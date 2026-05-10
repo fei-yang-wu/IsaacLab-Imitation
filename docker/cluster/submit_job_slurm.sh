@@ -4,6 +4,7 @@ run_singularity_path="$1/docker/cluster/run_singularity.sh"
 workspace_root="$1"
 container_profile="$2"
 shift 2
+time_limit="${CLUSTER_SLURM_TIME_LIMIT:-2-00:00:00}"
 
 printf -v quoted_run_singularity_path '%q' "$run_singularity_path"
 printf -v quoted_workspace_root '%q' "$workspace_root"
@@ -17,7 +18,7 @@ cat <<EOT > job.sh
 #SBATCH -N1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem-per-gpu=48G
-#SBATCH --time=16:00:00
+#SBATCH --time=$time_limit
 #SBATCH --job-name="training-$(date +"%Y-%m-%dT%H:%M")"
 #SBATCH --output="output_%j.log"
 #SBATCH --error="output_%j.log"
