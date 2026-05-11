@@ -83,10 +83,10 @@ For IPMD-family work, the important values are:
 
 - `IPMD`: base IPMD path.
 - `IPMD_BILINEAR`: IPMD plus bilinear representation/reward variant.
-  Current working assumption: use this with `Isaac-Imitation-G1-Latent-v0` and
-  `ipmd.use_latent_command=True`. The vanilla/non-latent-command bilinear path
-  is not a trusted experiment surface until it is explicitly fixed and
-  revalidated.
+  Use this with `Isaac-Imitation-G1-Latent-v0` and
+  `ipmd.use_latent_command=True` unless the user explicitly asks for a vanilla
+  debug run. The vanilla/non-latent-command bilinear path is not a trusted
+  comparison surface until it is explicitly fixed and revalidated.
 - `IPMD_SR`: supported by the registry, but not the current main focus.
 
 The task registry maps these through `rlopt_<algo>_cfg_entry_point` entries

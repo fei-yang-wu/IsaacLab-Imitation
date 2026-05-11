@@ -158,9 +158,10 @@ A bilinear job with offline pretraining enabled:
     agent.logger.exp_name=ipmd_bilinear_offline_full_4096
 ```
 
-For now, treat `IPMD_BILINEAR` as a latent-command experiment surface. The
-vanilla/non-latent-command path is useful for debugging only until it is
-explicitly fixed and revalidated.
+Treat `IPMD_BILINEAR` as a latent-command experiment surface unless the user
+explicitly asks for a vanilla debug run. Do not submit bilinear comparison jobs
+on `Isaac-Imitation-G1-v0`; the vanilla/non-latent-command path is useful for
+debugging only until it is explicitly fixed and revalidated.
 
 For the current pretrain/scratch/frozen comparison, use:
 
@@ -168,12 +169,12 @@ For the current pretrain/scratch/frozen comparison, use:
 experiments/bilinear_pretrain/submit_cluster_ablation.sh
 ```
 
-By default this submits one seed for five feature-only variants at
-`num_envs=4096`, `max_iterations=1024`, and logs them to W&B project
-`G1-Imitation-RLOpt-Pretrain`. This is a 100M-frame budget because each rollout
-iteration collects `4096 * 24` frames. The script sets
+By default this submits one seed on `Isaac-Imitation-G1-Latent-v0` for five
+feature-only variants at `num_envs=4096`, `max_iterations=10173`, and logs them
+to W&B project `G1-Imitation-RLOpt-Pretrain`. This is a 1B-frame budget because
+each rollout iteration collects `4096 * 24` frames. The script sets
 `agent.bilinear.policy_include_raw_state=false` so the policy sees `F(s)z`, not
-`concat(F(s)z, s)`. The default variants are `scratch`,
+`concat(F(s)z, s)`. The default seed is `42`. The default variants are `scratch`,
 `pretrained_finetune`, `pretrained_frozen`, `random_frozen`, and
 `pretrained_bc_finetune`. The BC variant runs offline policy BC after SR
 pretraining using reconstructed expert actions. Set `DRY_RUN=1` to print the

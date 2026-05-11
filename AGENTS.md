@@ -56,6 +56,12 @@ conda run -n SkillLearning ./scripts/install_workspace.sh
 - Preserve Isaac Lab / Hydra CLI patterns already used in `scripts/`.
 - Do not assume IDE-only workflows; command-line verification is the default here.
 - Avoid committing generated artifacts, caches, checkpoints, or log directories.
+- For IPMD/Bilinear representation-learning work, use the latent task surface
+  `Isaac-Imitation-G1-Latent-v0` unless the user explicitly requests vanilla.
+  Do not submit `IPMD_BILINEAR` comparison jobs on `Isaac-Imitation-G1-v0`; the
+  vanilla bilinear path is debug-only.
+- Unless the user specifies another budget, cluster training jobs should target
+  about 1B environment frames per task/run and a two-day SLURM walltime.
 - For simple G1 Dance102 cluster experiments, edit `docker/cluster/.env.cluster`
   and set `CLUSTER_G1_MANIFEST_PATH` to the Dance102 manifest before submitting.
   If that `CLUSTER_G1_MANIFEST_PATH` line is commented out, it means the job is
