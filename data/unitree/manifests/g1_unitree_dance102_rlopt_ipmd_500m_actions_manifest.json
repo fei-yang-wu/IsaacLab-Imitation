@@ -1,0 +1,31 @@
+{
+  "dataset_name": "unitree_dance102_rlopt_ipmd_500m_actions",
+  "dataset": {
+    "trajectories": {
+      "lafan1_csv": [
+        {
+          "name": "dance102_rlopt_ipmd_500m_actions",
+          "path": "../npz/g1/G1_Take_102.bvh_60hz.rlopt_ipmd_500m_actions.npz",
+          "input_fps": 50.0,
+          "frame_range": [
+            1,
+            1457
+          ]
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "source_manifest": "g1_unitree_dance102_manifest.json",
+    "source_npz": "../npz/g1/G1_Take_102.bvh_60hz.npz",
+    "action_label_npz": "../npz/g1/G1_Take_102.bvh_60hz.rlopt_ipmd_500m_actions.npz",
+    "action_labeler": "RLOpt IPMD latent policy",
+    "action_label_checkpoint": "../../../logs/rlopt/ipmd/Isaac-Imitation-G1-Latent-v0/2026-05-13_22-22-07/models/model_step_500023296.pt",
+    "num_motions": 1,
+    "input_fps": 50.0,
+    "output_fps": 50.0,
+    "paths_are_relative_to_manifest": true,
+    "recorded_action_key": "action",
+    "transition_action_key": "transition_action"
+  }
+}

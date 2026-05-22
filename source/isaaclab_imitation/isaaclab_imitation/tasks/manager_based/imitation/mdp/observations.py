@@ -166,6 +166,46 @@ def expert_window_anchor_ori_b(
     )
 
 
+def expert_goal_motion(
+    env: ImitationRLEnv,
+    goal_steps: int = 1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    return env.get_current_expert_goal_term(
+        term_name="expert_motion",
+        goal_steps=goal_steps,
+        joint_ids=asset_cfg.joint_ids,
+    )
+
+
+def expert_goal_anchor_pos_b(
+    env: ImitationRLEnv,
+    goal_steps: int = 1,
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    del asset_cfg
+    return env.get_current_expert_goal_term(
+        term_name="expert_anchor_pos_b",
+        goal_steps=goal_steps,
+        anchor_body_name=anchor_body_name,
+    )
+
+
+def expert_goal_anchor_ori_b(
+    env: ImitationRLEnv,
+    goal_steps: int = 1,
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    del asset_cfg
+    return env.get_current_expert_goal_term(
+        term_name="expert_anchor_ori_b",
+        goal_steps=goal_steps,
+        anchor_body_name=anchor_body_name,
+    )
+
+
 def robot_body_pos_b(
     env: ImitationRLEnv,
     anchor_body_name: str = "torso_link",

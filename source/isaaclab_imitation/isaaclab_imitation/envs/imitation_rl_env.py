@@ -233,6 +233,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
         if self._latent_patch_past_steps < 0 or self._latent_patch_future_steps < 0:
             raise ValueError("latent patch window steps must be >= 0.")
+        self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
+        if self._latent_goal_steps < 0:
+            raise ValueError("latent_goal_steps must be >= 0.")
         self._random_reset_step_min = int(getattr(cfg, "random_reset_step_min", 0))
         self._random_reset_step_max = int(getattr(cfg, "random_reset_step_max", 0))
         self._random_reset_full_trajectory = bool(
@@ -1032,6 +1035,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_expert_window_obs_cache: dict[
             tuple[int, int, str, object], dict[str, torch.Tensor]
         ] = {}
+        self._mdp_expert_goal_obs_cache: dict[
+            tuple[int, str, object], dict[str, torch.Tensor]
+        ] = {}
         self._mdp_reference_body_id_cache: dict[tuple[str, ...], torch.Tensor] = {}
         self._mdp_reference_body_pose_cache: dict[
             tuple[str, ...], tuple[torch.Tensor, torch.Tensor]
@@ -1112,6 +1118,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_reference_cvel_cache = None
         self._mdp_expert_motion_cache.clear()
         self._mdp_expert_window_obs_cache.clear()
+        self._mdp_expert_goal_obs_cache.clear()
         self._mdp_reference_body_pose_cache.clear()
         self._mdp_reference_body_velocity_cache.clear()
         self._mdp_robot_anchor_state_cache.clear()
@@ -1133,6 +1140,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_reference_cvel_cache = None
         self._mdp_expert_motion_cache.clear()
         self._mdp_expert_window_obs_cache.clear()
+        self._mdp_expert_goal_obs_cache.clear()
         self._mdp_reference_body_pose_cache.clear()
         self._mdp_reference_body_velocity_cache.clear()
         self._mdp_robot_anchor_state_cache.clear()
@@ -2316,7 +2324,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 if dim is not None:
                     action_dim = int(dim)
                     break
-        last_action = expert_frame.get(key("action"))
+        last_action = expert_frame.get(key("last_action"))
+        if last_action is None:
+            last_action = expert_frame.get(key("action"))
         if last_action is None:
             last_action = torch.zeros(
                 (int(joint_pos_ref.shape[0]), action_dim),
@@ -2532,6 +2542,62 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
         return value.index_select(0, env_ids)
 
+    def _get_current_expert_goal_terms(
+        self,
+        *,
+        goal_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+    ) -> dict[str, torch.Tensor]:
+        self._ensure_mdp_step_cache()
+        joint_ids_t = self._get_joint_ids_tensor_fast(joint_ids)
+        cache_key = (
+            int(goal_steps),
+            str(anchor_body_name),
+            self._joint_ids_cache_key(joint_ids_t),
+        )
+        cached_terms = self._mdp_expert_goal_obs_cache.get(cache_key)
+        if cached_terms is not None:
+            return cached_terms
+
+        env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        local_steps = self._current_local_steps(env_ids) + int(goal_steps)
+        expert_goal = self._sample_expert_window_slice(
+            env_ids,
+            local_steps,
+            past_steps=0,
+            future_steps=0,
+        )
+        cached_terms = self._build_expert_window_terms(
+            expert_goal,
+            env_ids,
+            context="rollout",
+            past_steps=0,
+            joint_ids=joint_ids_t,
+            anchor_body_name=anchor_body_name,
+        )
+        self._mdp_expert_goal_obs_cache[cache_key] = cached_terms
+        return cached_terms
+
+    def get_current_expert_goal_term(
+        self,
+        term_name: str,
+        *,
+        goal_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+        env_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        value = self._get_current_expert_goal_terms(
+            goal_steps=int(goal_steps),
+            joint_ids=joint_ids,
+            anchor_body_name=anchor_body_name,
+        )[term_name]
+        if env_ids is None:
+            return value
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        return value.index_select(0, env_ids)
+
     def _map_requested_expert_observations(
         self,
         expert_frame: TensorDict,
@@ -2595,6 +2661,38 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         env_ids,
                         context=context,
                         past_steps=int(past_steps),
+                        joint_ids=slice(None),
+                        anchor_body_name="torso_link",
+                    )
+                value = window_terms_cache[cache_key].get(term_name)
+            elif group_name == "expert_goal":
+                if len(prefix) > 0:
+                    unknown_terms.append(term_name)
+                    continue
+                if local_steps is None:
+                    logger.warning(
+                        "Expert mapper received expert_goal requests without trajectory-local steps."
+                    )
+                    return None
+                goal_steps = int(self._latent_goal_steps)
+                cache_key = (
+                    goal_steps,
+                    0,
+                    "torso_link",
+                    ("all",),
+                )
+                if cache_key not in window_terms_cache:
+                    expert_goal = self._sample_expert_window_slice(
+                        env_ids,
+                        local_steps + goal_steps,
+                        past_steps=0,
+                        future_steps=0,
+                    )
+                    window_terms_cache[cache_key] = self._build_expert_window_terms(
+                        expert_goal,
+                        env_ids,
+                        context=context,
+                        past_steps=0,
                         joint_ids=slice(None),
                         anchor_body_name="torso_link",
                     )

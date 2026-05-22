@@ -147,7 +147,11 @@ EOF
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
 # load variables to set the Isaac Lab path on the cluster
+requested_python_executable="${CLUSTER_PYTHON_EXECUTABLE:-}"
 source $SCRIPT_DIR/.env.cluster
+if [ -n "$requested_python_executable" ]; then
+    CLUSTER_PYTHON_EXECUTABLE="$requested_python_executable"
+fi
 source $SCRIPT_DIR/../.env.base
 
 base_tmpdir="${TMPDIR:-/tmp}"
@@ -231,8 +235,28 @@ container_pythonpath="${container_pythonpath_prefix}\${PYTHONPATH}"
 
 # make sure that all directories exists in cache directory
 setup_directories
-# copy all cache files
-cp -r $CLUSTER_ISAAC_SIM_CACHE_DIR $TMPDIR
+# copy all cache files unless the caller requests a lightweight startup.  Short
+# eval/export jobs do not need to spend minutes copying the full Isaac Sim cache.
+tmp_isaac_sim_cache_dir="$TMPDIR/$(basename "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
+if [ "${CLUSTER_SKIP_CACHE_COPY:-0}" = "1" ]; then
+    echo "[INFO] Skipping Isaac Sim cache copy via CLUSTER_SKIP_CACHE_COPY=1"
+    for dir in \
+        "$tmp_isaac_sim_cache_dir/cache/kit" \
+        "$tmp_isaac_sim_cache_dir/cache/ov" \
+        "$tmp_isaac_sim_cache_dir/cache/pip" \
+        "$tmp_isaac_sim_cache_dir/cache/glcache" \
+        "$tmp_isaac_sim_cache_dir/cache/computecache" \
+        "$tmp_isaac_sim_cache_dir/cache/triton" \
+        "$tmp_isaac_sim_cache_dir/cache/torchinductor" \
+        "$tmp_isaac_sim_cache_dir/home" \
+        "$tmp_isaac_sim_cache_dir/logs" \
+        "$tmp_isaac_sim_cache_dir/data" \
+        "$tmp_isaac_sim_cache_dir/documents"; do
+        mkdir -p "$dir"
+    done
+else
+    cp -r $CLUSTER_ISAAC_SIM_CACHE_DIR $TMPDIR
+fi
 
 # make sure logs directory exists (in the permanent isaaclab directory)
 mkdir -p "$CLUSTER_ISAACLAB_DIR/logs"
@@ -247,7 +271,9 @@ dir_name=$(basename "$1")
 tar -xf "$CLUSTER_SIF_PATH/$2.tar" -C "$TMPDIR"
 
 # create a persistant overlay using apptainer with fakeroot
-apptainer overlay create --size 20240 $CLUSTER_ISAACLAB_DIR/$dir_name.img
+overlay_size_mb="${CLUSTER_OVERLAY_SIZE_MB:-20240}"
+echo "[INFO] Creating Apptainer overlay: size=${overlay_size_mb}MB"
+apptainer overlay create --size "$overlay_size_mb" $CLUSTER_ISAACLAB_DIR/$dir_name.img
 
 # execute command in singularity container
 # NOTE: ISAACLAB_PATH is normally set in `isaaclab.sh` but we directly call the isaac-sim python because we sync the entire
@@ -283,7 +309,11 @@ singularity exec \
     bash -c "$container_entry_cmd"
 
 # copy resulting cache files back to host
-rsync -azPv $TMPDIR/docker-isaac-sim $CLUSTER_ISAAC_SIM_CACHE_DIR/..
+if [ "${CLUSTER_SKIP_CACHE_COPY:-0}" = "1" ]; then
+    echo "[INFO] Skipping Isaac Sim cache rsync back via CLUSTER_SKIP_CACHE_COPY=1"
+else
+    rsync -azPv $TMPDIR/docker-isaac-sim $CLUSTER_ISAAC_SIM_CACHE_DIR/..
+fi
 
 # if defined, remove the temporary isaaclab directory pushed when the job was submitted
 if $REMOVE_CODE_COPY_AFTER_JOB; then

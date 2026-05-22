@@ -55,6 +55,7 @@ _build
 
 # Pre-Trained Checkpoints
 /.pretrained_checkpoints/
+/checkpoints/
 
 # Teleop Recorded Dataset
 /datasets/
@@ -77,3 +78,6 @@ data/*
 !data/unitree
 
 .omc/
+
+# Generated motion label and rollout artifacts
+data/**/*.npz

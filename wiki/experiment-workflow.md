@@ -197,6 +197,21 @@ each rollout iteration collects `4096 * 24` frames. The script sets
 pretraining using reconstructed expert actions. Set `DRY_RUN=1` to print the
 commands, or set `SEEDS="2024 2025 2026"` for a three-seed sweep.
 
+For the Dance102 action-label ablation, use the labeled manifest and script:
+
+```bash
+DRY_RUN=1 experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
+experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
+```
+
+The default variants are `scratch`, `pretrained_finetune`,
+`pretrained_bc_finetune`, `pretrained_labeled_bc_finetune`, and
+`labeled_bc_finetune`. The labeled BC variants set
+`env.reconstructed_reference_action=false`, so expert actions are read from the
+locally generated action-label NPZ described by
+`data/unitree/manifests/g1_unitree_dance102_rlopt_ipmd_500m_actions_manifest.json`.
+The NPZ itself is intentionally not tracked.
+
 To test whether the offline stage is long enough, run the pretrained+finetune
 update-count sweep:
 

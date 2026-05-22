@@ -41,6 +41,18 @@ BILINEAR_NEXT_OBS_KEYS: list[tuple[str, str]] = [
     ("policy", "joint_vel_rel"),
 ]
 
+VQVAE_LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
+    ("expert_window", "expert_motion"),
+    ("expert_window", "expert_anchor_pos_b"),
+    ("expert_window", "expert_anchor_ori_b"),
+]
+
+GOAL_LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
+    ("expert_goal", "expert_motion"),
+    ("expert_goal", "expert_anchor_pos_b"),
+    ("expert_goal", "expert_anchor_ori_b"),
+]
+
 
 @configclass
 class _G1ImitationRLOptIPMDBilinearBaseConfig(IPMDBilinearRLOptConfig):
@@ -177,11 +189,12 @@ class _G1ImitationRLOptIPMDBilinearBaseConfig(IPMDBilinearRLOptConfig):
 
         self.bilinear.feature_dim = self.ipmd.latent_dim
         self.bilinear.policy_include_raw_state = False
-        self.bilinear.detach_features_for_policy = False
+        self.bilinear.detach_features_for_policy = True
         self.bilinear.offline_pretrain.enabled = False
         self.bilinear.offline_pretrain.num_updates = 2000
         self.bilinear.offline_pretrain.batch_size = 8192
         self.bilinear.offline_pretrain.log_interval = 100
+        self.bilinear.offline_pretrain.policy_bc_train_latent = False
 
         self.offline_dataset.source = "lerobot_stream"
         self.offline_dataset.repo_id = "unitreerobotics/G1_WBT_Brainco_Pickup_Pillow"
@@ -204,3 +217,119 @@ class G1ImitationLatentRLOptIPMDBilinearConfig(_G1ImitationRLOptIPMDBilinearBase
     """Latent-conditioned RLOpt IPMD + Bilinear configuration for G1 imitation."""
 
     _default_use_latent_command: bool = True
+
+
+@configclass
+class G1ImitationLatentRLOptIPMDBilinearVQVAEConfig(
+    _G1ImitationRLOptIPMDBilinearBaseConfig
+):
+    """Latent VQ-VAE env with bilinear offline pretraining enabled."""
+
+    _default_use_latent_command: bool = True
+
+    def sync_input_keys(self) -> None:
+        super().sync_input_keys()
+        self.ipmd.latent_learning.posterior_input_keys = list(
+            VQVAE_LATENT_POSTERIOR_INPUT_KEYS
+        )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.sync_input_keys()
+
+        self.ipmd.latent_dim = 64
+        self.ipmd.latent_steps_min = 10
+        self.ipmd.latent_steps_max = 10
+        self.ipmd.command_source = "posterior"
+
+        self.ipmd.latent_learning.method = "patch_vqvae"
+        self.ipmd.latent_learning.quantizer = "fsq"
+        self.ipmd.latent_learning.fsq_levels = [8, 8, 8, 5, 5]
+        self.ipmd.latent_learning.code_latent_dim = 64
+        self.ipmd.latent_learning.codebook_size = 512
+        self.ipmd.latent_learning.codebook_embed_dim = None
+        self.ipmd.latent_learning.commitment_coeff = 0.25
+        self.ipmd.latent_learning.ema_decay = 0.99
+        self.ipmd.latent_learning.dead_code_reset_iters = 1000
+        self.ipmd.latent_learning.gumbel_tau_start = 1.0
+        self.ipmd.latent_learning.gumbel_tau_end = 0.3
+        self.ipmd.latent_learning.gumbel_tau_anneal_iters = 200_000
+        self.ipmd.latent_learning.gumbel_hard = True
+        self.ipmd.latent_learning.gumbel_kl_to_uniform_coeff = 0.01
+        self.ipmd.latent_learning.code_usage_entropy_coeff = 0.01
+        self.ipmd.latent_learning.command_phase_mode = "none"
+        self.ipmd.latent_learning.code_period = 10
+        self.ipmd.latent_learning.latent_dropout_to_random_code_prob = 0.0
+
+        self.ipmd.latent_learning.patch_past_steps = 8
+        self.ipmd.latent_learning.patch_future_steps = 0
+        self.ipmd.latent_learning.encoder_hidden_dims = [512, 256]
+        self.ipmd.latent_learning.encoder_activation = "elu"
+        self.ipmd.latent_learning.decoder_hidden_dims = [256, 512]
+        self.ipmd.latent_learning.decoder_activation = "elu"
+        self.ipmd.latent_learning.lr = 3.0e-4
+        self.ipmd.latent_learning.grad_clip_norm = 1.0
+        self.ipmd.latent_learning.recon_coeff = 1.0
+        self.ipmd.latent_learning.action_recon_coeff = 0.5
+        self.ipmd.latent_learning.weight_decay_coeff = 0.0
+        self.ipmd.latent_learning.freeze_encoder = False
+        self.ipmd.latent_learning.train_posterior_through_policy = True
+
+        self.ipmd.latent_learning.probe_enabled = True
+        self.ipmd.latent_learning.probe_condition_on_state = False
+        self.ipmd.latent_learning.probe_target_keys = list(REWARD_INPUT_KEYS)
+        self.ipmd.latent_learning.probe_hidden_dims = [256, 256]
+        self.ipmd.latent_learning.probe_activation = "elu"
+        self.ipmd.latent_learning.probe_lr = 3.0e-4
+        self.ipmd.latent_learning.probe_grad_clip_norm = 1.0
+        self.ipmd.latent_learning.probe_batch_size = 8192
+
+        self.bilinear.feature_dim = self.ipmd.latent_dim
+        self.bilinear.offline_pretrain.policy_bc_train_latent = True
+
+
+@configclass
+class G1ImitationLatentGoalRLOptIPMDBilinearConfig(
+    _G1ImitationRLOptIPMDBilinearBaseConfig
+):
+    """Held future-goal latent command with a continuous AE embedding."""
+
+    _default_use_latent_command: bool = True
+
+    def sync_input_keys(self) -> None:
+        super().sync_input_keys()
+        self.ipmd.latent_learning.posterior_input_keys = list(
+            GOAL_LATENT_POSTERIOR_INPUT_KEYS
+        )
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        self.sync_input_keys()
+
+        # The manager action is a 128D continuous goal embedding. The bilinear
+        # low-level still uses a 64D spectral feature basis, so the policy head
+        # learns a command projector from goal embedding -> spectral direction.
+        self.ipmd.latent_dim = 128
+        self.ipmd.latent_steps_min = 25
+        self.ipmd.latent_steps_max = 25
+        self.ipmd.command_source = "posterior"
+
+        self.ipmd.latent_learning.method = "patch_autoencoder"
+        self.ipmd.latent_learning.encoder_hidden_dims = [512, 256]
+        self.ipmd.latent_learning.encoder_activation = "elu"
+        self.ipmd.latent_learning.decoder_hidden_dims = [256, 512]
+        self.ipmd.latent_learning.decoder_activation = "elu"
+        self.ipmd.latent_learning.patch_past_steps = 0
+        self.ipmd.latent_learning.patch_future_steps = 0
+        self.ipmd.latent_learning.posterior_command_period = 25
+        self.ipmd.latent_learning.lr = 3.0e-4
+        self.ipmd.latent_learning.grad_clip_norm = 1.0
+        self.ipmd.latent_learning.recon_coeff = 1.0
+        self.ipmd.latent_learning.weight_decay_coeff = 0.0
+        self.ipmd.latent_learning.freeze_encoder = False
+        self.ipmd.latent_learning.train_posterior_through_policy = False
+
+        self.bilinear.feature_dim = 64
+        self.bilinear.offline_pretrain.policy_bc_train_latent = False

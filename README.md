@@ -242,6 +242,29 @@ python scripts/rlopt/train.py \
     env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json
 ```
 
+The action-labeled Dance102 variant keeps the original NPZ intact and uses a
+locally generated label NPZ plus a separate manifest. Generate those artifacts
+with `scripts/rlopt/label_npz_with_policy.py` or provide your own matching
+manifest before launching:
+
+```bash
+python scripts/rlopt/train.py \
+    --task Isaac-Imitation-G1-Latent-v0 \
+    --algo IPMD_BILINEAR \
+    --headless \
+    env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_rlopt_ipmd_500m_actions_manifest.json \
+    env.reconstructed_reference_action=false \
+    agent.bilinear.offline_pretrain.policy_bc_updates=2000
+```
+
+For the cluster ablation set comparing scratch, state-only SR pretraining,
+reconstructed-action BC, and recorded-label BC:
+
+```bash
+DRY_RUN=1 experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
+experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
+```
+
 Train with RLOpt PPO:
 
 ```bash
