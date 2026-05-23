@@ -60,12 +60,6 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
   - type: bind
     source: ../ImitationLearningTools
     target: ${DOCKER_ISAACLAB_PATH}/ImitationLearningTools
-  - type: bind
-    source: ../../unitree_rl_lab
-    target: ${DOCKER_ISAACLAB_PATH}/unitree_rl_lab
-  - type: bind
-    source: ../../unitree_model
-    target: ${DOCKER_ISAACLAB_PATH}/unitree_model
     # The effect of these volumes is twofold:
     # 1. Prevent root-owned files from flooding the _build and logs dir
     #    on the host machine
@@ -87,10 +81,8 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
 x-default-isaac-lab-environment: &default-isaac-lab-environment
   - ISAACSIM_PATH=${DOCKER_ISAACLAB_PATH}/IsaacLab/_isaac_sim
   - ISAACLAB_PATH=${DOCKER_ISAACLAB_PATH}/IsaacLab
-  - PYTHONPATH=${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_tasks:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_assets:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_rl:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_mimic:${DOCKER_ISAACLAB_PATH}/source/isaaclab_imitation:${DOCKER_ISAACLAB_PATH}/unitree_rl_lab/source/unitree_rl_lab:${DOCKER_ISAACLAB_PATH}/RLOpt:${DOCKER_ISAACLAB_PATH}/ImitationLearningTools
+  - PYTHONPATH=${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_tasks:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_assets:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_rl:${DOCKER_ISAACLAB_PATH}/IsaacLab/source/isaaclab_mimic:${DOCKER_ISAACLAB_PATH}/source/isaaclab_imitation:${DOCKER_ISAACLAB_PATH}/RLOpt:${DOCKER_ISAACLAB_PATH}/ImitationLearningTools
   - OMNI_KIT_ALLOW_ROOT=1
-  - UNITREE_MODEL_DIR=${DOCKER_ISAACLAB_PATH}/unitree_model
-  - UNITREE_ROS_DIR=${DOCKER_ISAACLAB_PATH}/unitree_ros
 
 x-default-isaac-lab-deploy: &default-isaac-lab-deploy
   resources:
@@ -110,8 +102,6 @@ services:
       dockerfile: docker/Dockerfile.base
       additional_contexts:
         isaaclab: ../IsaacLab
-        unitree_rl_lab: ../../unitree_rl_lab
-        unitree_model: ../../unitree_model
       args:
         - ISAACSIM_BASE_IMAGE_ARG=${ISAACSIM_BASE_IMAGE}
         - ISAACSIM_VERSION_ARG=${ISAACSIM_VERSION}

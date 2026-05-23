@@ -8,7 +8,7 @@
 import os
 import toml
 
-from setuptools import setup
+from setuptools import find_packages, setup
 
 # Obtain the extension data from the extension.toml file
 EXTENSION_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -26,7 +26,7 @@ INSTALL_REQUIRES = [
 # Installation operation
 setup(
     name="isaaclab_imitation",
-    packages=["isaaclab_imitation"],
+    packages=find_packages(),
     author=EXTENSION_TOML_DATA["package"]["author"],
     maintainer=EXTENSION_TOML_DATA["package"]["maintainer"],
     url=EXTENSION_TOML_DATA["package"]["repository"],
@@ -34,6 +34,17 @@ setup(
     description=EXTENSION_TOML_DATA["package"]["description"],
     keywords=EXTENSION_TOML_DATA["package"]["keywords"],
     install_requires=INSTALL_REQUIRES,
+    package_data={
+        "isaaclab_imitation": [
+            "assets/unitree/g1_description/LICENSE",
+            "assets/unitree/g1_description/*.md",
+            "assets/unitree/g1_description/*.urdf",
+            "assets/unitree/g1_description/*.xml",
+            "assets/unitree/g1_description/*.usd",
+            "assets/unitree/g1_description/meshes/*",
+            "manifests/*.json",
+        ]
+    },
     license="Apache-2.0",
     include_package_data=True,
     python_requires=">=3.10",

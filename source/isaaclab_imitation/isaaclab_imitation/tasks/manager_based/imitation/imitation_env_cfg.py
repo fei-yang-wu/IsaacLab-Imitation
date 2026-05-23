@@ -303,10 +303,9 @@ class ImitationLearningEnvCfg(ManagerBasedRLEnvCfg):
     window_size: int = 64  # Window size for per-env cache
     batch_size: int = 1  # Batch size for Zarr prefetching
     device: str = "cuda"  # Torch device
-    loader_type: str = "loco_mujoco"  # Loader type (required if Zarr does not exist)
+    loader_type: str = "lafan1_csv"  # Loader type (required if Zarr does not exist)
     loader_kwargs: dict = {
-        "env_name": "UnitreeG1",
-        "n_substeps": 20,
+        "dataset": {"trajectories": {"lafan1_csv": []}},
     }  # Loader kwargs (required if Zarr does not exist)
     dataset: dict = {
         "trajectories": {
@@ -321,7 +320,7 @@ class ImitationLearningEnvCfg(ManagerBasedRLEnvCfg):
     reconstructed_reference_action_mode: Literal["next_pose", "pd_compensated"] = (
         "pd_compensated"
     )
-    # Reference joint names for the robot from the reference qpos order (this is the order of G1 in loco-mujoco)
+    # Reference joint names for the robot from the historical G1 reference qpos order.
     reference_joint_names: list[str] = [
         "root_x",
         "root_y",

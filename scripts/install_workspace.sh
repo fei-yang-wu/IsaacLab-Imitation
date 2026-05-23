@@ -96,6 +96,18 @@ install_editable_package() {
     )
 }
 
+install_lerobot_dependencies() {
+    case "${INSTALL_LEROBOT:-0}" in
+        1|true|TRUE|yes|YES|on|ON)
+            log "Installing optional LeRobot streaming dependencies."
+            uv pip install -e "${IMITATION_TOOLS_DIR}[lerobot]" datasets
+            ;;
+        *)
+            log "Skipping optional LeRobot dependencies. Set INSTALL_LEROBOT=1 to enable them."
+            ;;
+    esac
+}
+
 install_isaaclab_dependencies() {
     log "Installing Isaac Sim 5.1.0"
     uv pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
@@ -132,6 +144,7 @@ main() {
     install_uv_with_conda
     ensure_submodules_ready
     install_editable_package "${IMITATION_TOOLS_DIR}"
+    install_lerobot_dependencies
     install_editable_package "${RLOPT_DIR}"
     install_isaaclab_dependencies
     install_isaaclab_packages

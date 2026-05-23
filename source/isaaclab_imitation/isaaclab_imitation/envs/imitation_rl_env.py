@@ -17,6 +17,7 @@ from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import (
     FRAME_MARKER_CFG,
 )
+from isaaclab_imitation.assets.robots import UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES
 from tensordict import TensorDict
 
 logger = logging.getLogger(__name__)
@@ -36,13 +37,27 @@ def _get_mdp_compiled_module() -> Any:
 # Import the new manager and utilities
 try:
     from iltools.datasets.lafan1.loader import Lafan1CsvLoader
-    from iltools.datasets.loco_mujoco.loader import LocoMuJoCoLoader
+    from iltools.datasets.loaders import load_dataset_loader
     from iltools.datasets.manager import ParallelTrajectoryManager, ResetSchedule
     from iltools.datasets.utils import make_rb_from
 except ImportError as e:
     raise ImportError(
         f"Failed to import required modules from iltools_datasets: {e}. Make sure ImitationLearningTools is installed."
     ) from e
+
+
+def _load_loco_mujoco_loader() -> type[Any]:
+    """Import the optional Loco-MuJoCo loader only when requested."""
+    try:
+        loader_cls = load_dataset_loader("loco_mujoco")
+    except ImportError as exc:
+        raise ImportError(
+            "loader_type='loco_mujoco' requires the optional loco-mujoco "
+            "dependencies. Install ImitationLearningTools with its "
+            "`loco-mujoco` extra or select a different loader such as "
+            "'lafan1_csv'."
+        ) from exc
+    return loader_cls
 
 
 class ImitationRLEnv(ManagerBasedRLEnv):
@@ -72,8 +87,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         dataset_path = '/path/to/zarr'
         reset_schedule = 'random'  # or 'sequential', 'round_robin', 'custom'
         wrap_steps = False
-        loader_type = 'loco_mujoco'  # or 'lafan1_csv'
-        loader_kwargs = {'env_name': 'UnitreeG1', 'cfg': {...}}
+        loader_type = 'lafan1_csv'  # or 'loco_mujoco' when its optional dependency is installed
+        loader_kwargs = {'dataset': {'trajectories': {'lafan1_csv': [...]}}}
         reference_joint_names = ['left_hip_pitch_joint', ...]
     """
 
@@ -150,7 +165,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     from omegaconf import DictConfig
 
                     loader_cfg = DictConfig(loader_kwargs)
-                    _ = LocoMuJoCoLoader(
+                    loader_cls = _load_loco_mujoco_loader()
+                    _ = loader_cls(
                         env_name=loader_kwargs["env_name"],
                         cfg=loader_cfg,
                         build_zarr_dataset=True,
@@ -217,6 +233,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
         if self._latent_patch_past_steps < 0 or self._latent_patch_future_steps < 0:
             raise ValueError("latent patch window steps must be >= 0.")
+        self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
+        if self._latent_goal_steps < 0:
+            raise ValueError("latent_goal_steps must be >= 0.")
         self._random_reset_step_min = int(getattr(cfg, "random_reset_step_min", 0))
         self._random_reset_step_max = int(getattr(cfg, "random_reset_step_max", 0))
         self._random_reset_full_trajectory = bool(
@@ -573,6 +592,103 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             return value.to(device=template.device, dtype=template.dtype)
         return torch.full_like(template, float(value))
 
+    @staticmethod
+    def _resolve_offline_static_action_vector(
+        value: torch.Tensor | float,
+        *,
+        name: str,
+        width: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Resolve an env-invariant action parameter for offline dataset mapping."""
+        if isinstance(value, torch.Tensor):
+            tensor = value.detach().to(device=device, dtype=torch.float32)
+            if tensor.ndim == 2:
+                reference = tensor[0]
+                if tensor.shape[0] > 1 and not torch.allclose(
+                    tensor, reference.unsqueeze(0)
+                ):
+                    raise ValueError(
+                        f"offline_dataset mapper requires env-invariant {name}."
+                    )
+                tensor = reference
+            elif tensor.ndim != 1:
+                raise ValueError(f"Unexpected {name} shape {tuple(tensor.shape)}.")
+        else:
+            tensor = torch.full((width,), float(value), device=device)
+        if tuple(tensor.shape) != (width,):
+            raise ValueError(
+                f"{name} must have shape ({width},), got {tuple(tensor.shape)}."
+            )
+        return tensor
+
+    @staticmethod
+    def _resolve_offline_action_vector_pool(
+        value: torch.Tensor | float,
+        *,
+        name: str,
+        width: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Resolve one or more env-indexed action vectors for offline mapping."""
+        if isinstance(value, torch.Tensor):
+            tensor = value.detach().to(device=device, dtype=torch.float32)
+            if tensor.ndim == 1:
+                tensor = tensor.unsqueeze(0)
+            elif tensor.ndim != 2:
+                raise ValueError(f"Unexpected {name} shape {tuple(tensor.shape)}.")
+        else:
+            tensor = torch.full((1, width), float(value), device=device)
+        if tensor.shape[0] <= 0 or tuple(tensor.shape[1:]) != (width,):
+            raise ValueError(
+                f"{name} must have shape (N, {width}), got {tuple(tensor.shape)}."
+            )
+        return tensor
+
+    def get_offline_dataset_mapper_params(self) -> dict[str, Any]:
+        """Return G1 action inversion constants for offline TensorDict mapping."""
+        action_term = self.action_manager.get_term("joint_pos")
+        if not isinstance(action_term, JointPositionAction):
+            raise TypeError(
+                "offline_dataset G1 WBT mapper requires JointPositionAction."
+            )
+
+        action_joint_names = list(action_term._joint_names)
+        action_width = len(action_joint_names)
+        if action_width != 29:
+            raise ValueError(
+                "offline_dataset unitree_g1_wbt_29dof mapper requires 29 action "
+                f"joints, got {action_width}."
+            )
+        self.robot.find_joints(action_joint_names, preserve_order=True)
+        action_offset_pool = self._resolve_offline_action_vector_pool(
+            action_term._offset,
+            name="JointPositionAction offset",
+            width=action_width,
+            device=self.device,
+        )
+        action_scale = self._resolve_offline_static_action_vector(
+            action_term._scale,
+            name="JointPositionAction scale",
+            width=action_width,
+            device=self.device,
+        )
+        if torch.any(action_scale.abs() <= 1.0e-8):
+            raise ValueError("JointPositionAction scale must not contain zeros.")
+        default_root_height = float(
+            self.robot.data.default_root_state[0, 2].detach().cpu().item()
+        )
+        return {
+            "default_joint_pos": action_offset_pool[0].cpu().tolist(),
+            "default_joint_pos_pool": action_offset_pool.cpu().tolist(),
+            "action_scale": action_scale.cpu().tolist(),
+            "default_root_height": default_root_height,
+            "align_root_z_to_default": True,
+            "dataset_joint_names": list(UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES),
+            "target_joint_names": action_joint_names,
+            "joint_names": action_joint_names,
+        }
+
     def _raw_to_processed_action(
         self,
         raw_action: torch.Tensor,
@@ -919,6 +1035,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_expert_window_obs_cache: dict[
             tuple[int, int, str, object], dict[str, torch.Tensor]
         ] = {}
+        self._mdp_expert_goal_obs_cache: dict[
+            tuple[int, str, object], dict[str, torch.Tensor]
+        ] = {}
         self._mdp_reference_body_id_cache: dict[tuple[str, ...], torch.Tensor] = {}
         self._mdp_reference_body_pose_cache: dict[
             tuple[str, ...], tuple[torch.Tensor, torch.Tensor]
@@ -999,6 +1118,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_reference_cvel_cache = None
         self._mdp_expert_motion_cache.clear()
         self._mdp_expert_window_obs_cache.clear()
+        self._mdp_expert_goal_obs_cache.clear()
         self._mdp_reference_body_pose_cache.clear()
         self._mdp_reference_body_velocity_cache.clear()
         self._mdp_robot_anchor_state_cache.clear()
@@ -1020,6 +1140,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_reference_cvel_cache = None
         self._mdp_expert_motion_cache.clear()
         self._mdp_expert_window_obs_cache.clear()
+        self._mdp_expert_goal_obs_cache.clear()
         self._mdp_reference_body_pose_cache.clear()
         self._mdp_reference_body_velocity_cache.clear()
         self._mdp_robot_anchor_state_cache.clear()
@@ -2203,7 +2324,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 if dim is not None:
                     action_dim = int(dim)
                     break
-        last_action = expert_frame.get(key("action"))
+        last_action = expert_frame.get(key("last_action"))
+        if last_action is None:
+            last_action = expert_frame.get(key("action"))
         if last_action is None:
             last_action = torch.zeros(
                 (int(joint_pos_ref.shape[0]), action_dim),
@@ -2419,6 +2542,62 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
         return value.index_select(0, env_ids)
 
+    def _get_current_expert_goal_terms(
+        self,
+        *,
+        goal_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+    ) -> dict[str, torch.Tensor]:
+        self._ensure_mdp_step_cache()
+        joint_ids_t = self._get_joint_ids_tensor_fast(joint_ids)
+        cache_key = (
+            int(goal_steps),
+            str(anchor_body_name),
+            self._joint_ids_cache_key(joint_ids_t),
+        )
+        cached_terms = self._mdp_expert_goal_obs_cache.get(cache_key)
+        if cached_terms is not None:
+            return cached_terms
+
+        env_ids = torch.arange(self.num_envs, device=self.device, dtype=torch.long)
+        local_steps = self._current_local_steps(env_ids) + int(goal_steps)
+        expert_goal = self._sample_expert_window_slice(
+            env_ids,
+            local_steps,
+            past_steps=0,
+            future_steps=0,
+        )
+        cached_terms = self._build_expert_window_terms(
+            expert_goal,
+            env_ids,
+            context="rollout",
+            past_steps=0,
+            joint_ids=joint_ids_t,
+            anchor_body_name=anchor_body_name,
+        )
+        self._mdp_expert_goal_obs_cache[cache_key] = cached_terms
+        return cached_terms
+
+    def get_current_expert_goal_term(
+        self,
+        term_name: str,
+        *,
+        goal_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+        env_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        value = self._get_current_expert_goal_terms(
+            goal_steps=int(goal_steps),
+            joint_ids=joint_ids,
+            anchor_body_name=anchor_body_name,
+        )[term_name]
+        if env_ids is None:
+            return value
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        return value.index_select(0, env_ids)
+
     def _map_requested_expert_observations(
         self,
         expert_frame: TensorDict,
@@ -2482,6 +2661,38 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         env_ids,
                         context=context,
                         past_steps=int(past_steps),
+                        joint_ids=slice(None),
+                        anchor_body_name="torso_link",
+                    )
+                value = window_terms_cache[cache_key].get(term_name)
+            elif group_name == "expert_goal":
+                if len(prefix) > 0:
+                    unknown_terms.append(term_name)
+                    continue
+                if local_steps is None:
+                    logger.warning(
+                        "Expert mapper received expert_goal requests without trajectory-local steps."
+                    )
+                    return None
+                goal_steps = int(self._latent_goal_steps)
+                cache_key = (
+                    goal_steps,
+                    0,
+                    "torso_link",
+                    ("all",),
+                )
+                if cache_key not in window_terms_cache:
+                    expert_goal = self._sample_expert_window_slice(
+                        env_ids,
+                        local_steps + goal_steps,
+                        past_steps=0,
+                        future_steps=0,
+                    )
+                    window_terms_cache[cache_key] = self._build_expert_window_terms(
+                        expert_goal,
+                        env_ids,
+                        context=context,
+                        past_steps=0,
                         joint_ids=slice(None),
                         anchor_body_name="torso_link",
                     )
@@ -2788,7 +2999,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if not self._reference_vel_vis_enabled:
             return
 
-        # Desired reference body (root) location and current robot root — frame markers like unitree_rl_lab
+        # Desired reference body (root) location and current robot root.
         goal_cfg = FRAME_MARKER_CFG.copy()
         goal_cfg.prim_path = "/Visuals/Imitation/reference_root_goal"
         goal_cfg.markers["frame"].scale = (0.2, 0.2, 0.2)

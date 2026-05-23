@@ -24,7 +24,7 @@ Common flows:
 Equivalent lower-level Python command:
 
 ```bash
-conda run -n SkillLearning python scripts/setup_lafan1_dataset.py \
+conda run -n SL python scripts/setup_lafan1_dataset.py \
     --prepare-npz --headless
 ```
 
@@ -32,7 +32,7 @@ For the G1 CSV set, you can auto-trim the common arms-up alignment pose while
 building HF-ready NPZ files with:
 
 ```bash
-conda run -n SkillLearning python scripts/setup_lafan1_dataset.py \
+conda run -n SL python scripts/setup_lafan1_dataset.py \
     --prepare-npz --headless \
     --auto_trim_mode g1_shoulder_roll
 ```
@@ -40,7 +40,7 @@ conda run -n SkillLearning python scripts/setup_lafan1_dataset.py \
 2. If NPZ files already exist, regenerate the full manifest:
 
 ```bash
-conda run -n SkillLearning python scripts/write_lafan1_npz_manifest.py \
+conda run -n SL python scripts/write_lafan1_npz_manifest.py \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_lafan1_manifest.json
 ```
@@ -59,7 +59,7 @@ If you already have raw CSV files plus existing NPZ files and only want to add
 per-motion trim ranges to the manifest, use:
 
 ```bash
-conda run -n SkillLearning python scripts/prepare_lafan1_from_csv.py \
+conda run -n SL python scripts/prepare_lafan1_from_csv.py \
     --csv_dir data/lafan1/raw/g1 \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_lafan1_manifest.json \

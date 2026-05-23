@@ -37,6 +37,16 @@ _LATENT_TASK_KWARGS = {
     "rlopt_ase_cfg_entry_point": f"{agents.__name__}.rlopt_ase_cfg:G1ImitationRLOptASEConfig",
 }
 
+_LATENT_GOAL_TASK_KWARGS = {
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentGoalEnvCfg"
+    ),
+    "rlopt_ipmd_bilinear_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_bilinear_cfg:"
+        "G1ImitationLatentGoalRLOptIPMDBilinearConfig"
+    ),
+}
+
 _LATENT_VQVAE_TASK_KWARGS = {
     "env_cfg_entry_point": (
         f"{__name__}.imitation_g1_latent_vqvae_env_cfg:ImitationG1LatentVQVAEEnvCfg"
@@ -49,6 +59,10 @@ _LATENT_VQVAE_TASK_KWARGS = {
     ),
     "rlopt_ipmd_vqvae_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_vqvae_cfg:G1ImitationLatentRLOptIPMDVQVAEConfig"
+    ),
+    "rlopt_ipmd_bilinear_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_bilinear_cfg:"
+        "G1ImitationLatentRLOptIPMDBilinearVQVAEConfig"
     ),
 }
 
@@ -71,6 +85,13 @@ gym.register(
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
     kwargs=_LATENT_TASK_KWARGS,
+)
+
+gym.register(
+    id="Isaac-Imitation-G1-Latent-Goal-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_GOAL_TASK_KWARGS,
 )
 
 gym.register(

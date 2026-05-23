@@ -2,16 +2,16 @@
 
 This repo should act as the orchestration layer for G1 imitation experiments.
 It owns Isaac Lab environment wiring, task registration, RLOpt entrypoints,
-cluster submission, data manifests, and experiment scripts. It should not hide
-the algorithm owner: active `rlopt` runtime work belongs in the sibling checkout
-at `/home/fwu91/Documents/Research/SkillLearning/RLOpt`.
+cluster submission, data manifests, and experiment scripts. Algorithm and data
+tooling work is owned by the in-repo dependency submodules, not by sibling
+overlays.
 
 The goal of context management here is to help coding agents quickly answer:
 
 - Which repository owns the file I need to change?
 - Which context document should I read before editing?
 - Which validation command is appropriate for this change?
-- When should I use the pinned submodule state versus the sibling checkout?
+- When should I update a submodule pointer versus solving the issue in this repo?
 
 ## Context Layers
 
@@ -49,10 +49,9 @@ scripts, documentation, or cluster workflows:
 Expert-batch sampling and task configuration are repo-owned integration
 surfaces because they expose Isaac Lab data and registry wiring to RLOpt.
 
-### Owned by sibling `RLOpt`
+### Owned by `RLOpt`
 
-Use `/home/fwu91/Documents/Research/SkillLearning/RLOpt` for algorithm/runtime
-changes:
+Use the in-repo submodule at `./RLOpt` for algorithm/runtime changes:
 
 - IPMD, ASE, PPO, SAC, GAIL, AMP implementations
 - latent-command runtime behavior
@@ -60,38 +59,44 @@ changes:
 - bilinear model and offline pretraining internals
 - RLOpt tests and package metadata
 
-Do not edit `IsaacLab-Imitation/RLOpt/` for normal algorithm work. That path is
-a submodule snapshot for reproducibility, not the active edit target.
+When RLOpt changes are required, make them in `./RLOpt`, push them to the RLOpt
+remote, and update the top-level submodule pointer in this repo.
+
+### Owned by `ImitationLearningTools`
+
+Use the in-repo submodule at `./ImitationLearningTools` for reusable data
+loading, dataset conversion, replay-buffer construction, and LeRobot streaming
+utilities. Push ILT changes to its remote and update the top-level submodule
+pointer here.
 
 ### Owned by dependencies
 
 Treat these as dependencies unless a task explicitly targets them:
 
 - `IsaacLab/`
-- `ImitationLearningTools/`
-- sibling `unitree_rl_lab/`
-- sibling `loco-mujoco/`
+- optional sibling `loco-mujoco/` for the Loco-MuJoCo loader
 
 Prefer integration fixes in this repo before changing a dependency.
 
-## Submodule Versus Sibling Checkout
+## Submodule-First Workflow
 
-This repo uses submodules for reproducible dependency snapshots:
+This repo uses submodules as the active dependency checkouts and the
+reproducible experiment snapshots:
 
 - `IsaacLab/`
 - `RLOpt/`
 - `ImitationLearningTools/`
 
-Active research work still uses the sibling checkout for `RLOpt`. The practical
-workflow is:
+The practical workflow is:
 
-1. Change algorithm code in sibling `../RLOpt`.
-2. Change env/config/script/cluster code in this repo.
+1. Change algorithm code in `./RLOpt` or reusable data code in
+   `./ImitationLearningTools`.
+2. Push those submodule commits to their remotes.
 3. Run integration from this repo.
-4. For cluster jobs that need local RLOpt edits, follow the overlay-sync
-   workflow documented in `REPO_SETUP.md`.
-5. When an experiment state becomes worth preserving, push `RLOpt` and update
-   the `RLOpt` submodule pointer in this repo.
+4. Update the submodule pointer in this repo so the experiment state is
+   self-contained.
+5. For cluster jobs, leave local path overlays disabled unless a task explicitly
+   needs an unpinned local experiment.
 
 If `CLUSTER_RLOPT_LOCAL_PATH` is commented out, cluster submissions use the
 submodule-pinned `RLOpt` state from this repo.
@@ -109,10 +114,14 @@ For a coding agent starting in this repo:
 6. Inspect live files before editing. Do not rely only on previous memory.
 7. Determine the owner repo before patching:
    - `IsaacLab-Imitation` for env/config/script/cluster/docs.
-   - sibling `RLOpt` for algorithm runtime.
-8. Prefer construction-time validation and fail-fast errors. Avoid defensive
+   - `./RLOpt` for algorithm runtime.
+   - `./ImitationLearningTools` for reusable dataset tooling.
+8. If conda commands are needed and the user has not already named an
+   environment, ask which environment they prefer. Use `$CONDA_ENV` in reusable
+   command examples; `SL` and `SkillLearning` are examples only.
+9. Prefer construction-time validation and fail-fast errors. Avoid defensive
    runtime guards in algorithmic hot paths.
-9. Run the smallest relevant validation command.
+10. Run the smallest relevant validation command.
 
 ## Where To Put New Context
 
@@ -130,6 +139,39 @@ Use this decision table:
 
 Do not put long project history in `AGENTS.md` or `CLAUDE.md`. Long startup
 context makes agents slower and increases the chance they follow stale plans.
+
+## External CLI Setup
+
+```bash
+CONDA_ENV="${CONDA_ENV:-SL}"
+conda activate "$CONDA_ENV"
+
+# Hugging Face Hub CLI for LeRobot dataset access.
+uv pip install --system -U "huggingface_hub[cli]"
+hf auth login
+hf auth whoami
+
+# GitHub CLI is recommended for branch, push, PR, and CI workflows.
+conda install -y -c conda-forge gh
+gh auth login
+gh auth setup-git --hostname github.com
+gh auth status
+
+# Optional: only for direct git push/pull to https://huggingface.co.
+# This uses Git's plaintext store helper, scoped to Hugging Face only.
+git config --global credential.https://huggingface.co.helper store
+
+# If you are already logged in:
+hf auth list
+TOKEN_NAME=home-ubuntu
+hf auth switch --token-name "$TOKEN_NAME" --add-to-git-credential
+
+# If you are not logged in yet:
+hf auth login --add-to-git-credential
+
+# Remove the Hugging Face-scoped helper later if you no longer want it.
+git config --global --unset credential.https://huggingface.co.helper
+```
 
 ## Future Work
 
@@ -172,8 +214,8 @@ Pick the smallest relevant check:
 | --- | --- |
 | Docs only | `git diff --check` |
 | Shell scripts | `bash -n <script>` |
-| Pure Python helper or env sampling tests | `conda run -n SkillLearning pytest source/isaaclab_imitation/test_reference_patch_env.py` |
-| Isaac Lab imports or runtime env behavior | `TERM=xterm conda run -n SkillLearning ../IsaacLab/isaaclab.sh -p -m pytest source/isaaclab_imitation/test_reference_patch_env.py` |
+| Pure Python helper or env sampling tests | `conda run -n "${CONDA_ENV:-SL}" pytest source/isaaclab_imitation/test_reference_patch_env.py` |
+| Isaac Lab imports or runtime env behavior | `TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p -m pytest source/isaaclab_imitation/test_reference_patch_env.py` |
 | Cluster script behavior | `bash -n docker/cluster/cluster_interface.sh` |
 | Training entrypoint or config routing | targeted `scripts/rlopt/train.py` smoke run |
 

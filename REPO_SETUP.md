@@ -8,9 +8,9 @@ This repo now tracks its dependent repos as submodules:
 
 `IsaacLab-Imitation` itself remains the top-level repo.
 
-Additionally required (currently not a submodule):
+Optional local checkouts:
 
-- `unitree_rl_lab/` (sibling repository)
+- `loco-mujoco/` only when explicitly using the `loco_mujoco` dataset loader
 
 ## 1. Clone with submodules
 
@@ -35,7 +35,6 @@ git remote -v
 git -C IsaacLab remote -v
 git -C RLOpt remote -v
 git -C ImitationLearningTools remote -v
-git -C ../unitree_rl_lab remote -v
 ```
 
 Expected default remotes:
@@ -44,22 +43,19 @@ Expected default remotes:
 - `IsaacLab`: `origin -> git@github.com:GTLIDAR/IsaacLab.git`
 - `RLOpt`: `origin -> git@github.com:fei-yang-wu/RLOpt.git`
 - `ImitationLearningTools`: `origin -> git@github.com:GTLIDAR/ImitationLearningTools.git`
-- `unitree_rl_lab`: `origin -> https://github.com/unitreerobotics/unitree_rl_lab.git`
+- optional `loco-mujoco`: configured by your local checkout when using that loader
 
-## 2b. Set up unitree_rl_lab (required)
+## 2b. Optional loco-mujoco loader
 
-If `unitree_rl_lab` is missing as a sibling repo:
+The G1 Isaac training path no longer depends on `unitree_rl_lab`; robot
+configuration and URDF/mesh assets are packaged in this repo. If you want to
+use the optional Loco-MuJoCo loader, keep a local checkout or install the
+package in your Python environment:
 
 ```bash
 cd ..
-git clone https://github.com/unitreerobotics/unitree_rl_lab.git
+git clone https://github.com/robfiras/loco-mujoco.git
 ```
-
-Then follow the upstream setup instructions in:
-
-- `../unitree_rl_lab/README.md`
-
-At minimum, run its installation step and required asset/environment setup before training.
 
 Optional extra remotes used in this workspace:
 
@@ -74,13 +70,17 @@ git -C RLOpt remote add gatech https://github.gatech.edu/GeorgiaTechLIDARGroup/R
 git submodule update --init --recursive
 ```
 
-To move submodules to newer commits:
+To move submodules to newer commits from their configured tracking branches:
 
 ```bash
 git submodule update --remote --recursive
 git add IsaacLab RLOpt ImitationLearningTools
 git commit -m "Update submodule pins"
 ```
+
+For feature work, it is also valid to check out an exact commit inside a
+submodule and then commit the updated top-level gitlink. Keep `.gitmodules`
+tracking branches unchanged unless the long-lived default branch changes.
 
 ## 4. Cluster note (no conda/venv needed for submission)
 
@@ -106,7 +106,9 @@ bash cluster_interface.sh -c ice job --task Isaac-Imitation-G1-Latent-v0 --algo 
 
 If no `-c` is given, the script auto-selects `submit_job_slurm_${CLUSTER_LOGIN}.sh` (from `.env.cluster`) when that file exists, falling back to `submit_job_slurm.sh`. See `docker/README.md` for full details.
 
-If your active development clone for `RLOpt` (or `IsaacLab`, `ImitationLearningTools`) is outside this repo, set path overrides in `docker/cluster/.env.cluster` so cluster jobs sync your working tree directly:
+By default, cluster jobs use the submodule states pinned by this top-level repo.
+Only set path overrides in `docker/cluster/.env.cluster` when a task explicitly
+needs an unpinned local checkout outside this repo:
 
 ```bash
 CLUSTER_RLOPT_LOCAL_PATH=/absolute/path/to/RLOpt

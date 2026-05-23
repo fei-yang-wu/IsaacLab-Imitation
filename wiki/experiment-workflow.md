@@ -5,11 +5,17 @@ experiment tracking for IPMD-family G1 imitation runs.
 
 The rule is simple: local smoke first, then full cluster job. Do not submit a
 cluster job until the local command proves the task, algorithm, manifest, and
-repo overlay are wired correctly.
+submodule pins are wired correctly.
 
 ## Local Validation Ladder
 
 Start with the cheapest check that matches the change.
+Set `CONDA_ENV` to the conda environment you want to use; `SL` is only the
+example default:
+
+```bash
+CONDA_ENV="${CONDA_ENV:-SL}"
+```
 
 ### 1. Docs or shell-only changes
 
@@ -25,18 +31,15 @@ bash -n experiments/ipmd_stability/submit_cluster_ablations.sh
 Pure pytest path:
 
 ```bash
-conda run -n SkillLearning pytest source/isaaclab_imitation/test_reference_patch_env.py
+conda run -n "${CONDA_ENV:-SL}" pytest source/isaaclab_imitation/test_reference_patch_env.py
 ```
 
 Isaac Lab launcher path, needed when imports require Isaac Sim / Omniverse:
 
 ```bash
-TERM=xterm conda run -n SkillLearning ../IsaacLab/isaaclab.sh -p -m pytest \
+TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p -m pytest \
     source/isaaclab_imitation/test_reference_patch_env.py
 ```
-
-Use `./IsaacLab/isaaclab.sh` instead of `../IsaacLab/isaaclab.sh` when using the
-in-repo submodule checkout.
 
 ### 3. Minimal train smoke
 
@@ -44,7 +47,7 @@ Use a small number of envs and one or a few rollout iterations to prove wiring:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 \
-conda run -n SkillLearning python scripts/rlopt/train.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/rlopt/train.py \
     --task Isaac-Imitation-G1-v0 \
     --num_envs 16 \
     --headless \
@@ -76,6 +79,20 @@ the surface under test:
 agent.bilinear.offline_pretrain.enabled=true \
 agent.bilinear.offline_pretrain.num_updates=10
 ```
+
+For LeRobot-backed offline pretraining, keep the task latent and enable the
+offline dataset cache explicitly:
+
+```bash
+--task Isaac-Imitation-G1-Latent-v0 \
+--algo IPMD_BILINEAR \
+agent.bilinear.offline_pretrain.enabled=true \
+agent.offline_dataset.enabled=true
+```
+
+The default first dataset for the G1 bilinear config is
+`unitreerobotics/G1_WBT_Brainco_Pickup_Pillow`. The full command surface and
+re-image notes live in [LeRobot Offline Pretraining](lerobot-offline-pretraining.md).
 
 The `--kit_args=--/app/extensions/fsWatcherEnabled=false` override is useful on
 local machines where Isaac Kit file watcher startup fails under resource
@@ -180,6 +197,21 @@ each rollout iteration collects `4096 * 24` frames. The script sets
 pretraining using reconstructed expert actions. Set `DRY_RUN=1` to print the
 commands, or set `SEEDS="2024 2025 2026"` for a three-seed sweep.
 
+For the Dance102 action-label ablation, use the labeled manifest and script:
+
+```bash
+DRY_RUN=1 experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
+experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
+```
+
+The default variants are `scratch`, `pretrained_finetune`,
+`pretrained_bc_finetune`, `pretrained_labeled_bc_finetune`, and
+`labeled_bc_finetune`. The labeled BC variants set
+`env.reconstructed_reference_action=false`, so expert actions are read from the
+locally generated action-label NPZ described by
+`data/unitree/manifests/g1_unitree_dance102_rlopt_ipmd_500m_actions_manifest.json`.
+The NPZ itself is intentionally not tracked.
+
 To test whether the offline stage is long enough, run the pretrained+finetune
 update-count sweep:
 
@@ -212,17 +244,18 @@ For Dance102 or other single-manifest debugging, pass the manifest explicitly:
 env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json
 ```
 
-## Sibling RLOpt Overlay
+## RLOpt Submodule State
 
-If a job needs local algorithm edits from sibling `../RLOpt`, make sure
-`docker/cluster/.env.cluster` has the overlay path enabled:
+Cluster jobs should use the pinned `RLOpt/` submodule state from
+`IsaacLab-Imitation` by default. If a task explicitly needs an unpinned local
+experiment outside this repo, enable an overlay path in
+`docker/cluster/.env.cluster`:
 
 ```bash
-CLUSTER_RLOPT_LOCAL_PATH=/home/fwu91/Documents/Research/SkillLearning/RLOpt
+CLUSTER_RLOPT_LOCAL_PATH=/absolute/path/to/RLOpt
 ```
 
-If that line is commented out, cluster jobs use the pinned `RLOpt/` submodule
-state from `IsaacLab-Imitation`.
+Leave that line commented out for submodule-first runs.
 
 Every job writes a repo manifest to:
 
@@ -301,8 +334,7 @@ Use this promotion checklist:
 1. Run the smallest local test that exercises the changed path.
 2. Inspect `logs/rlopt/.../command.txt`, `params/agent.yaml`, and `rlopt.log`.
 3. Use a distinct `agent.logger.exp_name`.
-4. Confirm whether the job should use sibling `../RLOpt` overlay or submodule
-   `RLOpt/`.
+4. Confirm the intended `RLOpt/` and `ImitationLearningTools/` submodule SHAs.
 5. Run `DRY_RUN=1` for experiment scripts that support it.
 6. Submit the cluster job.
 7. Record the job id, repo manifest path, experiment name, task, algo, seed,

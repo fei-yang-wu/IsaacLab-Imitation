@@ -514,8 +514,7 @@ update_latest_sync_link() {
 resolve_repo_sync_path() {
     local repo_label="$1"
     local workspace_path="$2"
-    local sibling_path="$3"
-    local override_var_name="$4"
+    local override_var_name="$3"
     local override_path="${!override_var_name:-}"
     local resolved_path
 
@@ -536,35 +535,27 @@ resolve_repo_sync_path() {
         return
     fi
 
-    if dir_has_entries "$sibling_path"; then
-        resolved_path="$(realpath "$sibling_path")"
-        echo "[INFO] Using sibling $repo_label repo because workspace path is empty: '$resolved_path'" >&2
-        echo "$resolved_path"
-        return
-    fi
-
     resolved_path="$(realpath "$workspace_path" 2>/dev/null || echo "$workspace_path")"
     echo "$resolved_path"
 }
 
 build_default_sync_specs() {
     local local_workspace_root="$1"
-    local sibling_workspace_root="$2"
     local local_specs=""
     local resolved_path=""
 
     if [ -n "${CLUSTER_ISAACLAB_LOCAL_PATH:-}" ]; then
-        resolved_path="$(resolve_repo_sync_path "IsaacLab" "$local_workspace_root/IsaacLab" "$sibling_workspace_root/IsaacLab" "CLUSTER_ISAACLAB_LOCAL_PATH")"
+        resolved_path="$(resolve_repo_sync_path "IsaacLab" "$local_workspace_root/IsaacLab" "CLUSTER_ISAACLAB_LOCAL_PATH")"
         local_specs="$local_specs $resolved_path:IsaacLab"
     fi
 
     if [ -n "${CLUSTER_RLOPT_LOCAL_PATH:-}" ]; then
-        resolved_path="$(resolve_repo_sync_path "RLOpt" "$local_workspace_root/RLOpt" "$sibling_workspace_root/RLOpt" "CLUSTER_RLOPT_LOCAL_PATH")"
+        resolved_path="$(resolve_repo_sync_path "RLOpt" "$local_workspace_root/RLOpt" "CLUSTER_RLOPT_LOCAL_PATH")"
         local_specs="$local_specs $resolved_path:RLOpt"
     fi
 
     if [ -n "${CLUSTER_IMITATION_TOOLS_LOCAL_PATH:-}" ]; then
-        resolved_path="$(resolve_repo_sync_path "ImitationLearningTools" "$local_workspace_root/ImitationLearningTools" "$sibling_workspace_root/ImitationLearningTools" "CLUSTER_IMITATION_TOOLS_LOCAL_PATH")"
+        resolved_path="$(resolve_repo_sync_path "ImitationLearningTools" "$local_workspace_root/ImitationLearningTools" "CLUSTER_IMITATION_TOOLS_LOCAL_PATH")"
         local_specs="$local_specs $resolved_path:ImitationLearningTools"
     fi
 
@@ -694,19 +685,17 @@ submit_job() {
 
 sync_extra_repos() {
     local local_workspace_root
-    local sibling_workspace_root
     local local_specs
     local local_path
     local remote_subdir
 
     local_workspace_root="$(realpath "$SCRIPT_DIR/../..")"
-    sibling_workspace_root="$(realpath "$local_workspace_root/..")"
 
     if [ -n "${CLUSTER_EXTRA_SYNC_SPECS:-}" ]; then
         local_specs="$CLUSTER_EXTRA_SYNC_SPECS"
         echo "[INFO] Using CLUSTER_EXTRA_SYNC_SPECS for additional repo sync."
     else
-        local_specs="$(build_default_sync_specs "$local_workspace_root" "$sibling_workspace_root")"
+        local_specs="$(build_default_sync_specs "$local_workspace_root")"
     fi
     SYNC_EXTRA_REPO_SPECS="$local_specs"
 

@@ -87,6 +87,30 @@ def load_lafan1_manifest(
     return manifest_file, entries
 
 
+def infer_npz_manifest_control_freq(entries: list[dict[str, Any]]) -> float | None:
+    """Infer a single control frequency from NPZ manifest entries.
+
+    CSV manifests often describe source data that still needs resampling, so timing is
+    inferred only when every source is an NPZ and all declared ``input_fps`` values
+    agree.
+    """
+    if len(entries) == 0:
+        return None
+    fps_values: list[float] = []
+    for entry in entries:
+        path = Path(str(entry["path"]))
+        if path.suffix.lower() != ".npz":
+            return None
+        fps = float(entry["input_fps"])
+        if fps <= 0.0:
+            return None
+        fps_values.append(fps)
+    first = fps_values[0]
+    if all(abs(value - first) <= 1.0e-6 for value in fps_values):
+        return first
+    return None
+
+
 def build_lafan1_loader_kwargs(
     *,
     entries: list[dict[str, Any]],

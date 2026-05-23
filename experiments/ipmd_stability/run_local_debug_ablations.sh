@@ -172,7 +172,7 @@ run_one() {
     local log_file="$LOG_DIR/${run_name}.log"
 
     local cmd=(
-        conda run -n SkillLearning python
+        conda run -n SL python
         "${COMMON_ARGS[@]}"
         "agent.seed=${seed}"
         "agent.logger.exp_name=${run_name}"

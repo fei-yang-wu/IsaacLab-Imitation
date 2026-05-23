@@ -1,8 +1,8 @@
 # IsaacLab-Imitation
 
 IsaacLab-Imitation is a multi-repo workspace for humanoid imitation learning on top of Isaac Lab. This repository
-contains the Isaac Lab extension code for the imitation environments, while the workspace also vendors or assumes local
-checkouts of the upstream `IsaacLab`, `RLOpt`, and `ImitationLearningTools` repositories (typically as git submodules).
+contains the Isaac Lab extension code for the imitation environments and pins the active `IsaacLab`, `RLOpt`, and
+`ImitationLearningTools` dependency checkouts as git submodules.
 
 The current focus is manager-based imitation environments for the Unitree G1 robot, with training flows built around
 RLOpt and RSL-RL.
@@ -14,6 +14,7 @@ RLOpt and RSL-RL.
 - `scripts/rsl_rl`: training entrypoints for RSL-RL
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test environment runners
 - `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/`: required submodule checkouts
+- `source/isaaclab_imitation/isaaclab_imitation/assets/unitree`: vendored Unitree G1 URDF, meshes, and robot config
 - `docker/cluster`: cluster submission utilities
 
 Registered task IDs currently include:
@@ -24,7 +25,7 @@ Registered task IDs currently include:
 
 ## Workspace setup
 
-Clone with submodules (recommended layout, with `IsaacLab` etc. as submodules inside this repo):
+Clone with submodules:
 
 ```bash
 git clone --recurse-submodules git@github.com:GTLIDAR/IsaacLab-Imitation.git
@@ -38,39 +39,30 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-This workspace also expects the upstream `IsaacLab`, `unitree_rl_lab`, and `loco-mujoco` repositories to be available
-either as submodules in this repo (under directories such as `IsaacLab/`) or as sibling checkouts next to it.
-
-When using sibling checkouts, a typical layout looks like:
+This workspace expects `IsaacLab`, `RLOpt`, and `ImitationLearningTools` to live under this repo as submodules. G1 robot
+configuration and the required URDF/mesh assets are vendored in this repo under `source/isaaclab_imitation`, so
+`unitree_rl_lab` is no longer required for training. `loco-mujoco` is optional and only needed when explicitly selecting
+the `loco_mujoco` loader.
 
 ```text
 /path/to/workspace-root/
   IsaacLab-Imitation/
-  IsaacLab/
-  unitree_rl_lab/
-  loco-mujoco/
+  loco-mujoco/  # optional
 ```
-
-In that case, make sure your Python tooling and environment configuration (for example, `PYTHONPATH` or editable
-installs) can see all of these repositories.
-
-If you are following the submodule-based layout, `IsaacLab` and the other vendored repos will live directly under
-`IsaacLab-Imitation/` instead.
-
-This workspace also expects `unitree_rl_lab` specifically as a sibling checkout for training and cluster workflows:
-
-```bash
-cd ..
-git clone https://github.com/unitreerobotics/unitree_rl_lab.git
-cd IsaacLab-Imitation
-```
-
-You also need to complete the upstream `unitree_rl_lab` setup, not just clone it. Follow the installation and asset
-setup steps in `../unitree_rl_lab/README.md` before running training or mimic-style data workflows in this repo.
 
 More detail on remotes, submodules, and cluster sync lives in [REPO_SETUP.md](REPO_SETUP.md).
 
 ## Installation
+
+Pick any conda environment name you want. The examples below use `SL`, but
+`SkillLearning` or another Python 3.11 environment name is also fine:
+
+```bash
+CONDA_ENV="${CONDA_ENV:-SL}"
+# Skip this line if the environment already exists.
+conda create -y -n "$CONDA_ENV" python=3.11
+conda activate "$CONDA_ENV"
+```
 
 Use the workspace installer:
 
@@ -84,6 +76,7 @@ The script does the following:
 - installs `uv` with `conda install -y uv`
 - initializes git submodules if `IsaacLab`, `RLOpt`, or `ImitationLearningTools` are incomplete
 - installs `ImitationLearningTools` and `RLOpt` in editable mode
+- installs LeRobot support when `INSTALL_LEROBOT=1` is set
 - installs `isaacsim[all,extscache]==5.1.0`
 - installs `torch==2.7.0` and `torchvision==0.22.0` from the CUDA 12.8 wheel index
 - runs `./isaaclab.sh -i none` inside `IsaacLab`
@@ -91,13 +84,140 @@ The script does the following:
 
 If you need the manual submodule setup details or cluster notes, see [REPO_SETUP.md](REPO_SETUP.md).
 
+To install optional LeRobot streaming dependencies for offline pretraining:
+
+```bash
+INSTALL_LEROBOT=1 ./scripts/install_workspace.sh
+```
+
+### LeRobot Reference Prep
+
+Convert a Unitree LeRobot desired-command episode into an Isaac FK reference NPZ
+at the native 30 Hz control rate. Use `observation.state.robot_q_current` only
+when you explicitly want to inspect measured robot tracking instead of the
+desired label sequence:
+
+```bash
+TERM=xterm PYTHONUNBUFFERED=1 \
+conda run -n "${CONDA_ENV:-SL}" python scripts/replay_unitree_lerobot_reference.py \
+    --headless \
+    --device cuda:0 \
+    --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
+    --episode_index 0 \
+    --state_field action.robot_q_desired \
+    --root_z_alignment none \
+    --max_frames 180 \
+    --output_fps 30 \
+    --no_video \
+    --npz_output data/unitree/npz/g1_wbt_pillow_ep0_30hz.npz \
+    --overwrite_npz
+```
+
+For multiple episodes, use `scripts/batch_csv_to_npz.py` with LeRobot jobs:
+
+```json
+[
+  {
+    "source_type": "lerobot",
+    "repo_id": "unitreerobotics/G1_WBT_Brainco_Pickup_Pillow",
+    "split": "train",
+    "episode_index": 0,
+    "state_field": "action.robot_q_desired",
+    "root_z_alignment": "none",
+    "max_frames": 180,
+    "input_fps": 30,
+    "output_name": "data/unitree/npz/g1_wbt_pillow_ep0_30hz.npz"
+  }
+]
+```
+
+```bash
+TERM=xterm PYTHONUNBUFFERED=1 \
+conda run -n "${CONDA_ENV:-SL}" python scripts/batch_csv_to_npz.py \
+    --headless \
+    --device cuda:0 \
+    --jobs_json data/unitree/lerobot_jobs.json \
+    --output_fps 30
+
+conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
+    --npz_dir data/unitree/npz \
+    --manifest_path data/unitree/manifests/g1_wbt_pillow_30hz.json \
+    --dataset_name unitree_lerobot
+```
+
+NPZ manifests with a single FPS auto-sync the G1 env control rate. A 30 Hz
+manifest uses 240 Hz physics with `env.decimation=8` unless timing is overridden.
+
+### Large LeRobot Streaming
+
+The current G1 WBT LeRobot collection list is tracked in
+`data/unitree/g1_wbt_lerobot_repos.json`. The IPMD bilinear config uses that
+list when `agent.offline_dataset.enabled=true`.
+
+Probe the multi-repo streaming cache without launching Isaac:
+
+```bash
+conda run -n "${CONDA_ENV:-SL}" python scripts/validate_lerobot_streaming_cache.py \
+    --repo_ids_file data/unitree/g1_wbt_lerobot_repos.json \
+    --max_episodes_per_repo 1 \
+    --min_ready_transitions 32 \
+    --max_cache_transitions 20000 \
+    --batch_size 16 \
+    --drain
+```
+
+For training-scale runs, leave `agent.offline_dataset.max_episodes_per_repo=0`
+and size the cache deliberately, for example:
+
+```bash
+agent.offline_dataset.enabled=true \
+agent.offline_dataset.min_ready_transitions=100000 \
+agent.offline_dataset.max_cache_transitions=5000000 \
+agent.offline_dataset.max_episodes=0 \
+agent.offline_dataset.max_episodes_per_repo=0
+```
+
+### Hugging Face And GitHub CLI
+
+```bash
+CONDA_ENV="${CONDA_ENV:-SL}"
+conda activate "$CONDA_ENV"
+
+# Hugging Face Hub CLI for LeRobot dataset access.
+uv pip install --system -U "huggingface_hub[cli]"
+hf auth login
+hf auth whoami
+
+# GitHub CLI is recommended for branch, push, PR, and CI workflows.
+conda install -y -c conda-forge gh
+gh auth login
+gh auth setup-git --hostname github.com
+gh auth status
+
+# Optional: only for direct git push/pull to https://huggingface.co.
+# This uses Git's plaintext store helper, scoped to Hugging Face only.
+git config --global credential.https://huggingface.co.helper store
+
+# If you are already logged in:
+hf auth list
+TOKEN_NAME=home-ubuntu
+hf auth switch --token-name "$TOKEN_NAME" --add-to-git-credential
+
+# If you are not logged in yet:
+hf auth login --add-to-git-credential
+
+# Remove the Hugging Face-scoped helper later if you no longer want it.
+git config --global --unset credential.https://huggingface.co.helper
+```
+
 ## Running training
 
 Examples below assume you are running from the repository root.
-Activate the `SkillLearning` conda environment first:
+Activate your conda environment first:
 
 ```bash
-conda activate SkillLearning
+CONDA_ENV="${CONDA_ENV:-SL}"
+conda activate "$CONDA_ENV"
 ```
 
 Train a G1 imitation policy with RLOpt IPMD:
@@ -120,6 +240,29 @@ python scripts/rlopt/train.py \
     --algo IPMD \
     --headless \
     env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json
+```
+
+The action-labeled Dance102 variant keeps the original NPZ intact and uses a
+locally generated label NPZ plus a separate manifest. Generate those artifacts
+with `scripts/rlopt/label_npz_with_policy.py` or provide your own matching
+manifest before launching:
+
+```bash
+python scripts/rlopt/train.py \
+    --task Isaac-Imitation-G1-Latent-v0 \
+    --algo IPMD_BILINEAR \
+    --headless \
+    env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_rlopt_ipmd_500m_actions_manifest.json \
+    env.reconstructed_reference_action=false \
+    agent.bilinear.offline_pretrain.policy_bc_updates=2000
+```
+
+For the cluster ablation set comparing scratch, state-only SR pretraining,
+reconstructed-action BC, and recorded-label BC:
+
+```bash
+DRY_RUN=1 experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
+experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
 ```
 
 Train with RLOpt PPO:
@@ -257,7 +400,7 @@ To bake the G1 arms-up alignment trim into the generated NPZ files, pass
 The underlying Python entrypoint is:
 
 ```bash
-conda run -n SkillLearning python scripts/setup_lafan1_dataset.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/setup_lafan1_dataset.py \
     --prepare-npz --headless
 ```
 
@@ -265,7 +408,7 @@ For the G1 retargeted set, the public CSV motions often begin with an arms-up
 alignment pose. To bake a per-motion trim into the generated NPZ files, add:
 
 ```bash
-conda run -n SkillLearning python scripts/setup_lafan1_dataset.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/setup_lafan1_dataset.py \
     --prepare-npz --headless \
     --auto_trim_mode g1_shoulder_roll
 ```
@@ -288,7 +431,7 @@ If `data/lafan1/manifests/g1_lafan1_manifest.json` already exists, you do not ne
 If you already have local NPZ files but no manifest yet, generate one directly:
 
 ```bash
-conda run -n SkillLearning python scripts/write_lafan1_npz_manifest.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_lafan1_manifest.json
 ```
@@ -304,7 +447,7 @@ cp source/isaaclab_imitation/isaaclab_imitation/manifests/g1_lafan1_manifest.tem
 For a smaller local subset:
 
 ```bash
-conda run -n SkillLearning python scripts/write_lafan1_npz_manifest.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_debug_manifest.json \
     --select dance1_subject1 dance1_subject2 walk1_subject1
@@ -315,7 +458,7 @@ conda run -n SkillLearning python scripts/write_lafan1_npz_manifest.py \
 Prepare local CSV motions into NPZ plus a manifest with:
 
 ```bash
-conda run -n SkillLearning python scripts/prepare_lafan1_from_csv.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -327,7 +470,7 @@ If you want one replay MP4 per converted motion, add `--record_videos` and `--vi
 To auto-trim the G1 arms-up alignment segment while rebuilding NPZ files, add:
 
 ```bash
-conda run -n SkillLearning python scripts/prepare_lafan1_from_csv.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -344,7 +487,7 @@ If you already have NPZ files and only want a trimmed manifest without
 rewriting those NPZ files, use:
 
 ```bash
-conda run -n SkillLearning python scripts/prepare_lafan1_from_csv.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -361,7 +504,7 @@ In that mode the per-motion trim is written into each manifest entry as
 If you only want the prepared NPZ subtree, use:
 
 ```bash
-conda run -n SkillLearning python scripts/setup_g1_lafan1_npz_dataset.py
+conda run -n "${CONDA_ENV:-SL}" python scripts/setup_g1_lafan1_npz_dataset.py
 ```
 
 That syncs `npz/g1` from the dataset repo `GeorgiaTech/g1_lafan1_50hz` into:
@@ -373,7 +516,7 @@ data/lafan1/npz/g1/
 Upload mode pushes the same local NPZ tree back to Hugging Face:
 
 ```bash
-conda run -n SkillLearning python scripts/setup_g1_lafan1_npz_dataset.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/setup_g1_lafan1_npz_dataset.py \
     --mode upload --token "$HF_TOKEN"
 ```
 
@@ -450,44 +593,45 @@ Recommended tools:
 - `pyrefly` for type and import checking
 - `pytest` for focused unit tests
 
-Use the `SkillLearning` conda environment for all checks. Prefer `conda run`
-for non-interactive commands so the repo uses the environment's Python and
-tooling.
+Use your selected conda environment for all checks. Prefer `conda run` for
+non-interactive commands so the repo uses that environment's Python and tooling:
+
+```bash
+CONDA_ENV="${CONDA_ENV:-SL}"
+```
 
 Install tools into that environment:
 
 ```bash
-conda run -n SkillLearning uv pip install --system ruff pyrefly pytest
+conda run -n "${CONDA_ENV:-SL}" uv pip install --system ruff pyrefly pytest
 ```
 
 Useful commands:
 
 ```bash
-conda run -n SkillLearning ruff check .
-conda run -n SkillLearning ruff format --check .
-conda run -n SkillLearning pyrefly check
+conda run -n "${CONDA_ENV:-SL}" ruff check .
+conda run -n "${CONDA_ENV:-SL}" ruff format --check .
+conda run -n "${CONDA_ENV:-SL}" pyrefly check
 ```
 
 Pure-Python pytest targets can run directly through the conda environment, for
 example:
 
 ```bash
-conda run -n SkillLearning pytest source/isaaclab_imitation/test_reference_patch_env.py
+conda run -n "${CONDA_ENV:-SL}" pytest source/isaaclab_imitation/test_reference_patch_env.py
 ```
 
 Tests that import Isaac Lab or Omniverse modules need Isaac Sim's Python
 bootstrap before imports such as `pxr` are available. Run those tests through
-the Isaac Lab launcher. In the sibling-checkout layout:
+the in-repo Isaac Lab submodule launcher:
 
 ```bash
-TERM=xterm conda run -n SkillLearning ../IsaacLab/isaaclab.sh -p -m pytest source/isaaclab_imitation/test_reference_patch_env.py
+TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p -m pytest source/isaaclab_imitation/test_reference_patch_env.py
 ```
 
-If `IsaacLab` is checked out as an in-repo submodule, use
-`./IsaacLab/isaaclab.sh` instead.
-
-`pyrefly` is configured by [pyrefly.toml](pyrefly.toml) and already includes
-the import roots for this repo plus sibling/source dependencies such as `IsaacLab` and `unitree_rl_lab`.
+`pyrefly` is configured by [source/isaaclab_imitation/pyproject.toml](source/isaaclab_imitation/pyproject.toml) and
+already includes the import roots for this repo plus dependency checkouts such as `IsaacLab`, `RLOpt`, and
+`ImitationLearningTools`.
 
 For VS Code, prefer the Ruff extension and terminal-based `pyrefly` checks. Pylance is not the recommended workflow for
 this workspace because the Isaac / Omniverse dependency tree is large, generated settings tend to drift, and static

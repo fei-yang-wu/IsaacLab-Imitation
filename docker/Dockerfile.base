@@ -35,10 +35,6 @@ ENV DOCKER_USER_HOME=${DOCKER_USER_HOME_ARG}
 # Isaac Lab core repository path in the workspace
 ENV ISAACLAB_CORE_PATH=${ISAACLAB_PATH}/IsaacLab
 
-# Default Unitree asset locations
-ENV UNITREE_MODEL_DIR=${ISAACLAB_PATH}/unitree_model
-ENV UNITREE_ROS_DIR=${ISAACLAB_PATH}/unitree_ros
-
 # Set environment variables
 ENV LANG=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
@@ -65,15 +61,6 @@ RUN --mount=type=cache,target=/var/cache/apt \
 # - ISAACLAB_CORE_PATH: IsaacLab core repo
 COPY ../ ${ISAACLAB_PATH}
 COPY --from=isaaclab / ${ISAACLAB_CORE_PATH}
-COPY --from=unitree_rl_lab / ${ISAACLAB_PATH}/unitree_rl_lab
-RUN mkdir -p ${ISAACLAB_PATH}/unitree_model
-COPY --from=unitree_model /B2 ${ISAACLAB_PATH}/unitree_model/B2
-COPY --from=unitree_model /G1 ${ISAACLAB_PATH}/unitree_model/G1
-COPY --from=unitree_model /Go2 ${ISAACLAB_PATH}/unitree_model/Go2
-COPY --from=unitree_model /Go2W ${ISAACLAB_PATH}/unitree_model/Go2W
-COPY --from=unitree_model /H1 ${ISAACLAB_PATH}/unitree_model/H1
-COPY --from=unitree_model /H1-2 ${ISAACLAB_PATH}/unitree_model/H1-2
-COPY --from=unitree_model /README.md ${ISAACLAB_PATH}/unitree_model/README.md
 
 # Old IsaacLab installation strategy.
 RUN chmod +x ${ISAACLAB_CORE_PATH}/isaaclab.sh
@@ -89,9 +76,6 @@ RUN --mount=type=cache,target=/var/cache/apt \
     ${ISAACLAB_CORE_PATH}/isaaclab.sh -p ${ISAACLAB_CORE_PATH}/tools/install_deps.py apt \
     ${ISAACLAB_PATH}/source \
     && \
-    ${ISAACLAB_CORE_PATH}/isaaclab.sh -p ${ISAACLAB_CORE_PATH}/tools/install_deps.py apt \
-    ${ISAACLAB_PATH}/unitree_rl_lab/source \
-    && \
     apt -y autoremove && apt clean autoclean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -105,9 +89,9 @@ RUN ${ISAACLAB_CORE_PATH}/isaaclab.sh -p -c "from importlib import metadata; pac
 RUN --mount=type=cache,target=${DOCKER_USER_HOME}/.cache/pip \
     ${ISAACLAB_CORE_PATH}/isaaclab.sh -p -m pip install \
     -e ${ISAACLAB_PATH}/source/isaaclab_imitation \
-    -e ${ISAACLAB_PATH}/unitree_rl_lab/source/unitree_rl_lab
-RUN ${ISAACLAB_CORE_PATH}/isaaclab.sh -p -c "from importlib import metadata; packages=['isaaclab_imitation','unitree_rl_lab']; versions={name: metadata.version(name) for name in packages}; print('Verified installed local packages:', versions)"
-RUN ${ISAACLAB_CORE_PATH}/isaaclab.sh -p -c "from pathlib import Path; root=Path('${UNITREE_MODEL_DIR}'); required=['B2','G1','Go2','Go2W','H1','H1-2']; missing=[name for name in required if not (root / name).exists()]; assert not missing, f'Missing Unitree model directories: {missing}'; print('Verified Unitree model directories:', ', '.join(required))"
+    -e ${ISAACLAB_PATH}/RLOpt \
+    -e ${ISAACLAB_PATH}/ImitationLearningTools
+RUN ${ISAACLAB_CORE_PATH}/isaaclab.sh -p -c "from importlib import metadata; packages=['isaaclab_imitation','rlopt','iltools']; versions={name: metadata.version(name) for name in packages}; print('Verified installed local packages:', versions)"
 
 # Keep optional dependency behavior aligned with prior image.
 RUN ${ISAACLAB_CORE_PATH}/isaaclab.sh -p -m pip uninstall -y quadprog || true
@@ -135,8 +119,6 @@ RUN touch /bin/nvidia-smi && \
 # Aliases and environment setup for interactive shells.
 RUN echo "export ISAACLAB_WORKSPACE_PATH=${ISAACLAB_PATH}" >> ${HOME}/.bashrc && \
     echo "export ISAACLAB_PATH=${ISAACLAB_CORE_PATH}" >> ${HOME}/.bashrc && \
-    echo "export UNITREE_MODEL_DIR=${UNITREE_MODEL_DIR}" >> ${HOME}/.bashrc && \
-    echo "export UNITREE_ROS_DIR=${UNITREE_ROS_DIR}" >> ${HOME}/.bashrc && \
     echo "alias isaaclab=${ISAACLAB_CORE_PATH}/isaaclab.sh" >> ${HOME}/.bashrc && \
     echo "alias python=${ISAACLAB_CORE_PATH}/_isaac_sim/python.sh" >> ${HOME}/.bashrc && \
     echo "alias python3=${ISAACLAB_CORE_PATH}/_isaac_sim/python.sh" >> ${HOME}/.bashrc && \

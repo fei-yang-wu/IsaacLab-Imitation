@@ -17,12 +17,16 @@ from pathlib import Path
 def _append_workspace_sources() -> None:
     """Best-effort source path setup for local mono-workspace usage."""
     this_file = Path(__file__).resolve()
-    workspace_root = this_file.parents[2]
+    repo_root = this_file.parents[1]
+    workspace_root = repo_root.parent
     candidate_paths = [
+        repo_root / "IsaacLab" / "source" / "isaaclab",
+        repo_root / "IsaacLab" / "source" / "isaaclab_tasks",
+        repo_root / "source" / "isaaclab_imitation",
+        repo_root / "ImitationLearningTools",
+        repo_root / "RLOpt",
         workspace_root / "IsaacLab" / "source" / "isaaclab",
         workspace_root / "IsaacLab" / "source" / "isaaclab_tasks",
-        workspace_root / "IsaacLab-Imitation" / "source" / "isaaclab_imitation",
-        workspace_root / "unitree_rl_lab" / "source" / "unitree_rl_lab",
         workspace_root / "ImitationLearningTools",
     ]
     for candidate in candidate_paths:

@@ -16,18 +16,19 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
+from isaaclab_imitation.assets.robots.unitree import (
+    UNITREE_G1_29DOF_SDK_JOINT_NAMES,
+    UNITREE_G1_29DOF_MIMIC_ACTION_SCALE,
+    UNITREE_G1_29DOF_MIMIC_CFG,
+)
+
 from ... import mdp
 from ...imitation_env_cfg import ImitationLearningEnvCfg
 from ...lafan1_manifest import (
     build_lafan1_loader_kwargs,
     dataset_path_from_entries,
+    infer_npz_manifest_control_freq,
     load_lafan1_manifest,
-)
-
-# Import g1 29DOF from unitree_rl_lab
-from unitree_rl_lab.assets.robots.unitree import (
-    UNITREE_G1_29DOF_MIMIC_ACTION_SCALE,
-    UNITREE_G1_29DOF_MIMIC_CFG,
 )
 
 
@@ -40,39 +41,9 @@ VELOCITY_RANGE = {
     "yaw": (-0.78, 0.78),
 }
 
-G1_29DOF_JOINT_NAMES: list[str] = [
-    "left_hip_pitch_joint",
-    "left_hip_roll_joint",
-    "left_hip_yaw_joint",
-    "left_knee_joint",
-    "left_ankle_pitch_joint",
-    "left_ankle_roll_joint",
-    "right_hip_pitch_joint",
-    "right_hip_roll_joint",
-    "right_hip_yaw_joint",
-    "right_knee_joint",
-    "right_ankle_pitch_joint",
-    "right_ankle_roll_joint",
-    "waist_yaw_joint",
-    "waist_roll_joint",
-    "waist_pitch_joint",
-    "left_shoulder_pitch_joint",
-    "left_shoulder_roll_joint",
-    "left_shoulder_yaw_joint",
-    "left_elbow_joint",
-    "left_wrist_roll_joint",
-    "left_wrist_pitch_joint",
-    "left_wrist_yaw_joint",
-    "right_shoulder_pitch_joint",
-    "right_shoulder_roll_joint",
-    "right_shoulder_yaw_joint",
-    "right_elbow_joint",
-    "right_wrist_roll_joint",
-    "right_wrist_pitch_joint",
-    "right_wrist_yaw_joint",
-]
+G1_29DOF_JOINT_NAMES: list[str] = list(UNITREE_G1_29DOF_SDK_JOINT_NAMES)
 
-# Body tracking set aligned with unitree_rl_lab/tasks/mimic/.../tracking_env_cfg.py.
+# Body tracking set aligned with the original Unitree G1 mimic tracking config.
 G1_TRACKED_BODY_NAMES: list[str] = [
     "pelvis",
     "left_hip_roll_link",
@@ -644,6 +615,8 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
     motions: list[str] | None = None
     trajectories: list[str] | None = None
     wrap_steps: bool = False
+    sync_control_rate_to_manifest: bool = True
+    preferred_manifest_physics_fps: float = 240.0
     reconstructed_reference_action: bool = True
     reconstructed_reference_action_mode = "next_pose"
     random_reset_full_trajectory: bool = True
@@ -738,16 +711,62 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
             source["path"] = str(source_path)
             self._validate_source_path(source_path)
 
+    def _set_control_frequency(self, control_freq: float) -> None:
+        control_freq = float(control_freq)
+        if control_freq <= 0.0:
+            raise ValueError("control_freq must be positive.")
+
+        def _integer_timing_for(
+            physics_fps: float,
+        ) -> tuple[float, int] | None:
+            if physics_fps <= 0.0:
+                return None
+            decimation = max(int(round(physics_fps / control_freq)), 1)
+            actual_control_freq = physics_fps / decimation
+            if abs(actual_control_freq - control_freq) <= 1.0e-6:
+                return 1.0 / physics_fps, decimation
+            return None
+
+        current_physics_fps = 1.0 / float(self.sim.dt)
+        timing = _integer_timing_for(current_physics_fps)
+        if timing is None:
+            timing = _integer_timing_for(float(self.preferred_manifest_physics_fps))
+        if timing is None:
+            timing = (1.0 / control_freq, 1)
+
+        self.sim.dt, self.decimation = timing
+        self.sim.render_interval = self.decimation
+        if self.scene.contact_forces is not None:
+            self.scene.contact_forces.update_period = self.sim.dt
+
+    def _sync_control_rate_to_manifest_entries(
+        self,
+        source_entries: list[dict[str, object]],
+        *,
+        timing_explicit: bool = False,
+    ) -> None:
+        if timing_explicit or not bool(self.sync_control_rate_to_manifest):
+            return
+        control_freq = infer_npz_manifest_control_freq(source_entries)
+        if control_freq is None:
+            return
+        self._set_control_frequency(control_freq)
+
     def _resolve_manifest_config(
         self,
         *,
         dataset_path_explicit: bool = False,
         motions_explicit: bool = False,
+        timing_explicit: bool = False,
     ) -> None:
         if self.lafan1_manifest_path is None:
             return
 
         _, manifest_entries = load_lafan1_manifest(self.lafan1_manifest_path)
+        self._sync_control_rate_to_manifest_entries(
+            manifest_entries,
+            timing_explicit=timing_explicit,
+        )
         self.loader_type = "lafan1_csv"
         self.loader_kwargs = build_lafan1_loader_kwargs(
             entries=manifest_entries,
@@ -791,6 +810,9 @@ def _g1_lafan_track_env_cfg_from_dict(
 ) -> None:
     dataset_path_explicit = isinstance(data, Mapping) and "dataset_path" in data
     motions_explicit = isinstance(data, Mapping) and "motions" in data
+    timing_explicit = isinstance(data, Mapping) and (
+        "sim" in data or "decimation" in data
+    )
 
     if isinstance(data, Mapping):
         data = self._apply_optional_hydra_overrides(data)
@@ -803,6 +825,7 @@ def _g1_lafan_track_env_cfg_from_dict(
     self._resolve_manifest_config(
         dataset_path_explicit=dataset_path_explicit,
         motions_explicit=motions_explicit,
+        timing_explicit=timing_explicit,
     )
 
 

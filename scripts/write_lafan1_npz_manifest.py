@@ -7,11 +7,11 @@
 """Generate a LAFAN1 manifest JSON from an existing folder of NPZ motions.
 
 Examples:
-    conda run -n SkillLearning python scripts/write_lafan1_npz_manifest.py \
+    conda run -n SL python scripts/write_lafan1_npz_manifest.py \
       --npz_dir data/lafan1/npz/g1 \
       --manifest_path data/lafan1/manifests/g1_lafan1_manifest.json
 
-    conda run -n SkillLearning python scripts/write_lafan1_npz_manifest.py \
+    conda run -n SL python scripts/write_lafan1_npz_manifest.py \
       --npz_dir data/lafan1/npz/g1 \
       --manifest_path data/lafan1/manifests/g1_debug_manifest.json \
       --select dance1_subject1 dance1_subject2 walk1_subject1
@@ -88,7 +88,9 @@ def _resolve_selected_files(all_files: list[Path], selections: list[str]) -> lis
                 )
 
         if resolved is None:
-            raise FileNotFoundError(f"Could not match selection '{query}' to an NPZ file.")
+            raise FileNotFoundError(
+                f"Could not match selection '{query}' to an NPZ file."
+            )
         if resolved not in seen:
             seen.add(resolved)
             selected.append(resolved)
@@ -165,11 +167,14 @@ def main() -> None:
         raise RuntimeError(f"No NPZ files found under: {npz_dir}")
 
     selected_queries = list(args.select or [])
-    npz_files = _resolve_selected_files(all_files=all_npz_files, selections=selected_queries)
+    npz_files = _resolve_selected_files(
+        all_files=all_npz_files, selections=selected_queries
+    )
     if len(npz_files) == 0:
         raise RuntimeError("No NPZ files selected for the manifest.")
 
     manifest_entries: list[dict[str, object]] = []
+    manifest_fps_values: list[float] = []
     for npz_file in npz_files:
         relative_no_suffix = npz_file.relative_to(npz_dir).with_suffix("")
         motion_name = _sanitize_motion_name(relative_no_suffix)
@@ -177,6 +182,10 @@ def main() -> None:
             motion_name = f"{args.motion_name_prefix}{motion_name}"
 
         fps = _read_npz_fps(npz_file)
+        entry_fps = float(
+            fps if fps is not None and fps > 0.0 else args.fallback_input_fps
+        )
+        manifest_fps_values.append(entry_fps)
         entry_path = (
             os.path.relpath(npz_file, manifest_path.parent)
             if args.path_mode == "relative"
@@ -186,11 +195,15 @@ def main() -> None:
             {
                 "name": motion_name,
                 "path": entry_path,
-                "input_fps": float(
-                    fps if fps is not None and fps > 0.0 else args.fallback_input_fps
-                ),
+                "input_fps": entry_fps,
             }
         )
+
+    inferred_control_freq = None
+    if manifest_fps_values and all(
+        abs(value - manifest_fps_values[0]) <= 1.0e-6 for value in manifest_fps_values
+    ):
+        inferred_control_freq = manifest_fps_values[0]
 
     manifest = {
         "dataset_name": args.dataset_name,
@@ -207,6 +220,8 @@ def main() -> None:
             "selected_queries": selected_queries,
             "generated_from_existing_npz": True,
             "path_mode": args.path_mode,
+            "fps_values": manifest_fps_values,
+            "control_freq": inferred_control_freq,
         },
     }
 

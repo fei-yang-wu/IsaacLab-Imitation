@@ -12,7 +12,7 @@ RLOPT_VQVAE_DIR="${RLOPT_VQVAE_DIR:-${WORKSPACE_ROOT}/RLOpt-vqvae}"
 TASK="Isaac-Imitation-G1-Latent-VQVAE-v0"
 MANIFEST="./data/unitree/manifests/g1_unitree_dance102_manifest.json"
 DATASET="/tmp/iltools_g1_lafan1_tracking_g1_unitree_dance102_manifest_6d26546fd54a"
-CONDA_ENV="${CONDA_ENV:-SkillLearning-vqvae}"
+CONDA_ENV="${CONDA_ENV:-SL}"
 
 VARIANTS=(
     vqvae_p10_d64

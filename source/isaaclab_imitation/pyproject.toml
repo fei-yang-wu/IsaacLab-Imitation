@@ -2,20 +2,17 @@
 requires = ["setuptools", "wheel", "toml"]
 build-backend = "setuptools.build_meta"
 
-# expects the IsaacLab, unitree_rl_lab, and loco-mujoco projects to be in the parent directory
+# Prefer in-repo submodules. Optional loaders should resolve through the active
+# environment or explicit local overrides instead of default type-check paths.
 [tool.pyrefly]
 search-path = [
     "isaaclab_imitation",
-    "../../../IsaacLab/source/isaaclab",
-    "../../../IsaacLab/source/isaaclab_tasks",
-    "../../../IsaacLab/source/isaaclab_assets",
-    "../../../IsaacLab/source/isaaclab_mimic",
-    "../../../IsaacLab/source/isaaclab_rl",
-    "../../../IsaacLab/source/isaaclab_tasks",
-    "../../../IsaacLab/source/isaaclab_assets",
-    "../../../IsaacLab/source/isaaclab_mimic",
-    "../../../IsaacLab/source/isaaclab_rl",
-    "../../../unitree_rl_lab/source/unitree_rl_lab",
-    "../../../loco-mujoco/loco_mujoco",
+    "../../IsaacLab/source/isaaclab",
+    "../../IsaacLab/source/isaaclab_tasks",
+    "../../IsaacLab/source/isaaclab_assets",
+    "../../IsaacLab/source/isaaclab_mimic",
+    "../../IsaacLab/source/isaaclab_rl",
+    "../../RLOpt",
+    "../../ImitationLearningTools",
 ]
 disable-type-errors-in-ide = false

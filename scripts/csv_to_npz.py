@@ -16,6 +16,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -28,11 +29,11 @@ def _append_workspace_sources() -> None:
     repo_root = this_file.parents[1]
     workspace_root = repo_root.parent
     candidate_paths = [
+        repo_root / "IsaacLab" / "source" / "isaaclab",
+        repo_root / "IsaacLab" / "source" / "isaaclab_tasks",
+        repo_root / "source" / "isaaclab_imitation",
         workspace_root / "IsaacLab" / "source" / "isaaclab",
         workspace_root / "IsaacLab" / "source" / "isaaclab_tasks",
-        repo_root / "source" / "isaaclab_imitation",
-        workspace_root / "unitree_rl_lab" / "source" / "unitree_rl_lab",
-        repo_root / "unitree_rl_lab" / "source" / "unitree_rl_lab",
     ]
     for candidate in candidate_paths:
         if candidate.is_dir():
@@ -146,7 +147,7 @@ import omni.kit.app
 ##
 # Pre-defined configs
 ##
-from unitree_rl_lab.assets.robots.unitree import (
+from isaaclab_imitation.assets.robots.unitree import (
     UNITREE_G1_29DOF_CFG as ROBOT_CFG,
 )  # Currently only support G1-29dof
 
@@ -232,6 +233,9 @@ class MotionLoader:
         self.motion_base_rots_input = self.motion_base_rots_input[
             :, [3, 0, 1, 2]
         ]  # convert to wxyz
+        self.motion_base_rots_input = self._make_quat_continuous(
+            self._normalize_quat(self.motion_base_rots_input)
+        )
         self.motion_dof_poss_input = motion[:, 7:]
 
         self.input_frames = motion.shape[0]
@@ -242,6 +246,18 @@ class MotionLoader:
 
     def _interpolate_motion(self):
         """Interpolates the motion to the output fps."""
+        if self.input_frames < 2:
+            raise ValueError("Need at least two frames to interpolate a motion.")
+        if np.isclose(float(self.input_fps), float(self.output_fps)):
+            self.motion_base_poss = self.motion_base_poss_input
+            self.motion_base_rots = self.motion_base_rots_input
+            self.motion_dof_poss = self.motion_dof_poss_input
+            self.output_frames = int(self.input_frames)
+            print(
+                f"Motion kept at native fps, frames: {self.output_frames}, fps: {self.output_fps}"
+            )
+            return
+
         times = torch.arange(
             0, self.duration, self.output_dt, device=self.device, dtype=torch.float32
         )
@@ -282,6 +298,18 @@ class MotionLoader:
             slerped_quats[i] = quat_slerp(a[i], b[i], blend[i])
         return slerped_quats
 
+    def _normalize_quat(self, quat: torch.Tensor) -> torch.Tensor:
+        """Normalize WXYZ quaternions."""
+        return quat / quat.norm(dim=-1, keepdim=True).clamp_min(1.0e-8)
+
+    def _make_quat_continuous(self, quat: torch.Tensor) -> torch.Tensor:
+        """Choose quaternion signs consistently over time."""
+        quat = quat.clone()
+        for index in range(1, quat.shape[0]):
+            if torch.dot(quat[index - 1], quat[index]) < 0:
+                quat[index] = -quat[index]
+        return quat
+
     def _compute_frame_blend(self, times: torch.Tensor) -> torch.Tensor:
         """Computes the frame blend for the motion."""
         phase = times / self.duration
@@ -311,6 +339,12 @@ class MotionLoader:
         Returns:
             shape (B, 3).
         """
+        if rotations.shape[0] < 3:
+            return torch.zeros(
+                (rotations.shape[0], 3),
+                dtype=rotations.dtype,
+                device=rotations.device,
+            )
         q_prev, q_next = rotations[:-2], rotations[2:]
         q_rel = quat_mul(q_next, quat_conjugate(q_prev))  # shape (B−2, 4)
 
@@ -433,8 +467,6 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # ------- data logger -------------------------------------------------------
     log = {
         "fps": [args_cli.output_fps],
-        "joint_pos": [],
-        "joint_vel": [],
         "body_pos_w": [],
         "body_quat_w": [],
         "body_lin_vel_w": [],
@@ -479,8 +511,6 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         scene.update(sim.get_physics_dt())
 
         if not file_saved:
-            log["joint_pos"].append(robot.data.joint_pos[0, :].cpu().numpy().copy())
-            log["joint_vel"].append(robot.data.joint_vel[0, :].cpu().numpy().copy())
             log["body_pos_w"].append(robot.data.body_pos_w[0, :].cpu().numpy().copy())
             log["body_quat_w"].append(robot.data.body_quat_w[0, :].cpu().numpy().copy())
             log["body_lin_vel_w"].append(
@@ -493,14 +523,34 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         if reset_flag and not file_saved:
             file_saved = True
             for k in (
-                "joint_pos",
-                "joint_vel",
                 "body_pos_w",
                 "body_quat_w",
                 "body_lin_vel_w",
                 "body_ang_vel_w",
             ):
                 log[k] = np.stack(log[k], axis=0)
+
+            root_pos = motion.motion_base_poss.cpu().numpy().astype(np.float32)
+            root_quat = motion.motion_base_rots.cpu().numpy().astype(np.float32)
+            root_lin_vel = motion.motion_base_lin_vels.cpu().numpy().astype(np.float32)
+            root_ang_vel = motion.motion_base_ang_vels.cpu().numpy().astype(np.float32)
+            joint_pos_target = motion.motion_dof_poss.cpu().numpy().astype(np.float32)
+            joint_vel_target = motion.motion_dof_vels.cpu().numpy().astype(np.float32)
+            log["root_pos"] = root_pos
+            log["root_quat"] = root_quat
+            log["root_lin_vel"] = root_lin_vel
+            log["root_ang_vel"] = root_ang_vel
+            log["joint_pos"] = joint_pos_target
+            log["joint_vel"] = joint_vel_target
+            log["qpos"] = np.concatenate(
+                [root_pos, root_quat, joint_pos_target], axis=-1
+            ).astype(np.float32)
+            log["qvel"] = np.concatenate(
+                [root_lin_vel, root_ang_vel, joint_vel_target], axis=-1
+            ).astype(np.float32)
+            log["joint_names"] = np.asarray(
+                scene.cfg.robot.joint_sdk_names, dtype=np.str_
+            )
 
             np.savez(args_cli.output_name, **log)
             print("[INFO]: Motion npz file saved to", args_cli.output_name)
@@ -529,5 +579,7 @@ def main():
 if __name__ == "__main__":
     # run the main function
     main()
-    # close sim app
-    simulation_app.close()
+    # Isaac Sim shutdown can hang after one-shot offline conversion.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

@@ -8,11 +8,11 @@ Work in repo-owned files:
 - `source/isaaclab_imitation/` — installable Isaac Lab extension
 - `scripts/` — training, playback, data prep entrypoints
 - `docker/` — cluster and container workflows
-- Top-level configs: `pyrefly.toml`, `.pre-commit-config.yaml`
+- Top-level configs such as `.pre-commit-config.yaml` and package config files such as `source/isaaclab_imitation/pyproject.toml`
 
-Treat `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/` as **read-only dependencies**. Don't fix code inside them unless task explicitly requires; prefer wrappers, config, or docs instead.
+Treat `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/` as dependency submodules. Don't fix code inside them unless the task explicitly requires it; prefer wrappers, config, or docs when the ownership belongs in this repo.
 
-For RLOpt: don't edit vendored submodule at `IsaacLab-Imitation/RLOpt/`. Use installed sibling repo at `/home/fwu91/Documents/Research/SkillLearning/RLOpt` as authoritative `rlopt` codebase. Don't add path overrides forcing submodule copy.
+For RLOpt or ImitationLearningTools work, use the in-repo submodules at `./RLOpt` and `./ImitationLearningTools` as the authoritative codebases, then update the top-level submodule pointers.
 
 Before editing agent guidance or ownership rules, read
 `wiki/context-management.md`. Keep `AGENTS.md` and `CLAUDE.md` short; put
@@ -20,35 +20,38 @@ longer status, rationale, and strategy in `wiki/`.
 
 ## Environment
 
-Always use `SkillLearning` conda env:
+Do not assume a fixed conda env. Ask the user which environment they prefer if
+the current thread has not already specified one. Use `$CONDA_ENV` in reusable
+commands; `SL` and `SkillLearning` are examples.
 
 ```bash
-conda run -n SkillLearning <command>
+CONDA_ENV="${CONDA_ENV:-SL}"
+conda run -n "${CONDA_ENV:-SL}" <command>
 # or activate interactively:
-conda activate SkillLearning
+conda activate "$CONDA_ENV"
 ```
 
 ## Common commands
 
 **Linting and formatting:**
 ```bash
-conda run -n SkillLearning ruff check .
-conda run -n SkillLearning ruff format --check .
-conda run -n SkillLearning pyrefly check
+conda run -n "${CONDA_ENV:-SL}" ruff check .
+conda run -n "${CONDA_ENV:-SL}" ruff format --check .
+conda run -n "${CONDA_ENV:-SL}" pyrefly check
 # Apply formatting:
-conda run -n SkillLearning ruff format .
+conda run -n "${CONDA_ENV:-SL}" ruff format .
 ```
 
 **Smoke test (fast, no GPU training):**
 ```bash
-conda run -n SkillLearning python scripts/zero_agent.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/zero_agent.py \
     --task Isaac-Imitation-G1-v0 \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
 **Run training (RLOpt IPMD on latent task — recommended):**
 ```bash
-conda run -n SkillLearning python scripts/rlopt/train.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/rlopt/train.py \
     --task Isaac-Imitation-G1-Latent-v0 \
     --algo IPMD \
     --headless \
@@ -57,7 +60,7 @@ conda run -n SkillLearning python scripts/rlopt/train.py \
 
 **Quick single-motion run (dance102):**
 ```bash
-conda run -n SkillLearning python scripts/rlopt/train.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/rlopt/train.py \
     --task Isaac-Imitation-G1-Latent-v0 \
     --algo IPMD \
     --headless \
@@ -66,7 +69,7 @@ conda run -n SkillLearning python scripts/rlopt/train.py \
 
 **Play back a checkpoint:**
 ```bash
-conda run -n SkillLearning python scripts/rlopt/play.py \
+conda run -n "${CONDA_ENV:-SL}" python scripts/rlopt/play.py \
     --task Isaac-Imitation-G1-v0 \
     --checkpoint /path/to/checkpoint.pt \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
@@ -130,7 +133,7 @@ Each manifest entry requires `path` (or `file`) and `input_fps` fields.
 
 - **Hydra overrides**: pass config overrides as positional CLI args after script flags, e.g. `env.lafan1_manifest_path=...`, `ipmd.use_latent_command=False`.
 - **`--task`** selects registered gym env; **`--algo`** selects RLOpt agent config via `rlopt_<algo>_cfg_entry_point`.
-- **Type checking**: `pyrefly.toml` at repo root configures search paths for `pyrefly`. Don't modify `pyrightconfig.json` or VS Code Pylance settings.
+- **Type checking**: `source/isaaclab_imitation/pyproject.toml` configures search paths for `pyrefly`. Don't modify `pyrightconfig.json` or VS Code Pylance settings.
 - **Logs**: written under `logs/`; `outputs/` holds Hydra outputs. Both gitignored.
 - **Cluster jobs**: managed via `docker/cluster/cluster_interface.sh`. See `REPO_SETUP.md` and `docker/cluster/.env.cluster` for env var config.
 - **G1 Dance102 cluster jobs**: for simple Dance102 experiments, set `CLUSTER_G1_MANIFEST_PATH` in `docker/cluster/.env.cluster` to the Dance102 manifest. If that line is commented out, the job is using the default 40 trajectories.

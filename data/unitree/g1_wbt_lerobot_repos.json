@@ -1,0 +1,19 @@
+{
+  "collection": "https://huggingface.co/collections/unitreerobotics/unifolm-wbt-dataset",
+  "updated_from_collection_on": "2026-05-13",
+  "repo_ids": [
+    "unitreerobotics/G1_WBT_Inspire_Collect_Clothes_MainCamOnly",
+    "unitreerobotics/G1_WBT_Inspire_Pickup_Pillow_MainCamOnly",
+    "unitreerobotics/G1_WBT_Inspire_Put_Clothes_into_Washing_Machine_MainCamOnly",
+    "unitreerobotics/G1_WBT_Brainco_Collect_Plates_Into_Dishwasher",
+    "unitreerobotics/G1_WBT_Brainco_Pickup_Pillow",
+    "unitreerobotics/G1_WBT_Inspire_Put_Clothes_into_Washing_Machine",
+    "unitreerobotics/G1_WBT_Brainco_Make_The_Bed",
+    "unitreerobotics/G1_WBT_Inspire_Put_Clothes_Into_Basket",
+    "unitreerobotics/G1_WBT_Dex1_Put_Clothes_into_Washing_Machine",
+    "unitreerobotics/G1_WBT_Inspire_Put_Drinks_Into_Fridge",
+    "unitreerobotics/G1_WBT_Inspire_Put_Vegetables_Into_Basket",
+    "unitreerobotics/G1_WBT_Brainco_Pick_Up_Medicine",
+    "unitreerobotics/G1_WBT_Inspire_Pick_Up_Drinks"
+  ]
+}

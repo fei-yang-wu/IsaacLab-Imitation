@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CONDA_ENV_NAME="${CONDA_ENV_NAME:-SkillLearning}"
+CONDA_ENV_NAME="${CONDA_ENV_NAME:-SL}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 
 log() {

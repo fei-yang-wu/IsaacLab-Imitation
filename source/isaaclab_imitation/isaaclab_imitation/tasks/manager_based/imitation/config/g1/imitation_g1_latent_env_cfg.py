@@ -115,10 +115,31 @@ class G1LatentObservationCfg:
     ExpertWindowCfg = G1ObservationCfg.ExpertWindowCfg
     RewardInputCfg = G1ObservationCfg.RewardInputCfg
 
+    @configclass
+    class ExpertGoalCfg(ObsGroup):
+        """Single future expert goal observations exposed for hierarchical skills."""
+
+        expert_motion = ObsTerm(
+            func=mdp.expert_goal_motion,
+            params=_g1_expert_motion_obs_params(),
+        )
+        expert_anchor_pos_b = ObsTerm(
+            func=mdp.expert_goal_anchor_pos_b,
+            params=_g1_expert_anchor_obs_params(),
+        )
+        expert_anchor_ori_b = ObsTerm(
+            func=mdp.expert_goal_anchor_ori_b,
+            params=_g1_expert_anchor_obs_params(),
+        )
+
+        def __post_init__(self):
+            self.concatenate_terms = False
+
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
     expert_state: ExpertStateCfg = ExpertStateCfg()
     expert_window: ExpertWindowCfg = ExpertWindowCfg()
+    expert_goal: ExpertGoalCfg = ExpertGoalCfg()
     reward_input: RewardInputCfg = RewardInputCfg()
 
 
@@ -131,6 +152,7 @@ class ImitationG1LatentEnvCfg(ImitationG1LafanTrackEnvCfg):
     # Debug: publish the single-step vanilla tracker reference payload into
     # latent_command: expert_motion (58) + expert_anchor_ori_b (6) = 64.
     latent_command_dim: int = 64
+    latent_goal_steps: int = 1
 
     def __post_init__(self):
         super().__post_init__()
@@ -140,10 +162,31 @@ class ImitationG1LatentEnvCfg(ImitationG1LafanTrackEnvCfg):
         self.random_reset_step_max = 200
         self.random_reset_full_trajectory = False
         self._sync_expert_window_observation_params()
+        self._sync_expert_goal_observation_params()
         # No reference-based terminations in latent mode
         # self.terminations.anchor_pos = None
         # self.terminations.anchor_ori = None
         # self.terminations.ee_body_pos = None
 
+    def _sync_expert_goal_observation_params(self) -> None:
+        goal_steps = int(self.latent_goal_steps)
+        if goal_steps < 0:
+            raise ValueError("latent_goal_steps must be >= 0.")
+        for term in (
+            self.observations.expert_goal.expert_motion,
+            self.observations.expert_goal.expert_anchor_pos_b,
+            self.observations.expert_goal.expert_anchor_ori_b,
+        ):
+            term.params["goal_steps"] = goal_steps
+
+
+@configclass
+class ImitationG1LatentGoalEnvCfg(ImitationG1LatentEnvCfg):
+    """Latent G1 env whose posterior command observes a held future goal state."""
+
+    latent_command_dim: int = 128
+    latent_goal_steps: int = 25
+
 
 ImitationG1LatentEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+ImitationG1LatentGoalEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict

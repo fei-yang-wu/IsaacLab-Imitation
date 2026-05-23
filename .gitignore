@@ -24,6 +24,7 @@ docker/.container.cfg
 # IDE
 **/.idea/
 **/.vscode/
+/.claude/
 # Don't ignore the top-level .vscode directory as it is
 # used to configure VS Code settings
 !.vscode
@@ -54,9 +55,11 @@ _build
 
 # Pre-Trained Checkpoints
 /.pretrained_checkpoints/
+/checkpoints/
 
 # Teleop Recorded Dataset
 /datasets/
+/offline_dataset_cache/
 
 # Tests
 tests/
@@ -75,3 +78,6 @@ data/*
 !data/unitree
 
 .omc/
+
+# Generated motion label and rollout artifacts
+data/**/*.npz
