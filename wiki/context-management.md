@@ -116,9 +116,9 @@ For a coding agent starting in this repo:
    - `IsaacLab-Imitation` for env/config/script/cluster/docs.
    - `./RLOpt` for algorithm runtime.
    - `./ImitationLearningTools` for reusable dataset tooling.
-8. If conda commands are needed and the user has not already named an
-   environment, ask which environment they prefer. Use `$CONDA_ENV` in reusable
-   command examples; `SL` and `SkillLearning` are examples only.
+8. Use Pixi for repo-owned environments. Default commands run through
+   `pixi run`; Isaac Sim / Isaac Lab workflows run through
+   `pixi run -e isaaclab`.
 9. Prefer construction-time validation and fail-fast errors. Avoid defensive
    runtime guards in algorithmic hot paths.
 10. Run the smallest relevant validation command.
@@ -143,19 +143,14 @@ context makes agents slower and increases the chance they follow stale plans.
 ## External CLI Setup
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-conda activate "$CONDA_ENV"
-
 # Hugging Face Hub CLI for LeRobot dataset access.
-uv pip install --system -U "huggingface_hub[cli]"
-hf auth login
-hf auth whoami
+pixi run -e lerobot hf auth login
+pixi run -e lerobot hf auth whoami
 
 # GitHub CLI is recommended for branch, push, PR, and CI workflows.
-conda install -y -c conda-forge gh
-gh auth login
-gh auth setup-git --hostname github.com
-gh auth status
+pixi run gh auth login
+pixi run gh auth setup-git --hostname github.com
+pixi run gh auth status
 
 # Optional: only for direct git push/pull to https://huggingface.co.
 # This uses Git's plaintext store helper, scoped to Hugging Face only.
@@ -214,8 +209,8 @@ Pick the smallest relevant check:
 | --- | --- |
 | Docs only | `git diff --check` |
 | Shell scripts | `bash -n <script>` |
-| Pure Python helper or env sampling tests | `conda run -n "${CONDA_ENV:-SL}" pytest source/isaaclab_imitation/test_reference_patch_env.py` |
-| Isaac Lab imports or runtime env behavior | `TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p -m pytest source/isaaclab_imitation/test_reference_patch_env.py` |
+| RLOpt pure-Python tests | `pixi run test-rlopt` |
+| Isaac Lab imports or runtime env behavior | `pixi run -e isaaclab test-isaaclab` |
 | Cluster script behavior | `bash -n docker/cluster/cluster_interface.sh` |
 | Training entrypoint or config routing | targeted `scripts/rlopt/train.py` smoke run |
 

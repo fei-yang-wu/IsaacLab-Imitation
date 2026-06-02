@@ -1,0 +1,80 @@
+[workspace]
+authors = ["Feiyang Wu <feiyangwu@gatech.edu>"]
+channels = ["conda-forge"]
+name = "IsaacLab-Imitation"
+platforms = ["linux-64"]
+requires-pixi = ">=0.40"
+version = "0.1.0"
+
+[tasks]
+lint = "ruff check ."
+format-check = "ruff format --check ."
+typecheck = "pyrefly check"
+check = { depends-on = ["lint", "format-check", "typecheck"] }
+test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
+test-default = { depends-on = ["test-rlopt"] }
+
+[dependencies]
+python = "3.11.*"
+cmake = "*"
+cxx-compiler = "*"
+git = "*"
+gh = "*"
+filelock = "==3.13.1"
+make = "*"
+ninja = "*"
+packaging = "==23.0"
+pre-commit = "*"
+pytest = "*"
+pyyaml = "==6.0.2"
+ruff = "*"
+setuptools = "*"
+toml = "*"
+typing-extensions = "==4.12.2"
+wheel = "*"
+
+[pypi-dependencies]
+torch = { version = "==2.7.0", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "==0.22.0", index = "https://download.pytorch.org/whl/cu128" }
+tensordict = ">=0.11.0"
+torchrl = ">=0.9.0"
+pyrefly = "*"
+huggingface-hub = "*"
+rlopt = { path = "./RLOpt", editable = true }
+iltools = { path = "./ImitationLearningTools", editable = true }
+
+[feature.isaaclab.pypi-options]
+extra-index-urls = ["https://pypi.nvidia.com"]
+
+[feature.isaaclab.system-requirements]
+libc = { family = "glibc", version = "2.35" }
+
+[feature.isaaclab.dependencies]
+libxml2 = "<2.14"
+
+[feature.isaaclab.pypi-dependencies]
+isaaclab = { version = "==2.3.2.post1", extras = ["isaacsim", "all"], index = "https://pypi.nvidia.com" }
+isaaclab_imitation = { path = "./source/isaaclab_imitation", editable = true }
+
+[feature.isaaclab.tasks]
+test-isaaclab = "env TERM=xterm pytest source/isaaclab_imitation/test_reference_patch_env.py"
+zero-agent = "env TERM=xterm python scripts/zero_agent.py --task Isaac-Imitation-G1-LafanTrack-v0"
+smoke-ipmd = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train.py --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --num_envs 16 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend="
+
+[feature.lerobot.pypi-dependencies]
+datasets = "*"
+
+[feature.static.dependencies]
+python = "3.11.*"
+ruff = "==0.12.12"
+
+[feature.static.tasks]
+lint-owned = "ruff check source/isaaclab_imitation docker --exclude source/isaaclab_imitation/test_reference_patch_env.py --ignore F403"
+compile-owned = "python -m compileall -q docker source/isaaclab_imitation/isaaclab_imitation"
+ci-static = { depends-on = ["lint-owned", "compile-owned"] }
+
+[environments]
+isaaclab = ["isaaclab"]
+lerobot = ["lerobot"]
+isaaclab-lerobot = ["isaaclab", "lerobot"]
+static = { features = ["static"], no-default-feature = true }

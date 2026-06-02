@@ -12,7 +12,7 @@ RLOPT_VQVAE_DIR="${RLOPT_VQVAE_DIR:-${WORKSPACE_ROOT}/RLOpt-vqvae}"
 TASK="Isaac-Imitation-G1-Latent-VQVAE-v0"
 MANIFEST="./data/unitree/manifests/g1_unitree_dance102_manifest.json"
 DATASET="/tmp/iltools_g1_lafan1_tracking_g1_unitree_dance102_manifest_6d26546fd54a"
-CONDA_ENV="${CONDA_ENV:-SL}"
+PIXI_ENVIRONMENT="${PIXI_ENVIRONMENT:-isaaclab}"
 
 VARIANTS=(
     vqvae_p10_d64
@@ -117,7 +117,7 @@ run_local() {
     (
         cd "${REPO_ROOT}"
         TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 \
-            conda run -n "${CONDA_ENV}" python scripts/rlopt/train.py \
+            pixi run -e "${PIXI_ENVIRONMENT}" python scripts/rlopt/train.py \
             --task "${TASK}" \
             --num_envs "${local_num_envs}" \
             --headless \

@@ -346,7 +346,7 @@ New script `scripts/rlopt/play_hierarchical.py`:
 Smoke command (illustrative):
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/rlopt/play_hierarchical.py \
+pixi run -e isaaclab python scripts/rlopt/play_hierarchical.py \
     --task Isaac-Imitation-G1-Latent-v0 \
     --checkpoint <bilinear_scratch_1b.pt> \
     --hl_ckpt logs/hl_world_model/latest/ckpt.pt \

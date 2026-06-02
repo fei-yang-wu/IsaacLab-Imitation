@@ -16,22 +16,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install tools
+      - name: Install Pixi
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install ruff==0.12.12
+          curl -fsSL https://pixi.sh/install.sh | sh
 
       - name: Lint owned Python surfaces
         run: |
-          python -m ruff check source/isaaclab_imitation docker \
-            --exclude source/isaaclab_imitation/test_reference_patch_env.py \
-            --ignore F403
+          "$HOME/.pixi/bin/pixi" run -e static lint-owned
 
       - name: Byte-compile owned Python surfaces
         run: |
-          python -m compileall -q docker source/isaaclab_imitation/isaaclab_imitation
+          "$HOME/.pixi/bin/pixi" run -e static compile-owned

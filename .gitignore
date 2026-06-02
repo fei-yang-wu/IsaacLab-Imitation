@@ -25,6 +25,7 @@ docker/.container.cfg
 **/.idea/
 **/.vscode/
 /.claude/
+/.codex/worktrees/
 # Don't ignore the top-level .vscode directory as it is
 # used to configure VS Code settings
 !.vscode
@@ -81,3 +82,6 @@ data/*
 
 # Generated motion label and rollout artifacts
 data/**/*.npz
+# pixi environments
+.pixi/*
+!.pixi/config.toml

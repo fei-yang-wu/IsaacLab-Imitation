@@ -89,9 +89,9 @@ Debugging tools:
 
 RTX rendering status:
 
-- Clean Python 3.11 conda env with Torch `2.7.0+cu128` and Isaac Sim
+- Clean Python 3.11 Pixi `isaaclab` env with Torch `2.7.0+cu128` and Isaac Sim
   `5.1.0.0` still crashes in the RTX/Hydra startup path; the local validation
-  env happened to be named `SL`.
+  environment is managed by `pixi.toml`.
 - The current host is Ubuntu 25.10 with NVIDIA driver `595.58.03`.
 - PyTorch CUDA sees the RTX A4500, so this is not basic CUDA visibility.
 - Re-image target is Ubuntu 22.04 or 24.04 with NVIDIA driver `580.65.06`.

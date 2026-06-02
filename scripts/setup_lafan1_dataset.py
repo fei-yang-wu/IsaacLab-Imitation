@@ -13,12 +13,12 @@ It can also optionally convert the downloaded CSV files into NPZ motions and
 generate a manifest JSON by delegating to ``scripts/prepare_lafan1_from_csv.py``.
 
 Examples:
-    conda run -n SL python scripts/setup_lafan1_dataset.py
+    pixi run python scripts/setup_lafan1_dataset.py
 
-    conda run -n SL python scripts/setup_lafan1_dataset.py \
+    pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
         --prepare-npz --headless
 
-    conda run -n SL python scripts/setup_lafan1_dataset.py \
+    pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
         --prepare-npz --headless --auto_trim_mode g1_shoulder_roll
 """
 
@@ -34,8 +34,8 @@ try:
     from huggingface_hub import snapshot_download
 except ImportError as exc:  # pragma: no cover - import guard for misconfigured envs
     raise ImportError(
-        "huggingface_hub is required. Install it in the SL environment "
-        "and rerun this script."
+        "huggingface_hub is required. Run this script through the Pixi "
+        "default or isaaclab environment."
     ) from exc
 
 

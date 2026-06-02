@@ -54,40 +54,53 @@ More detail on remotes, submodules, and cluster sync lives in [REPO_SETUP.md](RE
 
 ## Installation
 
-Pick any conda environment name you want. The examples below use `SL`, but
-`SkillLearning` or another Python 3.11 environment name is also fine:
+Install Pixi if it is not already available:
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-# Skip this line if the environment already exists.
-conda create -y -n "$CONDA_ENV" python=3.11
-conda activate "$CONDA_ENV"
+curl -fsSL https://pixi.sh/install.sh | sh
+pixi --version
 ```
 
-Use the workspace installer:
+Install the default development environment:
+
+```bash
+pixi install
+```
+
+The default environment is intentionally Isaac-light. It installs Python 3.11,
+PyTorch 2.7.0 / torchvision 0.22.0 from the CUDA 12.8 wheel index,
+TensorDict / TorchRL, and the local editable `RLOpt` and
+`ImitationLearningTools` submodules. It does not install Isaac Sim, Isaac Lab,
+or `isaaclab_imitation`, so RLOpt and ILTools tests do not trigger TorchRL's
+IsaacLab integration path.
+
+Install the Isaac Lab environment only when you need Isaac-backed training,
+playback, conversion, or tests:
+
+```bash
+pixi install -e isaaclab
+```
+
+The `isaaclab` environment adds `isaaclab[isaacsim,all]==2.3.2.post1` from
+NVIDIA's PyPI index plus editable `source/isaaclab_imitation`. Pixi owns both
+Conda and PyPI dependencies through `pixi.toml`; do not install repo
+dependencies with `conda`, `pip`, or `uv`.
+
+The compatibility wrapper below initializes submodules and installs a selected
+Pixi environment, defaulting to `default`:
 
 ```bash
 ./scripts/install_workspace.sh
+PIXI_ENVIRONMENT=isaaclab ./scripts/install_workspace.sh
 ```
-
-The script does the following:
-
-- verifies the active `python` is `3.11`
-- installs `uv` with `conda install -y uv`
-- initializes git submodules if `IsaacLab`, `RLOpt`, or `ImitationLearningTools` are incomplete
-- installs `ImitationLearningTools` and `RLOpt` in editable mode
-- installs LeRobot support when `INSTALL_LEROBOT=1` is set
-- installs `isaacsim[all,extscache]==5.1.0`
-- installs `torch==2.7.0` and `torchvision==0.22.0` from the CUDA 12.8 wheel index
-- runs `./isaaclab.sh -i none` inside `IsaacLab`
-- installs `source/isaaclab_imitation` in editable mode
 
 If you need the manual submodule setup details or cluster notes, see [REPO_SETUP.md](REPO_SETUP.md).
 
 To install optional LeRobot streaming dependencies for offline pretraining:
 
 ```bash
-INSTALL_LEROBOT=1 ./scripts/install_workspace.sh
+pixi install -e lerobot
+pixi install -e isaaclab-lerobot
 ```
 
 ### LeRobot Reference Prep
@@ -99,7 +112,7 @@ desired label sequence:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-conda run -n "${CONDA_ENV:-SL}" python scripts/replay_unitree_lerobot_reference.py \
+pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py \
     --headless \
     --device cuda:0 \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
@@ -133,13 +146,13 @@ For multiple episodes, use `scripts/batch_csv_to_npz.py` with LeRobot jobs:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-conda run -n "${CONDA_ENV:-SL}" python scripts/batch_csv_to_npz.py \
+pixi run -e isaaclab-lerobot python scripts/batch_csv_to_npz.py \
     --headless \
     --device cuda:0 \
     --jobs_json data/unitree/lerobot_jobs.json \
     --output_fps 30
 
-conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/write_lafan1_npz_manifest.py \
     --npz_dir data/unitree/npz \
     --manifest_path data/unitree/manifests/g1_wbt_pillow_30hz.json \
     --dataset_name unitree_lerobot
@@ -157,7 +170,7 @@ list when `agent.offline_dataset.enabled=true`.
 Probe the multi-repo streaming cache without launching Isaac:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/validate_lerobot_streaming_cache.py \
+pixi run -e lerobot python scripts/validate_lerobot_streaming_cache.py \
     --repo_ids_file data/unitree/g1_wbt_lerobot_repos.json \
     --max_episodes_per_repo 1 \
     --min_ready_transitions 32 \
@@ -180,31 +193,26 @@ agent.offline_dataset.max_episodes_per_repo=0
 ### Hugging Face And GitHub CLI
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-conda activate "$CONDA_ENV"
-
 # Hugging Face Hub CLI for LeRobot dataset access.
-uv pip install --system -U "huggingface_hub[cli]"
-hf auth login
-hf auth whoami
+pixi run -e lerobot hf auth login
+pixi run -e lerobot hf auth whoami
 
 # GitHub CLI is recommended for branch, push, PR, and CI workflows.
-conda install -y -c conda-forge gh
-gh auth login
-gh auth setup-git --hostname github.com
-gh auth status
+pixi run gh auth login
+pixi run gh auth setup-git --hostname github.com
+pixi run gh auth status
 
 # Optional: only for direct git push/pull to https://huggingface.co.
 # This uses Git's plaintext store helper, scoped to Hugging Face only.
 git config --global credential.https://huggingface.co.helper store
 
 # If you are already logged in:
-hf auth list
+pixi run -e lerobot hf auth list
 TOKEN_NAME=home-ubuntu
-hf auth switch --token-name "$TOKEN_NAME" --add-to-git-credential
+pixi run -e lerobot hf auth switch --token-name "$TOKEN_NAME" --add-to-git-credential
 
 # If you are not logged in yet:
-hf auth login --add-to-git-credential
+pixi run -e lerobot hf auth login --add-to-git-credential
 
 # Remove the Hugging Face-scoped helper later if you no longer want it.
 git config --global --unset credential.https://huggingface.co.helper
@@ -213,11 +221,10 @@ git config --global --unset credential.https://huggingface.co.helper
 ## Running training
 
 Examples below assume you are running from the repository root.
-Activate your conda environment first:
+Use the Isaac Lab Pixi environment for Isaac-backed training:
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-conda activate "$CONDA_ENV"
+pixi shell -e isaaclab
 ```
 
 Train a G1 imitation policy with RLOpt IPMD:
@@ -400,7 +407,7 @@ To bake the G1 arms-up alignment trim into the generated NPZ files, pass
 The underlying Python entrypoint is:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/setup_lafan1_dataset.py \
+pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
     --prepare-npz --headless
 ```
 
@@ -408,7 +415,7 @@ For the G1 retargeted set, the public CSV motions often begin with an arms-up
 alignment pose. To bake a per-motion trim into the generated NPZ files, add:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/setup_lafan1_dataset.py \
+pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
     --prepare-npz --headless \
     --auto_trim_mode g1_shoulder_roll
 ```
@@ -431,7 +438,7 @@ If `data/lafan1/manifests/g1_lafan1_manifest.json` already exists, you do not ne
 If you already have local NPZ files but no manifest yet, generate one directly:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/write_lafan1_npz_manifest.py \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_lafan1_manifest.json
 ```
@@ -447,7 +454,7 @@ cp source/isaaclab_imitation/isaaclab_imitation/manifests/g1_lafan1_manifest.tem
 For a smaller local subset:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/write_lafan1_npz_manifest.py \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_debug_manifest.json \
     --select dance1_subject1 dance1_subject2 walk1_subject1
@@ -458,7 +465,7 @@ conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
 Prepare local CSV motions into NPZ plus a manifest with:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/prepare_lafan1_from_csv.py \
+pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -470,7 +477,7 @@ If you want one replay MP4 per converted motion, add `--record_videos` and `--vi
 To auto-trim the G1 arms-up alignment segment while rebuilding NPZ files, add:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/prepare_lafan1_from_csv.py \
+pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -487,7 +494,7 @@ If you already have NPZ files and only want a trimmed manifest without
 rewriting those NPZ files, use:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/prepare_lafan1_from_csv.py \
+pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -504,7 +511,7 @@ In that mode the per-motion trim is written into each manifest entry as
 If you only want the prepared NPZ subtree, use:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/setup_g1_lafan1_npz_dataset.py
+pixi run python scripts/setup_g1_lafan1_npz_dataset.py
 ```
 
 That syncs `npz/g1` from the dataset repo `GeorgiaTech/g1_lafan1_50hz` into:
@@ -516,7 +523,7 @@ data/lafan1/npz/g1/
 Upload mode pushes the same local NPZ tree back to Hugging Face:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/setup_g1_lafan1_npz_dataset.py \
+pixi run python scripts/setup_g1_lafan1_npz_dataset.py \
     --mode upload --token "$HF_TOKEN"
 ```
 
@@ -593,40 +600,49 @@ Recommended tools:
 - `pyrefly` for type and import checking
 - `pytest` for focused unit tests
 
-Use your selected conda environment for all checks. Prefer `conda run` for
-non-interactive commands so the repo uses that environment's Python and tooling:
+Pixi owns the development tools in `pixi.toml`. Prefer `pixi run` for
+non-interactive commands so the repo uses the checked-in environment
+definition:
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-```
-
-Install tools into that environment:
-
-```bash
-conda run -n "${CONDA_ENV:-SL}" uv pip install --system ruff pyrefly pytest
+pixi run ruff check .
 ```
 
 Useful commands:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" ruff check .
-conda run -n "${CONDA_ENV:-SL}" ruff format --check .
-conda run -n "${CONDA_ENV:-SL}" pyrefly check
+pixi run lint
+pixi run format-check
+pixi run typecheck
+pixi run check
 ```
 
-Pure-Python pytest targets can run directly through the conda environment, for
-example:
+RLOpt tests run in the default Pixi environment, which does not install
+IsaacLab or `isaaclab_imitation`:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" pytest source/isaaclab_imitation/test_reference_patch_env.py
+pixi run test-rlopt
+```
+
+Focused pure-Python pytest targets can run directly through the default
+environment, for example:
+
+```bash
+pixi run pytest RLOpt/tests/test_ipmd_components.py
 ```
 
 Tests that import Isaac Lab or Omniverse modules need Isaac Sim's Python
 bootstrap before imports such as `pxr` are available. Run those tests through
-the in-repo Isaac Lab submodule launcher:
+the `isaaclab` Pixi environment:
 
 ```bash
-TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p -m pytest source/isaaclab_imitation/test_reference_patch_env.py
+pixi run -e isaaclab test-isaaclab
+```
+
+For a minimal IPMD training smoke on the Unitree Dance102 manifest:
+
+```bash
+pixi run -e isaaclab smoke-ipmd
 ```
 
 `pyrefly` is configured by [source/isaaclab_imitation/pyproject.toml](source/isaaclab_imitation/pyproject.toml) and
@@ -642,8 +658,7 @@ analysis is more reliable here when driven from the checked-in repo configuratio
 A pre-commit configuration is included:
 
 ```bash
-pip install pre-commit
-pre-commit run --all-files
+pixi run pre-commit run --all-files
 ```
 
 Note that the current hook set is inherited from upstream Isaac Lab conventions. For day-to-day work in this repo,

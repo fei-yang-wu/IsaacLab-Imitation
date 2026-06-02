@@ -138,29 +138,25 @@ data is already cached. Remote decode and TensorDict conversion stay in the
 producer thread.
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-conda activate "$CONDA_ENV"
-
 # Hugging Face Hub CLI for LeRobot dataset access.
-uv pip install --system -U "huggingface_hub[cli]"
-hf auth login
-hf auth whoami
+pixi run -e lerobot hf auth login
+pixi run -e lerobot hf auth whoami
 
 # Optional: only for direct git push/pull to https://huggingface.co.
 # This uses Git's plaintext store helper, scoped to Hugging Face only.
 git config --global credential.https://huggingface.co.helper store
 
 # If you are already logged in:
-hf auth list
+pixi run -e lerobot hf auth list
 TOKEN_NAME=home-ubuntu
-hf auth switch --token-name "$TOKEN_NAME" --add-to-git-credential
+pixi run -e lerobot hf auth switch --token-name "$TOKEN_NAME" --add-to-git-credential
 ```
 
 Small latent smoke command:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 \
-conda run -n "${CONDA_ENV:-SL}" python scripts/rlopt/train.py \
+pixi run -e isaaclab-lerobot python scripts/rlopt/train.py \
     --task Isaac-Imitation-G1-Latent-v0 \
     --algo IPMD_BILINEAR \
     --num_envs 16 \
@@ -189,7 +185,7 @@ under-validated mapper.
 Use the Isaac-free cache probe before expensive training:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/validate_lerobot_streaming_cache.py \
+pixi run -e lerobot python scripts/validate_lerobot_streaming_cache.py \
     --repo_ids_file data/unitree/g1_wbt_lerobot_repos.json \
     --max_episodes_per_repo 1 \
     --min_ready_transitions 32 \
@@ -203,7 +199,7 @@ conda run -n "${CONDA_ENV:-SL}" python scripts/validate_lerobot_streaming_cache.
 Renderer-free dataset preview works without Isaac Sim:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/preview_unitree_lerobot_episode.py \
+pixi run -e lerobot python scripts/preview_unitree_lerobot_episode.py \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
     --episode_index 0 \
     --max_frames 180 \
@@ -220,7 +216,7 @@ tracking quality:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-conda run -n "${CONDA_ENV:-SL}" python scripts/replay_unitree_lerobot_reference.py \
+pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py \
     --headless \
     --device cuda:0 \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
@@ -238,7 +234,7 @@ raise it deliberately when you want interpolation to a faster control rate:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-conda run -n "${CONDA_ENV:-SL}" python scripts/replay_unitree_lerobot_reference.py \
+pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py \
     --headless \
     --device cuda:0 \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
@@ -272,7 +268,7 @@ For multi-episode conversion, the batch converter also accepts LeRobot jobs:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-conda run -n "${CONDA_ENV:-SL}" python scripts/batch_csv_to_npz.py \
+pixi run -e isaaclab-lerobot python scripts/batch_csv_to_npz.py \
     --headless \
     --device cuda:0 \
     --jobs_json data/unitree/lerobot_jobs.json \
@@ -284,7 +280,7 @@ same target/action order used by the G1 env. Build a tracking manifest from
 the generated NPZ folder with:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/write_lafan1_npz_manifest.py \
     --npz_dir data/unitree/npz \
     --manifest_path data/unitree/manifests/g1_wbt_pillow_30hz.json \
     --dataset_name unitree_lerobot
@@ -301,8 +297,8 @@ env.sim.dt=0.004166666666666667 env.decimation=8
 
 ## Host Re-Image Note
 
-RTX rendering is currently blocked by the host, not by a polluted conda env.
-A clean Python 3.11 conda environment with the official Isaac Sim 5.1 Python
+RTX rendering is currently blocked by the host, not by a polluted Python env.
+A clean Python 3.11 environment with the official Isaac Sim 5.1 Python
 package stack still crashes in the RTX/Hydra startup path. PyTorch CUDA works
 in the same env, so the failure is narrower than GPU visibility.
 
@@ -317,17 +313,17 @@ Re-image target:
 
 - Ubuntu 22.04 or Ubuntu 24.04
 - NVIDIA production driver `580.65.06`
-- Python 3.11 conda env
+- Python 3.11 Pixi `isaaclab` env
 - Torch `2.7.0+cu128`
-- `isaacsim[all,extscache]==5.1.0`
+- `isaaclab[isaacsim,all]==2.3.2.post1`
 - editable Isaac Lab plus this workspace's local repos
 
 After re-image, verify in this order:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-conda run -n "${CONDA_ENV:-SL}" python -c "from isaacsim import SimulationApp; app = SimulationApp({'headless': True}); print('ok'); app.close()"
-TERM=xterm conda run -n "${CONDA_ENV:-SL}" python scripts/replay_unitree_lerobot_reference.py --headless --device cuda:0 --no_video --max_frames 4
+pixi run -e isaaclab python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+pixi run -e isaaclab python -c "from isaacsim import SimulationApp; app = SimulationApp({'headless': True}); print('ok'); app.close()"
+TERM=xterm pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py --headless --device cuda:0 --no_video --max_frames 4
 ```
 
 Only after those pass should video replay or full Isaac training be treated as
