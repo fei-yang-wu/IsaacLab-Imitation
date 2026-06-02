@@ -19,28 +19,87 @@ This file defines how coding agents should work in the `IsaacLab-Imitation` work
 
 ## Environment
 
-- Do not assume a fixed conda environment name. If the user has not specified
-  one in the current thread, ask which environment they prefer before running
-  conda commands.
-- Use `$CONDA_ENV` in reusable commands. `SL` and `SkillLearning` are common
-  examples, not requirements.
-- Prefer `conda run -n "${CONDA_ENV:-SL}" ...` for non-interactive commands.
-- If you need an interactive shell, activate with:
+- Pixi is the repo-owned environment manager. Do not install repo dependencies
+  with `conda`, `pip`, or `uv`.
+- Use `pixi run ...` for default-environment commands and
+  `pixi run -e isaaclab ...` for Isaac Sim / Isaac Lab workflows.
+- The default Pixi environment contains Python 3.11, PyTorch, TensorDict,
+  TorchRL, editable `RLOpt`, and editable `ImitationLearningTools`.
+- The `isaaclab` Pixi environment adds
+  `isaaclab[isaacsim,all]==2.3.2.post1` from NVIDIA's PyPI index plus editable
+  `source/isaaclab_imitation`.
+- RLOpt tests should run in the default environment so TorchRL does not import
+  IsaacLab or initialize Isaac Sim during lightweight testing.
+- If you need an interactive shell, use:
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-conda activate "$CONDA_ENV"
+pixi shell
+pixi shell -e isaaclab
 ```
 
-- Use `uv` inside that environment for package installation and Python tooling.
 - The documented workspace installer is:
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-conda run -n "${CONDA_ENV:-SL}" ./scripts/install_workspace.sh
+./scripts/install_workspace.sh
+PIXI_ENVIRONMENT=isaaclab ./scripts/install_workspace.sh
 ```
 
-- The installer expects Python `3.11` and installs the local packages plus Isaac Sim / PyTorch dependencies.
+- The installer is a compatibility wrapper around `pixi install`. Prefer direct
+  `pixi install`, `pixi install -e isaaclab`, or `pixi install --all` when
+  possible.
+
+## Codex Worktrees
+
+- Codex-created worktrees should live under this repo's `.codex/worktrees/`
+  directory. Keep Claude-created worktrees under `.claude/` if that is the
+  active Claude workflow.
+- For Codex worktree commands, define a workspace-local `CODEX_HOME` from the
+  main checkout and use `${CODEX_HOME}/worktrees` as the worktree root:
+
+```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+export CODEX_HOME="${CODEX_HOME:-${REPO_ROOT}/.codex}"
+mkdir -p "${CODEX_HOME}/worktrees"
+```
+
+- Create one worktree per task or agent run. Prefer descriptive branch and
+  directory names:
+
+```bash
+TASK_NAME="ipmd-reward-fix"
+git worktree add "${CODEX_HOME}/worktrees/${TASK_NAME}" -b "codex/${TASK_NAME}"
+cd "${CODEX_HOME}/worktrees/${TASK_NAME}"
+git submodule update --init --recursive
+```
+
+- Every new worktree must have its own Pixi environment prefix. Do not point a
+  worktree at another worktree's `.pixi/envs`, because editable installs would
+  resolve to the wrong branch's `RLOpt`, `ImitationLearningTools`, or
+  `source/isaaclab_imitation`.
+- Use the locked Pixi environments in each worktree. Pixi reuses the shared
+  package cache for heavy packages such as PyTorch, IsaacLab, and Isaac Sim, so
+  this creates a separate editable layer without redownloading the world:
+
+```bash
+pixi install --locked
+pixi run test-rlopt
+
+pixi install --locked -e isaaclab
+pixi run -e isaaclab smoke-ipmd
+```
+
+- If only local source changed, editable installs are picked up immediately. If
+  package metadata, entry points, compiled extensions, or local package wiring
+  changed, refresh only the affected editable packages:
+
+```bash
+pixi reinstall rlopt iltools
+pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
+```
+
+- Do not commit `.codex/worktrees/`, `.pixi/envs/`, generated logs, caches, or
+  outputs from worktrees. Commit only the intended source changes from the
+  worktree branch.
 
 ## Repo Shape
 
@@ -74,49 +133,47 @@ conda run -n "${CONDA_ENV:-SL}" ./scripts/install_workspace.sh
 
 ## Validation
 
-Run the smallest relevant checks from the repo root, using the user's selected
-conda environment.
+Run the smallest relevant checks from the repo root through Pixi.
 
 General checks:
 
 ```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-conda run -n "${CONDA_ENV:-SL}" ruff check .
-conda run -n "${CONDA_ENV:-SL}" ruff format --check .
-conda run -n "${CONDA_ENV:-SL}" pyrefly check
+pixi run lint
+pixi run format-check
+pixi run typecheck
 ```
 
-Run pure-Python pytest targets through the selected conda environment, not as a
-bare `pytest` command. Prefer the smallest relevant target:
+Run RLOpt pure-Python tests in the default environment, not the `isaaclab`
+environment:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" pytest source/isaaclab_imitation/test_reference_patch_env.py
+pixi run test-rlopt
 ```
 
 Tests that import Isaac Lab or Omniverse modules need Isaac Sim's Python
 bootstrap before imports such as `pxr` are available. Run those tests through
-the in-repo Isaac Lab submodule launcher:
+the `isaaclab` environment:
 
 ```bash
-TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p -m pytest source/isaaclab_imitation/test_reference_patch_env.py
+pixi run -e isaaclab test-isaaclab
 ```
 
 If you changed formatting intentionally:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" ruff format .
+pixi run ruff format .
 ```
 
 For workspace setup changes, verify the installer or README commands still match:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" ./scripts/install_workspace.sh
+./scripts/install_workspace.sh
 ```
 
 For environment or training-entry changes, prefer a targeted smoke test over broad execution:
 
 ```bash
-TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p scripts/zero_agent.py --task Isaac-Imitation-G1-LafanTrack-v0
+pixi run -e isaaclab smoke-ipmd
 ```
 
 Use heavier training or playback commands only when the task requires them.

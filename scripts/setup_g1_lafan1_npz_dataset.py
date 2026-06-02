@@ -11,9 +11,9 @@ CSV-based workflow, it only handles an ``npz/g1`` subtree that is already ready
 for this repo's NPZ loader tooling.
 
 Examples:
-    conda run -n SL python scripts/setup_g1_lafan1_npz_dataset.py
+    pixi run python scripts/setup_g1_lafan1_npz_dataset.py
 
-    conda run -n SL python scripts/setup_g1_lafan1_npz_dataset.py \
+    pixi run python scripts/setup_g1_lafan1_npz_dataset.py \
         --mode upload --token "$HF_TOKEN"
 """
 
@@ -28,8 +28,8 @@ try:
     from huggingface_hub import HfApi, snapshot_download
 except ImportError as exc:  # pragma: no cover - import guard for misconfigured envs
     raise ImportError(
-        "huggingface_hub is required. Install it in the SL environment "
-        "and rerun this script."
+        "huggingface_hub is required. Run this script through the Pixi "
+        "default or lerobot environment."
     ) from exc
 
 

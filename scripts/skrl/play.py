@@ -88,7 +88,8 @@ SKRL_VERSION = "1.4.3"
 if version.parse(skrl.__version__) < version.parse(SKRL_VERSION):
     skrl.logger.error(
         f"Unsupported skrl version: {skrl.__version__}. "
-        f"Install supported version using 'pip install skrl>={SKRL_VERSION}'"
+        "Install a supported version with "
+        f"'pixi add --feature isaaclab --pypi \"skrl>={SKRL_VERSION}\"'"
     )
     exit()
 

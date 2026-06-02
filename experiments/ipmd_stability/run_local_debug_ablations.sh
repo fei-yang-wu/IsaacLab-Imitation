@@ -16,8 +16,8 @@ if ! command -v timeout >/dev/null 2>&1; then
     exit 1
 fi
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "[ERROR] 'conda' command is required but not found."
+if ! command -v pixi >/dev/null 2>&1; then
+    echo "[ERROR] 'pixi' command is required but not found."
     exit 1
 fi
 
@@ -172,7 +172,7 @@ run_one() {
     local log_file="$LOG_DIR/${run_name}.log"
 
     local cmd=(
-        conda run -n SL python
+        pixi run -e isaaclab python
         "${COMMON_ARGS[@]}"
         "agent.seed=${seed}"
         "agent.logger.exp_name=${run_name}"

@@ -10,12 +10,8 @@ submodule pins are wired correctly.
 ## Local Validation Ladder
 
 Start with the cheapest check that matches the change.
-Set `CONDA_ENV` to the conda environment you want to use; `SL` is only the
-example default:
-
-```bash
-CONDA_ENV="${CONDA_ENV:-SL}"
-```
+Use the default Pixi environment for lightweight checks and the `isaaclab`
+environment for Isaac-backed runtime checks.
 
 ### 1. Docs or shell-only changes
 
@@ -31,14 +27,13 @@ bash -n experiments/ipmd_stability/submit_cluster_ablations.sh
 Pure pytest path:
 
 ```bash
-conda run -n "${CONDA_ENV:-SL}" pytest source/isaaclab_imitation/test_reference_patch_env.py
+pixi run test-rlopt
 ```
 
-Isaac Lab launcher path, needed when imports require Isaac Sim / Omniverse:
+IsaacLab Pixi path, needed when imports require Isaac Sim / Omniverse:
 
 ```bash
-TERM=xterm conda run -n "${CONDA_ENV:-SL}" ./IsaacLab/isaaclab.sh -p -m pytest \
-    source/isaaclab_imitation/test_reference_patch_env.py
+pixi run -e isaaclab test-isaaclab
 ```
 
 ### 3. Minimal train smoke
@@ -47,7 +42,7 @@ Use a small number of envs and one or a few rollout iterations to prove wiring:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 \
-conda run -n "${CONDA_ENV:-SL}" python scripts/rlopt/train.py \
+pixi run -e isaaclab python scripts/rlopt/train.py \
     --task Isaac-Imitation-G1-v0 \
     --num_envs 16 \
     --headless \
