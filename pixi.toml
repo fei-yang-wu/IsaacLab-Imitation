@@ -36,8 +36,9 @@ wheel = "*"
 [pypi-dependencies]
 torch = { version = "==2.7.0", index = "https://download.pytorch.org/whl/cu128" }
 torchvision = { version = "==0.22.0", index = "https://download.pytorch.org/whl/cu128" }
-tensordict = ">=0.11.0"
-torchrl = ">=0.9.0"
+tensordict = "==0.11.0"
+torchrl = "==0.11.1"
+wandb = "==0.25.0"
 pyrefly = "*"
 huggingface-hub = "*"
 rlopt = { path = "./RLOpt", editable = true }
@@ -60,6 +61,7 @@ isaaclab_imitation = { path = "./source/isaaclab_imitation", editable = true }
 test-isaaclab = "env TERM=xterm pytest source/isaaclab_imitation/test_reference_patch_env.py"
 zero-agent = "env TERM=xterm python scripts/zero_agent.py --task Isaac-Imitation-G1-LafanTrack-v0"
 smoke-ipmd = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train.py --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --num_envs 16 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend="
+hl-skill-pipeline = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_hl_skill_pipeline.py"
 
 [feature.lerobot.pypi-dependencies]
 datasets = "*"

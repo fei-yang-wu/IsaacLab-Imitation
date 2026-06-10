@@ -304,6 +304,30 @@ python scripts/rlopt/train.py \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
+For the two-stage high-level skill workflow, use the pipeline entrypoint. It
+first runs offline DiffSR skill-encoder pretraining, checks
+`checkpoints/latest.pt`, then starts low-level IPMD training with
+`agent.ipmd.command_source=hl_skill`. Defaults match the LaFAN1 latent setup:
+`z_dim=256`, `horizon_steps=25`, `sin_cos` phase features, W&B logging, video
+recording, and sparse checkpoints every 100M environment frames.
+
+```bash
+pixi run -e isaaclab hl-skill-pipeline
+```
+
+Useful local smoke/dry-run forms:
+
+```bash
+pixi run -e isaaclab hl-skill-pipeline --dry-run
+
+pixi run -e isaaclab hl-skill-pipeline \
+    --pretrain-updates 1 \
+    --train-max-iterations 1 \
+    --train-num-envs 16 \
+    --no-train-video \
+    --logger-backend none
+```
+
 To run IPMD on the vanilla tracking task instead, disable latent commands explicitly:
 
 ```bash
