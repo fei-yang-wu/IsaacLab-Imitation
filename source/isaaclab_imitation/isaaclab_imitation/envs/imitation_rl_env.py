@@ -3211,7 +3211,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         window_terms = self._build_expert_window_terms(
             expert_window,
             env_ids_t,
-            context="expert",
+            context="rollout",
             past_steps=0,
             joint_ids=slice(None),
             anchor_body_name="torso_link",

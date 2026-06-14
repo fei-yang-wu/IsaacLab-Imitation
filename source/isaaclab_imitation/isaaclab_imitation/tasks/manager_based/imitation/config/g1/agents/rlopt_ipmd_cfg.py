@@ -42,6 +42,7 @@ LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
 LATENT_PRIOR_INPUT_KEYS: list[tuple[str, str]] = []
 
 LATENT_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
+    ("critic", "latent_command"),
     ("critic", "expert_motion"),
     ("critic", "expert_anchor_pos_b"),
     ("critic", "expert_anchor_ori_b"),
@@ -98,6 +99,7 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
 
         self.ipmd.use_latent_command = bool(self._default_use_latent_command)
         self.sync_input_keys()
+        self.logger.group_name = ""
 
         # More initial exploration to improve policy-state coverage for inverse reward.
         self.collector.init_random_frames = 0
@@ -126,6 +128,8 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
 
         self.policy.num_cells = [512, 256, 128]
         self.value_function.num_cells = [512, 256, 128]
+        if self.ipmd.use_latent_command:
+            self.value_function.num_cells = [768, 512, 256]
 
         self.collector.total_frames = 5_000_000_000
         self.save_interval = 100  # rollout iterations

@@ -47,6 +47,29 @@ def _bool_str(value: bool) -> str:
     return "true" if value else "false"
 
 
+def _normalize_hl_skill_command_mode(value: str) -> str:
+    normalized = str(value).strip().lower()
+    aliases = {"fz": "phi", "z_fz": "z_phi"}
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"z", "phi", "z_phi"}:
+        raise ValueError(
+            "--hl-skill-command-mode must be one of z, phi, or z_phi "
+            f"(aliases: fz, z_fz), got {value!r}."
+        )
+    return normalized
+
+
+def _hl_skill_command_code_dim(args: argparse.Namespace) -> int:
+    mode = _normalize_hl_skill_command_mode(args.hl_skill_command_mode)
+    if mode == "z":
+        return int(args.z_dim)
+    if mode == "phi":
+        return int(args.diffsr_feature_dim)
+    if mode == "z_phi":
+        return int(args.z_dim) + int(args.diffsr_feature_dim)
+    raise ValueError(f"Unsupported HL skill command mode: {mode!r}.")
+
+
 def _default_pretrain_output_dir(args: argparse.Namespace) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     seed_label = f"seed{args.seed}" if args.seed is not None else "seedauto"
@@ -132,6 +155,10 @@ def _pretrain_cmd(args: argparse.Namespace, output_dir: Path) -> list[str]:
             args.encoder_window_mode,
             "--z_dim",
             str(args.z_dim),
+            "--diffsr_feature_dim",
+            str(args.diffsr_feature_dim),
+            "--diffsr_embed_dim",
+            str(args.diffsr_embed_dim),
             "--batch_size",
             str(args.pretrain_batch_size),
             "--num_updates",
@@ -169,7 +196,9 @@ def _train_cmd(
     pretrain_output_dir: Path,
 ) -> list[str]:
     phase_dim = 2 if args.phase_mode == "sin_cos" else 0
-    latent_dim = int(args.z_dim) + phase_dim
+    command_mode = _normalize_hl_skill_command_mode(args.hl_skill_command_mode)
+    command_code_dim = _hl_skill_command_code_dim(args)
+    latent_dim = command_code_dim + phase_dim
     logger_backend = _str_to_backend(args.logger_backend)
     exp_name = args.exp_name or _default_train_exp_name(
         pretrain_output_dir=pretrain_output_dir,
@@ -213,10 +242,17 @@ def _train_cmd(
         "agent.ipmd.command_source=hl_skill",
         f"agent.ipmd.hl_skill_checkpoint_path={checkpoint_path}",
         f"agent.ipmd.hl_skill_horizon_steps={args.horizon_steps}",
+        f"agent.ipmd.hl_skill_command_mode={command_mode}",
         f"agent.ipmd.latent_steps_min={args.horizon_steps}",
         f"agent.ipmd.latent_steps_max={args.horizon_steps}",
         f"agent.ipmd.latent_learning.command_phase_mode={args.phase_mode}",
         f"agent.ipmd.latent_learning.code_period={args.horizon_steps}",
+        f"agent.ipmd.latent_learning.code_latent_dim={command_code_dim}",
+        f"agent.ipmd.hl_skill_finetune_enabled={_bool_str(args.finetune_hl_skill)}",
+        f"agent.ipmd.hl_skill_pg_coeff={args.hl_skill_pg_coeff}",
+        f"agent.ipmd.hl_skill_anchor_coeff={args.hl_skill_anchor_coeff}",
+        f"agent.ipmd.hl_skill_offline_diffsr_coeff={args.hl_skill_offline_coeff}",
+        f"agent.ipmd.hl_skill_lr={args.hl_skill_lr}",
         f"env.lafan1_manifest_path={_repo_path(args.manifest_path)}",
         f"env.dataset_path={_repo_path(args.dataset_path)}",
     ]
@@ -298,6 +334,8 @@ def _parse_args() -> argparse.Namespace:
         default="intermediate",
     )
     parser.add_argument("--z-dim", type=int, default=256)
+    parser.add_argument("--diffsr-feature-dim", type=int, default=128)
+    parser.add_argument("--diffsr-embed-dim", type=int, default=512)
     parser.add_argument(
         "--pretrain-override",
         action="append",
@@ -338,6 +376,12 @@ def _parse_args() -> argparse.Namespace:
         help="Phase features appended to the frozen skill latent command.",
     )
     parser.add_argument(
+        "--hl-skill-command-mode",
+        choices=("z", "phi", "z_phi", "fz", "z_fz"),
+        default="z",
+        help="HL skill command representation sent to the low-level policy.",
+    )
+    parser.add_argument(
         "--train-ipmd-reward-model",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -346,6 +390,36 @@ def _parse_args() -> argparse.Namespace:
             "pipeline trains the policy from environment rewards with the "
             "frozen skill command."
         ),
+    )
+    parser.add_argument(
+        "--finetune-hl-skill",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable online policy-gradient finetuning for the HL skill encoder.",
+    )
+    parser.add_argument(
+        "--hl-skill-pg-coeff",
+        type=float,
+        default=0.05,
+        help="Policy-gradient coefficient for online HL skill finetuning.",
+    )
+    parser.add_argument(
+        "--hl-skill-anchor-coeff",
+        type=float,
+        default=0.01,
+        help="Checkpoint-anchor coefficient for online HL skill finetuning.",
+    )
+    parser.add_argument(
+        "--hl-skill-offline-coeff",
+        type=float,
+        default=1.0,
+        help="Offline DiffSR coefficient for online HL skill finetuning.",
+    )
+    parser.add_argument(
+        "--hl-skill-lr",
+        type=float,
+        default=3.0e-5,
+        help="Learning rate for online HL skill finetuning.",
     )
     parser.add_argument(
         "--save-interval",

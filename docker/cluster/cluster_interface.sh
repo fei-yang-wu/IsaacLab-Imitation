@@ -675,6 +675,7 @@ submit_job() {
     fi
 
     printf -v remote_job_cmd '%q ' \
+        env "CLUSTER_PYTHON_EXECUTABLE=${CLUSTER_PYTHON_EXECUTABLE}" \
         bash -l "$CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file" \
         "$CLUSTER_ISAACLAB_DIR" \
         "isaac-lab-$profile" \
@@ -782,7 +783,11 @@ case $command in
         # Check docker and apptainer version
         check_docker_version
         # source env file to get cluster login and path information
+        requested_python_executable="${CLUSTER_PYTHON_EXECUTABLE:-}"
         source $SCRIPT_DIR/.env.cluster
+        if [ -n "$requested_python_executable" ]; then
+            CLUSTER_PYTHON_EXECUTABLE="$requested_python_executable"
+        fi
         # Prepend remote $HOME to relative cluster paths.
         CLUSTER_REMOTE_HOME=$(ssh "$CLUSTER_LOGIN" 'echo $HOME')
         CLUSTER_SIF_PATH="$CLUSTER_REMOTE_HOME/$CLUSTER_SIF_PATH"
@@ -815,7 +820,11 @@ case $command in
         echo "[INFO] Executing job command"
         [ -n "$profile" ] && echo -e "\tUsing profile: $profile"
         [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
+        requested_python_executable="${CLUSTER_PYTHON_EXECUTABLE:-}"
         source $SCRIPT_DIR/.env.cluster
+        if [ -n "$requested_python_executable" ]; then
+            CLUSTER_PYTHON_EXECUTABLE="$requested_python_executable"
+        fi
         # Prepend remote $HOME to relative cluster paths.
         CLUSTER_REMOTE_HOME=$(ssh "$CLUSTER_LOGIN" 'echo $HOME')
         CLUSTER_ISAAC_SIM_CACHE_DIR="$CLUSTER_REMOTE_HOME/$CLUSTER_ISAAC_SIM_CACHE_DIR"
