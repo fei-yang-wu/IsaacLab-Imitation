@@ -128,6 +128,16 @@ class IsaacLabWrapper(GymWrapper):
             env_ids=env_ids,
         )
 
+    def current_achieved_macro_transition_batch(
+        self,
+        horizon_steps: int,
+        env_ids=None,
+    ):
+        return self._base_isaac_env().current_achieved_macro_transition_batch(
+            horizon_steps=horizon_steps,
+            env_ids=env_ids,
+        )
+
     def expert_macro_feature_slices(self, horizon_steps: int):
         return self._base_isaac_env().expert_macro_feature_slices(
             horizon_steps=horizon_steps,

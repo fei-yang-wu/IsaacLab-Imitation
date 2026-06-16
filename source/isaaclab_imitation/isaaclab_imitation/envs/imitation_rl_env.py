@@ -3283,6 +3283,55 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
         return [str(item[1]) for item in ordered]
 
+    def current_achieved_macro_transition_batch(
+        self,
+        horizon_steps: int,
+        env_ids: torch.Tensor | Sequence[int] | None = None,
+    ) -> TensorDict:
+        """Macro transitions whose current ``state`` uses the robot's ACHIEVED motion.
+
+        Identical to ``current_expert_macro_transition_batch`` except the
+        ``expert_motion`` slice of the current ``state`` is replaced by the
+        robot's actual joint positions/velocities (the rollout-context anchor
+        terms already encode the robot-relative offset). The future window and
+        target stay expert-derived, so a skill commander can regress the expert
+        skill ``z`` from the robot's achieved state (full-M3 closed-loop input).
+        """
+        horizon_steps = int(horizon_steps)
+        batch = self.current_expert_macro_transition_batch(
+            horizon_steps, env_ids=env_ids
+        )
+        if env_ids is None:
+            env_ids_t = torch.arange(
+                self.num_envs, device=self.device, dtype=torch.long
+            )
+        else:
+            env_ids_t = torch.as_tensor(
+                env_ids, device=self.device, dtype=torch.long
+            ).reshape(-1)
+        slices = self.expert_macro_feature_slices(horizon_steps)
+        if "expert_motion" not in slices:
+            raise RuntimeError(
+                "expert_motion feature slice unavailable for achieved macro state."
+            )
+        start, end = slices["expert_motion"]
+        joint_pos = self.robot.data.joint_pos.index_select(0, env_ids_t)
+        joint_vel = self.robot.data.joint_vel.index_select(0, env_ids_t)
+        achieved_motion = torch.cat([joint_pos, joint_vel], dim=-1).to(
+            device=self.device, dtype=torch.float32
+        )
+        expected_width = int(end) - int(start)
+        if int(achieved_motion.shape[-1]) != expected_width:
+            raise ValueError(
+                "Achieved motion width mismatch: expected "
+                f"{expected_width} (expert_motion slice), got "
+                f"{int(achieved_motion.shape[-1])} from robot joint state."
+            )
+        state = batch.get(("hl", "state")).clone()
+        state[:, int(start) : int(end)] = achieved_motion
+        batch.set(("hl", "state"), state)
+        return batch
+
     def expert_macro_feature_slices(
         self,
         horizon_steps: int,

@@ -1,16 +1,16 @@
-"""Build a language-goal embedding table for the System-2 skill generator (M0).
+"""Build a language-goal embedding table for the System-2 skill commander (M0).
 
 This reads a LAFAN1 manifest, collects the unique motion names
 (e.g. ``dance1_subject1``), turns each name into a short natural-language phrase
 (e.g. ``dance``), and embeds every phrase into a fixed-length vector. The result
 is saved as a torch table mapping ``motion_name -> embedding`` that the
-downstream generator trainer and rollout sampler load directly, so no text model
+downstream commander trainer and rollout sampler load directly, so no text model
 is needed at train or rollout time.
 
 Two backends are supported:
 
 * ``dummy`` (default): deterministic pseudo-random unit vectors seeded by the
-  phrase text. Needs no external model, so the whole generator pipeline can be
+  phrase text. Needs no external model, so the whole commander pipeline can be
   built and tested before a real text encoder is wired up. Names that clean to
   the same phrase share the same vector, mirroring how a real text encoder would
   group ``dance1`` and ``dance2`` together.
@@ -143,7 +143,7 @@ def embed_phrases(
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Build a language-goal embedding table (M0) for the skill generator."
+            "Build a language-goal embedding table (M0) for the skill commander."
         )
     )
     parser.add_argument(
