@@ -1,4 +1,4 @@
-# Language-Conditioned Skill Generator (System 2)
+# Language-Conditioned Skill Commander (System 2)
 
 ## Context
 
@@ -9,7 +9,7 @@ the `FrozenHighLevelSkillCommandSampler` peeks at the expert's *future motion
 window* and runs `z = encoder(state, future_window)`. That requires the
 reference trajectory's future at inference time.
 
-This page describes the **System-2 skill generator**: a policy that maps
+This page describes the **System-2 skill commander**: a policy that maps
 `(current_state, language_goal) -> z`, removing the dependence on the future
 window. It is the "high-level manager" anticipated in
 [Hierarchical Planning over Spectral Skills](hierarchical-spectral-planning.md);
@@ -18,11 +18,11 @@ the low-level policy is unchanged and keeps consuming `z`. See also
 
 "Start slow": use each LAFAN1 trajectory's **name** (e.g. `dance1_subject1`) as
 the language instruction, embed it once into a `{motion_name: vector}` table,
-and **distill** the frozen encoder's `z` into the generator.
+and **distill** the frozen encoder's `z` into the commander.
 
 ## Approved approach and decisions (2026-06-15)
 
-- **Train signal: supervised distillation.** Regress `generator(state, lang) -> z_target`,
+- **Train signal: supervised distillation.** Regress `commander(state, lang) -> z_target`,
   where `z_target` comes from the frozen `HighLevelSkillEncoder`. No sim in the
   loop for v0. (RL fine-tune through the frozen low-level is a later option.)
 - **Language goal: trajectory names, embedded offline into a table.** RL/runtime
@@ -34,16 +34,16 @@ and **distill** the frozen encoder's `z` into the generator.
   **achieved** state for true closed-loop control.
 - **`z` target, not the full command.** Distill the encoder latent `z`; rebuild
   the command (`z` / `phi` / `z_phi` + optional phase) at rollout with the frozen
-  diffsr via the existing `_command_code_from_state_z`, so the generator is a
+  diffsr via the existing `_command_code_from_state_z`, so the commander is a
   drop-in for *only* the "encode the future window" step.
 
 ## Constraints for future agents
 
-- The generator must distill to the **same `z`** the target low-level policy was
+- The commander must distill to the **same `z`** the target low-level policy was
   trained against: inherit `horizon_steps`, `encoder_window_mode`, `z_dim`, and
   `command_mode` from the loaded skill checkpoint — do not re-pick them.
 - Do not retrain the low-level policy for v0. Validate by swapping the IPMD
-  `command_source` from `hl_skill` to `language_skill` at play time on an
+  `command_source` from `hl_skill` to `skill_commander` at play time on an
   existing frozen low-level checkpoint; `hl_skill` (oracle) is the upper bound.
 - Keep the table keyed by the **raw motion name** (the env emits motion names);
   the cleaned phrase only decides which text is embedded.
@@ -56,8 +56,8 @@ This feature genuinely requires **RLOpt** edits — the skill encoder, command
 samplers, and IPMD `command_source` all live there. Bump the top-level submodule
 pointer when RLOpt changes land.
 
-- **RLOpt (submodule):** new `language_skill_generator.py` (network + config +
-  trainer + sampler); new `command_source="language_skill"` in IPMD.
+- **RLOpt (submodule):** new `skill_commander.py` (network + config +
+  trainer + sampler); new `command_source="skill_commander"` in IPMD.
 - **This repo:** env plumbing (return `traj_rank`, add a motion-name accessor),
   the offline embedding script, the training entrypoint. The text-model
   dependency stays in the offline script here.
@@ -79,7 +79,7 @@ anchors.
 | `._append_command_phase(codes, phase)` | 671 | optional `sin_cos` phase (`phase_dim=2`). |
 | `._encode_current_macro_batch(env_ids)` | 680 | calls `current_expert_macro_transition_batch`, then `z = skill_encoder(state, _encoder_input_window(future_window))`. **Override point.** |
 | `.sample_for_step(td, device, dtype)` | 879 | renewal scheduling + returns `[B, latent_dim]`. Reuse as-is. |
-| `HighLevelSkillDiffSRTrainer` | 976 | `train_step` 1487, `evaluate` 1522, `train` 1587, `save_checkpoint` 1634, `load_checkpoint` 1639. **Mirror for the generator trainer.** Uses `sample_expert_macro_transition_batch`. |
+| `HighLevelSkillDiffSRTrainer` | 976 | `train_step` 1487, `evaluate` 1522, `train` 1587, `save_checkpoint` 1634, `load_checkpoint` 1639. **Mirror for the commander trainer.** Uses `sample_expert_macro_transition_batch`. |
 
 Checkpoint dict keys: `skill_encoder_state_dict`, `diffsr_state_dict`, `config`,
 optimizer state, feature normalization.
@@ -112,9 +112,9 @@ Also `get_ith_traj_info(rank, ordered_traj_list)` in
 ### Integration / config
 
 - IPMD command source: `RLOpt/rlopt/agent/ipmd/ipmd.py` — `command_source` ∈
-  `{random, posterior, hl_skill, language_skill}`. `language_skill` builds
-  `FrozenLanguageSkillCommandSampler` into the same `_hl_skill_command_sampler`
-  slot (config: `language_skill_checkpoint_path`, `language_skill_embeddings_path`;
+  `{random, posterior, hl_skill, skill_commander}`. `skill_commander` builds
+  `FrozenSkillCommanderSampler` into the same `_hl_skill_command_sampler`
+  slot (config: `skill_commander_checkpoint_path`, `skill_commander_embeddings_path`;
   reuses `hl_skill_command_mode` / `hl_skill_horizon_steps` / `latent_dim`).
 - Gym envs registered in
   `source/isaaclab_imitation/isaaclab_imitation/tasks/manager_based/imitation/config/g1/__init__.py`
@@ -155,61 +155,69 @@ pixi run python scripts/rlopt/build_language_goal_embeddings.py \
   --manifest data/lafan1/manifests/g1_lafan1_manifest.json --backend dummy
 ```
 
-### M1 — Generator network + distillation trainer (offline) — DONE (unit-tested)
+### M1 — Commander network + distillation trainer (offline) — DONE (unit-tested)
 
 - **Edit (this repo)** `envs/imitation_rl_env.py`: add `hl["traj_rank"]`
   (LongTensor `[B]`) to both macro samplers (split path = `traj_ranks_tm`;
   `all`/current path = `tm.env_traj_rank[env_ids]`); additive/back-compatible.
   Add accessor `expert_trajectory_motion_names() -> list[str]` (rank-indexed).
-- **New (RLOpt submodule)** `RLOpt/rlopt/agent/language_skill_generator.py`:
-  - `LanguageSkillGeneratorConfig` (mirror `HighLevelSkillDiffSRConfig`):
+- **New (RLOpt submodule)** `RLOpt/rlopt/agent/skill_commander.py`:
+  - `SkillCommanderConfig` (mirror `HighLevelSkillDiffSRConfig`):
     `skill_checkpoint_path`, `language_embeddings_path`, `lang_embed_dim=384`,
     `hidden_dims`, optimizer/iter/eval/split params, `cosine_loss_coeff`,
     `z_norm_coeff`. `z_dim`/`horizon_steps`/`encoder_window_mode`/`command_mode`
     are loaded from the skill checkpoint.
-  - `LanguageSkillGenerator(nn.Module)`: `forward(state, lang_emb) -> z` (MLP on
+  - `SkillCommander(nn.Module)`: `forward(state, lang_emb) -> z` (MLP on
     `concat[state, lang_emb]`, same `Linear→LayerNorm→Mish` block style).
-  - `LanguageSkillGeneratorTrainer` (mirror `HighLevelSkillDiffSRTrainer`):
+  - `SkillCommanderTrainer` (mirror `HighLevelSkillDiffSRTrainer`):
     freeze encoder from checkpoint; build `rank → embedding` lookup from the
     table + name accessor; per step sample `split="train"` macro batch →
     `z_target = frozen_encoder(state, encoder_input_window(future_window))`,
-    `z_hat = generator(state, lookup[traj_rank])`,
+    `z_hat = commander(state, lookup[traj_rank])`,
     `loss = MSE + cosine_loss_coeff·(1−cos) + z_norm_coeff·‖z_hat‖²`; eval on
     `split="eval"` (**held-out trajectory names**) reporting z-MSE, cosine, and
     optional reconstruction via the frozen diffsr.
-- **New (this repo)** `scripts/rlopt/train_language_skill_generator.py` — mirror
+- **New (this repo)** `scripts/rlopt/train_skill_commander.py` — mirror
   `train_hl_skill_diffsr.py` (Hydra/argparse + env build + trainer + save). Args:
   `--task Isaac-Imitation-G1-Latent-v0`, `--skill-checkpoint`,
   `--language-embeddings`, dims/iters.
-- **Tests (RLOpt)** `RLOpt/tests/test_language_skill_generator.py`: shapes;
+- **Tests (RLOpt)** `RLOpt/tests/test_skill_commander.py`: shapes;
   distillation loss drops on overfit batch; eval runs; sampler returns
   `[B, latent_dim]`. Wire into the `test-rlopt` pixi task.
 
 ### M2 — Rollout integration — DONE (code; pending Isaac-Sim rollout validation)
 
-- **New (RLOpt)** `FrozenLanguageSkillCommandSampler(FrozenHighLevelSkillCommandSampler)`:
+- **New (RLOpt)** `FrozenSkillCommanderSampler(FrozenHighLevelSkillCommandSampler)`:
   override only the `z` production in `_encode_current_macro_batch` — keep
   pulling `state` from `current_expert_macro_transition_batch`, read per-env
-  `tm.env_traj_rank → name → lookup` for `lang`, compute `z = generator(state, lang)`.
+  `tm.env_traj_rank → name → lookup` for `lang`, compute `z = commander(state, lang)`.
   Reuse `_command_code_from_state_z`, `_append_command_phase`, `_sample_steps`,
   `_done_mask`, `sample_for_step` unchanged.
-- **Edit (RLOpt)** `ipmd/ipmd.py`: add `command_source="language_skill"` branch
-  (config: `language_skill_checkpoint_path`, `language_embeddings_path`; read
-  `command_mode`/`horizon_steps` from the generator/skill checkpoint).
+- **Edit (RLOpt)** `ipmd/ipmd.py`: add `command_source="skill_commander"` branch
+  (config: `skill_commander_checkpoint_path`, `language_embeddings_path`; read
+  `command_mode`/`horizon_steps` from the commander/skill checkpoint).
 - **Validate** with `play.py` on a frozen low-level policy (trained with
-  `command_source=hl_skill`) by switching to `language_skill`; compare against
+  `command_source=hl_skill`) by switching to `skill_commander`; compare against
   `hl_skill` (oracle upper bound).
 
-### M3 — Later (not in first PR)
+### M3 — Achieved-state robustness — v0 DONE; full closed-loop = follow-up
 
-- Swap generator `state` input from expert macro state to robot **achieved**
-  state (manage train/target mismatch).
-- Optional **RL fine-tune** of the generator via policy gradient through the
-  frozen low-level policy.
+- **v0 (done):** `state_noise_std` augments the commander's state input with
+  per-dim-scaled Gaussian noise during distillation (target z stays from the
+  clean expert state), nudging the commander to rely on the language goal and
+  tolerate non-expert states. Validated knob: the real-vs-shuffled language
+  cosine gap grows from ~0.004 (no noise) to ~0.021 (std=5.0).
+- **Finding:** with the expert-reference macro state as input, language is
+  largely **redundant** — the state alone nearly determines the next skill.
+  Noise only weakly induces language reliance, confirming the real fix is
+  achieved-state conditioning.
+- **Follow-up (full M3):** feed the robot's **achieved** macro state (needs a new
+  env accessor) and distill on rollout-collected achieved states, or **RL
+  fine-tune** the commander through the frozen low-level policy on env reward.
 
 ## Environment / setup notes
 
-- The skill generator's RLOpt code lives in the submodule; before M1 in a fresh
+- The skill commander's RLOpt code lives in the submodule; before M1 in a fresh
   worktree: `git submodule update --init --recursive`, then
   `pixi install --locked` (and `-e isaaclab`), and `pixi reinstall rlopt` after
   RLOpt edits.
@@ -220,9 +228,29 @@ pixi run python scripts/rlopt/build_language_goal_embeddings.py \
 
 ## Validation summary
 
-1. `pixi run test-rlopt` (generator unit tests, default env).
-2. Offline smoke: `train_language_skill_generator.py` with tiny iters; train
+1. `pixi run test-rlopt` (commander unit tests, default env).
+2. Offline smoke: `train_skill_commander.py` with tiny iters; train
    z-MSE falls and eval cosine rises on held-out names.
 3. Rollout smoke: `pixi run -e isaaclab` play with
-   `command_source=language_skill`; compare to `hl_skill`.
+   `command_source=skill_commander`; compare to `hl_skill`.
 4. `pixi run lint`, `pixi run format-check`, `pixi run typecheck`.
+
+## Local validation results (2026-06-15, RTX PRO 6000, Pixi isaaclab)
+
+- **M0**: dummy + `sentence-transformer` (MiniLM, 384-d) tables built; 40 names ->
+  8 phrases; MiniLM cosine structure sensible (walk·run 0.46 > walk·fight 0.34).
+- **M1**: `train_skill_commander.py` (Isaac, headless, 300 updates) —
+  train z_mse 0.34->0.06, held-out eval z_cosine 0.25->0.77. Distillation works
+  and generalizes to held-out trajectory names.
+- **M2**: `command_source=skill_commander` drove the low-level policy in a real
+  Isaac rollout (`train.py`, fresh policy, ~44 fps) with `--video` clips recorded;
+  no crashes. (Old 2026-06-08 checkpoints don't load under the current config due
+  to network-shape version skew — unrelated to this feature.)
+- **M3 v0**: `state_noise_std` sweep (0 / 1 / 5) controls language reliance as
+  above.
+- `pixi run test-rlopt`: 74 passed.
+
+Run-env notes: Isaac needs `OMNI_KIT_ACCEPT_EULA=YES` for non-interactive runs;
+pass absolute paths for the manifest/table/checkpoints when the worktree lacks a
+local `data/lafan1`; `--video --video_interval 1` writes one clip per step (use a
+larger interval for a single clip).

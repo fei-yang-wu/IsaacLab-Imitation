@@ -7,7 +7,7 @@ trains a generator that maps ``(current_state, language_goal) -> z`` to match th
 encoder's skill latent. Evaluation uses held-out trajectory names.
 
 Example:
-    pixi run -e isaaclab python scripts/rlopt/train_language_skill_generator.py \
+    pixi run -e isaaclab python scripts/rlopt/train_skill_commander.py \
         --task Isaac-Imitation-G1-Latent-v0 --num_envs 16 \
         --skill_checkpoint logs/hl_skill_diffsr/<run>/checkpoints/latest.pt \
         --language_embeddings data/lafan1/language/g1_lafan1_name_embeddings.pt
@@ -41,7 +41,7 @@ parser.add_argument(
     "--output_dir",
     type=str,
     default=None,
-    help="Output directory. Defaults to logs/language_skill_generator/<timestamp>.",
+    help="Output directory. Defaults to logs/skill_commander/<timestamp>.",
 )
 parser.add_argument(
     "--skill_checkpoint",
@@ -137,6 +137,12 @@ parser.add_argument(
     default=1.0e-4,
     help="Small generated-z scale regularizer coefficient.",
 )
+parser.add_argument(
+    "--state_noise_std",
+    type=float,
+    default=0.0,
+    help="Per-dim-scaled Gaussian noise on the generator state input (M3 robustness).",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -157,7 +163,7 @@ from isaaclab.envs import (
 from isaaclab.utils.io import dump_yaml
 from isaaclab_imitation.envs.rlopt import IsaacLabWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from rlopt.agent import LanguageSkillGeneratorConfig, LanguageSkillGeneratorTrainer
+from rlopt.agent import SkillCommanderConfig, SkillCommanderTrainer
 
 AGENT_ENTRY_POINT = "rlopt_ipmd_bilinear_cfg_entry_point"
 
@@ -168,9 +174,9 @@ def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
         stream.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def _build_trainer_config() -> LanguageSkillGeneratorConfig:
+def _build_trainer_config() -> SkillCommanderConfig:
     grad_clip_norm = None if args_cli.grad_clip_norm <= 0 else args_cli.grad_clip_norm
-    config = LanguageSkillGeneratorConfig(
+    config = SkillCommanderConfig(
         skill_checkpoint_path=str(Path(args_cli.skill_checkpoint).expanduser()),
         language_embeddings_path=str(Path(args_cli.language_embeddings).expanduser()),
         generator_hidden_dims=tuple(int(dim) for dim in args_cli.generator_hidden_dims),
@@ -188,6 +194,7 @@ def _build_trainer_config() -> LanguageSkillGeneratorConfig:
         grad_clip_norm=grad_clip_norm,
         cosine_loss_coeff=args_cli.cosine_loss_coeff,
         z_norm_coeff=args_cli.z_norm_coeff,
+        state_noise_std=args_cli.state_noise_std,
         device=args_cli.device if args_cli.device is not None else "auto",
     )
     config.validate()
@@ -198,7 +205,7 @@ def _run_dir() -> Path:
     if args_cli.output_dir is not None:
         return Path(args_cli.output_dir).expanduser().resolve()
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    return Path("logs", "language_skill_generator", timestamp).resolve()
+    return Path("logs", "skill_commander", timestamp).resolve()
 
 
 @hydra_task_config(args_cli.task, AGENT_ENTRY_POINT)
@@ -249,7 +256,7 @@ def main(
         raise NotImplementedError("DirectMARLEnv is not supported by this script.")
 
     wrapped_env = IsaacLabWrapper(env)
-    trainer = LanguageSkillGeneratorTrainer(config=trainer_config, env=wrapped_env)
+    trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
     try:
         if args_cli.checkpoint is not None:
             state = torch.load(
