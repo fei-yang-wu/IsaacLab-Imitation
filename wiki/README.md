@@ -11,6 +11,10 @@ Start with:
 - [IPMD Representation Learning](ipmd-representation-learning.md): current
   research focus, ownership boundaries, and methodological constraints for
   representation learning with inverse RL / adversarial reward learning.
+- [Language-Conditioned Skill Generator (System 2)](system2-language-skill-generator.md):
+  high-level generator mapping current state + language goal to a skill code by
+  distilling the frozen skill encoder; approved approach, milestone status
+  (M0 done), and a grounded code reference map.
 - [Experiment Workflow](experiment-workflow.md): local tests, full cluster job
   submission, and experiment tracking conventions.
 - [LeRobot Offline Pretraining](lerobot-offline-pretraining.md): Unitree WBT

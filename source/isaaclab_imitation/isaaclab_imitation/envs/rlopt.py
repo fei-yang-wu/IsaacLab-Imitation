@@ -133,6 +133,9 @@ class IsaacLabWrapper(GymWrapper):
             horizon_steps=horizon_steps,
         )
 
+    def expert_trajectory_motion_names(self):
+        return self._base_isaac_env().expert_trajectory_motion_names()
+
     def set_agent_latent_command(self, latent_command, env_ids=None):
         return self._base_isaac_env().set_agent_latent_command(
             latent_command,

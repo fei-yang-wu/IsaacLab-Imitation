@@ -3093,6 +3093,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 env_ids,
                 global_indices,
             )
+            traj_rank = tm.env_traj_rank.index_select(
+                0, env_ids.to(device=tm._state_device, dtype=torch.long)
+            ).to(device=self.device, dtype=torch.long)
             expert_window = self._sample_expert_window_slice(
                 env_ids,
                 local_steps,
@@ -3120,6 +3123,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             ).to(dtype=torch.long)
             env_ids = torch.arange(batch_size, device=self.device, dtype=torch.long)
             local_steps = local_steps_tm.to(device=self.device, dtype=torch.long)
+            traj_rank = traj_ranks_tm.to(device=self.device, dtype=torch.long)
             expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
                 traj_ranks_tm,
                 local_steps_tm,
@@ -3174,6 +3178,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 "state": state,
                 "future_window": future_window,
                 "target": target,
+                "traj_rank": traj_rank,
             },
             batch_size=[batch_size],
             device=self.device,
@@ -3202,6 +3207,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             raise ValueError("env_ids must select at least one environment.")
 
         local_steps = self._current_local_steps(env_ids_t)
+        tm = self.trajectory_manager
+        traj_rank = tm.env_traj_rank.index_select(
+            0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
+        ).to(device=self.device, dtype=torch.long)
         expert_window = self._sample_expert_window_slice(
             env_ids_t,
             local_steps,
@@ -3256,11 +3265,23 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 "state": state,
                 "future_window": future_window,
                 "target": target,
+                "traj_rank": traj_rank,
             },
             batch_size=[batch_size],
             device=self.device,
         )
         return TensorDict({"hl": hl}, batch_size=[batch_size], device=self.device)
+
+    def expert_trajectory_motion_names(self) -> list[str]:
+        """Return motion names indexed by trajectory rank (for language goals)."""
+        tm = self.trajectory_manager
+        ordered = getattr(tm, "_ordered_traj_list", None)
+        if not ordered:
+            raise RuntimeError(
+                "Trajectory manager does not expose an ordered trajectory list "
+                "for language-goal motion-name lookup."
+            )
+        return [str(item[1]) for item in ordered]
 
     def expert_macro_feature_slices(
         self,
