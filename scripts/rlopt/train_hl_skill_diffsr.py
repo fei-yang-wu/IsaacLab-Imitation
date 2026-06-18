@@ -155,6 +155,7 @@ parser.add_argument(
     help="Ridge coefficient for eval-only window probes.",
 )
 parser.add_argument(
+<<<<<<< HEAD
     "--cotrain_commander",
     action="store_true",
     default=False,
@@ -187,6 +188,44 @@ parser.add_argument(
     type=float,
     default=0.0,
     help="Per-dim Gaussian noise on the commander state input (M3 robustness).",
+=======
+    "--logger_backend",
+    type=str,
+    default="none",
+    help="Metrics backend for pretraining. Use 'wandb' to log to Weights & Biases, "
+    "or 'none' to keep local JSONL/stdout logging only.",
+)
+parser.add_argument(
+    "--wandb_project",
+    type=str,
+    default="G1-Imitation-HL-Skill-DiffSR",
+    help="W&B project name when --logger_backend=wandb.",
+)
+parser.add_argument(
+    "--wandb_entity",
+    type=str,
+    default=None,
+    help="Optional W&B entity (team/user) when --logger_backend=wandb.",
+)
+parser.add_argument(
+    "--wandb_group",
+    type=str,
+    default=None,
+    help="Optional W&B group when --logger_backend=wandb.",
+)
+parser.add_argument(
+    "--wandb_run_name",
+    type=str,
+    default=None,
+    help="Optional W&B run name. Defaults to the run output directory name.",
+)
+parser.add_argument(
+    "--wandb_mode",
+    type=str,
+    default="online",
+    choices=("online", "offline", "disabled"),
+    help="W&B mode passed to wandb.init when --logger_backend=wandb.",
+>>>>>>> c7aece4 (update: allow generation eval during training)
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
@@ -217,6 +256,43 @@ def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _wandb_enabled() -> bool:
+    return str(args_cli.logger_backend).strip().lower() == "wandb"
+
+
+def _init_wandb(log_dir: Path, config_payload: dict[str, Any]) -> Any:
+    """Initialize a W&B run for pretraining, or return None if disabled."""
+    if not _wandb_enabled():
+        return None
+    import wandb  # local import so the dependency is only needed for wandb runs
+
+    run = wandb.init(
+        project=args_cli.wandb_project,
+        entity=args_cli.wandb_entity,
+        group=args_cli.wandb_group,
+        name=args_cli.wandb_run_name or log_dir.name,
+        dir=str(log_dir),
+        mode=args_cli.wandb_mode,
+        config=config_payload,
+    )
+    print(f"[INFO] W&B logging enabled: {run.url if run else '(no run)'}")
+    return run
+
+
+def _wandb_log(run: Any, row: dict[str, Any]) -> None:
+    """Log the numeric fields of a metrics row to W&B, stepped by 'update'."""
+    if run is None:
+        return
+    step = int(row["update"]) if "update" in row else None
+    payload = {
+        key: value
+        for key, value in row.items()
+        if key != "update" and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    if payload:
+        run.log(payload, step=step)
 
 
 def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
@@ -309,6 +385,8 @@ def main(
     dump_yaml(str(log_dir / "env.yaml"), env_cfg)
     print(f"[INFO] Logging high-level DiffSR run to: {log_dir}")
 
+    wandb_run = _init_wandb(log_dir, config_payload)
+
     env_cfg.log_dir = str(log_dir)
     env = gym.make(args_cli.task, cfg=env_cfg)
     if isinstance(env.unwrapped, DirectMARLEnv):
@@ -343,14 +421,20 @@ def main(
                 **metrics,
             }
             _write_jsonl(metrics_path, row)
+            _wandb_log(wandb_run, row)
             print(json.dumps(row, indent=2, sort_keys=True))
             return
 
         def _log(row: dict[str, float | int]) -> None:
             _write_jsonl(metrics_path, dict(row))
+            _wandb_log(wandb_run, dict(row))
             print(json.dumps(row, sort_keys=True))
 
-        trainer.train(log_callback=_log, checkpoint_path=checkpoint_path)
+        trainer.train(
+            log_callback=_log,
+            checkpoint_path=checkpoint_path,
+            reconstruction_eval=bool(args_cli.reconstruction_eval),
+        )
         final_metrics = trainer.evaluate(
             prefix="train",
             include_reconstruction=bool(args_cli.reconstruction_eval),
@@ -370,6 +454,7 @@ def main(
             **final_metrics,
         }
         _write_jsonl(metrics_path, final_row)
+        _wandb_log(wandb_run, final_row)
         trainer.save_checkpoint(checkpoint_path)
         print(f"[INFO] Saved checkpoint: {checkpoint_path}")
         if trainer.commander is not None:
@@ -380,6 +465,8 @@ def main(
             print(f"[INFO] Saved commander checkpoint: {commander_path}")
         print(json.dumps(final_row, indent=2, sort_keys=True))
     finally:
+        if wandb_run is not None:
+            wandb_run.finish()
         wrapped_env.close()
 
 
