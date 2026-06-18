@@ -179,6 +179,15 @@ def _pretrain_cmd(args: argparse.Namespace, output_dir: Path) -> list[str]:
         cmd.append("--reconstruction_eval")
     if args.pretrain_window_probe_eval:
         cmd.append("--window_probe_eval")
+    logger_backend = _str_to_backend(args.logger_backend)
+    cmd.extend(["--logger_backend", logger_backend or "none"])
+    if logger_backend.lower() == "wandb":
+        cmd.extend(["--wandb_project", args.wandb_project])
+        if args.wandb_entity:
+            cmd.extend(["--wandb_entity", args.wandb_entity])
+        if args.wandb_group:
+            cmd.extend(["--wandb_group", args.wandb_group])
+        cmd.extend(["--wandb_run_name", f"{output_dir.name}_pretrain"])
     cmd.extend(
         [
             f"env.lafan1_manifest_path={_repo_path(args.manifest_path)}",
