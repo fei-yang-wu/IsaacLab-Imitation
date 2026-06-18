@@ -109,6 +109,7 @@ class IsaacLabWrapper(GymWrapper):
         split: str | None = None,
         eval_fraction: float = 0.1,
         split_seed: int = 0,
+        trajectory_ranks=None,
     ):
         return self._base_isaac_env().sample_expert_macro_transition_batch(
             batch_size=batch_size,
@@ -116,6 +117,7 @@ class IsaacLabWrapper(GymWrapper):
             split=split,
             eval_fraction=eval_fraction,
             split_seed=split_seed,
+            trajectory_ranks=trajectory_ranks,
         )
 
     def current_expert_macro_transition_batch(

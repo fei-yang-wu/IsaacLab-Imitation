@@ -1,5 +1,5 @@
 # ruff: noqa: E402
-"""Train a language-conditioned skill generator (System 2) by distillation.
+"""Train a language-conditioned skill generator (System 1) by distillation.
 
 Loads a frozen high-level skill encoder (from ``train_hl_skill_diffsr.py``) and a
 language-goal embedding table (from ``build_language_goal_embeddings.py``), then
@@ -46,13 +46,13 @@ parser.add_argument(
 parser.add_argument(
     "--skill_checkpoint",
     type=str,
-    required=True,
+    default=None,
     help="Frozen high-level skill encoder checkpoint to distill from.",
 )
 parser.add_argument(
     "--language_embeddings",
     type=str,
-    required=True,
+    default=None,
     help="Language goal embedding table (.pt) keyed by motion name.",
 )
 parser.add_argument(
@@ -71,8 +71,90 @@ parser.add_argument(
     "--generator_hidden_dims",
     type=int,
     nargs="+",
-    default=[1024, 512, 512],
+    default=None,
     help="Generator MLP hidden layer widths.",
+)
+parser.add_argument(
+    "--planner_type",
+    type=str,
+    default=None,
+    choices=("mlp", "flow_matching", "diffusion_policy"),
+    help="Planner architecture for (state, language) -> skill z.",
+)
+parser.add_argument(
+    "--flow_num_inference_steps",
+    type=int,
+    default=None,
+    help="Euler integration steps for flow-matching planner inference.",
+)
+parser.add_argument(
+    "--flow_time_embed_dim",
+    type=int,
+    default=None,
+    help="Sinusoidal time embedding width for flow-matching planner.",
+)
+parser.add_argument(
+    "--flow_train_noise_std",
+    type=float,
+    default=None,
+    help="Gaussian source std for flow-matching training.",
+)
+parser.add_argument(
+    "--flow_inference_noise_std",
+    type=float,
+    default=None,
+    help="Gaussian source std for flow-matching inference.",
+)
+parser.add_argument(
+    "--diffusion_num_train_timesteps",
+    type=int,
+    default=None,
+    help="DDPM training horizon for diffusion-policy planner.",
+)
+parser.add_argument(
+    "--diffusion_num_inference_steps",
+    type=int,
+    default=None,
+    help="DDPM reverse steps for diffusion-policy planner inference.",
+)
+parser.add_argument(
+    "--diffusion_time_embed_dim",
+    type=int,
+    default=None,
+    help="Sinusoidal timestep embedding width for diffusion-policy planner.",
+)
+parser.add_argument(
+    "--diffusion_beta_schedule",
+    type=str,
+    default=None,
+    choices=("linear", "scaled_linear", "squaredcos_cap_v2", "sigmoid"),
+    help="Diffusers DDPMScheduler beta schedule for diffusion-policy planner.",
+)
+parser.add_argument(
+    "--diffusion_prediction_type",
+    type=str,
+    default=None,
+    choices=("epsilon",),
+    help="DDPM prediction target for diffusion-policy planner.",
+)
+parser.add_argument(
+    "--diffusion_inference_scheduler",
+    type=str,
+    default=None,
+    choices=("ddpm", "ddim"),
+    help="Reverse-process scheduler for diffusion-policy inference.",
+)
+parser.add_argument(
+    "--diffusion_ddim_eta",
+    type=float,
+    default=None,
+    help="DDIM eta for diffusion-policy inference; 0.0 is deterministic.",
+)
+parser.add_argument(
+    "--diffusion_inference_noise_std",
+    type=float,
+    default=None,
+    help="Gaussian source std for diffusion-policy inference.",
 )
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
 parser.add_argument("--num_updates", type=int, default=2000, help="Training updates.")
@@ -143,6 +225,62 @@ parser.add_argument(
     default=0.0,
     help="Per-dim-scaled Gaussian noise on the generator state input (M3 robustness).",
 )
+parser.add_argument(
+    "--state_feature_dropout_prob",
+    type=float,
+    default=None,
+    help=(
+        "Row probability for corrupting selected macro-state features during "
+        "commander training."
+    ),
+)
+parser.add_argument(
+    "--state_feature_dropout_terms",
+    type=str,
+    nargs="+",
+    default=None,
+    help=(
+        "Macro-state feature names to corrupt, e.g. expert_motion. Use all to "
+        "corrupt the full state."
+    ),
+)
+parser.add_argument(
+    "--state_feature_dropout_mode",
+    type=str,
+    default=None,
+    choices=("shuffle", "zero", "batch_mean"),
+    help="Replacement mode for --state_feature_dropout_prob.",
+)
+parser.add_argument(
+    "--state_feature_dropout_warmup_updates",
+    type=int,
+    default=None,
+    help="Delay state-feature dropout until this many trainer updates have completed.",
+)
+parser.add_argument(
+    "--language_contrastive_coeff",
+    type=float,
+    default=None,
+    help=(
+        "Optional weight for the endpoint loss that makes a different language "
+        "embedding score worse than the correct one."
+    ),
+)
+parser.add_argument(
+    "--language_contrastive_margin",
+    type=float,
+    default=None,
+    help="Cosine margin for --language_contrastive_coeff.",
+)
+parser.add_argument(
+    "--language_contrastive_warmup_updates",
+    type=int,
+    default=None,
+    help=(
+        "Delay endpoint language-contrastive loss until this many trainer "
+        "updates have completed."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -176,27 +314,92 @@ def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
 
 def _build_trainer_config() -> SkillCommanderConfig:
     grad_clip_norm = None if args_cli.grad_clip_norm <= 0 else args_cli.grad_clip_norm
-    config = SkillCommanderConfig(
-        skill_checkpoint_path=str(Path(args_cli.skill_checkpoint).expanduser()),
-        language_embeddings_path=str(Path(args_cli.language_embeddings).expanduser()),
-        generator_hidden_dims=tuple(int(dim) for dim in args_cli.generator_hidden_dims),
-        batch_size=args_cli.batch_size,
-        num_updates=args_cli.num_updates,
-        log_interval=args_cli.log_interval,
-        eval_batches=args_cli.eval_batches,
-        eval_batch_size=args_cli.eval_batch_size,
-        train_split=args_cli.train_split,
-        eval_split=args_cli.eval_split,
-        eval_trajectory_fraction=args_cli.eval_trajectory_fraction,
-        trajectory_split_seed=args_cli.trajectory_split_seed,
-        lr=args_cli.lr,
-        weight_decay=args_cli.weight_decay,
-        grad_clip_norm=grad_clip_norm,
-        cosine_loss_coeff=args_cli.cosine_loss_coeff,
-        z_norm_coeff=args_cli.z_norm_coeff,
-        state_noise_std=args_cli.state_noise_std,
-        device=args_cli.device if args_cli.device is not None else "auto",
+    values: dict[str, Any] = {}
+    if args_cli.checkpoint is not None:
+        checkpoint = torch.load(
+            Path(args_cli.checkpoint).expanduser(),
+            map_location="cpu",
+            weights_only=False,
+        )
+        values.update(checkpoint.get("config", {}))
+        values.setdefault(
+            "skill_checkpoint_path", checkpoint.get("skill_checkpoint_path", "")
+        )
+        values.setdefault(
+            "language_embeddings_path",
+            checkpoint.get("language_embeddings_path", ""),
+        )
+
+    if args_cli.skill_checkpoint is not None:
+        values["skill_checkpoint_path"] = str(
+            Path(args_cli.skill_checkpoint).expanduser()
+        )
+    if args_cli.language_embeddings is not None:
+        values["language_embeddings_path"] = str(
+            Path(args_cli.language_embeddings).expanduser()
+        )
+    if args_cli.planner_type is not None:
+        values["planner_type"] = args_cli.planner_type
+    if args_cli.generator_hidden_dims is not None:
+        values["generator_hidden_dims"] = tuple(
+            int(dim) for dim in args_cli.generator_hidden_dims
+        )
+    if args_cli.state_feature_dropout_terms is not None:
+        values["state_feature_dropout_terms"] = tuple(
+            str(term) for term in args_cli.state_feature_dropout_terms
+        )
+    for cli_name, config_name in (
+        ("flow_num_inference_steps", "flow_num_inference_steps"),
+        ("flow_time_embed_dim", "flow_time_embed_dim"),
+        ("flow_train_noise_std", "flow_train_noise_std"),
+        ("flow_inference_noise_std", "flow_inference_noise_std"),
+        ("diffusion_num_train_timesteps", "diffusion_num_train_timesteps"),
+        ("diffusion_num_inference_steps", "diffusion_num_inference_steps"),
+        ("diffusion_time_embed_dim", "diffusion_time_embed_dim"),
+        ("diffusion_beta_schedule", "diffusion_beta_schedule"),
+        ("diffusion_prediction_type", "diffusion_prediction_type"),
+        ("diffusion_inference_scheduler", "diffusion_inference_scheduler"),
+        ("diffusion_ddim_eta", "diffusion_ddim_eta"),
+        ("diffusion_inference_noise_std", "diffusion_inference_noise_std"),
+        ("state_feature_dropout_prob", "state_feature_dropout_prob"),
+        ("state_feature_dropout_mode", "state_feature_dropout_mode"),
+        (
+            "state_feature_dropout_warmup_updates",
+            "state_feature_dropout_warmup_updates",
+        ),
+        ("language_contrastive_coeff", "language_contrastive_coeff"),
+        ("language_contrastive_margin", "language_contrastive_margin"),
+        (
+            "language_contrastive_warmup_updates",
+            "language_contrastive_warmup_updates",
+        ),
+    ):
+        value = getattr(args_cli, cli_name)
+        if value is not None:
+            values[config_name] = value
+
+    values.update(
+        {
+            "batch_size": args_cli.batch_size,
+            "num_updates": args_cli.num_updates,
+            "log_interval": args_cli.log_interval,
+            "eval_batches": args_cli.eval_batches,
+            "eval_batch_size": args_cli.eval_batch_size,
+            "train_split": args_cli.train_split,
+            "eval_split": args_cli.eval_split,
+            "eval_trajectory_fraction": args_cli.eval_trajectory_fraction,
+            "trajectory_split_seed": args_cli.trajectory_split_seed,
+            "lr": args_cli.lr,
+            "weight_decay": args_cli.weight_decay,
+            "grad_clip_norm": grad_clip_norm,
+            "cosine_loss_coeff": args_cli.cosine_loss_coeff,
+            "z_norm_coeff": args_cli.z_norm_coeff,
+            "state_noise_std": args_cli.state_noise_std,
+            "device": args_cli.device if args_cli.device is not None else "auto",
+        }
     )
+
+    config = SkillCommanderConfig.from_dict(values)
     config.validate()
     return config
 

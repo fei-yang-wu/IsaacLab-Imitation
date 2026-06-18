@@ -214,9 +214,32 @@ class G1ImitationRLOptIPMDBilinearConfig(_G1ImitationRLOptIPMDBilinearBaseConfig
 
 @configclass
 class G1ImitationLatentRLOptIPMDBilinearConfig(_G1ImitationRLOptIPMDBilinearBaseConfig):
-    """Latent-conditioned RLOpt IPMD + Bilinear configuration for G1 imitation."""
+    """Latent-conditioned RLOpt IPMD + Bilinear configuration for G1 imitation.
+
+    Default skill-command recipe (wandb run dh8k313e, minus z_phi): the low-level
+    policy is conditioned on the high-level skill code ``z`` (256) plus a sin_cos
+    phase (2) -> ``latent_dim`` 258, with a pure motion-tracking reward (IPMD
+    discriminator off). ``command_source="hl_skill"`` requires a skill encoder at
+    runtime (``agent.ipmd.hl_skill_checkpoint_path=...``); switch to
+    ``command_source="skill_commander"`` for System-1 inference. Online encoder
+    finetune (``agent.ipmd.hl_skill_finetune_enabled=true``) is opt-in per run.
+    """
 
     _default_use_latent_command: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Skill-command recipe (z + sin_cos phase, 25-step, tracking-only reward).
+        self.ipmd.command_source = "hl_skill"
+        self.ipmd.hl_skill_command_mode = "z"
+        self.ipmd.hl_skill_horizon_steps = 25
+        self.ipmd.latent_dim = 258
+        self.ipmd.latent_steps_min = 25
+        self.ipmd.latent_steps_max = 25
+        self.ipmd.latent_learning.command_phase_mode = "sin_cos"
+        self.ipmd.latent_learning.code_latent_dim = 256
+        self.ipmd.latent_learning.code_period = 25
+        self.ipmd.reward_loss_coeff = 0.0
 
 
 @configclass

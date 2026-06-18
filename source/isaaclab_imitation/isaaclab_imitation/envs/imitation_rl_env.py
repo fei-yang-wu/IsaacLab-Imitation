@@ -3066,6 +3066,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         split: str | None = None,
         eval_fraction: float = 0.1,
         split_seed: int = 0,
+        trajectory_ranks: Sequence[int] | torch.Tensor | None = None,
     ) -> TensorDict:
         """Sample high-level expert macro transitions from the trajectory manager.
 
@@ -3073,7 +3074,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         ``expert_window`` observation group, concatenated per timestep:
         expert_motion, expert_anchor_pos_b, and expert_anchor_ori_b. The sampled
         window is clamped at trajectory boundaries by ``_sample_expert_window_slice``,
-        matching existing expert-window behavior.
+        matching existing expert-window behavior. If ``trajectory_ranks`` is
+        provided, samples are drawn only from those explicit trajectory ranks and
+        ``split`` is ignored.
         """
         batch_size = int(batch_size)
         horizon_steps = int(horizon_steps)
@@ -3083,39 +3086,35 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             raise ValueError("horizon_steps must be > 0.")
 
         tm = self.trajectory_manager
-        self._expert_macro_nonempty_trajectory_ranks()
-        normalized_split = self._normalize_expert_macro_split(split)
-        if normalized_split == "all":
-            _, env_ids, global_indices = self._sample_expert_trajectory_batch(
-                batch_size
-            )
-            local_steps = self._expert_local_steps_from_global_indices(
-                env_ids,
-                global_indices,
-            )
-            traj_rank = tm.env_traj_rank.index_select(
-                0, env_ids.to(device=tm._state_device, dtype=torch.long)
-            ).to(device=self.device, dtype=torch.long)
-            expert_window = self._sample_expert_window_slice(
-                env_ids,
-                local_steps,
-                past_steps=0,
-                future_steps=horizon_steps,
-            )
-        else:
-            split_ranks = self._expert_macro_split_trajectory_ranks(
-                split=normalized_split,
-                eval_fraction=float(eval_fraction),
-                split_seed=int(split_seed),
-            )
+        if trajectory_ranks is not None:
+            selected_ranks = torch.as_tensor(
+                trajectory_ranks, device=tm._state_device, dtype=torch.long
+            ).reshape(-1)
+            if int(selected_ranks.numel()) == 0:
+                raise ValueError("trajectory_ranks must select at least one rank.")
+            max_rank = int(getattr(tm, "num_trajectories", tm._length.numel()))
+            invalid = selected_ranks[
+                (selected_ranks < 0) | (selected_ranks >= max_rank)
+            ]
+            if int(invalid.numel()) > 0:
+                bad = sorted({int(item) for item in invalid.detach().cpu().tolist()})
+                raise ValueError(
+                    f"trajectory_ranks out of range [0, {max_rank - 1}]: {bad}."
+                )
+            lengths_for_selected = tm._length.index_select(0, selected_ranks)
+            empty = selected_ranks[lengths_for_selected <= 0]
+            if int(empty.numel()) > 0:
+                bad = sorted({int(item) for item in empty.detach().cpu().tolist()})
+                raise ValueError(f"trajectory_ranks include empty trajectories: {bad}.")
+
             choices = torch.randint(
                 low=0,
-                high=int(split_ranks.numel()),
+                high=int(selected_ranks.numel()),
                 size=(batch_size,),
                 device=tm._state_device,
                 dtype=torch.long,
             )
-            traj_ranks_tm = split_ranks.index_select(0, choices)
+            traj_ranks_tm = selected_ranks.index_select(0, choices)
             lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
             local_steps_tm = torch.floor(
                 torch.rand(batch_size, device=tm._state_device)
@@ -3130,6 +3129,54 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 past_steps=0,
                 future_steps=horizon_steps,
             )
+        else:
+            self._expert_macro_nonempty_trajectory_ranks()
+            normalized_split = self._normalize_expert_macro_split(split)
+            if normalized_split == "all":
+                _, env_ids, global_indices = self._sample_expert_trajectory_batch(
+                    batch_size
+                )
+                local_steps = self._expert_local_steps_from_global_indices(
+                    env_ids,
+                    global_indices,
+                )
+                traj_rank = tm.env_traj_rank.index_select(
+                    0, env_ids.to(device=tm._state_device, dtype=torch.long)
+                ).to(device=self.device, dtype=torch.long)
+                expert_window = self._sample_expert_window_slice(
+                    env_ids,
+                    local_steps,
+                    past_steps=0,
+                    future_steps=horizon_steps,
+                )
+            else:
+                split_ranks = self._expert_macro_split_trajectory_ranks(
+                    split=normalized_split,
+                    eval_fraction=float(eval_fraction),
+                    split_seed=int(split_seed),
+                )
+                choices = torch.randint(
+                    low=0,
+                    high=int(split_ranks.numel()),
+                    size=(batch_size,),
+                    device=tm._state_device,
+                    dtype=torch.long,
+                )
+                traj_ranks_tm = split_ranks.index_select(0, choices)
+                lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
+                local_steps_tm = torch.floor(
+                    torch.rand(batch_size, device=tm._state_device)
+                    * lengths.to(dtype=torch.float32)
+                ).to(dtype=torch.long)
+                env_ids = torch.arange(batch_size, device=self.device, dtype=torch.long)
+                local_steps = local_steps_tm.to(device=self.device, dtype=torch.long)
+                traj_rank = traj_ranks_tm.to(device=self.device, dtype=torch.long)
+                expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
+                    traj_ranks_tm,
+                    local_steps_tm,
+                    past_steps=0,
+                    future_steps=horizon_steps,
+                )
         window_terms = self._build_expert_window_terms(
             expert_window,
             env_ids,

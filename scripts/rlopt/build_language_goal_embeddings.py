@@ -1,4 +1,4 @@
-"""Build a language-goal embedding table for the System-2 skill commander (M0).
+"""Build a language-goal embedding table for the System-1 skill commander.
 
 This reads a LAFAN1 manifest, collects the unique motion names
 (e.g. ``dance1_subject1``), turns each name into a short natural-language phrase
