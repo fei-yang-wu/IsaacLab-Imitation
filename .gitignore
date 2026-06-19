@@ -82,6 +82,7 @@ data/*
 
 # Generated motion label and rollout artifacts
 data/**/*.npz
+data/unitree/*_hl_diffsr/
 # pixi environments
 .pixi/*
 !.pixi/config.toml

@@ -282,18 +282,12 @@ def _evaluate_batches(
     num_ranks = int(trainer.rank_embeddings.shape[0])
     for _ in range(num_batches):
         batch = sampler(batch_size)
-        state, future_window, _, traj_rank = trainer._validate_macro_batch(
+        state, planner_state, future_window, _, traj_rank = trainer._validate_macro_batch(
             batch, batch_size=batch_size
         )
         z_target = trainer._target_z(state, future_window)
         lang = trainer._lang_for_ranks(traj_rank)
-        z_hat = trainer.generator(state, lang)
-        if num_ranks <= 1:
-            wrong_rank = traj_rank
-        else:
-            wrong_rank = _different_language_ranks(traj_rank, trainer.rank_embeddings)
-        wrong_lang = trainer.rank_embeddings.index_select(0, wrong_rank)
-        z_hat_wrong = trainer.generator(state, wrong_lang)
+        z_hat = trainer.generator(planner_state, lang)
         batch_metrics = {
             f"{prefix}/z_cosine": float(
                 F.cosine_similarity(z_hat, z_target, dim=-1).mean().item()
@@ -301,17 +295,26 @@ def _evaluate_batches(
             f"{prefix}/z_mse": float(F.mse_loss(z_hat, z_target).item()),
             f"{prefix}/z_hat_rms": float(z_hat.pow(2).mean().sqrt().item()),
             f"{prefix}/z_target_rms": float(z_target.pow(2).mean().sqrt().item()),
-            f"{prefix}/z_cosine_wrong_lang": float(
-                F.cosine_similarity(z_hat_wrong, z_target, dim=-1).mean().item()
-            ),
-            f"{prefix}/z_mse_wrong_lang": float(
-                F.mse_loss(z_hat_wrong, z_target).item()
-            ),
         }
-        batch_metrics[f"{prefix}/z_cosine_language_delta"] = (
-            batch_metrics[f"{prefix}/z_cosine"]
-            - batch_metrics[f"{prefix}/z_cosine_wrong_lang"]
-        )
+        if trainer.condition_on_language:
+            if num_ranks <= 1:
+                wrong_rank = traj_rank
+            else:
+                wrong_rank = _different_language_ranks(
+                    traj_rank, trainer.rank_embeddings
+                )
+            wrong_lang = trainer.rank_embeddings.index_select(0, wrong_rank)
+            z_hat_wrong = trainer.generator(planner_state, wrong_lang)
+            batch_metrics[f"{prefix}/z_cosine_wrong_lang"] = float(
+                F.cosine_similarity(z_hat_wrong, z_target, dim=-1).mean().item()
+            )
+            batch_metrics[f"{prefix}/z_mse_wrong_lang"] = float(
+                F.mse_loss(z_hat_wrong, z_target).item()
+            )
+            batch_metrics[f"{prefix}/z_cosine_language_delta"] = (
+                batch_metrics[f"{prefix}/z_cosine"]
+                - batch_metrics[f"{prefix}/z_cosine_wrong_lang"]
+            )
         for key, value in batch_metrics.items():
             accum[key] = accum.get(key, 0.0) + float(value)
     for key in accum:
@@ -412,8 +415,13 @@ def main(
             f"{checkpoint_path} (update={trainer.update}, state_dim={trainer.state_dim}, "
             f"z_dim={trainer.z_dim}, horizon={trainer.horizon_steps})"
         )
+        condition_desc = (
+            "EXPERT macro state history + language"
+            if trainer.condition_on_language
+            else "EXPERT macro state history with no language"
+        )
         print(
-            "[INFO] Evaluating M1 on EXPERT macro state + language; "
+            f"[INFO] Evaluating M1 on {condition_desc}; "
             "no low-level policy or achieved-state rollout is used."
         )
 
@@ -459,6 +467,7 @@ def main(
                         horizon_steps=trainer.horizon_steps,
                         split="all",
                         trajectory_ranks=[rank],
+                        state_history_steps=trainer.config.state_history_steps,
                     )
 
                 metrics = _evaluate_batches(

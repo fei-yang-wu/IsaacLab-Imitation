@@ -56,6 +56,18 @@ parser.add_argument(
     help="Language goal embedding table (.pt) keyed by motion name.",
 )
 parser.add_argument(
+    "--no_language",
+    action="store_true",
+    default=False,
+    help="Train a state-only planner with a zero-width language condition.",
+)
+parser.add_argument(
+    "--state_history_steps",
+    type=int,
+    default=None,
+    help="Past expert macro states to flatten with the current state for planner input.",
+)
+parser.add_argument(
     "--checkpoint",
     type=str,
     default=None,
@@ -334,10 +346,14 @@ def _build_trainer_config() -> SkillCommanderConfig:
         values["skill_checkpoint_path"] = str(
             Path(args_cli.skill_checkpoint).expanduser()
         )
+    if args_cli.no_language:
+        values["condition_on_language"] = False
     if args_cli.language_embeddings is not None:
         values["language_embeddings_path"] = str(
             Path(args_cli.language_embeddings).expanduser()
         )
+    if args_cli.state_history_steps is not None:
+        values["state_history_steps"] = int(args_cli.state_history_steps)
     if args_cli.planner_type is not None:
         values["planner_type"] = args_cli.planner_type
     if args_cli.generator_hidden_dims is not None:
