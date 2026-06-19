@@ -3067,6 +3067,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         eval_fraction: float = 0.1,
         split_seed: int = 0,
         trajectory_ranks: Sequence[int] | torch.Tensor | None = None,
+        state_history_steps: int = 0,
     ) -> TensorDict:
         """Sample high-level expert macro transitions from the trajectory manager.
 
@@ -3080,10 +3081,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         """
         batch_size = int(batch_size)
         horizon_steps = int(horizon_steps)
+        state_history_steps = int(state_history_steps)
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0.")
         if horizon_steps <= 0:
             raise ValueError("horizon_steps must be > 0.")
+        if state_history_steps < 0:
+            raise ValueError("state_history_steps must be >= 0.")
 
         tm = self.trajectory_manager
         if trajectory_ranks is not None:
@@ -3126,7 +3130,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
                 traj_ranks_tm,
                 local_steps_tm,
-                past_steps=0,
+                past_steps=state_history_steps,
                 future_steps=horizon_steps,
             )
         else:
@@ -3146,7 +3150,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 expert_window = self._sample_expert_window_slice(
                     env_ids,
                     local_steps,
-                    past_steps=0,
+                    past_steps=state_history_steps,
                     future_steps=horizon_steps,
                 )
             else:
@@ -3174,32 +3178,37 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
                     traj_ranks_tm,
                     local_steps_tm,
-                    past_steps=0,
+                    past_steps=state_history_steps,
                     future_steps=horizon_steps,
                 )
         window_terms = self._build_expert_window_terms(
             expert_window,
             env_ids,
             context="expert",
-            past_steps=0,
+            past_steps=state_history_steps,
             joint_ids=slice(None),
             anchor_body_name="torso_link",
         )
+        window_steps = state_history_steps + horizon_steps + 1
+        current_index = state_history_steps
         sequence = self._expert_macro_state_sequence_from_terms(
             window_terms,
             batch_size=batch_size,
-            window_steps=horizon_steps + 1,
+            window_steps=window_steps,
         )
         self._expert_macro_feature_slices = (
             self._expert_macro_state_feature_slices_from_terms(
                 window_terms,
                 batch_size=batch_size,
-                window_steps=horizon_steps + 1,
+                window_steps=window_steps,
             )
         )
-        state = sequence[:, 0, :].contiguous()
-        future_window = sequence[:, 1:, :].contiguous()
+        state = sequence[:, current_index, :].contiguous()
+        future_window = sequence[:, current_index + 1 :, :].contiguous()
         target = sequence[:, -1, :].contiguous()
+        state_history = None
+        if state_history_steps > 0:
+            state_history = sequence[:, : current_index + 1, :].contiguous()
 
         state_dim = int(state.shape[-1])
         expected_state = (batch_size, state_dim)
@@ -3220,13 +3229,22 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 f"expected {expected_state}, got {tuple(target.shape)}."
             )
 
+        hl_payload = {
+            "state": state,
+            "future_window": future_window,
+            "target": target,
+            "traj_rank": traj_rank,
+        }
+        if state_history is not None:
+            expected_history = (batch_size, state_history_steps + 1, state_dim)
+            if tuple(state_history.shape) != expected_history:
+                raise ValueError(
+                    "Expert macro sampler produced invalid state_history shape: "
+                    f"expected {expected_history}, got {tuple(state_history.shape)}."
+                )
+            hl_payload["state_history"] = state_history
         hl = TensorDict(
-            {
-                "state": state,
-                "future_window": future_window,
-                "target": target,
-                "traj_rank": traj_rank,
-            },
+            hl_payload,
             batch_size=[batch_size],
             device=self.device,
         )
@@ -3236,11 +3254,15 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self,
         horizon_steps: int,
         env_ids: torch.Tensor | Sequence[int] | None = None,
+        state_history_steps: int = 0,
     ) -> TensorDict:
         """Return macro transitions aligned to each live environment cursor."""
         horizon_steps = int(horizon_steps)
+        state_history_steps = int(state_history_steps)
         if horizon_steps <= 0:
             raise ValueError("horizon_steps must be > 0.")
+        if state_history_steps < 0:
+            raise ValueError("state_history_steps must be >= 0.")
         if env_ids is None:
             env_ids_t = torch.arange(
                 self.num_envs, device=self.device, dtype=torch.long
@@ -3261,32 +3283,37 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         expert_window = self._sample_expert_window_slice(
             env_ids_t,
             local_steps,
-            past_steps=0,
+            past_steps=state_history_steps,
             future_steps=horizon_steps,
         )
         window_terms = self._build_expert_window_terms(
             expert_window,
             env_ids_t,
             context="rollout",
-            past_steps=0,
+            past_steps=state_history_steps,
             joint_ids=slice(None),
             anchor_body_name="torso_link",
         )
+        window_steps = state_history_steps + horizon_steps + 1
+        current_index = state_history_steps
         sequence = self._expert_macro_state_sequence_from_terms(
             window_terms,
             batch_size=batch_size,
-            window_steps=horizon_steps + 1,
+            window_steps=window_steps,
         )
         self._expert_macro_feature_slices = (
             self._expert_macro_state_feature_slices_from_terms(
                 window_terms,
                 batch_size=batch_size,
-                window_steps=horizon_steps + 1,
+                window_steps=window_steps,
             )
         )
-        state = sequence[:, 0, :].contiguous()
-        future_window = sequence[:, 1:, :].contiguous()
+        state = sequence[:, current_index, :].contiguous()
+        future_window = sequence[:, current_index + 1 :, :].contiguous()
         target = sequence[:, -1, :].contiguous()
+        state_history = None
+        if state_history_steps > 0:
+            state_history = sequence[:, : current_index + 1, :].contiguous()
 
         state_dim = int(state.shape[-1])
         expected_state = (batch_size, state_dim)
@@ -3307,13 +3334,22 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 f"expected {expected_state}, got {tuple(target.shape)}."
             )
 
+        hl_payload = {
+            "state": state,
+            "future_window": future_window,
+            "target": target,
+            "traj_rank": traj_rank,
+        }
+        if state_history is not None:
+            expected_history = (batch_size, state_history_steps + 1, state_dim)
+            if tuple(state_history.shape) != expected_history:
+                raise ValueError(
+                    "Current expert macro sampler produced invalid state_history shape: "
+                    f"expected {expected_history}, got {tuple(state_history.shape)}."
+                )
+            hl_payload["state_history"] = state_history
         hl = TensorDict(
-            {
-                "state": state,
-                "future_window": future_window,
-                "target": target,
-                "traj_rank": traj_rank,
-            },
+            hl_payload,
             batch_size=[batch_size],
             device=self.device,
         )
@@ -3334,6 +3370,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self,
         horizon_steps: int,
         env_ids: torch.Tensor | Sequence[int] | None = None,
+        state_history_steps: int = 0,
     ) -> TensorDict:
         """Macro transitions whose current ``state`` uses the robot's ACHIEVED motion.
 
@@ -3346,7 +3383,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         """
         horizon_steps = int(horizon_steps)
         batch = self.current_expert_macro_transition_batch(
-            horizon_steps, env_ids=env_ids
+            horizon_steps,
+            env_ids=env_ids,
+            state_history_steps=state_history_steps,
         )
         if env_ids is None:
             env_ids_t = torch.arange(
@@ -3377,6 +3416,11 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         state = batch.get(("hl", "state")).clone()
         state[:, int(start) : int(end)] = achieved_motion
         batch.set(("hl", "state"), state)
+        state_history = batch.get(("hl", "state_history"))
+        if state_history is not None:
+            state_history = state_history.clone()
+            state_history[:, -1, int(start) : int(end)] = achieved_motion
+            batch.set(("hl", "state_history"), state_history)
         return batch
 
     def expert_macro_feature_slices(

@@ -29,6 +29,7 @@ parser.add_argument(
     help="RLOpt algorithm (must match the checkpoint).",
 )
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint (.pt).")
+parser.add_argument("--output_dir", type=str, default=None, help="Optional log/video output directory for this play run.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment.")
 parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
 # append AppLauncher cli args
@@ -159,7 +160,11 @@ def main(
     if not os.path.isfile(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    log_dir = os.path.dirname(checkpoint_path)
+    if args_cli.output_dir is None:
+        log_dir = os.path.dirname(checkpoint_path)
+    else:
+        log_dir = os.path.abspath(args_cli.output_dir)
+        os.makedirs(log_dir, exist_ok=True)
     env_cfg.log_dir = log_dir
 
     # create isaac environment

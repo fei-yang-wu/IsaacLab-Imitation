@@ -110,6 +110,7 @@ class IsaacLabWrapper(GymWrapper):
         eval_fraction: float = 0.1,
         split_seed: int = 0,
         trajectory_ranks=None,
+        state_history_steps: int = 0,
     ):
         return self._base_isaac_env().sample_expert_macro_transition_batch(
             batch_size=batch_size,
@@ -118,26 +119,31 @@ class IsaacLabWrapper(GymWrapper):
             eval_fraction=eval_fraction,
             split_seed=split_seed,
             trajectory_ranks=trajectory_ranks,
+            state_history_steps=state_history_steps,
         )
 
     def current_expert_macro_transition_batch(
         self,
         horizon_steps: int,
         env_ids=None,
+        state_history_steps: int = 0,
     ):
         return self._base_isaac_env().current_expert_macro_transition_batch(
             horizon_steps=horizon_steps,
             env_ids=env_ids,
+            state_history_steps=state_history_steps,
         )
 
     def current_achieved_macro_transition_batch(
         self,
         horizon_steps: int,
         env_ids=None,
+        state_history_steps: int = 0,
     ):
         return self._base_isaac_env().current_achieved_macro_transition_batch(
             horizon_steps=horizon_steps,
             env_ids=env_ids,
+            state_history_steps=state_history_steps,
         )
 
     def expert_macro_feature_slices(self, horizon_steps: int):
