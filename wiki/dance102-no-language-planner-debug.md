@@ -66,6 +66,11 @@ RUN_ROOT=logs/dance102_single_trajectory_debug/20260618_150520_dance102_h10_hist
 scripts/rlopt/run_dance102_no_language_posthoc_eval.sh
 ```
 
+For the current reusable eval recipe, including M1 expert-state checks,
+oracle-drive sample collection, rollout finetuning, and achieved-state M3
+video eval, see
+[Closed-Loop Skill Commander Eval](closed-loop-skill-commander-eval.md).
+
 ## Code Changes
 
 Top-level repo changes:

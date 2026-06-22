@@ -133,6 +133,15 @@ parser.add_argument(
     help="Keep the task timeout termination. By default only reference end stops eval.",
 )
 parser.add_argument(
+    "--keep_early_terminations",
+    action="store_true",
+    default=False,
+    help=(
+        "Keep non-reference failure terminations. By default only reference end "
+        "stops eval."
+    ),
+)
+parser.add_argument(
     "--continue_after_reset",
     action="store_true",
     default=False,
@@ -339,8 +348,7 @@ def _trajectory_metadata(raw_env: Any) -> dict[str, Any]:
         0, tm.env_traj_rank.reshape(-1).to(device=tm._state_device, dtype=torch.long)
     )
     motion_names = [
-        names[int(rank)] if 0 <= int(rank) < len(names) else str(rank)
-        for rank in ranks
+        names[int(rank)] if 0 <= int(rank) < len(names) else str(rank) for rank in ranks
     ]
     return {
         "trajectory_ranks": [int(rank) for rank in ranks],
@@ -354,12 +362,16 @@ def _trainer_config_from_checkpoint(
     checkpoint: dict[str, Any],
 ) -> SkillCommanderConfig:
     values = dict(checkpoint.get("config", {}))
-    values.setdefault("skill_checkpoint_path", checkpoint.get("skill_checkpoint_path", ""))
+    values.setdefault(
+        "skill_checkpoint_path", checkpoint.get("skill_checkpoint_path", "")
+    )
     values.setdefault(
         "language_embeddings_path", checkpoint.get("language_embeddings_path", "")
     )
     if args_cli.skill_checkpoint is not None:
-        values["skill_checkpoint_path"] = str(Path(args_cli.skill_checkpoint).expanduser())
+        values["skill_checkpoint_path"] = str(
+            Path(args_cli.skill_checkpoint).expanduser()
+        )
     if args_cli.language_embeddings is not None:
         values["language_embeddings_path"] = str(
             Path(args_cli.language_embeddings).expanduser()
@@ -387,6 +399,16 @@ def _trainer_config_from_checkpoint(
     values["eval_batches"] = 1
     values["eval_batch_size"] = 1
     return SkillCommanderConfig.from_dict(values)
+
+
+def _disable_non_reference_terminations(terminations: Any) -> None:
+    names = set(getattr(terminations, "__dict__", {}).keys())
+    names.update(("anchor_pos", "anchor_ori", "ee_body_pos", "base_too_low"))
+    for name in sorted(names):
+        if name.startswith("_") or name == "reference_finished":
+            continue
+        if hasattr(terminations, name):
+            setattr(terminations, name, None)
 
 
 def _planner_state(batch: Any, state_history_steps: int) -> Tensor:
@@ -447,8 +469,10 @@ def _measure_commander(
     future_window = expert_batch.get(("hl", "future_window")).to(
         device=trainer.device, dtype=torch.float32
     )
-    traj_rank = expert_batch.get(("hl", "traj_rank")).reshape(-1).to(
-        device=trainer.device, dtype=torch.long
+    traj_rank = (
+        expert_batch.get(("hl", "traj_rank"))
+        .reshape(-1)
+        .to(device=trainer.device, dtype=torch.long)
     )
     expert_planner_state = _planner_state(expert_batch, state_history_steps).to(
         device=trainer.device, dtype=torch.float32
@@ -485,7 +509,9 @@ def _measure_commander(
         "m3_vs_m1/z_cosine": _cosine_mean(z_m3, z_m1),
         "m3_vs_m1/z_mse": _mse_mean(z_m3, z_m1),
     }
-    metrics.update(_diff_stats("state/achieved_vs_expert", achieved_state, expert_state))
+    metrics.update(
+        _diff_stats("state/achieved_vs_expert", achieved_state, expert_state)
+    )
 
     slices = wrapped_env.expert_macro_feature_slices(horizon_steps=horizon_steps)
     for name, (start, end) in sorted(slices.items()):
@@ -505,9 +531,7 @@ def _measure_commander(
         published_z = published[:, :z_dim]
         metrics["published_z_vs_m3/z_cosine"] = _cosine_mean(published_z, z_m3)
         metrics["published_z_vs_m3/z_mse"] = _mse_mean(published_z, z_m3)
-        metrics["published_z_vs_target/z_cosine"] = _cosine_mean(
-            published_z, z_target
-        )
+        metrics["published_z_vs_target/z_cosine"] = _cosine_mean(published_z, z_target)
         metrics["published_z_vs_target/z_mse"] = _mse_mean(published_z, z_target)
     return metrics
 
@@ -546,9 +570,7 @@ def main(
         env_cfg.motions = [str(args_cli.motion_name)]
     if args_cli.trajectory_name is not None:
         if not hasattr(env_cfg, "trajectories"):
-            raise TypeError(
-                f"Task {args_cli.task} does not support --trajectory_name."
-            )
+            raise TypeError(f"Task {args_cli.task} does not support --trajectory_name.")
         env_cfg.trajectories = [str(args_cli.trajectory_name)]
     if not args_cli.allow_random_reset:
         for name, value in (
@@ -558,10 +580,13 @@ def main(
         ):
             if hasattr(env_cfg, name):
                 setattr(env_cfg, name, value)
+    terminations = getattr(env_cfg, "terminations", None)
     if not args_cli.keep_time_out:
-        terminations = getattr(env_cfg, "terminations", None)
         if terminations is not None and hasattr(terminations, "time_out"):
             terminations.time_out = None
+    if not args_cli.keep_early_terminations:
+        if terminations is not None:
+            _disable_non_reference_terminations(terminations)
 
     checkpoint_path = Path(args_cli.checkpoint).expanduser().resolve()
     planner_checkpoint_path = Path(args_cli.planner_checkpoint).expanduser().resolve()
@@ -592,6 +617,7 @@ def main(
         "trajectory_name": args_cli.trajectory_name,
         "allow_random_reset": bool(args_cli.allow_random_reset),
         "keep_time_out": bool(args_cli.keep_time_out),
+        "keep_early_terminations": bool(args_cli.keep_early_terminations),
         "continue_after_reset": bool(args_cli.continue_after_reset),
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),
         "command": " ".join(sys.orig_argv),
@@ -669,9 +695,7 @@ def main(
     td = env.reset()
     start_metadata = _trajectory_metadata(raw_isaac_env)
     language_mode = (
-        "motion-name embedding"
-        if bool(trainer.condition_on_language)
-        else "none"
+        "motion-name embedding" if bool(trainer.condition_on_language) else "none"
     )
     print(
         "[INFO] Conditioning: "
@@ -687,7 +711,10 @@ def main(
         raise ValueError("--metric_interval must be > 0.")
     while simulation_app.is_running() and timestep < max_steps:
         start_time = time.time()
-        with torch.inference_mode(), set_exploration_type(InteractionType.DETERMINISTIC):
+        with (
+            torch.inference_mode(),
+            set_exploration_type(InteractionType.DETERMINISTIC),
+        ):
             should_measure = timestep % int(args_cli.metric_interval) == 0
             metric_row: dict[str, Any] = {}
             td = collector_policy(td)

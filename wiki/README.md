@@ -15,6 +15,9 @@ Start with:
   high-level commander mapping current state + language goal to a skill code by
   distilling the frozen skill encoder; approved approach, milestone status
   (M0 done), and a grounded code reference map.
+- [Closed-Loop Skill Commander Eval](closed-loop-skill-commander-eval.md):
+  practical M1, oracle-drive, rollout-finetune, and M3 eval recipe used for the
+  Dance102 planner-debug workflow.
 - [Experiment Workflow](experiment-workflow.md): local tests, full cluster job
   submission, and experiment tracking conventions.
 - [LeRobot Offline Pretraining](lerobot-offline-pretraining.md): Unitree WBT
