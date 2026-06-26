@@ -14,6 +14,8 @@ SYNC_EXTRA_REPO_SPECS=""
 CLUSTER_ISAACLAB_BASE_DIR=""
 CLUSTER_SYNC_LATEST_LINK=""
 CLUSTER_PREVIOUS_SYNC_DIR=""
+CLUSTER_ENV_OVERRIDES=()
+REMOTE_JOB_ENV_ARGS=()
 REPO_SYNC_HEAD_SHA=""
 REPO_SYNC_ORIGIN_URL=""
 REPO_SYNC_BRANCH=""
@@ -31,6 +33,61 @@ REPO_SYNC_REASON=""
 # Function to display warnings in red
 display_warning() {
     echo -e "\033[31mWARNING: $1\033[0m"
+}
+
+capture_cluster_env_overrides() {
+    local name
+    local value
+
+    CLUSTER_ENV_OVERRIDES=()
+    while IFS='=' read -r name value; do
+        case "$name" in
+            CLUSTER_*)
+                CLUSTER_ENV_OVERRIDES+=("$name=$value")
+                ;;
+        esac
+    done < <(env)
+}
+
+restore_cluster_env_overrides() {
+    local assignment
+
+    for assignment in "${CLUSTER_ENV_OVERRIDES[@]}"; do
+        export "$assignment"
+    done
+}
+
+source_cluster_env() {
+    local env_file="$SCRIPT_DIR/.env.cluster"
+
+    if [ -n "${cluster_config_name:-}" ]; then
+        env_file="$SCRIPT_DIR/.env.${cluster_config_name}"
+    fi
+    if [ ! -f "$env_file" ]; then
+        echo "[ERROR] Cluster env file not found: '$env_file'" >&2
+        exit 1
+    fi
+
+    source "$env_file"
+    restore_cluster_env_overrides
+}
+
+prefix_home_if_relative() {
+    local home_dir="$1"
+    local raw_path="$2"
+
+    if [ -z "$raw_path" ]; then
+        echo ""
+        return
+    fi
+    case "$raw_path" in
+        /*)
+            echo "$raw_path"
+            ;;
+        *)
+            echo "$home_dir/$raw_path"
+            ;;
+    esac
 }
 
 resolve_local_tmp_dir() {
@@ -170,6 +227,18 @@ sync_tree_to_cluster() {
         --exclude="runs/"
         --exclude="videos/"
         --exclude="wandb"
+        --exclude=".claude/"
+        --exclude=".codex/"
+        --exclude=".mypy_cache/"
+        --exclude=".pixi/"
+        --exclude=".pytest_cache/"
+        --exclude=".ruff_cache/"
+        --exclude="__pycache__/"
+        --exclude="*.npz"
+        --exclude="data/**/*.npz"
+        --exclude="logs/"
+        --exclude="outputs/"
+        --exclude="wandb/"
         --filter=':- .dockerignore'
     )
     for exclude_pattern in ${CLUSTER_EXTRA_RSYNC_EXCLUDES:-}; do
@@ -681,6 +750,85 @@ build_remote_job_env_args() {
     done < <(compgen -A variable CLUSTER_SLURM_)
 }
 
+select_slurm_job_script() {
+    local selector="${CLUSTER_SLURM_SUBMIT_SCRIPT:-}"
+    local candidate=""
+    local login_name="${CLUSTER_LOGIN%%.*}"
+
+    if [ -n "$selector" ]; then
+        case "$selector" in
+            */*)
+                echo "[ERROR] CLUSTER_SLURM_SUBMIT_SCRIPT must name a file in docker/cluster, not a path: '$selector'" >&2
+                exit 1
+                ;;
+            *.sh)
+                candidate="$selector"
+                ;;
+            submit_job_slurm_*)
+                candidate="${selector%.sh}.sh"
+                ;;
+            *)
+                candidate="submit_job_slurm_${selector}.sh"
+                ;;
+        esac
+        if [ ! -f "$SCRIPT_DIR/$candidate" ]; then
+            echo "[ERROR] Requested Slurm submit script does not exist: '$SCRIPT_DIR/$candidate'" >&2
+            exit 1
+        fi
+        echo "$candidate"
+        return
+    fi
+
+    if [ -n "${cluster_config_name:-}" ]; then
+        candidate="submit_job_slurm_${cluster_config_name}.sh"
+        if [ -f "$SCRIPT_DIR/$candidate" ]; then
+            echo "$candidate"
+            return
+        fi
+    fi
+
+    candidate="submit_job_slurm_${login_name}.sh"
+    if [ -f "$SCRIPT_DIR/$candidate" ]; then
+        echo "$candidate"
+        return
+    fi
+
+    if [[ "$CLUSTER_LOGIN" == *pace.gatech.edu* ]] && [ -f "$SCRIPT_DIR/submit_job_slurm_pace.sh" ]; then
+        echo "submit_job_slurm_pace.sh"
+        return
+    fi
+
+    echo "submit_job_slurm.sh"
+}
+
+add_remote_env_arg_if_set() {
+    local var_name="$1"
+
+    if [ "${!var_name+x}" ]; then
+        REMOTE_JOB_ENV_ARGS+=("$var_name=${!var_name}")
+    fi
+}
+
+build_remote_job_env_args() {
+    local var_name
+
+    REMOTE_JOB_ENV_ARGS=()
+    add_remote_env_arg_if_set CLUSTER_PYTHON_EXECUTABLE
+    add_remote_env_arg_if_set CLUSTER_AUTO_SETUP_G1_DATA
+    add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
+    add_remote_env_arg_if_set CLUSTER_G1_DATA_ROOT
+    add_remote_env_arg_if_set CLUSTER_G1_REPO_ID
+    add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_PATH
+    add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_REFRESH_POLICY
+    add_remote_env_arg_if_set CLUSTER_SKIP_CACHE_COPY
+    add_remote_env_arg_if_set CLUSTER_OVERLAY_SIZE_MB
+    add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
+
+    while IFS= read -r var_name; do
+        add_remote_env_arg_if_set "$var_name"
+    done < <(compgen -A variable CLUSTER_SLURM_)
+}
+
 init_incremental_sync_state() {
     CLUSTER_SYNC_LATEST_LINK="${CLUSTER_ISAACLAB_BASE_DIR}_latest"
     CLUSTER_PREVIOUS_SYNC_DIR=""
@@ -854,7 +1002,7 @@ submit_job() {
 
     case $CLUSTER_JOB_SCHEDULER in
         "SLURM")
-            job_script_file=submit_job_slurm.sh
+            job_script_file="$(select_slurm_job_script)"
             ;;
         "PBS")
             job_script_file=submit_job_pbs.sh
@@ -877,8 +1025,12 @@ submit_job() {
         echo "[INFO] Default G1 manifest override disabled via CLUSTER_APPEND_DEFAULT_G1_MANIFEST='${CLUSTER_APPEND_DEFAULT_G1_MANIFEST:-0}'."
     fi
 
+    echo "[INFO] Using scheduler submit script: $job_script_file"
+    build_remote_job_env_args
+
     build_remote_job_env_args
     printf -v remote_job_cmd '%q ' \
+        env "${REMOTE_JOB_ENV_ARGS[@]}" \
         env "${REMOTE_JOB_ENV_ARGS[@]}" \
         bash -l "$CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file" \
         "$CLUSTER_ISAACLAB_DIR" \
@@ -971,10 +1123,14 @@ link_isaaclab_from_previous_sync() {
 
 #!/bin/bash
 
+capture_cluster_env_overrides
+cluster_config_name=""
+
 help() {
-    echo -e "\nusage: $(basename "$0") [-h] <command> [<profile>] [<job_args>...] -- Utility for interfacing between IsaacLab and compute clusters."
+    echo -e "\nusage: $(basename "$0") [-h] [-c <cluster>] <command> [<profile>] [<job_args>...] -- Utility for interfacing between IsaacLab and compute clusters."
     echo -e "\noptions:"
     echo -e "  -h              Display this help message."
+    echo -e "  -c <cluster>    Source docker/cluster/.env.<cluster> instead of .env.cluster."
     echo -e "\ncommands:"
     echo -e "  push [<profile>]              Push the docker image to the cluster."
     echo -e "  job [<profile>] [<job_args>]  Submit a job to the cluster."
@@ -985,11 +1141,14 @@ help() {
 }
 
 # Parse options
-while getopts ":h" opt; do
+while getopts ":hc:" opt; do
     case ${opt} in
         h )
             help
             exit 0
+            ;;
+        c )
+            cluster_config_name="$OPTARG"
             ;;
         \? )
             echo "Invalid option: -$OPTARG" >&2
@@ -1034,8 +1193,10 @@ case $command in
         capture_cluster_env_overrides
         source $SCRIPT_DIR/.env.cluster
         restore_cluster_env_overrides
+        source_cluster_env
         # Prepend remote $HOME to relative cluster paths.
         CLUSTER_REMOTE_HOME=$(ssh "$CLUSTER_LOGIN" 'echo $HOME')
+        CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
         CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
         # make sure exports directory exists
         mkdir -p /$SCRIPT_DIR/exports
@@ -1069,6 +1230,7 @@ case $command in
         capture_cluster_env_overrides
         source $SCRIPT_DIR/.env.cluster
         restore_cluster_env_overrides
+        source_cluster_env
         # Prepend remote $HOME to relative cluster paths.
         CLUSTER_REMOTE_HOME=$(ssh "$CLUSTER_LOGIN" 'echo $HOME')
         CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
@@ -1077,6 +1239,14 @@ case $command in
         CLUSTER_DATA_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_DATA_DIR")"
         CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_HF_TOKEN_FILE")"
         CLUSTER_WANDB_API_KEY_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_WANDB_API_KEY_FILE")"
+        [ -n "${CLUSTER_G1_MANIFEST_PATH:-}" ] && CLUSTER_G1_MANIFEST_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_MANIFEST_PATH")"
+        [ -n "${CLUSTER_G1_DATA_ROOT:-}" ] && CLUSTER_G1_DATA_ROOT="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_DATA_ROOT")"
+        CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
+        CLUSTER_ISAACLAB_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAACLAB_DIR")"
+        CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
+        CLUSTER_DATA_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_DATA_DIR")"
+        CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "${CLUSTER_HF_TOKEN_FILE:-}")"
+        CLUSTER_WANDB_API_KEY_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "${CLUSTER_WANDB_API_KEY_FILE:-}")"
         [ -n "${CLUSTER_G1_MANIFEST_PATH:-}" ] && CLUSTER_G1_MANIFEST_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_MANIFEST_PATH")"
         [ -n "${CLUSTER_G1_DATA_ROOT:-}" ] && CLUSTER_G1_DATA_ROOT="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_DATA_ROOT")"
         CLUSTER_ISAACLAB_BASE_DIR="$CLUSTER_ISAACLAB_DIR"

@@ -104,7 +104,18 @@ bash cluster_interface.sh job --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --
 bash cluster_interface.sh -c ice job --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --headless
 ```
 
-If no `-c` is given, the script auto-selects `submit_job_slurm_${CLUSTER_LOGIN}.sh` (from `.env.cluster`) when that file exists, falling back to `submit_job_slurm.sh`. See `docker/README.md` for full details.
+If no `-c` is given, the script auto-selects `submit_job_slurm_${CLUSTER_LOGIN}.sh` (from `.env.cluster`) when that file exists, uses `submit_job_slurm_pace.sh` for `*.pace.gatech.edu` logins, and otherwise falls back to `submit_job_slurm.sh`. You can force a submitter with `CLUSTER_SLURM_SUBMIT_SCRIPT=pace`.
+
+For Georgia Tech ICE/PACE pipeline jobs, use:
+
+```bash
+DRY_RUN=1 experiments/submit_hl_skill_pipeline_pace_2b.sh
+CLUSTER_SLURM_ACCOUNT=<pace-account> DRY_RUN=0 experiments/submit_hl_skill_pipeline_pace_2b.sh
+```
+
+The helper defaults to `ice-gpu`, `gpu:l40s:1`, `coe-ice`, and 32G RAM; override
+those with `CLUSTER_SLURM_PARTITION`, `CLUSTER_SLURM_GPU_GRES`,
+`CLUSTER_SLURM_QOS`, or `CLUSTER_SLURM_MEM` if the active allocation differs.
 
 By default, cluster jobs use the submodule states pinned by this top-level repo.
 Only set path overrides in `docker/cluster/.env.cluster` when a task explicitly

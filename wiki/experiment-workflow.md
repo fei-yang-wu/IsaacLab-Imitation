@@ -58,7 +58,9 @@ pixi run -e isaaclab python scripts/rlopt/train.py \
 ```
 
 The empty `agent.logger.backend=` override disables the external metrics backend
-for quick local smoke tests. Remove it when you want W&B tracking.
+for quick local smoke tests. Remove it for normal local runs: RLOpt defaults to
+online W&B logging through `agent.logger.backend=wandb`. Use
+`WANDB_MODE=offline` only when explicitly running without network sync.
 
 For latent IPMD, switch the task:
 
@@ -239,6 +241,77 @@ For Dance102 or other single-manifest debugging, pass the manifest explicitly:
 env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json
 ```
 
+### Georgia Tech PACE / ICE
+
+PACE ICE is the instructional Georgia Tech cluster. The
+[official PACE ICE page](https://pace.gatech.edu/ice-cluster/) describes ICE as
+an instructional cluster with Phoenix-like hardware/software, and public ICE
+[student-facing ICE guides](https://github.com/guru-desh/Intro-To-PACE-ICE)
+list SSH access through `login-ice.pace.gatech.edu`. PACE Slurm examples use
+explicit account, QOS, CPU, memory, and GPU GRES requests. The repo keeps this
+in `docker/cluster/submit_job_slurm_pace.sh` so the lab-local Slurm submitter
+does not inherit PACE assumptions.
+
+For a dry run of the high-level skill pipeline on ICE/PACE with video enabled
+and a 2B-frame low-level cap:
+
+```bash
+DRY_RUN=1 experiments/submit_hl_skill_pipeline_pace_2b.sh
+```
+
+For a real submission, set the PACE account first:
+
+```bash
+CLUSTER_SLURM_ACCOUNT=<pace-account> \
+DRY_RUN=0 experiments/submit_hl_skill_pipeline_pace_2b.sh
+```
+
+The helper defaults to:
+
+- `CLUSTER_LOGIN=login-ice.pace.gatech.edu`
+- `CLUSTER_SLURM_SUBMIT_SCRIPT=pace`
+- `CLUSTER_SLURM_PARTITION=ice-gpu`
+- `CLUSTER_SLURM_GPU_GRES=gpu:l40s:1`
+- `CLUSTER_SLURM_QOS=coe-ice`
+- `CLUSTER_SLURM_CPUS_PER_TASK=24`
+- `CLUSTER_SLURM_MEM=32G`
+- `CLUSTER_SLURM_TIME_LIMIT=16:00:00`
+- `CLUSTER_G1_MANIFEST_REFRESH_POLICY=auto`
+- `CLUSTER_GIT_SYNC_FIRST=0`
+
+Override any of those in the environment if `sinfo`, `pace-quota`, or PACE
+support guidance says the current ICE allocation needs a different account, QOS,
+GPU model, or CPU/GPU ratio. If L40S nodes are only available through backfill
+for the active allocation, submit with `CLUSTER_SLURM_QOS=embers`; PACE's
+[L40S announcement](https://pace.gatech.edu/2024/10/31/new-gpus-for-phoenix-v100s-being-replaced/)
+notes that L40S availability/QOS has changed over time, so verify current ICE
+policy before relying on a specific QOS.
+
+Useful live checks on ICE:
+
+```bash
+pace-quota
+sacctmgr -n -P show assoc where user=$USER format=Account,QOS%60
+sinfo -o "%P %G %D %t" | grep -E "ice-gpu|l40s"
+```
+
+The pipeline entrypoint does not accept Hydra-style
+`env.lafan1_manifest_path=...`, so the helper sets
+`CLUSTER_APPEND_DEFAULT_G1_MANIFEST=0` and passes:
+
+```text
+--manifest-path /data/lafan1/manifests/g1_lafan1_manifest.json
+--dataset-path /data/lafan1/g1_hl_diffsr
+```
+
+The container preflight still auto-checks `${CLUSTER_DATA_DIR}/lafan1/npz/g1`
+and creates the manifest from the cluster NPZ tree when it is missing or stale.
+The helper also skips git-clone-first sync by default on ICE because user
+scratch quotas can be tight; incremental `rsync` uses the previous snapshot as
+the base and excludes generated caches, logs, worktrees, and `.npz` data files.
+The live `ice-gpu` partition reports `MaxTime=16:00:00`; keep the 2B frame cap
+as a training cap, but do not assume ICE will grant a two-day walltime.
+
 ## RLOpt Submodule State
 
 Cluster jobs should use the pinned `RLOpt/` submodule state from
@@ -286,8 +359,11 @@ agent.logger.exp_name=<short_descriptive_name>
 agent.logger.group_name=<optional_group_name>
 ```
 
-Default RLOpt logging uses W&B. For cluster jobs, provide the key on the cluster
-host and let `run_singularity.sh` inject it into the container:
+Default RLOpt logging uses online W&B. For local long runs, leave
+`WANDB_MODE` unset or set `WANDB_MODE=online`; do not set
+`WANDB_MODE=offline` unless the run is intentionally local-only. For cluster
+jobs, provide the key on the cluster host and let `run_singularity.sh` inject
+it into the container:
 
 ```bash
 printf '%s\n' 'your_wandb_api_key' > ~/.wandb_api_key
