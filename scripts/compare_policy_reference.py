@@ -725,11 +725,10 @@ def main(
         "body_markers",
         "both",
     )
-    if use_reference_robot_replay:
-        base_env.configure_reference_replay_targets(
-            source_env_ids=[POLICY_ENV_ID],
-            target_env_ids=[REFERENCE_ENV_ID],
-        )
+    base_env.configure_reference_replay_targets(
+        source_env_ids=[POLICY_ENV_ID],
+        target_env_ids=[REFERENCE_ENV_ID],
+    )
 
     reference_body_markers = (
         _create_reference_body_markers() if use_reference_body_markers else None
@@ -748,8 +747,7 @@ def main(
     dt = getattr(base_env, "step_dt", None)
 
     td = env.reset()
-    if use_reference_robot_replay:
-        base_env.apply_reference_replay_targets()
+    base_env.apply_reference_replay_targets()
 
     reference_root_pos_w = None
     reference_marker_stats = None
@@ -765,8 +763,8 @@ def main(
     timestep = 0
     if args_cli.reference_visualization == "body_markers":
         print(
-            "[INFO] Starting comparison loop. env 0 shows reference body-state markers; "
-            "env 1 runs policy."
+            "[INFO] Starting comparison loop. env 0 shows reference body-state markers "
+            "with expert qpos robot replay; env 1 runs policy."
         )
     elif args_cli.reference_visualization == "both":
         print(
