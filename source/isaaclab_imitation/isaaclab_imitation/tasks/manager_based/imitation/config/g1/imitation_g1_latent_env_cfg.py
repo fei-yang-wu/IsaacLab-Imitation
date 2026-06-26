@@ -149,9 +149,9 @@ class ImitationG1LatentEnvCfg(ImitationG1LafanTrackEnvCfg):
 
     observations = G1LatentObservationCfg()
     enable_latent_command: bool = True
-    # Debug: publish the single-step vanilla tracker reference payload into
-    # latent_command: expert_motion (58) + expert_anchor_ori_b (6) = 64.
-    latent_command_dim: int = 64
+    # Default skill-command width: skill code z (256) + sin_cos phase (2) = 258
+    # (wandb run dh8k313e recipe, minus z_phi). Override per run as needed.
+    latent_command_dim: int = 258
     latent_goal_steps: int = 1
 
     def __post_init__(self):

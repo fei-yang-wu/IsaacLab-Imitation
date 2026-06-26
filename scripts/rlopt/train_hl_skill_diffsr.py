@@ -154,6 +154,40 @@ parser.add_argument(
     default=1.0e-3,
     help="Ridge coefficient for eval-only window probes.",
 )
+parser.add_argument(
+    "--cotrain_commander",
+    action="store_true",
+    default=False,
+    help="Co-train a skill commander (BC to encoder z from state + language goal).",
+)
+parser.add_argument(
+    "--commander_language_embeddings",
+    type=str,
+    default=None,
+    help="Language-goal embedding table (.pt); required with --cotrain_commander.",
+)
+parser.add_argument(
+    "--commander_lr", type=float, default=3.0e-4, help="Commander BC learning rate."
+)
+parser.add_argument(
+    "--commander_hidden_dims",
+    type=int,
+    nargs="+",
+    default=[1024, 512, 512],
+    help="Commander MLP hidden widths.",
+)
+parser.add_argument(
+    "--commander_cosine_loss_coeff",
+    type=float,
+    default=1.0,
+    help="Weight on the (1 - cosine) commander BC term.",
+)
+parser.add_argument(
+    "--commander_state_noise_std",
+    type=float,
+    default=0.0,
+    help="Per-dim Gaussian noise on the commander state input (M3 robustness).",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -206,6 +240,16 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         z_norm_coeff=args_cli.z_norm_coeff,
         reconstruction_norm_eps=args_cli.reconstruction_norm_eps,
         device=args_cli.device if args_cli.device is not None else "auto",
+        cotrain_commander=bool(args_cli.cotrain_commander),
+        commander_language_embeddings_path=(
+            str(Path(args_cli.commander_language_embeddings).expanduser())
+            if args_cli.commander_language_embeddings
+            else ""
+        ),
+        commander_hidden_dims=tuple(int(d) for d in args_cli.commander_hidden_dims),
+        commander_lr=args_cli.commander_lr,
+        commander_cosine_loss_coeff=args_cli.commander_cosine_loss_coeff,
+        commander_state_noise_std=args_cli.commander_state_noise_std,
     )
     config.validate()
     return config
@@ -328,6 +372,12 @@ def main(
         _write_jsonl(metrics_path, final_row)
         trainer.save_checkpoint(checkpoint_path)
         print(f"[INFO] Saved checkpoint: {checkpoint_path}")
+        if trainer.commander is not None:
+            commander_path = checkpoints_dir / "commander.pt"
+            trainer.save_commander_checkpoint(
+                commander_path, skill_checkpoint_path=str(checkpoint_path)
+            )
+            print(f"[INFO] Saved commander checkpoint: {commander_path}")
         print(json.dumps(final_row, indent=2, sort_keys=True))
     finally:
         wrapped_env.close()

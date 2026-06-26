@@ -11,7 +11,7 @@ lint = "ruff check ."
 format-check = "ruff format --check ."
 typecheck = "pyrefly check"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
-test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_hl_skill_diffsr.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
+test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_hl_skill_diffsr.py tests/test_skill_commander.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
 test-default = { depends-on = ["test-rlopt"] }
 
 [dependencies]
@@ -43,6 +43,7 @@ pyrefly = "*"
 huggingface-hub = "*"
 rlopt = { path = "./RLOpt", editable = true }
 iltools = { path = "./ImitationLearningTools", editable = true }
+sentence-transformers = ">=5.5.1, <6"
 
 [feature.isaaclab.pypi-options]
 extra-index-urls = ["https://pypi.nvidia.com"]
