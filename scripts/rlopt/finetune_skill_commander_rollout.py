@@ -24,7 +24,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Finetune a SkillCommander from saved closed-loop rollout tensors."
     )
-    parser.add_argument("--checkpoint", required=True, help="Base commander checkpoint.")
+    parser.add_argument(
+        "--checkpoint", required=True, help="Base commander checkpoint."
+    )
     parser.add_argument(
         "--samples_dir",
         required=True,
@@ -103,13 +105,43 @@ def _load_samples(samples_dir: Path) -> dict[str, torch.Tensor]:
     steps: list[int] = []
     for path in paths:
         sample = torch.load(path, map_location="cpu", weights_only=False)
+        sample_rows: dict[str, torch.Tensor] = {}
         for key in rows:
+            if key not in sample:
+                raise KeyError(f"Sample {path} is missing required key {key!r}.")
             value = sample[key]
-            if value.ndim == 1:
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(
+                    f"Sample {path} key {key!r} must be a tensor, got {type(value).__name__}."
+                )
+            if key == "traj_rank":
+                value = value.reshape(-1)
+            elif value.ndim == 1:
                 value = value.unsqueeze(0)
-            rows[key].append(value.to(dtype=torch.long if key == "traj_rank" else torch.float32))
-        if sample.get("step") is not None:
-            steps.append(int(sample["step"]))
+            if key != "traj_rank" and value.ndim != 2:
+                raise ValueError(
+                    f"Sample {path} key {key!r} must be rank-2, got {tuple(value.shape)}."
+                )
+            dtype = torch.long if key == "traj_rank" else torch.float32
+            sample_rows[key] = value.to(dtype=dtype)
+        row_count = int(sample_rows["planner_state"].shape[0])
+        for key, value in sample_rows.items():
+            if int(value.shape[0]) != row_count:
+                raise ValueError(
+                    f"Sample {path} key {key!r} row count {value.shape[0]} "
+                    f"does not match planner_state row count {row_count}."
+                )
+            rows[key].append(value)
+        step = sample.get("step")
+        if step is None:
+            raise KeyError(f"Sample {path} is missing required key 'step'.")
+        if isinstance(step, torch.Tensor):
+            if step.numel() != 1:
+                raise ValueError(
+                    f"Sample {path} step tensor must contain one value, got {tuple(step.shape)}."
+                )
+            step = step.item()
+        steps.extend([int(step)] * row_count)
     data = {key: torch.cat(value, dim=0).contiguous() for key, value in rows.items()}
     data["step"] = torch.as_tensor(steps, dtype=torch.long)
     return data
@@ -122,12 +154,16 @@ def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
 
 
 @torch.no_grad()
-def _evaluate(generator: torch.nn.Module, data: dict[str, torch.Tensor]) -> dict[str, float]:
+def _evaluate(
+    generator: torch.nn.Module, data: dict[str, torch.Tensor]
+) -> dict[str, float]:
     generator.eval()
     z_hat = generator(data["planner_state"], data["lang"])
     z_target = data["z_target"]
     return {
-        "eval/z_cosine": float(F.cosine_similarity(z_hat, z_target, dim=-1).mean().item()),
+        "eval/z_cosine": float(
+            F.cosine_similarity(z_hat, z_target, dim=-1).mean().item()
+        ),
         "eval/z_mse": float(F.mse_loss(z_hat, z_target).item()),
         "eval/z_hat_rms": float(z_hat.pow(2).mean().sqrt().item()),
         "eval/z_target_rms": float(z_target.pow(2).mean().sqrt().item()),
@@ -271,7 +307,11 @@ def main() -> None:
             metrics["train/grad_norm"] = float(grad_norm.item())
         optimizer.step()
 
-        if update == 1 or update == int(args.num_updates) or update % int(args.log_interval) == 0:
+        if (
+            update == 1
+            or update == int(args.num_updates)
+            or update % int(args.log_interval) == 0
+        ):
             row = {
                 "update": int(update),
                 "train/loss": float(loss.detach().item()),
@@ -293,6 +333,39 @@ def main() -> None:
         args.num_updates
     )
     output_checkpoint["rollout_finetune"] = config_payload
+    checkpoint_metadata = output_checkpoint.get("metadata")
+    if not isinstance(checkpoint_metadata, dict):
+        checkpoint_metadata = {}
+    pretrain_num_updates = checkpoint_metadata.get("pretrain_num_updates")
+    if pretrain_num_updates in (None, ""):
+        pretrain_num_updates = checkpoint_metadata.get("num_updates")
+    if pretrain_num_updates in (None, ""):
+        pretrain_num_updates = int(checkpoint.get("update", 0))
+    checkpoint_metadata.update(
+        {
+            "interface": "latent_skill",
+            "planner_type": config.get("planner_type", "skill_commander"),
+            "state_key": "planner_state",
+            "source_sample_count": int(num_samples),
+            "num_samples": int(num_samples),
+            "selected_sample_count": int(num_samples),
+            "heldout_sample_count": 0,
+            "batch_size": int(args.batch_size),
+            "num_updates": int(args.num_updates),
+            "pretrain_num_updates": int(pretrain_num_updates),
+            "finetune_num_updates": int(args.num_updates),
+            "lr": float(args.lr),
+            "weight_decay": float(args.weight_decay),
+            "flow_inference_noise_std": float(args.flow_inference_noise_std),
+            "state_dim": int(data["planner_state"].shape[-1]),
+            "target_dim": int(data["z_target"].shape[-1]),
+        }
+    )
+    if args.flow_num_inference_steps is not None:
+        checkpoint_metadata["flow_num_inference_steps"] = int(
+            args.flow_num_inference_steps
+        )
+    output_checkpoint["metadata"] = checkpoint_metadata
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(output_checkpoint, checkpoint_path)
     summary = {

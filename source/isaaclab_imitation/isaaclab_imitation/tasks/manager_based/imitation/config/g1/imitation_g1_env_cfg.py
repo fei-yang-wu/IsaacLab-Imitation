@@ -122,6 +122,16 @@ def _g1_expert_window_anchor_obs_params() -> dict[str, object]:
     }
 
 
+def _g1_expert_window_ee_obs_params() -> dict[str, object]:
+    return {
+        "asset_cfg": SceneEntityCfg("robot"),
+        "reference_body_names": tuple(G1_EE_BODY_NAMES),
+        "anchor_body_name": G1_OBS_ANCHOR_BODY_NAME,
+        "past_steps": 0,
+        "future_steps": 0,
+    }
+
+
 @configclass
 class G1ActionsCfg:
     """Action settings for 29-DoF mimic G1."""
@@ -254,6 +264,14 @@ class G1ObservationCfg:
         expert_anchor_ori_b = ObsTerm(
             func=mdp.expert_window_anchor_ori_b,
             params=_g1_expert_window_anchor_obs_params(),
+        )
+        expert_ee_pos_b = ObsTerm(
+            func=mdp.expert_window_ee_pos_b,
+            params=_g1_expert_window_ee_obs_params(),
+        )
+        expert_ee_ori_b = ObsTerm(
+            func=mdp.expert_window_ee_ori_b,
+            params=_g1_expert_window_ee_obs_params(),
         )
 
         def __post_init__(self):
@@ -538,6 +556,8 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
 
     reference_joint_names: list[str] = G1_29DOF_JOINT_NAMES.copy()
     target_joint_names: list[str] = G1_29DOF_JOINT_NAMES.copy()
+    command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
+    command_observation_source: str = "reference"
 
     def _sync_expert_window_observation_params(self) -> None:
         past_steps = int(self.latent_patch_past_steps)
@@ -549,6 +569,13 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         ):
             term.params["past_steps"] = past_steps
             term.params["future_steps"] = future_steps
+        for term in (
+            self.observations.expert_window.expert_ee_pos_b,
+            self.observations.expert_window.expert_ee_ori_b,
+        ):
+            term.params["past_steps"] = past_steps
+            term.params["future_steps"] = future_steps
+            term.params["reference_body_names"] = tuple(self.command_ee_body_names)
 
     def __post_init__(self) -> None:
         super().__post_init__()  # type: ignore
@@ -818,6 +845,10 @@ def _g1_lafan_track_env_cfg_from_dict(
         data = self._apply_optional_hydra_overrides(data)
 
     ImitationG1BaseTrackingEnvCfg.from_dict(self, data)
+    self._sync_expert_window_observation_params()
+    sync_goal_params = getattr(self, "_sync_expert_goal_observation_params", None)
+    if callable(sync_goal_params):
+        sync_goal_params()
 
     self.loader_kwargs = copy.deepcopy(self.loader_kwargs)
     self._normalize_sequence_overrides()

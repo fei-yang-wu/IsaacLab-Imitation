@@ -25,6 +25,50 @@ VANILLA_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
     ("critic", "last_action"),
 ]
 
+PROPRIO_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
+    ("policy", "base_ang_vel"),
+    ("policy", "joint_pos_rel"),
+    ("policy", "joint_vel_rel"),
+    ("policy", "last_action"),
+]
+
+PRIVILEGED_CRITIC_STATE_KEYS: list[tuple[str, str]] = [
+    ("critic", "body_pos"),
+    ("critic", "body_ori"),
+    ("critic", "base_lin_vel"),
+    ("critic", "base_ang_vel"),
+    ("critic", "joint_pos_rel"),
+    ("critic", "joint_vel_rel"),
+    ("critic", "last_action"),
+]
+
+FULL_BODY_TRAJECTORY_COMMAND_KEYS: list[tuple[str, str]] = [
+    ("expert_window", "expert_motion"),
+    ("expert_window", "expert_anchor_pos_b"),
+    ("expert_window", "expert_anchor_ori_b"),
+]
+
+EE_TRAJECTORY_COMMAND_KEYS: list[tuple[str, str]] = [
+    ("expert_window", "expert_ee_pos_b"),
+    ("expert_window", "expert_ee_ori_b"),
+]
+
+COMMAND_SPACE_ALIASES: dict[str, str] = {
+    "single_frame_full_body": "single_frame_full_body",
+    "single_frame": "single_frame_full_body",
+    "vanilla": "single_frame_full_body",
+    "full_state": "single_frame_full_body",
+    "full_body": "single_frame_full_body",
+    "full_body_trajectory": "full_body_trajectory",
+    "full_state_trajectory": "full_body_trajectory",
+    "whole_body_trajectory": "full_body_trajectory",
+    "full_traj": "full_body_trajectory",
+    "ee_trajectory": "ee_trajectory",
+    "end_effector_trajectory": "ee_trajectory",
+    "end_effector": "ee_trajectory",
+    "ee_pose_trajectory": "ee_trajectory",
+}
+
 LATENT_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "latent_command"),
     ("policy", "base_ang_vel"),
@@ -62,24 +106,59 @@ REWARD_INPUT_KEYS: list[tuple[str, str]] = [
 ]
 
 
+def normalize_command_space(command_space: str) -> str:
+    normalized = str(command_space).strip().lower().replace("-", "_")
+    try:
+        return COMMAND_SPACE_ALIASES[normalized]
+    except KeyError as err:
+        raise ValueError(
+            f"Unsupported command_space={command_space!r}. "
+            f"Expected one of {sorted(set(COMMAND_SPACE_ALIASES.values()))}."
+        ) from err
+
+
+def command_space_policy_input_keys(command_space: str) -> list[tuple[str, str]]:
+    command_space = normalize_command_space(command_space)
+    if command_space == "single_frame_full_body":
+        return list(VANILLA_POLICY_INPUT_KEYS)
+    if command_space == "full_body_trajectory":
+        return list(FULL_BODY_TRAJECTORY_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
+    if command_space == "ee_trajectory":
+        return list(EE_TRAJECTORY_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
+    raise AssertionError(f"Unhandled command space: {command_space}")
+
+
+def command_space_critic_input_keys(command_space: str) -> list[tuple[str, str]]:
+    command_space = normalize_command_space(command_space)
+    if command_space == "single_frame_full_body":
+        return list(VANILLA_CRITIC_INPUT_KEYS)
+    if command_space == "full_body_trajectory":
+        return list(FULL_BODY_TRAJECTORY_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
+    if command_space == "ee_trajectory":
+        return list(EE_TRAJECTORY_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
+    raise AssertionError(f"Unhandled command space: {command_space}")
+
+
 @configclass
 class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
     """Shared RLOpt IPMD configuration for G1 imitation."""
 
     _default_use_latent_command: bool = False
+    command_space: str = "single_frame_full_body"
 
     def sync_input_keys(self) -> None:
         use_latent_command = bool(self.ipmd.use_latent_command)
+        self.command_space = normalize_command_space(self.command_space)
         self.policy.input_keys = (
             list(LATENT_POLICY_INPUT_KEYS)
             if use_latent_command
-            else list(VANILLA_POLICY_INPUT_KEYS)
+            else command_space_policy_input_keys(self.command_space)
         )
         if self.value_function is not None:
             self.value_function.input_keys = (
                 list(LATENT_CRITIC_INPUT_KEYS)
                 if use_latent_command
-                else list(VANILLA_CRITIC_INPUT_KEYS)
+                else command_space_critic_input_keys(self.command_space)
             )
         self.ipmd.reward_input_keys = list(REWARD_INPUT_KEYS)
         self.ipmd.latent_learning.posterior_input_keys = list(

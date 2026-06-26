@@ -12,6 +12,9 @@ need ``unitree_rl_lab`` at import or runtime.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.sim.converters import UrdfConverterCfg
@@ -39,6 +42,15 @@ UNITREE_G1_29DOF_USD_PATH = (
 )
 
 
+def _unitree_usd_cache_dir() -> str | None:
+    root = os.environ.get("ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT")
+    if not root:
+        return None
+    path = Path(root).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 @configclass
 class UnitreeArticulationCfg(ArticulationCfg):
     """Configuration for Unitree articulations."""
@@ -51,6 +63,7 @@ class UnitreeArticulationCfg(ArticulationCfg):
 class UnitreeUrdfFileCfg(UrdfFileCfg):
     """Common URDF import settings for Unitree robots."""
 
+    usd_dir: str | None = _unitree_usd_cache_dir()
     fix_base: bool = False
     activate_contact_sensors: bool = True
     replace_cylinders_with_capsules = True

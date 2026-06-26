@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -148,6 +149,9 @@ def dataset_path_from_entries(
     manifest_path: str | Path | None = None,
 ) -> str:
     """Create a stable cache path tied to the manifest identity and entries."""
+    cache_root = Path(
+        os.environ.get("ISAACLAB_IMITATION_LAFAN1_ZARR_CACHE_ROOT", "/tmp")
+    ).expanduser()
     resolved_manifest_path = None
     manifest_name = "lafan1"
     if manifest_path is not None:
@@ -163,4 +167,4 @@ def dataset_path_from_entries(
         separators=(",", ":"),
     )
     digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
-    return f"/tmp/iltools_g1_lafan1_tracking_{manifest_name}_{digest}"
+    return str(cache_root / f"iltools_g1_lafan1_tracking_{manifest_name}_{digest}")

@@ -197,6 +197,7 @@ sync_tree_to_cluster() {
     local label="$3"
     local remote_subdir="${4:-.}"
     local link_dest=""
+    local exclude_pattern=""
     local -a rsync_cmd
 
     if [ ! -d "$src_path" ]; then
@@ -217,6 +218,15 @@ sync_tree_to_cluster() {
     rsync_cmd=(
         rsync -rh
         --exclude="*.git*"
+        --exclude=".pixi/"
+        --exclude=".codex/"
+        --exclude=".claude/"
+        --exclude="logs/"
+        --exclude="outputs/"
+        --exclude="output/"
+        --exclude="runs/"
+        --exclude="videos/"
+        --exclude="wandb"
         --exclude=".claude/"
         --exclude=".codex/"
         --exclude=".mypy_cache/"
@@ -231,6 +241,9 @@ sync_tree_to_cluster() {
         --exclude="wandb/"
         --filter=':- .dockerignore'
     )
+    for exclude_pattern in ${CLUSTER_EXTRA_RSYNC_EXCLUDES:-}; do
+        rsync_cmd+=("--exclude=$exclude_pattern")
+    done
 
     if [ -n "$link_dest" ] && ssh "$CLUSTER_LOGIN" "[ -d '$link_dest' ]"; then
         echo "[INFO]   Using incremental sync base: '$link_dest'"
@@ -554,6 +567,189 @@ has_arg_with_prefix() {
     return 1
 }
 
+prefix_home_if_relative() {
+    local home_dir="$1"
+    local path="$2"
+
+    if [ -z "$path" ] || [[ "$path" = /* ]]; then
+        echo "$path"
+    else
+        echo "${home_dir%/}/$path"
+    fi
+}
+
+select_slurm_job_script() {
+    local selector="${CLUSTER_SLURM_SUBMIT_SCRIPT:-}"
+    local candidate=""
+    local login_name="${CLUSTER_LOGIN%%.*}"
+
+    if [ -n "$selector" ]; then
+        case "$selector" in
+            */*)
+                echo "[ERROR] CLUSTER_SLURM_SUBMIT_SCRIPT must name a file in docker/cluster, not a path: '$selector'" >&2
+                exit 1
+                ;;
+            *.sh)
+                candidate="$selector"
+                ;;
+            submit_job_slurm_*)
+                candidate="${selector%.sh}.sh"
+                ;;
+            *)
+                candidate="submit_job_slurm_${selector}.sh"
+                ;;
+        esac
+        if [ ! -f "$SCRIPT_DIR/$candidate" ]; then
+            echo "[ERROR] Requested Slurm submit script does not exist: '$SCRIPT_DIR/$candidate'" >&2
+            exit 1
+        fi
+        echo "$candidate"
+        return
+    fi
+
+    if [ -n "${cluster_config_name:-}" ]; then
+        candidate="submit_job_slurm_${cluster_config_name}.sh"
+        if [ -f "$SCRIPT_DIR/$candidate" ]; then
+            echo "$candidate"
+            return
+        fi
+    fi
+
+    candidate="submit_job_slurm_${login_name}.sh"
+    if [ -f "$SCRIPT_DIR/$candidate" ]; then
+        echo "$candidate"
+        return
+    fi
+
+    if [[ "$CLUSTER_LOGIN" == *pace.gatech.edu* ]] && [ -f "$SCRIPT_DIR/submit_job_slurm_pace.sh" ]; then
+        echo "submit_job_slurm_pace.sh"
+        return
+    fi
+
+    echo "submit_job_slurm.sh"
+}
+
+add_remote_env_arg_if_set() {
+    local var_name="$1"
+
+    if [ "${!var_name+x}" ]; then
+        REMOTE_JOB_ENV_ARGS+=("$var_name=${!var_name}")
+    fi
+}
+
+capture_requested_env_var() {
+    local var_name="$1"
+    local marker_name="REQUESTED_${var_name}_IS_SET"
+    local value_name="REQUESTED_${var_name}"
+
+    if [ "${!var_name+x}" ]; then
+        printf -v "$marker_name" '%s' "1"
+        printf -v "$value_name" '%s' "${!var_name}"
+    else
+        printf -v "$marker_name" '%s' ""
+        printf -v "$value_name" '%s' ""
+    fi
+}
+
+restore_requested_env_var() {
+    local var_name="$1"
+    local marker_name="REQUESTED_${var_name}_IS_SET"
+    local value_name="REQUESTED_${var_name}"
+
+    if [ -n "${!marker_name:-}" ]; then
+        printf -v "$var_name" '%s' "${!value_name}"
+    fi
+}
+
+capture_cluster_env_overrides() {
+    local var_name
+
+    for var_name in \
+        CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_APPEND_DEFAULT_G1_MANIFEST \
+        CLUSTER_AUTO_SETUP_G1_DATA \
+        CLUSTER_G1_EXPECTED_MOTION_COUNT \
+        CLUSTER_G1_DATA_ROOT \
+        CLUSTER_G1_REPO_ID \
+        CLUSTER_G1_MANIFEST_PATH \
+        CLUSTER_G1_MANIFEST_REFRESH_POLICY \
+        CLUSTER_SKIP_CACHE_COPY \
+        CLUSTER_OVERLAY_SIZE_MB \
+        CLUSTER_JOB_TMPDIR_ROOT \
+        CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB \
+        CLUSTER_USE_SHARED_SIF \
+        CLUSTER_SHARED_SIF_PATH \
+        CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_GIT_SYNC_FIRST \
+        CLUSTER_EXTRA_RSYNC_EXCLUDES \
+        CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS \
+        CLUSTER_EXTRA_SYNC_SPECS \
+        CLUSTER_ISAACLAB_LOCAL_PATH \
+        CLUSTER_RLOPT_LOCAL_PATH \
+        CLUSTER_IMITATION_TOOLS_LOCAL_PATH \
+        CLUSTER_EXTRA_PYTHONPATH_REL \
+        CLUSTER_EXTRA_RSYNC_SPECS; do
+        capture_requested_env_var "$var_name"
+    done
+}
+
+restore_cluster_env_overrides() {
+    local var_name
+
+    for var_name in \
+        CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_APPEND_DEFAULT_G1_MANIFEST \
+        CLUSTER_AUTO_SETUP_G1_DATA \
+        CLUSTER_G1_EXPECTED_MOTION_COUNT \
+        CLUSTER_G1_DATA_ROOT \
+        CLUSTER_G1_REPO_ID \
+        CLUSTER_G1_MANIFEST_PATH \
+        CLUSTER_G1_MANIFEST_REFRESH_POLICY \
+        CLUSTER_SKIP_CACHE_COPY \
+        CLUSTER_OVERLAY_SIZE_MB \
+        CLUSTER_JOB_TMPDIR_ROOT \
+        CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB \
+        CLUSTER_USE_SHARED_SIF \
+        CLUSTER_SHARED_SIF_PATH \
+        CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_GIT_SYNC_FIRST \
+        CLUSTER_EXTRA_RSYNC_EXCLUDES \
+        CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS \
+        CLUSTER_EXTRA_SYNC_SPECS \
+        CLUSTER_ISAACLAB_LOCAL_PATH \
+        CLUSTER_RLOPT_LOCAL_PATH \
+        CLUSTER_IMITATION_TOOLS_LOCAL_PATH \
+        CLUSTER_EXTRA_PYTHONPATH_REL \
+        CLUSTER_EXTRA_RSYNC_SPECS; do
+        restore_requested_env_var "$var_name"
+    done
+}
+
+build_remote_job_env_args() {
+    local var_name
+
+    REMOTE_JOB_ENV_ARGS=()
+    add_remote_env_arg_if_set CLUSTER_PYTHON_EXECUTABLE
+    add_remote_env_arg_if_set CLUSTER_AUTO_SETUP_G1_DATA
+    add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
+    add_remote_env_arg_if_set CLUSTER_G1_DATA_ROOT
+    add_remote_env_arg_if_set CLUSTER_G1_REPO_ID
+    add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_PATH
+    add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_REFRESH_POLICY
+    add_remote_env_arg_if_set CLUSTER_SKIP_CACHE_COPY
+    add_remote_env_arg_if_set CLUSTER_OVERLAY_SIZE_MB
+    add_remote_env_arg_if_set CLUSTER_JOB_TMPDIR_ROOT
+    add_remote_env_arg_if_set CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB
+    add_remote_env_arg_if_set CLUSTER_USE_SHARED_SIF
+    add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
+    add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
+    add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
+
+    while IFS= read -r var_name; do
+        add_remote_env_arg_if_set "$var_name"
+    done < <(compgen -A variable CLUSTER_SLURM_)
+}
+
 select_slurm_job_script() {
     local selector="${CLUSTER_SLURM_SUBMIT_SCRIPT:-}"
     local candidate=""
@@ -783,6 +979,14 @@ record_repo_sync_manifest() {
         fi
         append_repo_manifest_entry "$manifest_local_file" "$remote_subdir" "$local_path" "$remote_subdir"
     done
+    for spec in ${CLUSTER_EXTRA_RSYNC_SPECS:-}; do
+        local_path="${spec%%:*}"
+        remote_subdir="${spec#*:}"
+        if [ -z "$local_path" ] || [ -z "$remote_subdir" ]; then
+            continue
+        fi
+        append_repo_manifest_entry "$manifest_local_file" "${remote_subdir} (rsync)" "$local_path" "$remote_subdir"
+    done
 
     ssh "$CLUSTER_LOGIN" "cat > '$manifest_remote_file'" < "$manifest_local_file"
     echo "[INFO] Saved repo sync manifest to '$CLUSTER_LOGIN:$manifest_remote_file'"
@@ -824,7 +1028,9 @@ submit_job() {
     echo "[INFO] Using scheduler submit script: $job_script_file"
     build_remote_job_env_args
 
+    build_remote_job_env_args
     printf -v remote_job_cmd '%q ' \
+        env "${REMOTE_JOB_ENV_ARGS[@]}" \
         env "${REMOTE_JOB_ENV_ARGS[@]}" \
         bash -l "$CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file" \
         "$CLUSTER_ISAACLAB_DIR" \
@@ -837,6 +1043,7 @@ submit_job() {
 sync_extra_repos() {
     local local_workspace_root
     local local_specs
+    local rsync_specs
     local local_path
     local remote_subdir
 
@@ -849,22 +1056,65 @@ sync_extra_repos() {
         local_specs="$(build_default_sync_specs "$local_workspace_root")"
     fi
     SYNC_EXTRA_REPO_SPECS="$local_specs"
+    rsync_specs="${CLUSTER_EXTRA_RSYNC_SPECS:-}"
 
     if [ -z "$local_specs" ]; then
         echo "[INFO] No extra repo overlays requested; using submodule state from IsaacLab-Imitation."
-        return
+    else
+        for spec in $local_specs; do
+            local_path="${spec%%:*}"
+            remote_subdir="${spec#*:}"
+            if [ -z "$local_path" ] || [ -z "$remote_subdir" ]; then
+                display_warning "Ignoring invalid CLUSTER_EXTRA_SYNC_SPECS entry: '$spec'"
+                continue
+            fi
+            local_path="$(realpath "$local_path" 2>/dev/null || echo "$local_path")"
+            sync_repo_prefer_git_then_rsync "$local_path" "$CLUSTER_ISAACLAB_DIR/$remote_subdir" "$remote_subdir" "$remote_subdir"
+        done
     fi
 
-    for spec in $local_specs; do
+    if [ -n "$rsync_specs" ]; then
+        echo "[INFO] Using CLUSTER_EXTRA_RSYNC_SPECS for artifact sync."
+    fi
+    for spec in $rsync_specs; do
         local_path="${spec%%:*}"
         remote_subdir="${spec#*:}"
         if [ -z "$local_path" ] || [ -z "$remote_subdir" ]; then
-            display_warning "Ignoring invalid CLUSTER_EXTRA_SYNC_SPECS entry: '$spec'"
+            display_warning "Ignoring invalid CLUSTER_EXTRA_RSYNC_SPECS entry: '$spec'"
             continue
         fi
         local_path="$(realpath "$local_path" 2>/dev/null || echo "$local_path")"
-        sync_repo_prefer_git_then_rsync "$local_path" "$CLUSTER_ISAACLAB_DIR/$remote_subdir" "$remote_subdir" "$remote_subdir"
+        sync_tree_to_cluster "$local_path" "$CLUSTER_ISAACLAB_DIR/$remote_subdir" "$remote_subdir" "$remote_subdir"
     done
+}
+
+link_isaaclab_from_previous_sync() {
+    local previous_isaaclab=""
+    local target_isaaclab=""
+
+    if ! is_truthy "${CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS:-0}"; then
+        return
+    fi
+
+    target_isaaclab="$CLUSTER_ISAACLAB_DIR/IsaacLab"
+    if ssh "$CLUSTER_LOGIN" "[ -d '$target_isaaclab' ]"; then
+        echo "[INFO] IsaacLab already present in target workspace; not linking from previous sync."
+        return
+    fi
+
+    if [ -z "${CLUSTER_PREVIOUS_SYNC_DIR:-}" ]; then
+        display_warning "CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS=1 but no previous sync snapshot is available."
+        return
+    fi
+
+    previous_isaaclab="$CLUSTER_PREVIOUS_SYNC_DIR/IsaacLab"
+    if ! ssh "$CLUSTER_LOGIN" "[ -d '$previous_isaaclab' ]"; then
+        display_warning "CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS=1 but previous IsaacLab tree is missing: '$previous_isaaclab'."
+        return
+    fi
+
+    echo "[INFO] Hardlinking IsaacLab from previous sync: '$previous_isaaclab' -> '$target_isaaclab'"
+    ssh "$CLUSTER_LOGIN" "cp -al '$previous_isaaclab' '$target_isaaclab'"
 }
 
 #==
@@ -940,9 +1190,13 @@ case $command in
         # Check docker and apptainer version
         check_docker_version
         # source env file to get cluster login and path information
+        capture_cluster_env_overrides
+        source $SCRIPT_DIR/.env.cluster
+        restore_cluster_env_overrides
         source_cluster_env
         # Prepend remote $HOME to relative cluster paths.
         CLUSTER_REMOTE_HOME=$(ssh "$CLUSTER_LOGIN" 'echo $HOME')
+        CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
         CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
         # make sure exports directory exists
         mkdir -p /$SCRIPT_DIR/exports
@@ -973,9 +1227,20 @@ case $command in
         echo "[INFO] Executing job command"
         [ -n "$profile" ] && echo -e "\tUsing profile: $profile"
         [ -n "$job_args" ] && echo -e "\tJob arguments: $job_args"
+        capture_cluster_env_overrides
+        source $SCRIPT_DIR/.env.cluster
+        restore_cluster_env_overrides
         source_cluster_env
         # Prepend remote $HOME to relative cluster paths.
         CLUSTER_REMOTE_HOME=$(ssh "$CLUSTER_LOGIN" 'echo $HOME')
+        CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
+        CLUSTER_ISAACLAB_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAACLAB_DIR")"
+        CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
+        CLUSTER_DATA_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_DATA_DIR")"
+        CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_HF_TOKEN_FILE")"
+        CLUSTER_WANDB_API_KEY_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_WANDB_API_KEY_FILE")"
+        [ -n "${CLUSTER_G1_MANIFEST_PATH:-}" ] && CLUSTER_G1_MANIFEST_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_MANIFEST_PATH")"
+        [ -n "${CLUSTER_G1_DATA_ROOT:-}" ] && CLUSTER_G1_DATA_ROOT="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_DATA_ROOT")"
         CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
         CLUSTER_ISAACLAB_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAACLAB_DIR")"
         CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
@@ -999,6 +1264,8 @@ case $command in
         sync_repo_prefer_git_then_rsync "$local_workspace_root" "$CLUSTER_ISAACLAB_DIR" "IsaacLab-Imitation" "."
         # Sync optional extra repos only when explicitly requested via overrides/specs.
         sync_extra_repos
+        # Keep IsaacLab available without recopying the large dependency tree on every dirty worktree submission.
+        link_isaaclab_from_previous_sync
         # Record exact repo SHAs and dirty state used in this submission.
         record_repo_sync_manifest
         # Refresh latest snapshot pointer used by incremental sync on future submissions.
@@ -1006,7 +1273,7 @@ case $command in
         # execute job script
         echo "[INFO] Executing job script..."
         # check whether the second argument is a profile or a job argument
-        submit_job $job_args
+        submit_job "$@"
         ;;
     *)
         echo "Error: Invalid command: $command" >&2

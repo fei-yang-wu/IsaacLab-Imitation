@@ -1,6 +1,6 @@
 import logging
 import shutil
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 NestedKey: TypeAlias = str | tuple[str, ...]
 _MDP_COMPILED: Any | None = None
 
+_COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracle"})
+
 
 def _get_mdp_compiled_module() -> Any:
     global _MDP_COMPILED
@@ -32,6 +34,16 @@ def _get_mdp_compiled_module() -> Any:
 
         _MDP_COMPILED = _compiled
     return _MDP_COMPILED
+
+
+def _normalize_command_observation_source(value: str) -> str:
+    source = str(value).strip().lower().replace("-", "_")
+    if source not in _COMMAND_OBSERVATION_SOURCES:
+        raise ValueError(
+            f"Unsupported command_observation_source={value!r}; "
+            f"expected one of {sorted(_COMMAND_OBSERVATION_SOURCES)}."
+        )
+    return source
 
 
 # Import the new manager and utilities
@@ -325,11 +337,31 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             device=device,
             dtype=torch.float32,
         )
+        self._command_ee_body_names = tuple(
+            str(name) for name in getattr(cfg, "command_ee_body_names", ())
+        )
+        self._command_observation_source = _normalize_command_observation_source(
+            getattr(cfg, "command_observation_source", "reference")
+        )
 
         # Store reference joint mapping
         self.reference_joint_names = reference_joint_names
         self.reference_body_names: list[str] = []
         self.reference_site_names: list[str] = []
+        self._agent_trajectory_command_window_steps = (
+            self._command_window_steps_from_offsets(
+                self._latent_patch_past_steps,
+                self._latent_patch_future_steps,
+            )
+        )
+        self._agent_trajectory_command_terms = (
+            self._allocate_agent_trajectory_command_terms(
+                window_steps=self._agent_trajectory_command_window_steps,
+                num_joints=len(self.reference_joint_names),
+                num_ee_bodies=len(self._command_ee_body_names),
+                device=torch.device(device),
+            )
+        )
         self._joint_mapping_cache: torch.Tensor | None = None
         self._reference_vel_vis_enabled = bool(
             getattr(
@@ -1033,7 +1065,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_reference_cvel_cache: torch.Tensor | None = None
         self._mdp_expert_motion_cache: dict[tuple[int, ...], torch.Tensor] = {}
         self._mdp_expert_window_obs_cache: dict[
-            tuple[int, int, str, object], dict[str, torch.Tensor]
+            tuple[int, int, str, object, tuple[str, ...]], dict[str, torch.Tensor]
         ] = {}
         self._mdp_expert_goal_obs_cache: dict[
             tuple[int, str, object], dict[str, torch.Tensor]
@@ -1433,6 +1465,196 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self._mdp_expert_motion_cache[cache_key] = motion_command
         return motion_command
 
+    @staticmethod
+    def _command_window_steps_from_offsets(past_steps: int, future_steps: int) -> int:
+        past_steps = int(past_steps)
+        future_steps = int(future_steps)
+        if past_steps < 0 or future_steps < 0:
+            raise ValueError("Command window steps must be >= 0.")
+        return past_steps + future_steps + 1
+
+    @staticmethod
+    def _allocate_agent_trajectory_command_terms(
+        *,
+        window_steps: int,
+        num_joints: int,
+        num_ee_bodies: int,
+        device: torch.device,
+    ) -> dict[str, torch.Tensor]:
+        def zeros(width: int) -> torch.Tensor:
+            return torch.zeros((0, width), device=device, dtype=torch.float32)
+
+        window_steps = int(window_steps)
+        return {
+            "expert_motion": zeros(window_steps * 2 * int(num_joints)),
+            "expert_anchor_pos_b": zeros(window_steps * 3),
+            "expert_anchor_ori_b": zeros(window_steps * 6),
+            "expert_ee_pos_b": zeros(window_steps * int(num_ee_bodies) * 3),
+            "expert_ee_ori_b": zeros(window_steps * int(num_ee_bodies) * 6),
+        }
+
+    def _ensure_agent_trajectory_command_terms(self) -> None:
+        num_envs = int(self.num_envs)
+        device = torch.device(self.device)
+        for term_name, term in tuple(self._agent_trajectory_command_terms.items()):
+            if term.shape[0] == num_envs and term.device == device:
+                continue
+            self._agent_trajectory_command_terms[term_name] = torch.zeros(
+                (num_envs, int(term.shape[1])),
+                device=device,
+                dtype=torch.float32,
+            )
+
+    def _validate_command_window_request(
+        self,
+        *,
+        past_steps: int,
+        future_steps: int,
+    ) -> None:
+        requested_steps = self._command_window_steps_from_offsets(
+            past_steps,
+            future_steps,
+        )
+        if requested_steps != self._agent_trajectory_command_window_steps:
+            raise ValueError(
+                "Planner command window mismatch. "
+                f"Configured planner command has {self._agent_trajectory_command_window_steps} steps, "
+                f"but observation requested {requested_steps} steps."
+            )
+
+    def get_agent_trajectory_command_term(
+        self,
+        term_name: str,
+        env_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        self._ensure_agent_trajectory_command_terms()
+        try:
+            value = self._agent_trajectory_command_terms[str(term_name)]
+        except KeyError as err:
+            raise KeyError(f"Unknown trajectory command term: {term_name!r}.") from err
+        if env_ids is None:
+            return value
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        return value.index_select(0, env_ids)
+
+    def set_agent_trajectory_command(
+        self,
+        command_terms: Mapping[str, torch.Tensor],
+        env_ids: torch.Tensor | None = None,
+    ) -> None:
+        self._ensure_agent_trajectory_command_terms()
+        if env_ids is not None:
+            env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        for term_name, command in command_terms.items():
+            key = str(term_name)
+            if key not in self._agent_trajectory_command_terms:
+                raise KeyError(f"Unknown trajectory command term: {key!r}.")
+            target = self._agent_trajectory_command_terms[key]
+            command = command.to(device=self.device, dtype=torch.float32)
+            if env_ids is None:
+                if command.ndim != 2 or command.shape != target.shape:
+                    raise ValueError(
+                        f"Trajectory command term {key!r} shape mismatch. "
+                        f"Expected {tuple(target.shape)}, got {tuple(command.shape)}."
+                    )
+                target.copy_(command)
+                continue
+            expected_shape = (int(env_ids.shape[0]), int(target.shape[1]))
+            if command.ndim != 2 or tuple(command.shape) != expected_shape:
+                raise ValueError(
+                    f"Trajectory command term {key!r} indexed shape mismatch. "
+                    f"Expected {expected_shape}, got {tuple(command.shape)}."
+                )
+            target.index_copy_(0, env_ids, command)
+
+    def set_agent_full_body_trajectory_command(
+        self,
+        *,
+        expert_motion: torch.Tensor,
+        expert_anchor_pos_b: torch.Tensor,
+        expert_anchor_ori_b: torch.Tensor,
+        env_ids: torch.Tensor | None = None,
+    ) -> None:
+        self.set_agent_trajectory_command(
+            {
+                "expert_motion": expert_motion,
+                "expert_anchor_pos_b": expert_anchor_pos_b,
+                "expert_anchor_ori_b": expert_anchor_ori_b,
+            },
+            env_ids=env_ids,
+        )
+
+    def set_agent_ee_trajectory_command(
+        self,
+        *,
+        expert_ee_pos_b: torch.Tensor,
+        expert_ee_ori_b: torch.Tensor,
+        env_ids: torch.Tensor | None = None,
+    ) -> None:
+        self.set_agent_trajectory_command(
+            {
+                "expert_ee_pos_b": expert_ee_pos_b,
+                "expert_ee_ori_b": expert_ee_ori_b,
+            },
+            env_ids=env_ids,
+        )
+
+    def reset_agent_trajectory_command(
+        self, env_ids: torch.Tensor | None = None
+    ) -> None:
+        self._ensure_agent_trajectory_command_terms()
+        if env_ids is None:
+            for command in self._agent_trajectory_command_terms.values():
+                command.zero_()
+            return
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        for command in self._agent_trajectory_command_terms.values():
+            command.index_fill_(0, env_ids, 0.0)
+
+    def get_current_command_window_term(
+        self,
+        term_name: str,
+        *,
+        past_steps: int,
+        future_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+        reference_body_names: Sequence[str] = (),
+        env_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        source = self._command_observation_source
+        if source == "reference":
+            return self.get_current_expert_window_term(
+                term_name=term_name,
+                past_steps=past_steps,
+                future_steps=future_steps,
+                joint_ids=joint_ids,
+                anchor_body_name=anchor_body_name,
+                reference_body_names=reference_body_names,
+                env_ids=env_ids,
+            )
+
+        self._validate_command_window_request(
+            past_steps=past_steps,
+            future_steps=future_steps,
+        )
+        if source == "planner_oracle":
+            value = self.get_current_expert_window_term(
+                term_name=term_name,
+                past_steps=past_steps,
+                future_steps=future_steps,
+                joint_ids=joint_ids,
+                anchor_body_name=anchor_body_name,
+                reference_body_names=reference_body_names,
+            )
+            self.set_agent_trajectory_command({term_name: value})
+
+        # Observation tensors must not alias the mutable planner command buffers:
+        # resets and subsequent planner publishes update those buffers in-place.
+        return self.get_agent_trajectory_command_term(
+            term_name, env_ids=env_ids
+        ).clone()
+
     def get_agent_latent_command(
         self, env_ids: torch.Tensor | None = None
     ) -> torch.Tensor:
@@ -1812,6 +2034,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             reset_steps = self._sample_adaptive_failure_reset_steps(env_ids_tm)
             tm._set_env_steps(env_ids_tm, reset_steps)
         self.reset_agent_latent_command(env_ids)
+        self.reset_agent_trajectory_command(env_ids)
 
         # Refresh only the resetting rows before reset events consume current_expert_frame.
         self._refresh_current_expert_frame(env_ids, advance=False)
@@ -2524,6 +2747,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         past_steps: int,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
+        reference_body_names: Sequence[str] = (),
     ) -> dict[str, torch.Tensor]:
         compiled = _get_mdp_compiled_module()
         batch_size = int(env_ids.shape[0])
@@ -2544,6 +2768,11 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         anchor_quat = body_quat_source.index_select(body_dim, anchor_ids).squeeze(
             body_dim
         )
+        body_terms_enabled = len(reference_body_names) > 0
+        if body_terms_enabled:
+            body_ids = self._get_reference_body_ids_fast(tuple(reference_body_names))
+            body_pos = body_pos_source.index_select(body_dim, body_ids)
+            body_quat = body_quat_source.index_select(body_dim, body_ids)
 
         if context == "expert":
             center_index = int(past_steps)
@@ -2555,6 +2784,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 anchor_pos,
                 anchor_quat,
             )
+            if body_terms_enabled:
+                body_pos_b, body_ori_b = compiled.body_pose_in_anchor_frame(
+                    center_anchor_pos,
+                    center_anchor_quat,
+                    body_pos.reshape(batch_size, -1, 3),
+                    body_quat.reshape(batch_size, -1, 4),
+                )
         elif context == "rollout":
             window_size = int(anchor_pos.shape[1])
             flat_env_ids = env_ids[:, None].expand(-1, window_size).reshape(-1)
@@ -2580,16 +2816,51 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 anchor_pos_w,
                 anchor_quat_w,
             )
+            if body_terms_enabled:
+                body_count = int(body_pos.shape[2])
+                flat_body_env_ids = (
+                    env_ids[:, None, None]
+                    .expand(-1, window_size, body_count)
+                    .reshape(-1)
+                )
+                body_pos_w, body_quat_w_opt = self._transform_reference_pose_to_world(
+                    body_pos.reshape(-1, 3),
+                    body_quat.reshape(-1, 4),
+                    env_ids=flat_body_env_ids,
+                )
+                if body_quat_w_opt is None:
+                    raise RuntimeError(
+                        "Failed to transform expert-window body quaternion for rollout observations."
+                    )
+                body_pos_w = body_pos_w.reshape(batch_size, window_size, body_count, 3)
+                body_quat_w = body_quat_w_opt.reshape(
+                    batch_size,
+                    window_size,
+                    body_count,
+                    4,
+                )
+                body_pos_b, body_ori_b = compiled.body_pose_in_anchor_frame(
+                    robot_anchor_pos_w,
+                    robot_anchor_quat_w,
+                    body_pos_w.reshape(batch_size, window_size * body_count, 3),
+                    body_quat_w.reshape(batch_size, window_size * body_count, 4),
+                )
         else:
             raise ValueError(f"Unsupported expert-window context: {context!r}.")
 
-        return {
+        terms = {
             "expert_motion": expert_motion,
             "expert_anchor_pos_b": anchor_pos_b.reshape(batch_size, -1),
             "expert_anchor_ori_b": compiled.quat_to_rot6d_flat(anchor_ori_b).reshape(
                 batch_size, -1
             ),
         }
+        if body_terms_enabled:
+            terms["expert_ee_pos_b"] = body_pos_b.reshape(batch_size, -1)
+            terms["expert_ee_ori_b"] = compiled.quat_to_rot6d_flat(body_ori_b).reshape(
+                batch_size, -1
+            )
+        return terms
 
     @staticmethod
     def _expert_macro_feature_term_order() -> tuple[str, ...]:
@@ -2663,14 +2934,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         future_steps: int,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
+        reference_body_names: Sequence[str] = (),
     ) -> dict[str, torch.Tensor]:
         self._ensure_mdp_step_cache()
         joint_ids_t = self._get_joint_ids_tensor_fast(joint_ids)
+        reference_body_names_t = tuple(str(name) for name in reference_body_names)
         cache_key = (
             int(past_steps),
             int(future_steps),
             str(anchor_body_name),
             self._joint_ids_cache_key(joint_ids_t),
+            reference_body_names_t,
         )
         cached_terms = self._mdp_expert_window_obs_cache.get(cache_key)
         if cached_terms is not None:
@@ -2691,6 +2965,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             past_steps=int(past_steps),
             joint_ids=joint_ids_t,
             anchor_body_name=anchor_body_name,
+            reference_body_names=reference_body_names_t,
         )
         self._mdp_expert_window_obs_cache[cache_key] = cached_terms
         return cached_terms
@@ -2703,6 +2978,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         future_steps: int,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
+        reference_body_names: Sequence[str] = (),
         env_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         value = self._get_current_expert_window_terms(
@@ -2710,6 +2986,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             future_steps=int(future_steps),
             joint_ids=joint_ids,
             anchor_body_name=anchor_body_name,
+            reference_body_names=reference_body_names,
         )[term_name]
         if env_ids is None:
             return value
@@ -2791,9 +3068,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             expert_frame, env_ids, prefix=prefix
         )
         anchor_terms_cache: dict[str, dict[str, torch.Tensor]] = {}
-        window_terms_cache: dict[
-            tuple[int, int, str, object], dict[str, torch.Tensor]
-        ] = {}
+        window_terms_cache: dict[tuple[object, ...], dict[str, torch.Tensor]] = {}
         batch_size = int(env_ids.shape[0])
 
         for obs_key in obs_keys:
@@ -2817,11 +3092,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         "Expert mapper received expert_window requests without trajectory-local steps."
                     )
                     return None
+                reference_body_names = (
+                    self._command_ee_body_names
+                    if term_name in {"expert_ee_pos_b", "expert_ee_ori_b"}
+                    else ()
+                )
                 cache_key = (
                     int(past_steps),
                     int(future_steps),
                     "torso_link",
                     ("all",),
+                    reference_body_names,
                 )
                 if cache_key not in window_terms_cache:
                     expert_window = self._sample_expert_window_slice(
@@ -2837,6 +3118,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         past_steps=int(past_steps),
                         joint_ids=slice(None),
                         anchor_body_name="torso_link",
+                        reference_body_names=reference_body_names,
                     )
                 value = window_terms_cache[cache_key].get(term_name)
             elif group_name == "expert_goal":

@@ -106,6 +106,7 @@ parser.add_argument(
     default=None,
     help="Output directory. Defaults to logs/skill_commander_closed_loop_eval/<timestamp>.",
 )
+parser.add_argument("--label", type=str, default="", help="Optional summary label.")
 parser.add_argument("--seed", type=int, default=0, help="Environment seed.")
 parser.add_argument("--real-time", action="store_true", default=False)
 parser.add_argument(
@@ -211,9 +212,15 @@ from isaaclab.envs import (
     DirectRLEnvCfg,
     ManagerBasedRLEnvCfg,
 )
+from isaaclab.utils import math as math_utils
+from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
+    G1_EE_BODY_NAMES,
+    G1_TRACKED_BODY_NAMES,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import (
     AMP,
@@ -228,6 +235,7 @@ from rlopt.agent import (
     SkillCommanderConfig,
     SkillCommanderTrainer,
 )
+from tensordict import TensorDictBase
 from tensordict.nn import InteractionType
 from torch import Tensor
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
@@ -295,6 +303,89 @@ def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
         stream.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def _parameter_counts(module: torch.nn.Module) -> dict[str, int]:
+    parameters = list(module.parameters())
+    return {
+        "parameter_count": int(sum(parameter.numel() for parameter in parameters)),
+        "trainable_parameter_count": int(
+            sum(
+                parameter.numel() for parameter in parameters if parameter.requires_grad
+            )
+        ),
+    }
+
+
+def _skill_commander_planner_metadata(
+    checkpoint: dict[str, Any],
+    *,
+    generator: torch.nn.Module,
+    trainer_config: SkillCommanderConfig,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    checkpoint_metadata = checkpoint.get("metadata")
+    if isinstance(checkpoint_metadata, dict):
+        metadata.update(checkpoint_metadata)
+
+    config = checkpoint.get("config")
+    config_values = config if isinstance(config, dict) else trainer_config.to_dict()
+    metadata.setdefault("interface", "latent_skill")
+    metadata.setdefault(
+        "planner_type",
+        config_values.get("planner_type", generator.__class__.__name__),
+    )
+    for key in (
+        "flow_num_inference_steps",
+        "diffusion_num_inference_steps",
+        "flow_inference_noise_std",
+        "diffusion_inference_noise_std",
+    ):
+        value = config_values.get(key)
+        if value not in (None, ""):
+            metadata.setdefault(key, value)
+
+    rollout_finetune = checkpoint.get("rollout_finetune")
+    finetune_num_updates: int | None = None
+    if isinstance(rollout_finetune, dict):
+        sample_count = rollout_finetune.get("num_samples")
+        if sample_count not in (None, ""):
+            metadata.setdefault("source_sample_count", int(sample_count))
+            metadata.setdefault("num_samples", int(sample_count))
+            metadata.setdefault("selected_sample_count", int(sample_count))
+            metadata.setdefault("heldout_sample_count", 0)
+        for key in ("batch_size", "state_dim", "lang_embed_dim", "z_dim"):
+            value = rollout_finetune.get(key)
+            if value not in (None, ""):
+                metadata.setdefault(key, value)
+        args_payload = rollout_finetune.get("args")
+        if isinstance(args_payload, dict):
+            for key in (
+                "num_updates",
+                "lr",
+                "weight_decay",
+                "flow_inference_noise_std",
+            ):
+                value = args_payload.get(key)
+                if value not in (None, ""):
+                    metadata.setdefault(key, value)
+            value = args_payload.get("num_updates")
+            if value not in (None, ""):
+                finetune_num_updates = int(value)
+                metadata.setdefault("finetune_num_updates", finetune_num_updates)
+
+    checkpoint_update = checkpoint.get("update")
+    if metadata.get("pretrain_num_updates") in (None, "") and checkpoint_update not in (
+        None,
+        "",
+    ):
+        pretrain_update = int(checkpoint_update)
+        if finetune_num_updates is not None:
+            pretrain_update = max(0, pretrain_update - int(finetune_num_updates))
+        metadata.setdefault("pretrain_num_updates", pretrain_update)
+
+    metadata.update(_parameter_counts(generator))
+    return metadata
+
+
 def _mean_dict(rows: list[dict[str, Any]]) -> dict[str, float]:
     sums: dict[str, float] = {}
     counts: dict[str, int] = {}
@@ -320,6 +411,146 @@ def _any_done(td: Any) -> bool:
         if isinstance(value, Tensor) and bool(value.any().detach().cpu().item()):
             return True
     return False
+
+
+def _get_optional(td: TensorDictBase, key: str | tuple[str, ...]) -> Tensor | None:
+    try:
+        value = td.get(key)
+    except KeyError:
+        return None
+    return value if isinstance(value, Tensor) else None
+
+
+def _optional_flat_tensor(
+    td: TensorDictBase,
+    key: str | tuple[str, ...],
+    *,
+    num_envs: int,
+    default: float | bool,
+) -> Tensor:
+    value = _get_optional(td, key)
+    if value is None:
+        return torch.full((num_envs,), default)
+    flat = value.detach().reshape(-1).cpu()
+    if flat.numel() == 1 and num_envs > 1:
+        flat = flat.expand(num_envs)
+    if flat.numel() < num_envs:
+        raise RuntimeError(
+            f"Expected at least {num_envs} values for {key}, got {flat.numel()}."
+        )
+    return flat[:num_envs]
+
+
+def _resolve_existing_body_names(
+    base_env: ImitationRLEnv, requested_names: list[str]
+) -> list[str]:
+    names: list[str] = []
+    for name in requested_names:
+        try:
+            base_env._get_robot_anchor_body_id_fast(name)
+            base_env._get_reference_body_ids_fast((name,))
+        except Exception as exc:
+            print(f"[WARNING] Skipping unavailable body metric target {name!r}: {exc}")
+            continue
+        names.append(str(name))
+    return names
+
+
+def _mean_body_pose_errors(
+    base_env: ImitationRLEnv,
+    names: list[str],
+) -> tuple[Tensor, Tensor] | None:
+    if len(names) == 0:
+        return None
+    body_ids = [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
+    actual_pos, actual_quat = base_env._get_robot_body_pose_w_fast(body_ids)
+    ref_pos, ref_quat = base_env._get_reference_body_pose_w_fast(tuple(names))
+    pos_error = torch.linalg.vector_norm(actual_pos - ref_pos, dim=-1).mean(dim=-1)
+    ori_error = math_utils.quat_error_magnitude(
+        actual_quat.reshape(-1, 4),
+        ref_quat.reshape(-1, 4),
+    ).reshape(actual_quat.shape[0], -1)
+    return pos_error, ori_error.mean(dim=-1)
+
+
+def _tracking_metrics(
+    base_env: ImitationRLEnv,
+    *,
+    tracked_body_names: list[str],
+    ee_body_names: list[str],
+) -> dict[str, Tensor]:
+    robot_data = base_env.robot.data
+    root_pos_ref, root_quat_ref, root_lin_vel_ref, root_ang_vel_ref = (
+        base_env._get_reference_root_state_w_fast()
+    )
+    joint_pos_ref = base_env.current_expert_frame["joint_pos"]
+    joint_vel_ref = base_env.current_expert_frame["joint_vel"]
+    root_pos_error = robot_data.root_pos_w - root_pos_ref
+    metrics = {
+        "root_pos_xy_error_m": torch.linalg.vector_norm(root_pos_error[:, :2], dim=-1),
+        "root_ori_error_rad": math_utils.quat_error_magnitude(
+            robot_data.root_quat_w, root_quat_ref
+        ),
+        "joint_pos_rmse_rad": torch.sqrt(
+            torch.mean((robot_data.joint_pos - joint_pos_ref).square(), dim=-1)
+        ),
+        "joint_vel_rmse_radps": torch.sqrt(
+            torch.mean((robot_data.joint_vel - joint_vel_ref).square(), dim=-1)
+        ),
+        "root_lin_vel_rmse_mps": torch.sqrt(
+            torch.mean((robot_data.root_lin_vel_w - root_lin_vel_ref).square(), dim=-1)
+        ),
+        "root_ang_vel_rmse_radps": torch.sqrt(
+            torch.mean((robot_data.root_ang_vel_w - root_ang_vel_ref).square(), dim=-1)
+        ),
+    }
+    tracked_errors = _mean_body_pose_errors(base_env, tracked_body_names)
+    if tracked_errors is not None:
+        metrics["tracked_body_pos_error_m"] = tracked_errors[0]
+        metrics["tracked_body_ori_error_rad"] = tracked_errors[1]
+    ee_errors = _mean_body_pose_errors(base_env, ee_body_names)
+    if ee_errors is not None:
+        metrics["ee_pos_error_m"] = ee_errors[0]
+        metrics["ee_ori_error_rad"] = ee_errors[1]
+    return metrics
+
+
+def _accumulate_metric(
+    stats: dict[str, list[Tensor]],
+    metric_name: str,
+    values: Tensor,
+    mask: Tensor,
+) -> None:
+    selected = values.detach().cpu()[mask.cpu()]
+    if selected.numel() == 0:
+        return
+    stats.setdefault(metric_name, []).append(selected.float())
+
+
+def _finalize_metric_stats(
+    stats: dict[str, list[Tensor]],
+) -> dict[str, dict[str, float]]:
+    finalized: dict[str, dict[str, float]] = {}
+    for name, chunks in sorted(stats.items()):
+        values = torch.cat(chunks) if len(chunks) > 1 else chunks[0]
+        finalized[name] = {
+            "mean": float(values.mean().item()),
+            "std": float(values.std(unbiased=False).item())
+            if values.numel() > 1
+            else 0.0,
+            "count": int(values.numel()),
+        }
+    return finalized
+
+
+def _tensor_mean_std(values: Tensor, mask: Tensor) -> tuple[float, float]:
+    selected = values[mask]
+    if selected.numel() == 0:
+        return float("nan"), float("nan")
+    return (
+        float(selected.mean().item()),
+        float(selected.std(unbiased=False).item()) if selected.numel() > 1 else 0.0,
+    )
 
 
 def _auto_reference_steps(raw_env: Any) -> int:
@@ -667,6 +898,16 @@ def main(
             RewardClipping(-10.0, 5.0),
         ),
     )
+    if not isinstance(raw_isaac_env, ImitationRLEnv):
+        raise TypeError("Expected the unwrapped gym env to be an ImitationRLEnv.")
+    base_env = raw_isaac_env
+    tracked_body_names = _resolve_existing_body_names(
+        base_env, list(G1_TRACKED_BODY_NAMES)
+    )
+    ee_body_names = _resolve_existing_body_names(
+        base_env,
+        list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
+    )
 
     planner_checkpoint = torch.load(
         planner_checkpoint_path,
@@ -703,8 +944,18 @@ def main(
     )
     print(f"[INFO] Rollout steps: {max_steps} (auto_reference_steps={auto_steps})")
 
+    num_envs = int(env_cfg.scene.num_envs)
+    active = torch.ones(num_envs, dtype=torch.bool)
+    survival_steps = torch.zeros(num_envs, dtype=torch.float32)
+    return_sum = torch.zeros(num_envs, dtype=torch.float32)
+    done_events = torch.zeros(num_envs, dtype=torch.float32)
+    rollout_metric_stats: dict[str, list[Tensor]] = {}
+    previous_action: Tensor | None = None
+    valid_transition_count = 0
     rows: list[dict[str, Any]] = []
     samples_dir = log_dir / "rollout_training_samples"
+    saved_sample_files = 0
+    saved_sample_rows = 0
     timestep = 0
     stop_reason = "max_steps"
     if int(args_cli.metric_interval) <= 0:
@@ -715,9 +966,30 @@ def main(
             torch.inference_mode(),
             set_exploration_type(InteractionType.DETERMINISTIC),
         ):
+            step_active = active.clone()
             should_measure = timestep % int(args_cli.metric_interval) == 0
             metric_row: dict[str, Any] = {}
             td = collector_policy(td)
+            action = td.get("action", None)
+            if isinstance(action, Tensor):
+                action_2d = action.detach().reshape(num_envs, -1).cpu()
+                _accumulate_metric(
+                    rollout_metric_stats,
+                    "action_l2",
+                    torch.linalg.vector_norm(action_2d, dim=-1),
+                    step_active,
+                )
+                if previous_action is not None:
+                    action_delta_l2 = torch.linalg.vector_norm(
+                        action_2d - previous_action, dim=-1
+                    )
+                    _accumulate_metric(
+                        rollout_metric_stats,
+                        "action_delta_l2",
+                        action_delta_l2,
+                        step_active,
+                    )
+                previous_action = action_2d
             if should_measure:
                 # Measure after policy injection so published_z_* reflects the
                 # command actually sent to System 0 on this step, while the env
@@ -742,7 +1014,48 @@ def main(
                 }
                 _write_jsonl(metrics_path, row)
                 rows.append(row)
+                if args_cli.save_rollout_training_samples:
+                    saved_sample_files += 1
+                    saved_sample_rows += int(env_ids.numel())
             stepped_td = env.step(td)
+            rewards = _optional_flat_tensor(
+                stepped_td, ("next", "reward"), num_envs=num_envs, default=0.0
+            )
+            dones = _optional_flat_tensor(
+                stepped_td, ("next", "done"), num_envs=num_envs, default=False
+            ).bool()
+            terminateds = _optional_flat_tensor(
+                stepped_td,
+                ("next", "terminated"),
+                num_envs=num_envs,
+                default=False,
+            ).bool()
+            truncateds = _optional_flat_tensor(
+                stepped_td,
+                ("next", "truncated"),
+                num_envs=num_envs,
+                default=False,
+            ).bool()
+            done_any = dones | terminateds | truncateds
+            return_sum += rewards.float() * step_active.float()
+            survival_steps += step_active.float()
+            done_events += (done_any & step_active).float()
+            metric_mask = (
+                step_active
+                if args_cli.continue_after_reset
+                else step_active & ~done_any
+            )
+            valid_transition_count += int(metric_mask.sum().item())
+            for metric_name, values in _tracking_metrics(
+                base_env,
+                tracked_body_names=tracked_body_names,
+                ee_body_names=ee_body_names,
+            ).items():
+                _accumulate_metric(
+                    rollout_metric_stats, metric_name, values.cpu(), metric_mask
+                )
+            if not args_cli.continue_after_reset:
+                active &= ~done_any
             done = _any_done(stepped_td)
             td = step_mdp(
                 stepped_td,
@@ -764,12 +1077,55 @@ def main(
         stop_reason = "simulation_app_stopped"
 
     final_metadata = _trajectory_metadata(raw_isaac_env)
+    active_mask = survival_steps > 0
+    return_mean, return_std = _tensor_mean_std(return_sum, active_mask)
+    survival_mean, survival_std = _tensor_mean_std(survival_steps, active_mask)
+    aggregate = {
+        "return_sum_mean": return_mean,
+        "return_sum_std": return_std,
+        "survival_steps_mean": survival_mean,
+        "survival_steps_std": survival_std,
+        "done_rate": float((done_events[active_mask] > 0).float().mean().item())
+        if bool(active_mask.any())
+        else float("nan"),
+        "valid_transition_count": int(valid_transition_count),
+    }
+    metric_means = _mean_dict(rows)
+    rollout_metrics = _finalize_metric_stats(rollout_metric_stats)
+    if "m3/z_mse" in metric_means:
+        rollout_metrics["planner_target_rmse"] = {
+            "mean": float(max(metric_means["m3/z_mse"], 0.0) ** 0.5),
+            "std": 0.0,
+            "count": int(len(rows)),
+        }
+    planner_metadata = _skill_commander_planner_metadata(
+        planner_checkpoint,
+        generator=trainer.generator,
+        trainer_config=trainer_config,
+    )
     summary = {
         **config_payload,
+        "metadata": {
+            "label": args_cli.label,
+            "task": args_cli.task,
+            "algorithm": args_cli.algorithm,
+            "checkpoint": str(checkpoint_path),
+            "planner_checkpoint": str(planner_checkpoint_path),
+            "interface": "latent_skill",
+            "planner_target_dim": int(trainer.z_dim),
+            "planner_metadata": planner_metadata,
+            "num_envs": int(num_envs),
+            "seed": int(agent_cfg.seed),
+            "motion_name": args_cli.motion_name,
+            "trajectory_name": args_cli.trajectory_name,
+        },
+        "aggregate": aggregate,
+        "metrics": rollout_metrics,
         "output_dir": str(log_dir),
         "video_dir": str(log_dir / "videos" / "play") if args_cli.video else None,
         "planner_config": trainer_config.to_dict(),
         "planner_update": int(trainer.update),
+        "planner_target_dim": int(trainer.z_dim),
         "auto_reference_steps": int(auto_steps),
         "max_steps": int(max_steps),
         "steps_run": int(timestep),
@@ -777,8 +1133,11 @@ def main(
         "metric_interval": int(args_cli.metric_interval),
         "start_trajectories": start_metadata,
         "final_trajectories": final_metadata,
-        "metric_means": _mean_dict(rows),
+        "metric_means": metric_means,
         "num_metric_rows": len(rows),
+        "saved_rows": int(saved_sample_rows),
+        "saved_steps": int(saved_sample_files),
+        "sample_file_count": int(saved_sample_files),
     }
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))

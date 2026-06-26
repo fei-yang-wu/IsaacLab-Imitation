@@ -80,6 +80,17 @@ load_secret_from_file() {
     tr -d '\r\n' < "$secret_file"
 }
 
+prefix_home_if_relative() {
+    local home_dir="$1"
+    local path="$2"
+
+    if [ -z "$path" ] || [[ "$path" = /* ]]; then
+        echo "$path"
+    else
+        echo "${home_dir%/}/$path"
+    fi
+}
+
 build_g1_preflight_cmd() {
     local data_root="$1"
     local manifest_path="$2"
@@ -179,6 +190,117 @@ echo "[INFO] G1 dataset ready: manifest='\${cluster_g1_manifest_path}', motions=
 EOF
 }
 
+sync_project_logs_back() {
+    local tmp_project_logs=""
+
+    if [ "${PROJECT_LOGS_SYNCED:-0}" = "1" ]; then
+        return
+    fi
+    if [ -z "${dir_name:-}" ]; then
+        echo "[INFO] No submitted workspace name yet; skipping per-job project log sync."
+        return
+    fi
+
+    tmp_project_logs="${TMPDIR}/${dir_name}/logs"
+
+    if [ ! -d "$tmp_project_logs" ]; then
+        echo "[INFO] No per-job project logs found to sync back: $tmp_project_logs"
+        return
+    fi
+    mkdir -p "$CLUSTER_ISAACLAB_DIR/logs"
+    echo "[INFO] Syncing per-job project logs back to permanent workspace: $tmp_project_logs -> $CLUSTER_ISAACLAB_DIR/logs"
+    rsync -a "$tmp_project_logs/" "$CLUSTER_ISAACLAB_DIR/logs/"
+    PROJECT_LOGS_SYNCED=1
+}
+
+seed_shared_project_logs_from_submission() {
+    local submitted_project_logs=""
+
+    if [ -z "${dir_name:-}" ]; then
+        echo "[INFO] No submitted workspace name yet; skipping shared project log seeding."
+        return
+    fi
+
+    submitted_project_logs="${TMPDIR}/${dir_name}/logs"
+    if [ ! -d "$submitted_project_logs" ]; then
+        return
+    fi
+
+    mkdir -p "$CLUSTER_ISAACLAB_DIR/logs"
+    echo "[INFO] Seeding shared project logs from submitted workspace: $submitted_project_logs -> $CLUSTER_ISAACLAB_DIR/logs"
+    rsync -a "$submitted_project_logs/" "$CLUSTER_ISAACLAB_DIR/logs/"
+}
+
+capture_requested_env_var() {
+    local var_name="$1"
+    local marker_name="REQUESTED_${var_name}_IS_SET"
+    local value_name="REQUESTED_${var_name}"
+
+    if [ "${!var_name+x}" ]; then
+        printf -v "$marker_name" '%s' "1"
+        printf -v "$value_name" '%s' "${!var_name}"
+    else
+        printf -v "$marker_name" '%s' ""
+        printf -v "$value_name" '%s' ""
+    fi
+}
+
+restore_requested_env_var() {
+    local var_name="$1"
+    local marker_name="REQUESTED_${var_name}_IS_SET"
+    local value_name="REQUESTED_${var_name}"
+
+    if [ -n "${!marker_name:-}" ]; then
+        printf -v "$var_name" '%s' "${!value_name}"
+    fi
+}
+
+capture_cluster_env_overrides() {
+    local var_name
+
+    for var_name in \
+        CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_AUTO_SETUP_G1_DATA \
+        CLUSTER_G1_EXPECTED_MOTION_COUNT \
+        CLUSTER_G1_DATA_ROOT \
+        CLUSTER_G1_REPO_ID \
+        CLUSTER_G1_MANIFEST_PATH \
+        CLUSTER_G1_MANIFEST_REFRESH_POLICY \
+        CLUSTER_SKIP_CACHE_COPY \
+        CLUSTER_OVERLAY_SIZE_MB \
+        CLUSTER_JOB_TMPDIR_ROOT \
+        CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB \
+        CLUSTER_USE_SHARED_SIF \
+        CLUSTER_SHARED_SIF_PATH \
+        CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_EXTRA_PYTHONPATH_REL; do
+        capture_requested_env_var "$var_name"
+    done
+}
+
+restore_cluster_env_overrides() {
+    local var_name
+
+    for var_name in \
+        CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_AUTO_SETUP_G1_DATA \
+        CLUSTER_G1_EXPECTED_MOTION_COUNT \
+        CLUSTER_G1_DATA_ROOT \
+        CLUSTER_G1_REPO_ID \
+        CLUSTER_G1_MANIFEST_PATH \
+        CLUSTER_G1_MANIFEST_REFRESH_POLICY \
+        CLUSTER_SKIP_CACHE_COPY \
+        CLUSTER_OVERLAY_SIZE_MB \
+        CLUSTER_JOB_TMPDIR_ROOT \
+        CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB \
+        CLUSTER_USE_SHARED_SIF \
+        CLUSTER_SHARED_SIF_PATH \
+        CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_EXTRA_PYTHONPATH_REL; do
+        restore_requested_env_var "$var_name"
+    done
+}
+
 
 #==
 # Main
@@ -194,9 +316,21 @@ source $SCRIPT_DIR/.env.cluster
 restore_cluster_env_overrides
 source $SCRIPT_DIR/../.env.base
 
-base_tmpdir="${TMPDIR:-/tmp}"
+base_tmpdir="${CLUSTER_JOB_TMPDIR_ROOT:-${TMPDIR:-/tmp}}"
+base_tmpdir="$(prefix_home_if_relative "$HOME" "$base_tmpdir")"
+mkdir -p "$base_tmpdir"
 job_tmpdir="${base_tmpdir%/}/isaaclab-${SLURM_JOB_ID:-$$}"
 mkdir -p "$job_tmpdir"
+cleanup_job_tmpdir() {
+    local status=$?
+    set +e
+    sync_project_logs_back
+    if [ "${CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB:-1}" = "1" ] && [ -n "${job_tmpdir:-}" ]; then
+        rm -rf "$job_tmpdir" || true
+    fi
+    exit "$status"
+}
+trap cleanup_job_tmpdir EXIT
 export TMPDIR="$job_tmpdir"
 echo "[INFO] Using per-job TMPDIR: $TMPDIR"
 
@@ -295,6 +429,7 @@ if [ "${CLUSTER_SKIP_CACHE_COPY:-0}" = "1" ]; then
         mkdir -p "$dir"
     done
 else
+    echo "[INFO] Copying Isaac Sim cache to per-job TMPDIR."
     cp -r $CLUSTER_ISAAC_SIM_CACHE_DIR $TMPDIR
 fi
 
@@ -303,12 +438,37 @@ mkdir -p "$CLUSTER_ISAACLAB_DIR/logs"
 touch "$CLUSTER_ISAACLAB_DIR/logs/.keep"
 
 # copy the temporary isaaclab directory with the latest changes to the compute node
+echo "[INFO] Copying submitted workspace into per-job TMPDIR."
 cp -r $1 $TMPDIR
 # Get the directory name
 dir_name=$(basename "$1")
+seed_shared_project_logs_from_submission
 
-# copy container to the compute node
-tar -xf "$CLUSTER_SIF_PATH/$2.tar" -C "$TMPDIR"
+container_image="$TMPDIR/$2.sif"
+if [ "${CLUSTER_USE_SHARED_SIF:-0}" = "1" ]; then
+    container_image="${CLUSTER_SHARED_SIF_PATH:-${CLUSTER_SIF_PATH}/$2.sif}"
+    container_image="$(prefix_home_if_relative "$HOME" "$container_image")"
+    if [ ! -e "$container_image" ]; then
+        mkdir -p "$(dirname "$container_image")"
+        lock_file="${container_image}.lock"
+        (
+            flock 9
+            if [ ! -e "$container_image" ]; then
+                tmp_container_image="${container_image}.tmp.${SLURM_JOB_ID:-$$}"
+                rm -rf "$tmp_container_image"
+                mkdir -p "$tmp_container_image"
+                tar -xf "$CLUSTER_SIF_PATH/$2.tar" -C "$tmp_container_image"
+                mv "$tmp_container_image/$2.sif" "$container_image"
+                rm -rf "$tmp_container_image"
+            fi
+        ) 9>"$lock_file"
+    fi
+    echo "[INFO] Using shared container image: $container_image"
+else
+    # copy container to the compute node
+    echo "[INFO] Extracting container image into per-job TMPDIR."
+    tar -xf "$CLUSTER_SIF_PATH/$2.tar" -C "$TMPDIR"
+fi
 
 # create a persistant overlay using apptainer with fakeroot
 overlay_size_mb="${CLUSTER_OVERLAY_SIZE_MB:-20240}"
@@ -328,6 +488,7 @@ if [ -n "${preflight_cmd}" ]; then
     container_entry_cmd="${container_entry_cmd} && ${preflight_cmd}"
 fi
 container_entry_cmd="${container_entry_cmd} && ${workload_cmd}"
+set +e
 singularity exec \
     -B $TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B $TMPDIR/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -345,8 +506,12 @@ singularity exec \
     -B ${CLUSTER_DATA_DIR}:/data:rw \
     -B ${CLUSTER_DATA_DIR}:${CLUSTER_DATA_DIR}:rw \
     --overlay $CLUSTER_ISAACLAB_DIR/$dir_name.img \
-    --nv --containall $TMPDIR/$2.sif \
+    --nv --containall "$container_image" \
     bash -c "$container_entry_cmd"
+workload_status=$?
+set -e
+
+sync_project_logs_back || true
 
 # copy resulting cache files back to host
 if [ "${CLUSTER_SKIP_CACHE_COPY:-0}" = "1" ]; then
@@ -366,3 +531,4 @@ if $REMOVE_OVERLAY_AFTER_JOB; then
 fi
 
 echo "(run_singularity.py): Return"
+exit "$workload_status"

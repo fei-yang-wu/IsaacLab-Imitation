@@ -126,7 +126,7 @@ def expert_window_motion(
     future_steps: int = 1,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    return env.get_current_expert_window_term(
+    return env.get_current_command_window_term(
         term_name="expert_motion",
         past_steps=past_steps,
         future_steps=future_steps,
@@ -142,7 +142,7 @@ def expert_window_anchor_pos_b(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     del asset_cfg
-    return env.get_current_expert_window_term(
+    return env.get_current_command_window_term(
         term_name="expert_anchor_pos_b",
         past_steps=past_steps,
         future_steps=future_steps,
@@ -158,11 +158,47 @@ def expert_window_anchor_ori_b(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     del asset_cfg
-    return env.get_current_expert_window_term(
+    return env.get_current_command_window_term(
         term_name="expert_anchor_ori_b",
         past_steps=past_steps,
         future_steps=future_steps,
         anchor_body_name=anchor_body_name,
+    )
+
+
+def expert_window_ee_pos_b(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    del asset_cfg
+    return env.get_current_command_window_term(
+        term_name="expert_ee_pos_b",
+        past_steps=past_steps,
+        future_steps=future_steps,
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def expert_window_ee_ori_b(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    del asset_cfg
+    return env.get_current_command_window_term(
+        term_name="expert_ee_ori_b",
+        past_steps=past_steps,
+        future_steps=future_steps,
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
     )
 
 

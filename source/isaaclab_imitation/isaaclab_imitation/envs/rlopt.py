@@ -166,6 +166,49 @@ class IsaacLabWrapper(GymWrapper):
     def get_agent_latent_command(self, env_ids=None):
         return self._base_isaac_env().get_agent_latent_command(env_ids=env_ids)
 
+    def set_agent_trajectory_command(self, command_terms, env_ids=None):
+        return self._base_isaac_env().set_agent_trajectory_command(
+            command_terms,
+            env_ids=env_ids,
+        )
+
+    def set_agent_full_body_trajectory_command(
+        self,
+        *,
+        expert_motion,
+        expert_anchor_pos_b,
+        expert_anchor_ori_b,
+        env_ids=None,
+    ):
+        return self._base_isaac_env().set_agent_full_body_trajectory_command(
+            expert_motion=expert_motion,
+            expert_anchor_pos_b=expert_anchor_pos_b,
+            expert_anchor_ori_b=expert_anchor_ori_b,
+            env_ids=env_ids,
+        )
+
+    def set_agent_ee_trajectory_command(
+        self,
+        *,
+        expert_ee_pos_b,
+        expert_ee_ori_b,
+        env_ids=None,
+    ):
+        return self._base_isaac_env().set_agent_ee_trajectory_command(
+            expert_ee_pos_b=expert_ee_pos_b,
+            expert_ee_ori_b=expert_ee_ori_b,
+            env_ids=env_ids,
+        )
+
+    def reset_agent_trajectory_command(self, env_ids=None):
+        return self._base_isaac_env().reset_agent_trajectory_command(env_ids=env_ids)
+
+    def get_agent_trajectory_command_term(self, term_name, env_ids=None):
+        return self._base_isaac_env().get_agent_trajectory_command_term(
+            term_name,
+            env_ids=env_ids,
+        )
+
     @property
     def _is_batched(self) -> bool:
         return True
