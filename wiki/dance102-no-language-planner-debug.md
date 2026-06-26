@@ -66,6 +66,10 @@ RUN_ROOT=logs/dance102_single_trajectory_debug/20260618_150520_dance102_h10_hist
 scripts/rlopt/run_dance102_no_language_posthoc_eval.sh
 ```
 
+The posthoc helper keeps the oracle pass as a playback video, but runs the
+planner pass through `eval_skill_commander_closed_loop.py` so the achieved-state
+M3 metrics and published-command checks are logged alongside the video.
+
 For the current reusable eval recipe, including M1 expert-state checks,
 oracle-drive sample collection, rollout finetuning, and achieved-state M3
 video eval, see
