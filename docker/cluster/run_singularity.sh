@@ -8,6 +8,48 @@ echo "(run_singularity.py): Called on compute node from current isaaclab directo
 # Helper functions
 #==
 
+CLUSTER_ENV_OVERRIDES=()
+
+capture_cluster_env_overrides() {
+    local name
+    local value
+
+    CLUSTER_ENV_OVERRIDES=()
+    while IFS='=' read -r name value; do
+        case "$name" in
+            CLUSTER_*)
+                CLUSTER_ENV_OVERRIDES+=("$name=$value")
+                ;;
+        esac
+    done < <(env)
+}
+
+restore_cluster_env_overrides() {
+    local assignment
+
+    for assignment in "${CLUSTER_ENV_OVERRIDES[@]}"; do
+        export "$assignment"
+    done
+}
+
+prefix_home_if_relative() {
+    local home_dir="$1"
+    local raw_path="$2"
+
+    if [ -z "$raw_path" ]; then
+        echo ""
+        return
+    fi
+    case "$raw_path" in
+        /*)
+            echo "$raw_path"
+            ;;
+        *)
+            echo "$home_dir/$raw_path"
+            ;;
+    esac
+}
+
 setup_directories() {
     # Check and create directories
     for dir in \
@@ -297,8 +339,8 @@ CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$HOME" "$CLUSTER_ISAAC_S
 CLUSTER_ISAACLAB_DIR="$(prefix_home_if_relative "$HOME" "$CLUSTER_ISAACLAB_DIR")"
 CLUSTER_SIF_PATH="$(prefix_home_if_relative "$HOME" "$CLUSTER_SIF_PATH")"
 CLUSTER_DATA_DIR="$(prefix_home_if_relative "$HOME" "$CLUSTER_DATA_DIR")"
-CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$HOME" "$CLUSTER_HF_TOKEN_FILE")"
-CLUSTER_WANDB_API_KEY_FILE="$(prefix_home_if_relative "$HOME" "$CLUSTER_WANDB_API_KEY_FILE")"
+CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$HOME" "${CLUSTER_HF_TOKEN_FILE:-}")"
+CLUSTER_WANDB_API_KEY_FILE="$(prefix_home_if_relative "$HOME" "${CLUSTER_WANDB_API_KEY_FILE:-}")"
 [ -n "${CLUSTER_G1_MANIFEST_PATH:-}" ] && CLUSTER_G1_MANIFEST_PATH="$(prefix_home_if_relative "$HOME" "$CLUSTER_G1_MANIFEST_PATH")"
 [ -n "${CLUSTER_G1_DATA_ROOT:-}" ] && CLUSTER_G1_DATA_ROOT="$(prefix_home_if_relative "$HOME" "$CLUSTER_G1_DATA_ROOT")"
 
