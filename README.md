@@ -304,6 +304,44 @@ python scripts/rlopt/train.py \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
+For the command-space oracle ablation comparing the existing single-frame
+full-body command, a full-body trajectory command, and an end-effector
+trajectory command, use:
+
+```bash
+DRY_RUN=1 experiments/command_space_ablation/run_local_oracle_smoke.sh
+experiments/command_space_ablation/run_local_oracle_smoke.sh
+
+DRY_RUN=1 experiments/command_space_ablation/submit_cluster_oracle_ablation.sh
+```
+
+Set `COMMAND_OBSERVATION_SOURCE=planner_oracle` to route the same oracle
+commands through the planner command buffers for a bridge smoke test.
+The cluster launcher defaults to three Dance102 seeds (`2024 2025 2026`) and
+uses `docker/cluster/.env.cluster` for the cluster-side manifest path.
+
+After checkpoints are available, evaluate them with the shared deterministic
+table path:
+
+```bash
+SEEDS="2024 2025 2026" \
+CHECKPOINTS="/path/single_seed2024.pt /path/single_seed2025.pt /path/single_seed2026.pt \
+/path/full_body_seed2024.pt /path/full_body_seed2025.pt /path/full_body_seed2026.pt \
+/path/ee_seed2024.pt /path/ee_seed2025.pt /path/ee_seed2026.pt" \
+experiments/command_space_ablation/evaluate_oracle_checkpoints.sh
+```
+
+The detailed two-level plan, metric list, and later closed-loop planner
+comparison live in
+[wiki/command-space-ablation.md](wiki/command-space-ablation.md).
+For trajectory checkpoints, set `PLANNER_MODE=reference`, `hold_current`,
+`noisy_reference`, or `zero` in the evaluator wrapper to compare the planner
+buffer path and simple planner-burden baselines.
+For the paper-facing learned-planner comparison between the learned latent
+interface, full-body trajectory commands, and end-effector trajectory commands,
+use the controlled strong internal baseline workflow in
+[wiki/fair-interface-baselines.md](wiki/fair-interface-baselines.md).
+
 For the two-stage high-level skill workflow, use the pipeline entrypoint. It
 first runs offline DiffSR skill-encoder pretraining, checks
 `checkpoints/latest.pt`, then starts low-level IPMD training with

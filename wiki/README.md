@@ -20,6 +20,11 @@ Start with:
   Dance102 planner-debug workflow.
 - [Experiment Workflow](experiment-workflow.md): local tests, full cluster job
   submission, and experiment tracking conventions.
+- [Command-Space Ablation](command-space-ablation.md): two-level oracle and
+  closed-loop planner plan for full-body versus end-effector command spaces.
+- [Fair Interface Baselines](fair-interface-baselines.md): Dance102-first
+  strong internal workflow comparing latent skills, EE trajectories, and
+  full-body trajectories as high-low interfaces.
 - [LeRobot Offline Pretraining](lerobot-offline-pretraining.md): Unitree WBT
   LeRobot ingestion, TorchRL cache ownership, replay/debug commands, and the
   current RTX re-image note.
