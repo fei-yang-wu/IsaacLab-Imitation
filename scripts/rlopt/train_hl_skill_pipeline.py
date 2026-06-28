@@ -155,6 +155,31 @@ def _pretrain_cmd(args: argparse.Namespace, output_dir: Path) -> list[str]:
             args.encoder_window_mode,
             "--z_dim",
             str(args.z_dim),
+            "--latent_mode",
+            args.latent_mode,
+            "--reg_coeff",
+            str(args.reg_coeff),
+            "--categorical_groups",
+            str(args.categorical_groups),
+            "--categorical_categories",
+            str(args.categorical_categories),
+            "--gumbel_codebook_size",
+            str(args.gumbel_codebook_size),
+            "--gumbel_tau_start",
+            str(args.gumbel_tau_start),
+            "--gumbel_tau_end",
+            str(args.gumbel_tau_end),
+            "--gumbel_tau_anneal_iters",
+            str(args.gumbel_tau_anneal_iters),
+            "--gumbel_hard" if args.gumbel_hard else "--no-gumbel_hard",
+            "--fsq_levels",
+            *[str(level) for level in args.fsq_levels],
+            "--vq_codebook_size",
+            str(args.vq_codebook_size),
+            "--vq_ema_decay",
+            str(args.vq_ema_decay),
+            "--vq_dead_code_reset_iters",
+            str(args.vq_dead_code_reset_iters),
             "--diffsr_feature_dim",
             str(args.diffsr_feature_dim),
             "--diffsr_embed_dim",
@@ -343,7 +368,35 @@ def _parse_args() -> argparse.Namespace:
         default="intermediate",
     )
     parser.add_argument("--z-dim", type=int, default=256)
-    parser.add_argument("--diffsr-feature-dim", type=int, default=128)
+    parser.add_argument(
+        "--latent-mode",
+        choices=(
+            "deterministic",
+            "gaussian",
+            "categorical",
+            "gumbel_multicat",
+            "gumbel",
+            "fsq",
+            "vq",
+        ),
+        default="deterministic",
+        help="Skill latent bottleneck design forwarded to pretraining.",
+    )
+    parser.add_argument("--reg-coeff", type=float, default=1.0e-3)
+    parser.add_argument("--categorical-groups", type=int, default=8)
+    parser.add_argument("--categorical-categories", type=int, default=32)
+    parser.add_argument("--gumbel-codebook-size", type=int, default=512)
+    parser.add_argument("--gumbel-tau-start", type=float, default=2.0)
+    parser.add_argument("--gumbel-tau-end", type=float, default=0.5)
+    parser.add_argument("--gumbel-tau-anneal-iters", type=int, default=2000)
+    parser.add_argument(
+        "--gumbel-hard", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument("--fsq-levels", type=int, nargs="+", default=[8, 8, 8, 5, 5])
+    parser.add_argument("--vq-codebook-size", type=int, default=512)
+    parser.add_argument("--vq-ema-decay", type=float, default=0.99)
+    parser.add_argument("--vq-dead-code-reset-iters", type=int, default=0)
+    parser.add_argument("--diffsr-feature-dim", type=int, default=256)
     parser.add_argument("--diffsr-embed-dim", type=int, default=512)
     parser.add_argument(
         "--pretrain-override",
