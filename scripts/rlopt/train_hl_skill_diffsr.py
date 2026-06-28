@@ -54,6 +54,70 @@ parser.add_argument(
 )
 parser.add_argument("--z_dim", type=int, default=256, help="Skill latent dimension.")
 parser.add_argument(
+    "--latent_mode",
+    type=str,
+    default="deterministic",
+    choices=(
+        "deterministic",
+        "gaussian",
+        "categorical",
+        "gumbel_multicat",
+        "gumbel",
+        "fsq",
+        "vq",
+    ),
+    help=(
+        "Latent bottleneck design: 'deterministic' (z_norm), 'gaussian' (beta-VAE), "
+        "'categorical' (multi-categorical straight-through codebook), 'gumbel' "
+        "(Gumbel-softmax, annealed tau), 'fsq' (finite scalar quant), 'vq' (EMA VQ-VAE)."
+    ),
+)
+parser.add_argument(
+    "--reg_coeff",
+    type=float,
+    default=1.0e-3,
+    help="Latent regularizer weight: L2 on z for 'deterministic', KL bottleneck "
+    "for 'gaussian'/'categorical'.",
+)
+parser.add_argument(
+    "--categorical_groups",
+    type=int,
+    default=8,
+    help="Number of categorical groups G for --latent_mode categorical (must divide "
+    "z_dim; per-group code dim = z_dim // G).",
+)
+parser.add_argument(
+    "--categorical_categories",
+    type=int,
+    default=32,
+    help="Categories per group (vocab size) for --latent_mode categorical. Independent "
+    "of z_dim; larger = more capacity per group.",
+)
+parser.add_argument(
+    "--gumbel_codebook_size", type=int, default=512, help="Codebook size for gumbel/."
+)
+parser.add_argument("--gumbel_tau_start", type=float, default=2.0)
+parser.add_argument("--gumbel_tau_end", type=float, default=0.5)
+parser.add_argument("--gumbel_tau_anneal_iters", type=int, default=2000)
+parser.add_argument(
+    "--gumbel_hard", action=argparse.BooleanOptionalAction, default=True
+)
+parser.add_argument(
+    "--fsq_levels",
+    type=int,
+    nargs="+",
+    default=[8, 8, 8, 5, 5],
+    help="Per-dim levels for --latent_mode fsq (codebook size = product).",
+)
+parser.add_argument("--vq_codebook_size", type=int, default=512)
+parser.add_argument("--vq_ema_decay", type=float, default=0.99)
+parser.add_argument(
+    "--vq_dead_code_reset_iters",
+    type=int,
+    default=0,
+    help="Revive unused VQ codes every N updates (0 disables).",
+)
+parser.add_argument(
     "--diffsr_feature_dim",
     type=int,
     default=128,
@@ -111,12 +175,6 @@ parser.add_argument(
     type=float,
     default=1.0,
     help="Global gradient max norm. Use <=0 to disable.",
-)
-parser.add_argument(
-    "--z_norm_coeff",
-    type=float,
-    default=1.0e-4,
-    help="Small z-scale regularizer coefficient.",
 )
 parser.add_argument(
     "--reconstruction_norm_eps",
@@ -266,6 +324,19 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         horizon_steps=args_cli.horizon_steps,
         encoder_window_mode=args_cli.encoder_window_mode,
         z_dim=args_cli.z_dim,
+        latent_mode=args_cli.latent_mode,
+        reg_coeff=args_cli.reg_coeff,
+        categorical_groups=args_cli.categorical_groups,
+        categorical_categories=args_cli.categorical_categories,
+        gumbel_codebook_size=args_cli.gumbel_codebook_size,
+        gumbel_tau_start=args_cli.gumbel_tau_start,
+        gumbel_tau_end=args_cli.gumbel_tau_end,
+        gumbel_tau_anneal_iters=args_cli.gumbel_tau_anneal_iters,
+        gumbel_hard=args_cli.gumbel_hard,
+        fsq_levels=tuple(args_cli.fsq_levels),
+        vq_codebook_size=args_cli.vq_codebook_size,
+        vq_ema_decay=args_cli.vq_ema_decay,
+        vq_dead_code_reset_iters=args_cli.vq_dead_code_reset_iters,
         diffsr_feature_dim=args_cli.diffsr_feature_dim,
         diffsr_embed_dim=args_cli.diffsr_embed_dim,
         batch_size=args_cli.batch_size,
@@ -278,7 +349,6 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         eval_trajectory_fraction=args_cli.eval_trajectory_fraction,
         trajectory_split_seed=args_cli.trajectory_split_seed,
         grad_clip_norm=grad_clip_norm,
-        z_norm_coeff=args_cli.z_norm_coeff,
         reconstruction_norm_eps=args_cli.reconstruction_norm_eps,
         device=args_cli.device if args_cli.device is not None else "auto",
     )
