@@ -92,9 +92,14 @@ def _resolve_device(device: str) -> torch.device:
 
 
 def _load_samples(samples_dir: Path) -> dict[str, torch.Tensor]:
-    paths = sorted(samples_dir.expanduser().glob("sample_step_*.pt"))
+    samples_dir = samples_dir.expanduser()
+    paths = sorted(samples_dir.glob("sample_step_*.pt")) + sorted(
+        samples_dir.glob("sample_chunk_*.pt")
+    )
     if not paths:
-        raise FileNotFoundError(f"No sample_step_*.pt files found in {samples_dir}.")
+        raise FileNotFoundError(
+            f"No sample_step_*.pt or sample_chunk_*.pt files found in {samples_dir}."
+        )
     rows: dict[str, list[torch.Tensor]] = {
         "planner_state": [],
         "expert_planner_state": [],
@@ -136,12 +141,18 @@ def _load_samples(samples_dir: Path) -> dict[str, torch.Tensor]:
         if step is None:
             raise KeyError(f"Sample {path} is missing required key 'step'.")
         if isinstance(step, torch.Tensor):
-            if step.numel() != 1:
+            if step.numel() == 1:
+                step_value = int(step.item())
+                steps.extend([step_value] * row_count)
+            elif int(step.numel()) == row_count:
+                steps.extend([int(value) for value in step.reshape(-1).tolist()])
+            else:
                 raise ValueError(
-                    f"Sample {path} step tensor must contain one value, got {tuple(step.shape)}."
+                    f"Sample {path} step tensor must contain one value or {row_count} "
+                    f"values, got {tuple(step.shape)}."
                 )
-            step = step.item()
-        steps.extend([int(step)] * row_count)
+        else:
+            steps.extend([int(step)] * row_count)
     data = {key: torch.cat(value, dim=0).contiguous() for key, value in rows.items()}
     data["step"] = torch.as_tensor(steps, dtype=torch.long)
     return data
