@@ -304,6 +304,39 @@ python scripts/rlopt/train.py \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
+For the LAFAN1 no-language latent-skill pipeline, use:
+
+```bash
+pixi run -e isaaclab scripts/rlopt/run_lafan1_no_language_pipeline.sh
+```
+
+This runs the default no-language stack for LAFAN1: DiffSR skill encoder,
+flow-matching planner, latent-conditioned IPMD-Bilinear low-level policy,
+evaluation, and optional oracle rollout finetuning. Defaults include
+`num_envs=4096`, `z_dim=256`, `horizon_steps=10`, sinusoidal phase features,
+and `state_history_steps=9`. The default budgets are 5k skill-encoder updates,
+5k base-planner updates, and 10k low-level policy iterations.
+
+To run only the 40-motion oracle rollout-finetuning stage from existing
+checkpoints, use:
+
+```bash
+pixi run -e isaaclab python scripts/rlopt/run_lafan1_no_language_rollout_ft_merged.py \
+    --checkpoint /path/to/low_level_policy.pt \
+    --planner_checkpoint /path/to/base_planner.pt \
+    --skill_checkpoint /path/to/skill_encoder.pt \
+    --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
+    --dataset_path data/lafan1/g1_hl_diffsr \
+    --ranks all \
+    --seeds 0,1,2 \
+    --finetune_updates 20000
+```
+
+This collects oracle skill rollouts with the frozen skill encoder, merges the
+samples, and finetunes one shared no-language planner. With the default LAFAN1
+manifest, `--ranks all --seeds 0,1,2` collects 40 motions times 3 seeds, or 120
+rollout trajectories total.
+
 For the command-space oracle ablation comparing the existing single-frame
 full-body command, a full-body trajectory command, and an end-effector
 trajectory command, use:
