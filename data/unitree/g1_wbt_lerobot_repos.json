@@ -1,6 +1,6 @@
 {
   "collection": "https://huggingface.co/collections/unitreerobotics/unifolm-wbt-dataset",
-  "updated_from_collection_on": "2026-05-13",
+  "updated_from_collection_on": "2026-06-30",
   "repo_ids": [
     "unitreerobotics/G1_WBT_Inspire_Collect_Clothes_MainCamOnly",
     "unitreerobotics/G1_WBT_Inspire_Pickup_Pillow_MainCamOnly",
