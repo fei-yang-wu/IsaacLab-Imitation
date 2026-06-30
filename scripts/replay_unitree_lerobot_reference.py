@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import imageio.v2 as imageio
 import numpy as np
 
 
@@ -140,6 +141,18 @@ parser.add_argument(
     help="Replay without recording an MP4.",
 )
 parser.add_argument(
+    "--video_width",
+    type=int,
+    default=1280,
+    help="Direct camera video width in pixels.",
+)
+parser.add_argument(
+    "--video_height",
+    type=int,
+    default=720,
+    help="Direct camera video height in pixels.",
+)
+parser.add_argument(
     "--root_z_alignment",
     type=str,
     choices=("first_frame_to_default", "none"),
@@ -205,11 +218,11 @@ from datasets import load_dataset
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
+from isaaclab.sensors import TiledCameraCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from isaaclab.utils.math import quat_slerp
-import omni.kit.app
+from isaaclab.utils.math import quat_from_matrix, quat_slerp
 
 from isaaclab_imitation.assets.robots.unitree import (
     UNITREE_G1_29DOF_JOINT_ORDER_SOURCE,
@@ -218,23 +231,6 @@ from isaaclab_imitation.assets.robots.unitree import (
     UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES,
     UNITREE_G1_29DOF_MIMIC_CFG as ROBOT_CFG,
 )
-
-if not args_cli.no_video:
-    extension_manager = omni.kit.app.get_app().get_extension_manager()
-    extension_manager.set_extension_enabled_immediate("omni.kit.capture.viewport", True)
-    extension_manager.set_extension_enabled_immediate("omni.videoencoding", True)
-
-    import omni.kit.viewport.utility as vp_utils
-    from omni.kit.capture.viewport import (
-        CaptureExtension,
-        CaptureOptions,
-        CaptureRangeType,
-    )
-else:
-    vp_utils = None
-    CaptureExtension = None
-    CaptureOptions = None
-    CaptureRangeType = None
 
 
 @dataclass(frozen=True)
@@ -289,6 +285,23 @@ def _row_episode_index(row: dict) -> int:
 
 def _row_frame_index(row: dict) -> int:
     return int(torch.as_tensor(_nested_row_get(row, "frame_index")).item())
+
+
+def _look_at_quat_world(
+    camera_pos: tuple[float, float, float],
+    target_pos: tuple[float, float, float],
+) -> tuple[float, float, float, float]:
+    camera = torch.tensor(camera_pos, dtype=torch.float32)
+    target = torch.tensor(target_pos, dtype=torch.float32)
+    forward = target - camera
+    forward = forward / torch.linalg.norm(forward)
+    world_up = torch.tensor((0.0, 0.0, 1.0), dtype=torch.float32)
+    left = torch.cross(world_up, forward, dim=0)
+    left = left / torch.linalg.norm(left)
+    up = torch.cross(forward, left, dim=0)
+    rotation = torch.stack([forward, left, up], dim=1)
+    quat = quat_from_matrix(rotation.unsqueeze(0))[0]
+    return tuple(float(x) for x in quat.tolist())
 
 
 def _normalize_quat_wxyz(quat: torch.Tensor) -> torch.Tensor:
@@ -498,6 +511,8 @@ unitree_motion = _load_unitree_episode()
 
 @configclass
 class ReplayUnitreeLeRobotSceneCfg(InteractiveSceneCfg):
+    lazy_sensor_update = args_cli.no_video
+
     ground = AssetBaseCfg(
         prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg()
     )
@@ -511,6 +526,26 @@ class ReplayUnitreeLeRobotSceneCfg(InteractiveSceneCfg):
     )
 
     robot: ArticulationCfg = ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
+    if not args_cli.no_video:
+        video_camera: TiledCameraCfg = TiledCameraCfg(
+            prim_path="{ENV_REGEX_NS}/VideoCamera",
+            offset=TiledCameraCfg.OffsetCfg(
+                pos=(2.6, 2.4, 1.35),
+                rot=_look_at_quat_world((2.6, 2.4, 1.35), (0.25, 0.0, 0.75)),
+                convention="world",
+            ),
+            data_types=["rgb"],
+            update_period=0,
+            spawn=sim_utils.PinholeCameraCfg(
+                focal_length=24.0,
+                focus_distance=400.0,
+                horizontal_aperture=20.955,
+                clipping_range=(0.1, 20.0),
+            ),
+            width=args_cli.video_width,
+            height=args_cli.video_height,
+        )
 
 
 def _quat_conjugate_wxyz(quat: torch.Tensor) -> torch.Tensor:
@@ -620,71 +655,44 @@ class IsaacReplayMotion:
         return state, reset
 
 
-def _pump_app_once() -> None:
-    if hasattr(simulation_app, "update"):
-        simulation_app.update()
-        return
-    omni.kit.app.get_app().update()
-
-
-def _start_video_capture(output_frames: int):
+def _open_video_writer():
     if args_cli.no_video:
         return None
-    if (
-        CaptureExtension is None
-        or CaptureOptions is None
-        or CaptureRangeType is None
-        or vp_utils is None
-    ):
-        raise RuntimeError(
-            "Video capture requested, but viewport capture extensions are unavailable."
-        )
-
-    viewport = vp_utils.get_active_viewport()
-    if viewport is None:
-        raise RuntimeError(
-            "Video capture requested, but no active viewport is available."
-        )
-
     output_path = Path(args_cli.video_output).expanduser().resolve()
-    capture = CaptureExtension.get_instance()
-    options = CaptureOptions()
-    options.camera = viewport.camera_path.pathString
-    options.output_folder = str(output_path.parent)
-    options.file_name = output_path.stem
-    options.file_type = output_path.suffix or ".mp4"
-    options.range_type = CaptureRangeType.FRAMES
-    options.start_frame = 1
-    options.end_frame = int(output_frames)
-    options.capture_every_Nth_frames = 1
-    options.fps = int(round(float(args_cli.output_fps)))
-    options.overwrite_existing_frames = True
-    capture.options = options
-
-    if not capture.start():
-        raise RuntimeError(f"Failed to start video capture for: {output_path}")
-
+    if output_path.exists() and args_cli.overwrite_video:
+        output_path.unlink()
+    writer = imageio.get_writer(
+        str(output_path),
+        fps=max(1, int(round(float(args_cli.output_fps)))),
+        codec="libx264",
+        macro_block_size=None,
+    )
     print("[INFO]: Recording replay video to", output_path)
-    return capture
+    return writer
 
 
-def _wait_for_capture(capture) -> None:
-    if capture is None:
+def _append_video_frame(video_camera, writer) -> None:
+    if video_camera is None or writer is None:
         return
-    updates = 0
-    max_updates = 900
-    while not capture.done and simulation_app.is_running() and updates < max_updates:
-        _pump_app_once()
-        updates += 1
-    if capture.done:
-        print("[INFO]: Video capture completed:", capture.get_outputs())
-    else:
-        raise TimeoutError("Timed out waiting for video capture to finish.")
+    rgb = video_camera.data.output["rgb"]
+    if rgb.shape[-1] > 3:
+        rgb = rgb[..., :3]
+    writer.append_data(rgb[0].detach().cpu().numpy())
+
+
+def _close_video_writer(writer) -> None:
+    if writer is not None:
+        writer.close()
+        print(
+            "[INFO]: Video capture completed:",
+            str(Path(args_cli.video_output).expanduser().resolve()),
+        )
 
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> None:
     motion = IsaacReplayMotion(unitree_motion, device=sim.device)
     robot = scene["robot"]
+    video_camera = scene.sensors.get("video_camera") if not args_cli.no_video else None
     dataset_joint_names = list(UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES)
     target_joint_names = list(scene.cfg.robot.joint_sdk_names)
     if dataset_joint_names != list(UNITREE_G1_29DOF_XML_MOTOR_JOINT_NAMES):
@@ -756,84 +764,93 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> 
             "joint_names": target_joint_names,
         }
 
-    first_lookat = motion.root_pos[0].cpu().numpy()
-    sim.set_camera_view(first_lookat + np.array([2.0, 2.0, 0.7]), first_lookat)
-    capture = _start_video_capture(motion.frames)
+    if video_camera is not None:
+        for _ in range(5):
+            sim.render()
+            scene.update(sim.get_physics_dt())
+    video_writer = _open_video_writer()
     printed_first_write_debug = False
 
-    while simulation_app.is_running():
-        (
+    try:
+        while simulation_app.is_running():
             (
-                root_pos,
-                root_quat,
-                root_lin_vel,
-                root_ang_vel,
-                joint_pos_input,
-                joint_vel_input,
-            ),
-            reset,
-        ) = motion.get_next_state()
+                (
+                    root_pos,
+                    root_quat,
+                    root_lin_vel,
+                    root_ang_vel,
+                    joint_pos_input,
+                    joint_vel_input,
+                ),
+                reset,
+            ) = motion.get_next_state()
 
-        root_states = robot.data.default_root_state.clone()
-        root_states[:, :3] = root_pos
-        root_states[:, :2] += scene.env_origins[:, :2]
-        root_states[:, 3:7] = root_quat
-        root_states[:, 7:10] = root_lin_vel
-        root_states[:, 10:] = root_ang_vel
-        robot.write_root_state_to_sim(root_states)
+            root_states = robot.data.default_root_state.clone()
+            root_states[:, :3] = root_pos
+            root_states[:, :2] += scene.env_origins[:, :2]
+            root_states[:, 3:7] = root_quat
+            root_states[:, 7:10] = root_lin_vel
+            root_states[:, 10:] = root_ang_vel
+            robot.write_root_state_to_sim(root_states)
 
-        joint_pos = robot.data.default_joint_pos.clone()
-        joint_vel = robot.data.default_joint_vel.clone()
-        joint_pos_target = joint_pos_input.index_select(1, dataset_to_target_indexes)
-        joint_vel_target = joint_vel_input.index_select(1, dataset_to_target_indexes)
-        joint_pos[:, robot_joint_indexes] = joint_pos_target
-        joint_vel[:, robot_joint_indexes] = joint_vel_target
-        robot.write_joint_state_to_sim(joint_pos, joint_vel)
-        if args_cli.print_joint_debug and not printed_first_write_debug:
-            write_error = (
-                (joint_pos[:, robot_joint_indexes] - joint_pos_target).abs().max()
+            joint_pos = robot.data.default_joint_pos.clone()
+            joint_vel = robot.data.default_joint_vel.clone()
+            joint_pos_target = joint_pos_input.index_select(
+                1, dataset_to_target_indexes
             )
-            print(
-                "[DEBUG]: First-frame dataset joint vector:",
-                joint_pos_input[0].detach().cpu().tolist(),
+            joint_vel_target = joint_vel_input.index_select(
+                1, dataset_to_target_indexes
             )
-            print(
-                "[DEBUG]: First-frame target joint vector:",
-                joint_pos_target[0].detach().cpu().tolist(),
-            )
-            print(
-                "[DEBUG]: First-frame Isaac write max_abs_error:",
-                f"{float(write_error.item()):.6g}",
-            )
-            printed_first_write_debug = True
+            joint_pos[:, robot_joint_indexes] = joint_pos_target
+            joint_vel[:, robot_joint_indexes] = joint_vel_target
+            robot.write_joint_state_to_sim(joint_pos, joint_vel)
+            if args_cli.print_joint_debug and not printed_first_write_debug:
+                write_error = (
+                    (joint_pos[:, robot_joint_indexes] - joint_pos_target).abs().max()
+                )
+                print(
+                    "[DEBUG]: First-frame dataset joint vector:",
+                    joint_pos_input[0].detach().cpu().tolist(),
+                )
+                print(
+                    "[DEBUG]: First-frame target joint vector:",
+                    joint_pos_target[0].detach().cpu().tolist(),
+                )
+                print(
+                    "[DEBUG]: First-frame Isaac write max_abs_error:",
+                    f"{float(write_error.item()):.6g}",
+                )
+                printed_first_write_debug = True
 
-        lookat = root_states[0, :3].cpu().numpy()
-        sim.set_camera_view(lookat + np.array([2.0, 2.0, 0.7]), lookat)
-        sim.render()
-        scene.update(sim.get_physics_dt())
+            sim.render()
+            scene.update(sim.get_physics_dt())
+            _append_video_frame(video_camera, video_writer)
 
-        if log is not None:
-            log["root_pos"].append(root_pos[0].cpu().numpy().copy())
-            log["root_quat"].append(root_quat[0].cpu().numpy().copy())
-            log["root_lin_vel"].append(root_lin_vel[0].cpu().numpy().copy())
-            log["root_ang_vel"].append(root_ang_vel[0].cpu().numpy().copy())
-            log["joint_pos"].append(joint_pos_target[0].cpu().numpy().copy())
-            log["joint_vel"].append(joint_vel_target[0].cpu().numpy().copy())
-            log["body_pos_w"].append(robot.data.body_pos_w[0].cpu().numpy().copy())
-            log["body_quat_w"].append(robot.data.body_quat_w[0].cpu().numpy().copy())
-            log["body_lin_vel_w"].append(
-                robot.data.body_lin_vel_w[0].cpu().numpy().copy()
-            )
-            log["body_ang_vel_w"].append(
-                robot.data.body_ang_vel_w[0].cpu().numpy().copy()
-            )
+            if log is not None:
+                log["root_pos"].append(root_pos[0].cpu().numpy().copy())
+                log["root_quat"].append(root_quat[0].cpu().numpy().copy())
+                log["root_lin_vel"].append(root_lin_vel[0].cpu().numpy().copy())
+                log["root_ang_vel"].append(root_ang_vel[0].cpu().numpy().copy())
+                log["joint_pos"].append(joint_pos_target[0].cpu().numpy().copy())
+                log["joint_vel"].append(joint_vel_target[0].cpu().numpy().copy())
+                log["body_pos_w"].append(robot.data.body_pos_w[0].cpu().numpy().copy())
+                log["body_quat_w"].append(
+                    robot.data.body_quat_w[0].cpu().numpy().copy()
+                )
+                log["body_lin_vel_w"].append(
+                    robot.data.body_lin_vel_w[0].cpu().numpy().copy()
+                )
+                log["body_ang_vel_w"].append(
+                    robot.data.body_ang_vel_w[0].cpu().numpy().copy()
+                )
 
-        if reset:
-            break
+            if reset:
+                break
+    finally:
+        _close_video_writer(video_writer)
 
     if log is not None:
         _save_npz_output(log)
-    _wait_for_capture(capture)
 
 
 def main() -> None:

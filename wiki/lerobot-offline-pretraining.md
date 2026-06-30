@@ -1,6 +1,6 @@
 # LeRobot Offline Pretraining
 
-Last refreshed: 2026-05-12.
+Last refreshed: 2026-06-30.
 
 This page records the current offline dataset approach for G1 latent bilinear
 pretraining. The implementation keeps internet-facing dataset ingestion out of
@@ -24,6 +24,30 @@ validated:
 ```text
 unitreerobotics/G1_WBT_Brainco_Collect_Plates_Into_Dishwasher
 ```
+
+As of 2026-06-30, the compatible WBT streaming set is the 13-repo list in
+`data/unitree/g1_wbt_lerobot_repos.json`. The public WBT collection also lists
+`unitreerobotics/G1_WBT_Inspire_Clean_The_Living_Room`, but Dataset Viewer
+currently exposes that repo as video-only, so keep it out of the low-dimensional
+G1 WBT mapper until its `robot_q_current` / `robot_q_desired` schema is
+available through the streaming path.
+
+Daily-task WBT data is useful as auxiliary offline representation data for the
+latent bilinear path. It should complement, not replace, agile motion-reference
+datasets: keep locomotion/agile tracking coverage in the online task manifests,
+and use WBT to warm-start whole-body postural, reaching, and manipulation-state
+structure.
+
+Probe result on 2026-06-30: one episode per compatible repo streamed through
+`datasets` into the TorchRL cache successfully, producing 9,512 converted
+transitions across the 13 configured repos. The sampled training batches were
+29-wide low-dimensional G1 tensors only. `MainCamOnly` repos still expose the
+same `robot_q_current` / `robot_q_desired` fields through the current streaming
+path; the camera stream is not part of the IPMD bilinear TensorDict contract.
+`unitreerobotics/G1_WBT_Inspire_Clean_The_Living_Room` currently requires video
+decoding support (`torchcodec`) before even the first row can be inspected, so
+keep it excluded from `data/unitree/g1_wbt_lerobot_repos.json` until we
+intentionally add a visual/metadata-aware mapper.
 
 For serious IPMD/bilinear work, only use `Isaac-Imitation-G1-Latent-v0`.
 Vanilla G1 is still useful for mapper/debug checks, but not as the current

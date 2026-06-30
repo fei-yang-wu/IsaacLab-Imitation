@@ -65,7 +65,7 @@ smoke-ipmd = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_D
 hl-skill-pipeline = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_hl_skill_pipeline.py"
 
 [feature.lerobot.pypi-dependencies]
-datasets = "*"
+datasets = ">=4.8.5,<5"
 
 [feature.static.dependencies]
 python = "3.11.*"
