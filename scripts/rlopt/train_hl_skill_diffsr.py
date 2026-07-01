@@ -213,7 +213,6 @@ parser.add_argument(
     help="Ridge coefficient for eval-only window probes.",
 )
 parser.add_argument(
-<<<<<<< HEAD
     "--cotrain_commander",
     action="store_true",
     default=False,
@@ -246,7 +245,8 @@ parser.add_argument(
     type=float,
     default=0.0,
     help="Per-dim Gaussian noise on the commander state input (M3 robustness).",
-=======
+)
+parser.add_argument(
     "--logger_backend",
     type=str,
     default="none",
@@ -283,7 +283,6 @@ parser.add_argument(
     default="online",
     choices=("online", "offline", "disabled"),
     help="W&B mode passed to wandb.init when --logger_backend=wandb.",
->>>>>>> c7aece4 (update: allow generation eval during training)
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
