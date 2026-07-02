@@ -72,6 +72,12 @@ LOGGER_PROJECT_NAME="${LOGGER_PROJECT_NAME:-G1-Imitation-LAFAN1-Language}"
 SKILL_LOGGER_BACKEND="${SKILL_LOGGER_BACKEND:-${LOGGER_BACKEND}}"
 SKILL_WANDB_MODE="${SKILL_WANDB_MODE:-${WANDB_MODE:-offline}}"
 RUN_M1_EVAL="${RUN_M1_EVAL:-1}"
+RUN_M3_EVAL="${RUN_M3_EVAL:-0}"
+M3_EVAL_MOTION_NAME="${M3_EVAL_MOTION_NAME:-dance1_subject1}"
+M3_EVAL_MAX_STEPS="${M3_EVAL_MAX_STEPS:-200}"
+M3_EVAL_METRIC_INTERVAL="${M3_EVAL_METRIC_INTERVAL:-5}"
+M3_EVAL_VIDEO="${M3_EVAL_VIDEO:-1}"
+M3_EVAL_VIDEO_LENGTH="${M3_EVAL_VIDEO_LENGTH:-${M3_EVAL_MAX_STEPS}}"
 SKIP_SKILL="${SKIP_SKILL:-0}"
 SKIP_LOW_LEVEL="${SKIP_LOW_LEVEL:-0}"
 STOP_AFTER_LOW_LEVEL="${STOP_AFTER_LOW_LEVEL:-0}"
@@ -98,10 +104,6 @@ if [[ ! -f "${MANIFEST_PATH}" ]]; then
     echo "[ERROR] LAFAN1 manifest not found: ${MANIFEST_PATH}" >&2
     exit 1
 fi
-if [[ ! -e "${DATASET_PATH}" ]]; then
-    echo "[ERROR] LAFAN1 dataset cache not found: ${DATASET_PATH}" >&2
-    exit 1
-fi
 if [[ ! -f "${LANGUAGE_EMBEDDINGS}" ]]; then
     echo "[ERROR] Language embedding table not found: ${LANGUAGE_EMBEDDINGS}" >&2
     echo "[HINT] Set LANGUAGE_EMBEDDINGS=/path/to/table.pt to use a different encoder." >&2
@@ -113,7 +115,7 @@ if [[ "${LOW_LEVEL_ALGO}" == "IPMD_BILINEAR" ]]; then
 fi
 
 MANIFEST_ABS="$(realpath "${MANIFEST_PATH}")"
-DATASET_ABS="$(realpath "${DATASET_PATH}")"
+DATASET_ABS="$(realpath -m "${DATASET_PATH}")"
 LANGUAGE_EMBEDDINGS_ABS="$(realpath "${LANGUAGE_EMBEDDINGS}")"
 RUN_ROOT_ABS="$(mkdir -p "${RUN_ROOT}" && realpath "${RUN_ROOT}")"
 COMMAND_LOG="${RUN_ROOT_ABS}/commands.sh"
@@ -419,6 +421,47 @@ if [[ "${RUN_M1_EVAL}" == "1" ]]; then
         "env.lafan1_manifest_path=${MANIFEST_ABS}" \
         "env.dataset_path=${DATASET_ABS}" \
         "env.refresh_zarr_dataset=false"
+fi
+
+if [[ "${RUN_M3_EVAL}" == "1" ]]; then
+    M3_EVAL_CMD=(
+        "${PYTHON_BIN}" scripts/rlopt/eval_skill_commander_closed_loop.py
+        --headless
+        --device "${DEVICE}"
+        --task "${TASK}"
+        --algorithm "${LOW_LEVEL_ALGO}"
+        --num_envs 1
+        --seed "${SEED}"
+        --checkpoint "${LOW_LEVEL_CHECKPOINT}"
+        --planner_checkpoint "${PLANNER_CHECKPOINT}"
+        --skill_checkpoint "${SKILL_CHECKPOINT}"
+        --language_embeddings "${LANGUAGE_EMBEDDINGS_ABS}"
+        --output_dir "${RUN_ROOT_ABS}/m3_eval_planner_language"
+        --metric_interval "${M3_EVAL_METRIC_INTERVAL}"
+        --flow_num_inference_steps "${PLANNER_FLOW_STEPS}"
+        --flow_inference_noise_std "${PLANNER_EVAL_FLOW_NOISE_STD}"
+    )
+    if [[ -n "${M3_EVAL_MOTION_NAME}" ]]; then
+        M3_EVAL_CMD+=(--motion_name "${M3_EVAL_MOTION_NAME}")
+    fi
+    if (( M3_EVAL_MAX_STEPS > 0 )); then
+        M3_EVAL_CMD+=(--max_steps "${M3_EVAL_MAX_STEPS}")
+    fi
+    if [[ "${M3_EVAL_VIDEO}" == "1" || "${M3_EVAL_VIDEO}" == "true" ]]; then
+        M3_EVAL_CMD+=(--video --video_length "${M3_EVAL_VIDEO_LENGTH}")
+    fi
+    M3_EVAL_CMD+=(
+        "agent.ipmd.command_source=skill_commander"
+        "agent.ipmd.skill_commander_checkpoint_path=${PLANNER_CHECKPOINT}"
+        "agent.ipmd.skill_commander_embeddings_path=${LANGUAGE_EMBEDDINGS_ABS}"
+        "agent.ipmd.skill_commander_flow_num_inference_steps=${PLANNER_FLOW_STEPS}"
+        "agent.ipmd.skill_commander_flow_inference_noise_std=${PLANNER_EVAL_FLOW_NOISE_STD}"
+        "agent.ipmd.skill_commander_use_achieved_state=true"
+        "agent.ipmd.hl_skill_checkpoint_path=${SKILL_CHECKPOINT}"
+        "agent.ipmd.hl_skill_finetune_enabled=false"
+        "${COMMON_LATENT_OVERRIDES[@]}"
+    )
+    run_cmd "${M3_EVAL_CMD[@]}"
 fi
 
 if [[ "${SKIP_ROLLOUT_FINETUNE}" == "1" ]]; then
