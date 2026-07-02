@@ -155,6 +155,40 @@ parser.add_argument(
     help="Save achieved-state planner inputs and target z tensors for finetuning.",
 )
 parser.add_argument(
+    "--rollout_sample_chunk_rows",
+    type=int,
+    default=8192,
+    help=(
+        "Rows per rollout-training sample chunk. Set <=0 for legacy "
+        "one-file-per-step sample_step output."
+    ),
+)
+parser.add_argument(
+    "--leakage_audit",
+    action="store_true",
+    default=False,
+    help=(
+        "Log actor input keys/tensor summaries and actual SkillCommander generator "
+        "inputs to leakage_audit.jsonl."
+    ),
+)
+parser.add_argument(
+    "--leakage_audit_interval",
+    type=int,
+    default=1,
+    help="Write leakage-audit rows every N simulation steps.",
+)
+parser.add_argument(
+    "--pure_m3_audit",
+    action="store_true",
+    default=False,
+    help=(
+        "Best-effort deployment audit: require SkillCommander achieved-state M3, "
+        "disable reference-based scoring/sample export, and log only live planner/"
+        "policy data. Requires --max_steps > 0."
+    ),
+)
+parser.add_argument(
     "--flow_num_inference_steps",
     type=int,
     default=None,
@@ -194,6 +228,8 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
+if args_cli.pure_m3_audit:
+    args_cli.leakage_audit = True
 if args_cli.video:
     args_cli.enable_cameras = True
 
@@ -301,6 +337,292 @@ def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _key_to_str(key: Any) -> str:
+    if isinstance(key, tuple | list):
+        return "/".join(str(part) for part in key)
+    return str(key)
+
+
+def _policy_input_keys_from_agent(agent: Any) -> list[Any]:
+    keys = getattr(agent, "_policy_obs_keys", None)
+    if keys:
+        return list(keys)
+    config = getattr(agent, "config", None)
+    policy_cfg = getattr(config, "policy", None)
+    get_input_keys = getattr(policy_cfg, "get_input_keys", None)
+    if callable(get_input_keys):
+        return list(get_input_keys())
+    policy_operator = getattr(agent, "_policy_operator", None)
+    in_keys = getattr(policy_operator, "in_keys", None)
+    return list(in_keys) if in_keys is not None else []
+
+
+def _forbidden_policy_input_keys(keys: list[Any]) -> list[str]:
+    forbidden: list[str] = []
+    for key in keys:
+        text = _key_to_str(key).lower()
+        if (
+            "expert" in text
+            or "reference" in text
+            or text.startswith("critic/")
+            or text.startswith("reward_input/")
+        ):
+            forbidden.append(_key_to_str(key))
+    return forbidden
+
+
+def _tensor_summary(value: Tensor, *, max_values: int = 8) -> dict[str, Any]:
+    detached = value.detach()
+    flat = detached.reshape(-1)
+    summary: dict[str, Any] = {
+        "shape": [int(dim) for dim in detached.shape],
+        "dtype": str(detached.dtype),
+        "numel": int(flat.numel()),
+    }
+    if flat.numel() == 0:
+        summary["sample"] = []
+        return summary
+
+    sample = flat[: int(max_values)].detach().cpu()
+    if torch.is_floating_point(sample) or torch.is_complex(sample):
+        summary["sample"] = [float(item) for item in sample.real.tolist()]
+    else:
+        summary["sample"] = [int(item) for item in sample.tolist()]
+
+    stats = flat.to(dtype=torch.float32)
+    finite_mask = torch.isfinite(stats)
+    summary["nonfinite_count"] = int((~finite_mask).sum().detach().cpu().item())
+    if bool(finite_mask.any().detach().cpu().item()):
+        finite = stats[finite_mask]
+        summary.update(
+            {
+                "mean": float(finite.mean().detach().cpu().item()),
+                "std": float(finite.std(unbiased=False).detach().cpu().item())
+                if finite.numel() > 1
+                else 0.0,
+                "rms": float(finite.pow(2).mean().sqrt().detach().cpu().item()),
+                "min": float(finite.min().detach().cpu().item()),
+                "max": float(finite.max().detach().cpu().item()),
+                "max_abs": float(finite.abs().max().detach().cpu().item()),
+            }
+        )
+    return summary
+
+
+def _summarize_td_keys(td: TensorDictBase, keys: list[Any]) -> dict[str, Any]:
+    summaries: dict[str, Any] = {}
+    for key in keys:
+        value = _get_optional(td, key)
+        summaries[_key_to_str(key)] = (
+            {"missing": True} if value is None else _tensor_summary(value)
+        )
+    return summaries
+
+
+def _agent_ipmd_cfg(agent_cfg: Any) -> dict[str, Any]:
+    ipmd_cfg = getattr(agent_cfg, "ipmd", None)
+    if ipmd_cfg is None:
+        return {}
+    keys = (
+        "use_latent_command",
+        "latent_key",
+        "latent_dim",
+        "command_source",
+        "skill_commander_checkpoint_path",
+        "skill_commander_embeddings_path",
+        "skill_commander_use_achieved_state",
+        "hl_skill_command_mode",
+        "latent_steps_min",
+        "latent_steps_max",
+    )
+    return {key: getattr(ipmd_cfg, key, None) for key in keys}
+
+
+def _sampler_audit_cfg(sampler: Any) -> dict[str, Any]:
+    if sampler is None:
+        return {}
+    keys = (
+        "use_achieved_state",
+        "condition_on_language",
+        "state_history_steps",
+        "planner_state_dim",
+        "state_dim",
+        "skill_z_dim",
+        "latent_dim",
+        "command_mode",
+        "phase_dim",
+        "finetune_enabled",
+    )
+    return {
+        "class": sampler.__class__.__name__,
+        **{key: getattr(sampler, key, None) for key in keys},
+    }
+
+
+def _maybe_resolve_path(value: Any) -> str:
+    text = "" if value is None else str(value).strip()
+    if not text:
+        return ""
+    try:
+        return str(Path(text).expanduser().resolve())
+    except Exception:
+        return text
+
+
+class _LeakageAuditor:
+    def __init__(
+        self,
+        *,
+        path: Path,
+        policy_input_keys: list[Any],
+        sampler: Any,
+        agent_cfg: Any,
+        metric_planner_checkpoint_path: Path,
+        pure_m3: bool,
+    ) -> None:
+        self.path = path
+        self.policy_input_keys = list(policy_input_keys)
+        self.sampler = sampler
+        self.current_step: int | None = None
+        self._generator_call_count = 0
+        self._hook_handle = None
+        generator = getattr(sampler, "generator", None)
+        if isinstance(generator, torch.nn.Module):
+            self._hook_handle = generator.register_forward_pre_hook(
+                self._record_generator_call
+            )
+
+        ipmd_cfg = _agent_ipmd_cfg(agent_cfg)
+        actor_planner_path = _maybe_resolve_path(
+            ipmd_cfg.get("skill_commander_checkpoint_path")
+        )
+        metric_planner_path = str(metric_planner_checkpoint_path)
+        forbidden = _forbidden_policy_input_keys(self.policy_input_keys)
+        row = {
+            "event": "audit_start",
+            "pure_m3_audit": bool(pure_m3),
+            "policy_input_keys": [_key_to_str(key) for key in self.policy_input_keys],
+            "forbidden_policy_input_keys": forbidden,
+            "agent_ipmd": {
+                key: _key_to_str(value) if isinstance(value, tuple | list) else value
+                for key, value in ipmd_cfg.items()
+            },
+            "sampler": _sampler_audit_cfg(sampler),
+            "actor_planner_checkpoint": actor_planner_path,
+            "metric_side_planner_checkpoint": metric_planner_path,
+            "planner_checkpoint_paths_match": (
+                bool(actor_planner_path) and actor_planner_path == metric_planner_path
+            ),
+            "notes": [
+                "policy_input summaries are logged after latent injection",
+                "planner_generator_call rows are captured from the live actor-side sampler",
+                "future_window/target are not generator inputs",
+            ],
+        }
+        _write_jsonl(self.path, row)
+
+    def close(self) -> None:
+        if self._hook_handle is not None:
+            self._hook_handle.remove()
+            self._hook_handle = None
+
+    def _record_generator_call(self, module: torch.nn.Module, inputs: tuple[Any, ...]):
+        del module
+        self._generator_call_count += 1
+        planner_state = inputs[0] if len(inputs) >= 1 else None
+        language = inputs[1] if len(inputs) >= 2 else None
+        row: dict[str, Any] = {
+            "event": "planner_generator_call",
+            "step": self.current_step,
+            "call_index": int(self._generator_call_count),
+        }
+        if isinstance(planner_state, Tensor):
+            row["planner_state"] = _tensor_summary(planner_state)
+        if isinstance(language, Tensor):
+            row["language"] = _tensor_summary(language)
+        _write_jsonl(self.path, row)
+
+    def record_policy_step(
+        self,
+        *,
+        step: int,
+        td: TensorDictBase,
+        action: Tensor | None,
+        published_latent: Tensor | None,
+    ) -> None:
+        row: dict[str, Any] = {
+            "event": "policy_step",
+            "step": int(step),
+            "td_batch_size": [int(dim) for dim in td.batch_size],
+            "policy_inputs": _summarize_td_keys(td, self.policy_input_keys),
+            "sampler": {},
+        }
+        if isinstance(action, Tensor):
+            row["action"] = _tensor_summary(action)
+        if isinstance(published_latent, Tensor):
+            row["published_latent_command"] = _tensor_summary(published_latent)
+        latent_steps = getattr(self.sampler, "_latent_steps", None)
+        if isinstance(latent_steps, Tensor):
+            row["sampler"]["latent_steps_remaining"] = _tensor_summary(latent_steps)
+        command_codes = getattr(self.sampler, "_codes", None)
+        if isinstance(command_codes, Tensor):
+            row["sampler"]["command_codes"] = _tensor_summary(command_codes)
+        _write_jsonl(self.path, row)
+
+
+def _validate_m3_leakage_audit(
+    *,
+    agent_cfg: Any,
+    agent: Any,
+    sampler: Any,
+    policy_input_keys: list[Any],
+    pure_m3: bool,
+) -> None:
+    ipmd_cfg = getattr(agent_cfg, "ipmd", None)
+    if ipmd_cfg is None:
+        raise ValueError("--leakage_audit requires an IPMD-style agent config.")
+    if not bool(getattr(ipmd_cfg, "use_latent_command", False)):
+        raise ValueError("--leakage_audit M3 expects ipmd.use_latent_command=True.")
+    command_source = str(getattr(ipmd_cfg, "command_source", "")).strip().lower()
+    if command_source != "skill_commander":
+        raise ValueError(
+            "--leakage_audit M3 expects agent.ipmd.command_source=skill_commander, "
+            f"got {command_source!r}."
+        )
+    if not bool(getattr(ipmd_cfg, "skill_commander_use_achieved_state", False)):
+        raise ValueError(
+            "--leakage_audit M3 expects "
+            "agent.ipmd.skill_commander_use_achieved_state=true."
+        )
+    if sampler is None or sampler.__class__.__name__ != "FrozenSkillCommanderSampler":
+        raise ValueError("Could not find the live FrozenSkillCommanderSampler.")
+    if not bool(getattr(sampler, "use_achieved_state", False)):
+        raise ValueError("Live SkillCommander sampler is not using achieved state.")
+    if bool(getattr(sampler, "finetune_enabled", False)):
+        raise ValueError(
+            "Leakage audit expects FrozenSkillCommander finetune disabled."
+        )
+    forbidden = _forbidden_policy_input_keys(policy_input_keys)
+    if forbidden:
+        raise ValueError(
+            "Policy input keys include expert/reference fields during M3 inference: "
+            f"{forbidden}."
+        )
+    latent_key = getattr(agent, "_latent_key", None)
+    if latent_key is not None and latent_key not in policy_input_keys:
+        raise ValueError(
+            "Policy input keys do not include the configured latent command key "
+            f"{latent_key!r}."
+        )
+    if pure_m3 and bool(getattr(sampler, "condition_on_language", False)):
+        raise ValueError(
+            "--pure_m3_audit cannot be reference-free with a language-conditioned "
+            "SkillCommander because rollout inference maps trajectory ranks/motion "
+            "names to language embeddings. Use a no-language checkpoint or regular "
+            "--leakage_audit."
+        )
 
 
 def _parameter_counts(module: torch.nn.Module) -> dict[str, int]:
@@ -669,13 +991,111 @@ def _diff_stats(prefix: str, lhs: Tensor, rhs: Tensor) -> dict[str, float]:
     }
 
 
+class _RolloutSampleWriter:
+    def __init__(self, output_dir: Path, *, chunk_rows: int) -> None:
+        self.output_dir = output_dir
+        self.chunk_rows = int(chunk_rows)
+        self.saved_files = 0
+        self.saved_rows = 0
+        self.saved_steps = 0
+        self._chunk_index = 0
+        self._buffered_rows = 0
+        self._buffers: dict[str, list[Tensor]] = {
+            "planner_state": [],
+            "expert_planner_state": [],
+            "lang": [],
+            "z_target": [],
+            "traj_rank": [],
+            "step": [],
+        }
+
+    def add(
+        self,
+        *,
+        step: int | None,
+        planner_state: Tensor,
+        expert_planner_state: Tensor,
+        lang: Tensor,
+        z_target: Tensor,
+        traj_rank: Tensor,
+    ) -> None:
+        row_count = int(planner_state.shape[0])
+        self.saved_steps += 1
+        self.saved_rows += row_count
+        if self.chunk_rows <= 0:
+            sample_step = 0 if step is None else int(step)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "step": None if step is None else int(step),
+                    "planner_state": planner_state.detach().cpu(),
+                    "expert_planner_state": expert_planner_state.detach().cpu(),
+                    "lang": lang.detach().cpu(),
+                    "z_target": z_target.detach().cpu(),
+                    "traj_rank": traj_rank.detach().cpu(),
+                },
+                self.output_dir / f"sample_step_{sample_step:06d}.pt",
+            )
+            self.saved_files += 1
+            return
+
+        rows = {
+            "planner_state": planner_state.detach().cpu().to(dtype=torch.float32),
+            "expert_planner_state": expert_planner_state.detach()
+            .cpu()
+            .to(dtype=torch.float32),
+            "lang": lang.detach().cpu().to(dtype=torch.float32),
+            "z_target": z_target.detach().cpu().to(dtype=torch.float32),
+            "traj_rank": traj_rank.detach().cpu().reshape(-1).to(dtype=torch.long),
+            "step": torch.full(
+                (row_count,),
+                -1 if step is None else int(step),
+                dtype=torch.long,
+            ),
+        }
+        for key, value in rows.items():
+            self._buffers[key].append(value.contiguous())
+        self._buffered_rows += row_count
+        self._flush_full_chunks()
+
+    def close(self) -> None:
+        self._flush(force=True)
+
+    def _flush_full_chunks(self) -> None:
+        while self._buffered_rows >= self.chunk_rows:
+            self._flush(force=False)
+
+    def _flush(self, *, force: bool) -> None:
+        if self._buffered_rows <= 0:
+            return
+        if not force and self._buffered_rows < self.chunk_rows:
+            return
+        concat = {key: torch.cat(values, dim=0) for key, values in self._buffers.items()}
+        rows_to_write = self._buffered_rows if force else self.chunk_rows
+        payload = {
+            key: value[:rows_to_write].contiguous() for key, value in concat.items()
+        }
+        tail = {
+            key: value[rows_to_write:].contiguous() for key, value in concat.items()
+        }
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(payload, self.output_dir / f"sample_chunk_{self._chunk_index:06d}.pt")
+        self.saved_files += 1
+        self._chunk_index += 1
+        for key, values in self._buffers.items():
+            values.clear()
+            if int(tail[key].shape[0]) > 0:
+                values.append(tail[key])
+        self._buffered_rows = int(tail["planner_state"].shape[0])
+
+
 @torch.no_grad()
 def _measure_commander(
     *,
     trainer: SkillCommanderTrainer,
     wrapped_env: IsaacLabWrapper,
     env_ids: Tensor,
-    sample_path: Path | None = None,
+    sample_writer: _RolloutSampleWriter | None = None,
     sample_step: int | None = None,
 ) -> dict[str, float]:
     horizon_steps = int(trainer.horizon_steps)
@@ -718,18 +1138,14 @@ def _measure_commander(
     z_m1 = trainer.generator(expert_planner_state, lang)
     z_m3 = trainer.generator(achieved_planner_state, lang)
 
-    if sample_path is not None:
-        sample_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "step": None if sample_step is None else int(sample_step),
-                "planner_state": achieved_planner_state.detach().cpu(),
-                "expert_planner_state": expert_planner_state.detach().cpu(),
-                "lang": lang.detach().cpu(),
-                "z_target": z_target.detach().cpu(),
-                "traj_rank": traj_rank.detach().cpu(),
-            },
-            sample_path,
+    if sample_writer is not None:
+        sample_writer.add(
+            step=sample_step,
+            planner_state=achieved_planner_state,
+            expert_planner_state=expert_planner_state,
+            lang=lang,
+            z_target=z_target,
+            traj_rank=traj_rank,
         )
 
     metrics = {
@@ -775,6 +1191,20 @@ def main(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     agent_cfg: Any,
 ) -> None:
+    if int(args_cli.metric_interval) <= 0:
+        raise ValueError("--metric_interval must be > 0.")
+    if int(args_cli.leakage_audit_interval) <= 0:
+        raise ValueError("--leakage_audit_interval must be > 0.")
+    if args_cli.pure_m3_audit:
+        if int(args_cli.max_steps) <= 0:
+            raise ValueError("--pure_m3_audit requires --max_steps > 0.")
+        if args_cli.save_rollout_training_samples:
+            raise ValueError(
+                "--pure_m3_audit cannot be combined with "
+                "--save_rollout_training_samples because sample export stores "
+                "expert target z labels."
+            )
+
     sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
     if callable(sync_input_keys):
         sync_input_keys()
@@ -851,6 +1281,9 @@ def main(
         "keep_early_terminations": bool(args_cli.keep_early_terminations),
         "continue_after_reset": bool(args_cli.continue_after_reset),
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),
+        "leakage_audit": bool(args_cli.leakage_audit),
+        "leakage_audit_interval": int(args_cli.leakage_audit_interval),
+        "pure_m3_audit": bool(args_cli.pure_m3_audit),
         "command": " ".join(sys.orig_argv),
     }
     (log_dir / "config.yaml").write_text(
@@ -864,8 +1297,10 @@ def main(
         raise NotImplementedError("DirectMARLEnv is not supported by this script.")
 
     raw_isaac_env = raw_gym_env.unwrapped
-    auto_steps = _auto_reference_steps(raw_isaac_env)
-    max_steps = int(args_cli.max_steps) if int(args_cli.max_steps) > 0 else auto_steps
+    auto_steps = 0 if args_cli.pure_m3_audit else _auto_reference_steps(raw_isaac_env)
+    max_steps = (
+        int(args_cli.max_steps) if int(args_cli.max_steps) > 0 else int(auto_steps)
+    )
     max_steps = max(1, max_steps)
     video_length = (
         int(args_cli.video_length) if int(args_cli.video_length) > 0 else max_steps
@@ -901,13 +1336,17 @@ def main(
     if not isinstance(raw_isaac_env, ImitationRLEnv):
         raise TypeError("Expected the unwrapped gym env to be an ImitationRLEnv.")
     base_env = raw_isaac_env
-    tracked_body_names = _resolve_existing_body_names(
-        base_env, list(G1_TRACKED_BODY_NAMES)
-    )
-    ee_body_names = _resolve_existing_body_names(
-        base_env,
-        list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
-    )
+    if args_cli.pure_m3_audit:
+        tracked_body_names: list[str] = []
+        ee_body_names: list[str] = []
+    else:
+        tracked_body_names = _resolve_existing_body_names(
+            base_env, list(G1_TRACKED_BODY_NAMES)
+        )
+        ee_body_names = _resolve_existing_body_names(
+            base_env,
+            list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
+        )
 
     planner_checkpoint = torch.load(
         planner_checkpoint_path,
@@ -915,10 +1354,18 @@ def main(
         weights_only=False,
     )
     trainer_config = _trainer_config_from_checkpoint(planner_checkpoint)
-    trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
-    trainer.generator.load_state_dict(planner_checkpoint["generator_state_dict"])
-    trainer.update = int(planner_checkpoint.get("update", 0))
-    trainer.generator.eval()
+    if args_cli.pure_m3_audit and bool(trainer_config.condition_on_language):
+        raise ValueError(
+            "--pure_m3_audit requires a no-language SkillCommander checkpoint; "
+            "language-conditioned checkpoints need trajectory rank/motion-name "
+            "metadata during rollout."
+        )
+    trainer: SkillCommanderTrainer | None = None
+    if not args_cli.pure_m3_audit:
+        trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
+        trainer.generator.load_state_dict(planner_checkpoint["generator_state_dict"])
+        trainer.update = int(planner_checkpoint.get("update", 0))
+        trainer.generator.eval()
 
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
@@ -926,6 +1373,35 @@ def main(
     agent.load_model(str(checkpoint_path))
     collector_policy = agent.collector_policy
     collector_policy.eval()
+    policy_input_keys = _policy_input_keys_from_agent(agent)
+    skill_commander_sampler = getattr(agent, "_hl_skill_command_sampler", None)
+    leakage_auditor: _LeakageAuditor | None = None
+    if args_cli.leakage_audit:
+        _validate_m3_leakage_audit(
+            agent_cfg=agent_cfg,
+            agent=agent,
+            sampler=skill_commander_sampler,
+            policy_input_keys=policy_input_keys,
+            pure_m3=bool(args_cli.pure_m3_audit),
+        )
+        leakage_auditor = _LeakageAuditor(
+            path=log_dir / "leakage_audit.jsonl",
+            policy_input_keys=policy_input_keys,
+            sampler=skill_commander_sampler,
+            agent_cfg=agent_cfg,
+            metric_planner_checkpoint_path=planner_checkpoint_path,
+            pure_m3=bool(args_cli.pure_m3_audit),
+        )
+        print(f"[INFO] Writing leakage audit rows to: {leakage_auditor.path}")
+        actor_planner = _maybe_resolve_path(
+            _agent_ipmd_cfg(agent_cfg).get("skill_commander_checkpoint_path")
+        )
+        if actor_planner and actor_planner != str(planner_checkpoint_path):
+            print(
+                "[WARNING] Actor-side SkillCommander checkpoint differs from "
+                f"--planner_checkpoint: actor={actor_planner} "
+                f"metric={planner_checkpoint_path}"
+            )
 
     dt = getattr(env, "step_dt", None)
     env_ids = torch.arange(
@@ -934,15 +1410,32 @@ def main(
         dtype=torch.long,
     )
     td = env.reset()
-    start_metadata = _trajectory_metadata(raw_isaac_env)
+    start_metadata = (
+        {"reference_metadata": "disabled_by_pure_m3_audit"}
+        if args_cli.pure_m3_audit
+        else _trajectory_metadata(raw_isaac_env)
+    )
     language_mode = (
-        "motion-name embedding" if bool(trainer.condition_on_language) else "none"
+        "motion-name embedding"
+        if bool(
+            getattr(
+                trainer if trainer is not None else skill_commander_sampler,
+                "condition_on_language",
+                False,
+            )
+        )
+        else "none"
     )
     print(
         "[INFO] Conditioning: "
-        f"language={language_mode} trajectories={start_metadata['motion_names']}"
+        f"language={language_mode} trajectories={start_metadata.get('motion_names', [])}"
     )
-    print(f"[INFO] Rollout steps: {max_steps} (auto_reference_steps={auto_steps})")
+    if args_cli.pure_m3_audit:
+        print(
+            f"[INFO] Rollout steps: {max_steps} (pure_m3_audit, no auto reference end)"
+        )
+    else:
+        print(f"[INFO] Rollout steps: {max_steps} (auto_reference_steps={auto_steps})")
 
     num_envs = int(env_cfg.scene.num_envs)
     active = torch.ones(num_envs, dtype=torch.bool)
@@ -954,129 +1447,162 @@ def main(
     valid_transition_count = 0
     rows: list[dict[str, Any]] = []
     samples_dir = log_dir / "rollout_training_samples"
+    sample_writer = (
+        _RolloutSampleWriter(
+            samples_dir, chunk_rows=int(args_cli.rollout_sample_chunk_rows)
+        )
+        if args_cli.save_rollout_training_samples
+        else None
+    )
     saved_sample_files = 0
     saved_sample_rows = 0
+    saved_sample_steps = 0
     timestep = 0
     stop_reason = "max_steps"
-    if int(args_cli.metric_interval) <= 0:
-        raise ValueError("--metric_interval must be > 0.")
-    while simulation_app.is_running() and timestep < max_steps:
-        start_time = time.time()
-        with (
-            torch.inference_mode(),
-            set_exploration_type(InteractionType.DETERMINISTIC),
-        ):
-            step_active = active.clone()
-            should_measure = timestep % int(args_cli.metric_interval) == 0
-            metric_row: dict[str, Any] = {}
-            td = collector_policy(td)
-            action = td.get("action", None)
-            if isinstance(action, Tensor):
-                action_2d = action.detach().reshape(num_envs, -1).cpu()
-                _accumulate_metric(
-                    rollout_metric_stats,
-                    "action_l2",
-                    torch.linalg.vector_norm(action_2d, dim=-1),
-                    step_active,
+    try:
+        while simulation_app.is_running() and timestep < max_steps:
+            start_time = time.time()
+            with (
+                torch.inference_mode(),
+                set_exploration_type(InteractionType.DETERMINISTIC),
+            ):
+                step_active = active.clone()
+                should_measure = (
+                    not args_cli.pure_m3_audit
+                    and timestep % int(args_cli.metric_interval) == 0
                 )
-                if previous_action is not None:
-                    action_delta_l2 = torch.linalg.vector_norm(
-                        action_2d - previous_action, dim=-1
-                    )
+                should_audit = (
+                    leakage_auditor is not None
+                    and timestep % int(args_cli.leakage_audit_interval) == 0
+                )
+                metric_row: dict[str, Any] = {}
+                if leakage_auditor is not None:
+                    leakage_auditor.current_step = int(timestep)
+                td = collector_policy(td)
+                action = td.get("action", None)
+                if isinstance(action, Tensor):
+                    action_2d = action.detach().reshape(num_envs, -1).cpu()
                     _accumulate_metric(
                         rollout_metric_stats,
-                        "action_delta_l2",
-                        action_delta_l2,
+                        "action_l2",
+                        torch.linalg.vector_norm(action_2d, dim=-1),
                         step_active,
                     )
-                previous_action = action_2d
-            if should_measure:
-                # Measure after policy injection so published_z_* reflects the
-                # command actually sent to System 0 on this step, while the env
-                # state is still the pre-step state used to form the command.
-                metric_row.update(
-                    _measure_commander(
-                        trainer=trainer,
-                        wrapped_env=wrapped_env,
-                        env_ids=env_ids,
-                        sample_path=(
-                            samples_dir / f"sample_step_{timestep:06d}.pt"
-                            if args_cli.save_rollout_training_samples
-                            else None
-                        ),
-                        sample_step=timestep,
+                    if previous_action is not None:
+                        action_delta_l2 = torch.linalg.vector_norm(
+                            action_2d - previous_action, dim=-1
+                        )
+                        _accumulate_metric(
+                            rollout_metric_stats,
+                            "action_delta_l2",
+                            action_delta_l2,
+                            step_active,
+                        )
+                    previous_action = action_2d
+                if should_audit:
+                    published = wrapped_env.get_agent_latent_command(env_ids=env_ids)
+                    assert leakage_auditor is not None
+                    leakage_auditor.record_policy_step(
+                        step=int(timestep),
+                        td=td,
+                        action=action if isinstance(action, Tensor) else None,
+                        published_latent=published,
                     )
+                if should_measure:
+                    if trainer is None:
+                        raise RuntimeError("Metric-side trainer is unavailable.")
+                    # Measure after policy injection so published_z_* reflects the
+                    # command actually sent to System 0 on this step, while the env
+                    # state is still the pre-step state used to form the command.
+                    metric_row.update(
+                        _measure_commander(
+                            trainer=trainer,
+                            wrapped_env=wrapped_env,
+                            env_ids=env_ids,
+                            sample_writer=sample_writer,
+                            sample_step=timestep,
+                        )
+                    )
+                    row = {
+                        "step": int(timestep),
+                        **_trajectory_metadata(raw_isaac_env),
+                        **metric_row,
+                    }
+                    _write_jsonl(metrics_path, row)
+                    rows.append(row)
+                stepped_td = env.step(td)
+                rewards = _optional_flat_tensor(
+                    stepped_td, ("next", "reward"), num_envs=num_envs, default=0.0
                 )
-                row = {
-                    "step": int(timestep),
-                    **_trajectory_metadata(raw_isaac_env),
-                    **metric_row,
-                }
-                _write_jsonl(metrics_path, row)
-                rows.append(row)
-                if args_cli.save_rollout_training_samples:
-                    saved_sample_files += 1
-                    saved_sample_rows += int(env_ids.numel())
-            stepped_td = env.step(td)
-            rewards = _optional_flat_tensor(
-                stepped_td, ("next", "reward"), num_envs=num_envs, default=0.0
-            )
-            dones = _optional_flat_tensor(
-                stepped_td, ("next", "done"), num_envs=num_envs, default=False
-            ).bool()
-            terminateds = _optional_flat_tensor(
-                stepped_td,
-                ("next", "terminated"),
-                num_envs=num_envs,
-                default=False,
-            ).bool()
-            truncateds = _optional_flat_tensor(
-                stepped_td,
-                ("next", "truncated"),
-                num_envs=num_envs,
-                default=False,
-            ).bool()
-            done_any = dones | terminateds | truncateds
-            return_sum += rewards.float() * step_active.float()
-            survival_steps += step_active.float()
-            done_events += (done_any & step_active).float()
-            metric_mask = (
-                step_active
-                if args_cli.continue_after_reset
-                else step_active & ~done_any
-            )
-            valid_transition_count += int(metric_mask.sum().item())
-            for metric_name, values in _tracking_metrics(
-                base_env,
-                tracked_body_names=tracked_body_names,
-                ee_body_names=ee_body_names,
-            ).items():
-                _accumulate_metric(
-                    rollout_metric_stats, metric_name, values.cpu(), metric_mask
+                dones = _optional_flat_tensor(
+                    stepped_td, ("next", "done"), num_envs=num_envs, default=False
+                ).bool()
+                terminateds = _optional_flat_tensor(
+                    stepped_td,
+                    ("next", "terminated"),
+                    num_envs=num_envs,
+                    default=False,
+                ).bool()
+                truncateds = _optional_flat_tensor(
+                    stepped_td,
+                    ("next", "truncated"),
+                    num_envs=num_envs,
+                    default=False,
+                ).bool()
+                done_any = dones | terminateds | truncateds
+                return_sum += rewards.float() * step_active.float()
+                survival_steps += step_active.float()
+                done_events += (done_any & step_active).float()
+                metric_mask = (
+                    step_active
+                    if args_cli.continue_after_reset
+                    else step_active & ~done_any
                 )
-            if not args_cli.continue_after_reset:
-                active &= ~done_any
-            done = _any_done(stepped_td)
-            td = step_mdp(
-                stepped_td,
-                exclude_reward=True,
-                exclude_done=False,
-                exclude_action=True,
-            )
+                valid_transition_count += int(metric_mask.sum().item())
+                if not args_cli.pure_m3_audit:
+                    for metric_name, values in _tracking_metrics(
+                        base_env,
+                        tracked_body_names=tracked_body_names,
+                        ee_body_names=ee_body_names,
+                    ).items():
+                        _accumulate_metric(
+                            rollout_metric_stats, metric_name, values.cpu(), metric_mask
+                        )
+                if not args_cli.continue_after_reset:
+                    active &= ~done_any
+                done = _any_done(stepped_td)
+                td = step_mdp(
+                    stepped_td,
+                    exclude_reward=True,
+                    exclude_done=False,
+                    exclude_action=True,
+                )
 
-        timestep += 1
-        if done and not args_cli.continue_after_reset:
-            stop_reason = "env_done"
-            print(f"[INFO] Stopping at step {timestep}: env emitted done.")
-            break
-        if args_cli.real_time and dt is not None:
-            sleep_time = float(dt) - (time.time() - start_time)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            timestep += 1
+            if done and not args_cli.continue_after_reset:
+                stop_reason = "env_done"
+                print(f"[INFO] Stopping at step {timestep}: env emitted done.")
+                break
+            if args_cli.real_time and dt is not None:
+                sleep_time = float(dt) - (time.time() - start_time)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+    finally:
+        if sample_writer is not None:
+            sample_writer.close()
+            saved_sample_files = int(sample_writer.saved_files)
+            saved_sample_rows = int(sample_writer.saved_rows)
+            saved_sample_steps = int(sample_writer.saved_steps)
+        if leakage_auditor is not None:
+            leakage_auditor.close()
     if not simulation_app.is_running():
         stop_reason = "simulation_app_stopped"
 
-    final_metadata = _trajectory_metadata(raw_isaac_env)
+    final_metadata = (
+        {"reference_metadata": "disabled_by_pure_m3_audit"}
+        if args_cli.pure_m3_audit
+        else _trajectory_metadata(raw_isaac_env)
+    )
     active_mask = survival_steps > 0
     return_mean, return_std = _tensor_mean_std(return_sum, active_mask)
     survival_mean, survival_std = _tensor_mean_std(survival_steps, active_mask)
@@ -1098,9 +1624,24 @@ def main(
             "std": 0.0,
             "count": int(len(rows)),
         }
+    planner_generator = (
+        trainer.generator
+        if trainer is not None
+        else getattr(skill_commander_sampler, "generator", None)
+    )
+    if not isinstance(planner_generator, torch.nn.Module):
+        raise RuntimeError("SkillCommander generator is unavailable for summary.")
+    planner_target_dim = int(
+        trainer.z_dim
+        if trainer is not None
+        else getattr(skill_commander_sampler, "skill_z_dim")
+    )
+    planner_update = int(
+        trainer.update if trainer is not None else planner_checkpoint.get("update", 0)
+    )
     planner_metadata = _skill_commander_planner_metadata(
         planner_checkpoint,
-        generator=trainer.generator,
+        generator=planner_generator,
         trainer_config=trainer_config,
     )
     summary = {
@@ -1112,7 +1653,7 @@ def main(
             "checkpoint": str(checkpoint_path),
             "planner_checkpoint": str(planner_checkpoint_path),
             "interface": "latent_skill",
-            "planner_target_dim": int(trainer.z_dim),
+            "planner_target_dim": int(planner_target_dim),
             "planner_metadata": planner_metadata,
             "num_envs": int(num_envs),
             "seed": int(agent_cfg.seed),
@@ -1124,8 +1665,8 @@ def main(
         "output_dir": str(log_dir),
         "video_dir": str(log_dir / "videos" / "play") if args_cli.video else None,
         "planner_config": trainer_config.to_dict(),
-        "planner_update": int(trainer.update),
-        "planner_target_dim": int(trainer.z_dim),
+        "planner_update": int(planner_update),
+        "planner_target_dim": int(planner_target_dim),
         "auto_reference_steps": int(auto_steps),
         "max_steps": int(max_steps),
         "steps_run": int(timestep),
@@ -1136,8 +1677,18 @@ def main(
         "metric_means": metric_means,
         "num_metric_rows": len(rows),
         "saved_rows": int(saved_sample_rows),
-        "saved_steps": int(saved_sample_files),
+        "saved_steps": int(saved_sample_steps),
         "sample_file_count": int(saved_sample_files),
+        "leakage_audit_path": str(log_dir / "leakage_audit.jsonl")
+        if args_cli.leakage_audit
+        else None,
+        "policy_input_keys": [_key_to_str(key) for key in policy_input_keys],
+        "forbidden_policy_input_keys": _forbidden_policy_input_keys(policy_input_keys),
+        "agent_ipmd": {
+            key: _key_to_str(value) if isinstance(value, tuple | list) else value
+            for key, value in _agent_ipmd_cfg(agent_cfg).items()
+        },
+        "skill_commander_sampler": _sampler_audit_cfg(skill_commander_sampler),
     }
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))

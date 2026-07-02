@@ -315,7 +315,7 @@ from isaaclab_imitation.envs.rlopt import IsaacLabWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import SkillCommanderConfig, SkillCommanderTrainer
 
-AGENT_ENTRY_POINT = "rlopt_ipmd_bilinear_cfg_entry_point"
+AGENT_ENTRY_POINT = "rlopt_ipmd_cfg_entry_point"
 
 
 def _write_jsonl(path: Path, row: dict[str, Any]) -> None:

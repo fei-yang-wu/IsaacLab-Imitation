@@ -23,6 +23,9 @@ LOW_LEVEL_ALGO="${LOW_LEVEL_ALGO:-IPMD_BILINEAR}"
 DEVICE="${DEVICE:-cuda:0}"
 SEED="${SEED:-0}"
 NUM_ENVS="${NUM_ENVS:-4096}"
+SKILL_NUM_ENVS="${SKILL_NUM_ENVS:-16}"
+PLANNER_NUM_ENVS="${PLANNER_NUM_ENVS:-16}"
+LOW_LEVEL_NUM_ENVS="${LOW_LEVEL_NUM_ENVS:-${NUM_ENVS}}"
 MANIFEST_PATH="${MANIFEST_PATH:-data/lafan1/manifests/g1_lafan1_manifest.json}"
 DATASET_PATH="${DATASET_PATH:-data/lafan1/g1_hl_diffsr}"
 TRAJECTORY_NAME="${TRAJECTORY_NAME:-lafan1_full}"
@@ -34,10 +37,17 @@ STATE_HISTORY_STEPS="${STATE_HISTORY_STEPS:-9}"
 Z_DIM="${Z_DIM:-256}"
 DIFFSR_FEATURE_DIM="${DIFFSR_FEATURE_DIM:-128}"
 DIFFSR_EMBED_DIM="${DIFFSR_EMBED_DIM:-512}"
+DIFFSR_PHI_PARAMETERIZATION="${DIFFSR_PHI_PARAMETERIZATION:-concat}"
 SKILL_UPDATES="${SKILL_UPDATES:-5000}"
 SKILL_BATCH_SIZE="${SKILL_BATCH_SIZE:-8192}"
+SKILL_TRAIN_SPLIT="${SKILL_TRAIN_SPLIT:-all}"
+SKILL_EVAL_SPLIT="${SKILL_EVAL_SPLIT:-all}"
+SKILL_EVAL_TRAJECTORY_FRACTION="${SKILL_EVAL_TRAJECTORY_FRACTION:-0.5}"
 PLANNER_UPDATES="${PLANNER_UPDATES:-5000}"
 PLANNER_BATCH_SIZE="${PLANNER_BATCH_SIZE:-8192}"
+PLANNER_TRAIN_SPLIT="${PLANNER_TRAIN_SPLIT:-all}"
+PLANNER_EVAL_SPLIT="${PLANNER_EVAL_SPLIT:-all}"
+PLANNER_EVAL_TRAJECTORY_FRACTION="${PLANNER_EVAL_TRAJECTORY_FRACTION:-0.5}"
 PLANNER_TYPE="${PLANNER_TYPE:-flow_matching}"
 PLANNER_FLOW_STEPS="${PLANNER_FLOW_STEPS:-16}"
 PLANNER_FLOW_TIME_DIM="${PLANNER_FLOW_TIME_DIM:-64}"
@@ -121,12 +131,17 @@ horizon_steps=${HORIZON_STEPS}
 planner_state_history_steps=${STATE_HISTORY_STEPS}
 planner_condition_window_states=$((STATE_HISTORY_STEPS + 1))
 latent_skill_action_dim=${Z_DIM}
+diffsr_phi_parameterization=${DIFFSR_PHI_PARAMETERIZATION}
 num_envs=${NUM_ENVS}
+skill_num_envs=${SKILL_NUM_ENVS}
+planner_num_envs=${PLANNER_NUM_ENVS}
+low_level_num_envs=${LOW_LEVEL_NUM_ENVS}
 seed=${SEED}
 EOF
 
 log "LAFAN1 no-language pipeline"
 log "trajectory=${TRAJECTORY_NAME} manifest=${MANIFEST_ABS} dataset=${DATASET_ABS} language=${LANGUAGE_CONDITION}"
+log "skill: diffsr_phi_parameterization=${DIFFSR_PHI_PARAMETERIZATION}"
 log "planner condition: $((STATE_HISTORY_STEPS + 1)) state frames, latent action z_dim=${Z_DIM}, planner_type=${PLANNER_TYPE}"
 log "run root: ${RUN_ROOT_ABS}"
 
@@ -143,7 +158,7 @@ else
         --headless \
         --device "${DEVICE}" \
         --task "${TASK}" \
-        --num_envs "${NUM_ENVS}" \
+        --num_envs "${SKILL_NUM_ENVS}" \
         --seed "${SEED}" \
         --output_dir "${SKILL_DIR}" \
         --horizon_steps "${HORIZON_STEPS}" \
@@ -151,14 +166,15 @@ else
         --z_dim "${Z_DIM}" \
         --diffsr_feature_dim "${DIFFSR_FEATURE_DIM}" \
         --diffsr_embed_dim "${DIFFSR_EMBED_DIM}" \
+        --diffsr_phi_parameterization "${DIFFSR_PHI_PARAMETERIZATION}" \
         --batch_size "${SKILL_BATCH_SIZE}" \
         --num_updates "${SKILL_UPDATES}" \
         --log_interval 100 \
         --eval_batches 4 \
         --eval_batch_size "${SKILL_BATCH_SIZE}" \
-        --train_split all \
-        --eval_split all \
-        --eval_trajectory_fraction 0.5 \
+        --train_split "${SKILL_TRAIN_SPLIT}" \
+        --eval_split "${SKILL_EVAL_SPLIT}" \
+        --eval_trajectory_fraction "${SKILL_EVAL_TRAJECTORY_FRACTION}" \
         --trajectory_split_seed "${SEED}" \
         --reconstruction_eval \
         --window_probe_eval \
@@ -187,7 +203,7 @@ else
         --headless \
         --device "${DEVICE}" \
         --task "${TASK}" \
-        --num_envs "${NUM_ENVS}" \
+        --num_envs "${PLANNER_NUM_ENVS}" \
         --seed "${SEED}" \
         --output_dir "${PLANNER_DIR}" \
         --skill_checkpoint "${SKILL_CHECKPOINT}" \
@@ -204,9 +220,9 @@ else
         --log_interval 100 \
         --eval_batches 4 \
         --eval_batch_size "${PLANNER_BATCH_SIZE}" \
-        --train_split all \
-        --eval_split all \
-        --eval_trajectory_fraction 0.5 \
+        --train_split "${PLANNER_TRAIN_SPLIT}" \
+        --eval_split "${PLANNER_EVAL_SPLIT}" \
+        --eval_trajectory_fraction "${PLANNER_EVAL_TRAJECTORY_FRACTION}" \
         --trajectory_split_seed "${SEED}" \
         "env.lafan1_manifest_path=${MANIFEST_ABS}" \
         "env.dataset_path=${DATASET_ABS}" \
@@ -223,7 +239,7 @@ if [[ "${RUN_M1_EVAL}" == "1" ]]; then
         --headless \
         --device "${DEVICE}" \
         --task "${TASK}" \
-        --num_envs "${NUM_ENVS}" \
+        --num_envs "${PLANNER_NUM_ENVS}" \
         --seed "${SEED}" \
         --checkpoint "${PLANNER_CHECKPOINT}" \
         --output_dir "${RUN_ROOT_ABS}/m1_eval_planner_no_language" \
@@ -279,7 +295,7 @@ else
         --video_length "${LOW_LEVEL_VIDEO_LENGTH}" \
         --video_interval "${LOW_LEVEL_VIDEO_INTERVAL}" \
         --device "${DEVICE}" \
-        --num_envs "${NUM_ENVS}" \
+        --num_envs "${LOW_LEVEL_NUM_ENVS}" \
         --task "${TASK}" \
         --algo "${LOW_LEVEL_ALGO}" \
         --seed "${SEED}" \

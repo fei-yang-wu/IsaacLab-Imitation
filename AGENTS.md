@@ -120,6 +120,11 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 - Preserve Isaac Lab / Hydra CLI patterns already used in `scripts/`.
 - Do not assume IDE-only workflows; command-line verification is the default here.
 - Avoid committing generated artifacts, caches, checkpoints, or log directories.
+- When the user asks to train from scratch, start new training for every
+  trainable component in the workflow. Reuse only large external pretrained or
+  foundation models unless the user explicitly asks to retrain them too.
+- By default, training and evaluation runs should log to W&B and pass `--video`
+  when the entrypoint supports it, unless the user requests otherwise.
 - For IPMD/Bilinear representation-learning work, use the latent task surface
   `Isaac-Imitation-G1-Latent-v0` unless the user explicitly requests vanilla.
   Do not submit `IPMD_BILINEAR` comparison jobs on `Isaac-Imitation-G1-v0`; the

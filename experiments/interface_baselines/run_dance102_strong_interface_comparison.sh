@@ -48,6 +48,9 @@ WEIGHT_DECAY="${WEIGHT_DECAY:-1.0e-4}"
 FLOW_STEPS="${FLOW_STEPS:-16}"
 TRAIN_ENDPOINT_STEPS="${TRAIN_ENDPOINT_STEPS:-4}"
 FLOW_NOISE_STD="${FLOW_NOISE_STD:-0.0}"
+VIDEO="${VIDEO:-0}"
+VIDEO_LENGTH="${VIDEO_LENGTH:-200}"
+VIDEO_INTERVAL="${VIDEO_INTERVAL:-1000000}"
 FORCE_COLLECT="${FORCE_COLLECT:-0}"
 RUN_ORACLE="${RUN_ORACLE:-1}"
 USE_CHECKPOINT_NORMALIZATION="${USE_CHECKPOINT_NORMALIZATION:-0}"
@@ -107,6 +110,9 @@ export WEIGHT_DECAY
 export FLOW_STEPS
 export TRAIN_ENDPOINT_STEPS
 export FLOW_NOISE_STD
+export VIDEO
+export VIDEO_LENGTH
+export VIDEO_INTERVAL
 export FORCE_COLLECT
 export RUN_ORACLE
 export USE_CHECKPOINT_NORMALIZATION
@@ -181,6 +187,14 @@ PY
 finetune_normalization_args=()
 if [[ "${USE_CHECKPOINT_NORMALIZATION}" == "1" ]]; then
     finetune_normalization_args+=(--use_checkpoint_normalization)
+fi
+closed_loop_video_args=()
+if [[ "${VIDEO}" == "1" || "${VIDEO}" == "true" ]]; then
+    closed_loop_video_args+=(
+        --video
+        --video_length "${VIDEO_LENGTH}"
+        --video_interval "${VIDEO_INTERVAL}"
+    )
 fi
 
 for interface in ${INTERFACES}; do
@@ -321,6 +335,7 @@ for interface in ${INTERFACES}; do
                 --command_future_steps "${COMMAND_FUTURE_STEPS}" \
                 --flow_num_inference_steps "${FLOW_STEPS}" \
                 --flow_inference_noise_std "${FLOW_NOISE_STD}" \
+                "${closed_loop_video_args[@]}" \
                 --kit_args=--/app/extensions/fsWatcherEnabled=false
 
             run_cmd "${PYTHON_CMD[@]}" experiments/interface_baselines/train_chunked_transformer_planner.py \
@@ -374,6 +389,7 @@ for interface in ${INTERFACES}; do
                 --command_future_steps "${COMMAND_FUTURE_STEPS}" \
                 --flow_num_inference_steps "${FLOW_STEPS}" \
                 --flow_inference_noise_std "${FLOW_NOISE_STD}" \
+                "${closed_loop_video_args[@]}" \
                 --kit_args=--/app/extensions/fsWatcherEnabled=false
         done
     done

@@ -1,30 +1,31 @@
 """Build a language-goal embedding table for the System-1 skill commander.
 
-This reads a LAFAN1 manifest, collects the unique motion names
-(e.g. ``dance1_subject1``), turns each name into a short natural-language phrase
-(e.g. ``dance``), and embeds every phrase into a fixed-length vector. The result
-is saved as a torch table mapping ``motion_name -> embedding`` that the
-downstream commander trainer and rollout sampler load directly, so no text model
-is needed at train or rollout time.
+This reads a LAFAN1-style manifest, collects the unique motion names
+(e.g. ``dance1_subject1``), turns each name into an offline prompt, and embeds
+every prompt into a fixed-length vector. The result is saved as a torch table
+mapping ``motion_name -> embedding`` that the downstream commander trainer and
+rollout sampler load directly, so no text model is needed at train or rollout
+time.
 
 Two backends are supported:
 
 * ``dummy`` (default): deterministic pseudo-random unit vectors seeded by the
-  phrase text. Needs no external model, so the whole commander pipeline can be
-  built and tested before a real text encoder is wired up. Names that clean to
-  the same phrase share the same vector, mirroring how a real text encoder would
-  group ``dance1`` and ``dance2`` together.
+  prompt text. Needs no external model, so the whole commander pipeline can be
+  built and tested before a real text encoder is wired up. Names that resolve to
+  the same prompt share the same vector, mirroring how a real text encoder would
+  group similar language goals together.
 * ``sentence-transformer``: real sentence-transformer embeddings (lazy import;
-  only required when this backend is selected).
+  only required when this backend is selected). Use ``--model`` to select larger
+  local models such as Qwen/Qwen3-Embedding-8B when available.
 
 The table is keyed by the *raw motion name* so the environment's per-trajectory
-name lookup always resolves exactly, while the embedding *value* reflects the
-cleaned phrase.
+name lookup always resolves exactly, while the embedding value reflects the
+selected prompt tier.
 
 Example:
     pixi run python scripts/rlopt/build_language_goal_embeddings.py \
         --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
-        --backend dummy
+        --backend dummy --prompt_tier category
 """
 
 from __future__ import annotations
@@ -32,11 +33,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 import torch
+
+from language_prompts import (
+    PROMPT_TIERS,
+    humanize_motion_name,
+    load_prompt_overrides,
+    normalize_prompt_tier,
+    resolve_prompt_for_motion,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = (
@@ -48,20 +56,6 @@ DEFAULT_OUTPUT = (
 # Matches sentence-transformers/all-MiniLM-L6-v2 so the table width is stable
 # whether or not the dummy backend is used.
 DEFAULT_EMBED_DIM = 384
-
-
-def humanize_motion_name(name: str) -> str:
-    """Convert a motion name into a short phrase.
-
-    ``dance1_subject1`` -> ``dance``; ``fallAndGetUp1_subject4`` -> ``fall and
-    get up``; ``fightAndSports1_subject1`` -> ``fight and sports``.
-    """
-    base = re.sub(r"_subject\d+$", "", str(name))  # drop subject suffix
-    base = re.sub(r"\d+$", "", base)  # drop trailing motion index
-    base = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", base)  # split camelCase
-    base = base.replace("_", " ").replace("-", " ")
-    base = re.sub(r"\s+", " ", base).strip().lower()
-    return base or str(name).strip().lower()
 
 
 def _extract_manifest_entries(data: Any) -> list[dict[str, Any]]:
@@ -100,6 +94,14 @@ def load_motion_names(manifest_path: Path) -> list[str]:
     return list(dict.fromkeys(names))
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _dummy_embedding(phrase: str, dim: int, seed: int) -> torch.Tensor:
     """Deterministic standard-normal vector seeded by the phrase text."""
     digest = hashlib.sha256(f"{seed}:{phrase}".encode("utf-8")).digest()
@@ -133,7 +135,10 @@ def embed_phrases(
             ) from exc
         model = SentenceTransformer(model_name)
         vectors = model.encode(
-            phrases, convert_to_numpy=True, normalize_embeddings=False
+            phrases,
+            convert_to_numpy=True,
+            normalize_embeddings=False,
+            show_progress_bar=False,
         )
         matrix = torch.as_tensor(vectors, dtype=torch.float32)
         return matrix, int(matrix.shape[-1]), model_name
@@ -150,7 +155,11 @@ def main() -> None:
         "--manifest",
         type=str,
         default=str(DEFAULT_MANIFEST),
-        help="LAFAN1 manifest JSON to read motion names from.",
+        help=(
+            "LAFAN1 manifest JSON to read motion names from. If entries contain "
+            "a 'language' mapping, the selected --prompt_tier is read from it "
+            "before falling back to built-in templates."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -164,6 +173,27 @@ def main() -> None:
         default="dummy",
         choices=("dummy", "sentence-transformer"),
         help="Embedding backend. 'dummy' needs no external model.",
+    )
+    parser.add_argument(
+        "--prompt_tier",
+        type=str,
+        default="category",
+        choices=PROMPT_TIERS,
+        help=(
+            "Prompt tier to embed. 'category' preserves the previous cleaned-name "
+            "default."
+        ),
+    )
+    parser.add_argument(
+        "--prompt_json",
+        type=str,
+        default=None,
+        help=(
+            "Optional JSON prompt overrides keyed by raw motion name or cleaned "
+            "category. Values may be strings or mappings with 'prompt'/'text'. "
+            "A captioned manifest with per-entry 'language' mappings is also "
+            "accepted. Explicit overrides take precedence over manifest language."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -181,7 +211,7 @@ def main() -> None:
         "--raw_names",
         action="store_true",
         default=False,
-        help="Embed the literal motion name instead of a cleaned phrase.",
+        help=("Deprecated alias for --prompt_tier raw_name. Kept for older commands."),
     )
     parser.add_argument(
         "--seed",
@@ -195,33 +225,60 @@ def main() -> None:
     if not manifest_path.is_file():
         raise SystemExit(f"Manifest not found: {manifest_path}")
 
-    names = load_motion_names(manifest_path)
-    phrases = [n if args.raw_names else humanize_motion_name(n) for n in names]
+    prompt_tier = normalize_prompt_tier(args.prompt_tier)
+    if bool(args.raw_names):
+        if prompt_tier != "category":
+            raise SystemExit("--raw_names cannot be combined with --prompt_tier.")
+        prompt_tier = "raw_name"
 
-    # Embed each unique phrase once, then expand to one row per motion name so
+    names = load_motion_names(manifest_path)
+    categories = [humanize_motion_name(name) for name in names]
+    manifest_prompt_overrides = load_prompt_overrides(manifest_path, prompt_tier)
+    explicit_prompt_overrides = load_prompt_overrides(args.prompt_json, prompt_tier)
+    prompt_overrides = dict(manifest_prompt_overrides)
+    prompt_overrides.update(explicit_prompt_overrides)
+    prompt_texts = [
+        resolve_prompt_for_motion(name, prompt_tier, prompt_overrides) for name in names
+    ]
+
+    # Embed each unique prompt once, then expand to one row per motion name so
     # the table can always be looked up by the exact name the env emits.
-    unique_phrases = list(dict.fromkeys(phrases))
-    phrase_matrix, embed_dim, model_name = embed_phrases(
-        unique_phrases,
+    unique_prompts = list(dict.fromkeys(prompt_texts))
+    prompt_matrix, embed_dim, model_name = embed_phrases(
+        unique_prompts,
         backend=args.backend,
         embed_dim=args.embed_dim,
         model_name=args.model,
         seed=args.seed,
     )
-    phrase_matrix = torch.nn.functional.normalize(phrase_matrix, dim=-1)
-    phrase_to_row = {phrase: row for row, phrase in enumerate(unique_phrases)}
-    embeddings = torch.stack([phrase_matrix[phrase_to_row[p]] for p in phrases])
+    prompt_matrix = torch.nn.functional.normalize(prompt_matrix, dim=-1, eps=1.0e-12)
+    prompt_to_row = {phrase: row for row, phrase in enumerate(unique_prompts)}
+    embeddings = torch.stack([prompt_matrix[prompt_to_row[p]] for p in prompt_texts])
 
     table = {
         "names": names,
-        "phrases": phrases,
+        # Backward-compatible alias consumed by existing diagnostics.
+        "phrases": prompt_texts,
+        "prompt_texts": prompt_texts,
+        "prompt_tier": prompt_tier,
+        "categories": categories,
         "name_to_index": {name: index for index, name in enumerate(names)},
         "embeddings": embeddings.contiguous(),
         "embed_dim": int(embed_dim),
         "backend": args.backend,
         "model": model_name,
-        "raw_names": bool(args.raw_names),
+        "embedding_model": model_name,
+        "raw_names": prompt_tier == "raw_name",
+        "normalized": True,
         "manifest": str(manifest_path),
+        "manifest_sha256": _sha256_file(manifest_path),
+        "prompt_json": (
+            str(Path(args.prompt_json).expanduser().resolve())
+            if args.prompt_json is not None
+            else None
+        ),
+        "manifest_prompt_count": len(manifest_prompt_overrides),
+        "prompt_json_prompt_count": len(explicit_prompt_overrides),
     }
 
     output_path = Path(args.output).expanduser().resolve()
@@ -231,12 +288,15 @@ def main() -> None:
     model_suffix = f" ({model_name})" if model_name else ""
     print(f"[M0] manifest:       {manifest_path}")
     print(f"[M0] backend:        {args.backend}{model_suffix}")
+    print(f"[M0] prompt tier:    {prompt_tier}")
     print(f"[M0] motion names:   {len(names)}")
-    print(f"[M0] unique phrases: {len(unique_phrases)}")
+    print(f"[M0] manifest prompts: {len(manifest_prompt_overrides)}")
+    print(f"[M0] prompt-json prompts: {len(explicit_prompt_overrides)}")
+    print(f"[M0] unique prompts: {len(unique_prompts)}")
     print(f"[M0] embedding dim:  {embed_dim}")
     print(f"[M0] saved table ->  {output_path}")
     preview = ", ".join(
-        f"{name}->'{phrase}'" for name, phrase in list(zip(names, phrases))[:6]
+        f"{name}->'{prompt}'" for name, prompt in list(zip(names, prompt_texts))[:6]
     )
     print(f"[M0] sample mapping: {preview}{' ...' if len(names) > 6 else ''}")
 

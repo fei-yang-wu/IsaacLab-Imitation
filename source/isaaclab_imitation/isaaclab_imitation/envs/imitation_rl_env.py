@@ -3571,7 +3571,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         window_terms = self._build_expert_window_terms(
             expert_window,
             env_ids_t,
-            context="rollout",
+            context="expert",
             past_steps=state_history_steps,
             joint_ids=slice(None),
             anchor_body_name="torso_link",
@@ -3654,21 +3654,20 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         env_ids: torch.Tensor | Sequence[int] | None = None,
         state_history_steps: int = 0,
     ) -> TensorDict:
-        """Macro transitions whose current ``state`` uses the robot's ACHIEVED motion.
+        """Return reference-free macro transitions from the robot's achieved state.
 
-        Identical to ``current_expert_macro_transition_batch`` except the
-        ``expert_motion`` slice of the current ``state`` is replaced by the
-        robot's actual joint positions/velocities (the rollout-context anchor
-        terms already encode the robot-relative offset). The future window and
-        target stay expert-derived, so a skill commander can regress the expert
-        skill ``z`` from the robot's achieved state (full-M3 closed-loop input).
+        The SkillCommander rollout path uses only ``state``/``state_history`` and
+        language, but the frozen sampler validates ``future_window`` and
+        ``target`` shapes. Populate those validation fields with repeats of the
+        live robot state instead of borrowing expert future windows, so M3
+        inference does not pass reference features to the planner.
         """
         horizon_steps = int(horizon_steps)
-        batch = self.current_expert_macro_transition_batch(
-            horizon_steps,
-            env_ids=env_ids,
-            state_history_steps=state_history_steps,
-        )
+        state_history_steps = int(state_history_steps)
+        if horizon_steps <= 0:
+            raise ValueError("horizon_steps must be > 0.")
+        if state_history_steps < 0:
+            raise ValueError("state_history_steps must be >= 0.")
         if env_ids is None:
             env_ids_t = torch.arange(
                 self.num_envs, device=self.device, dtype=torch.long
@@ -3677,33 +3676,72 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             env_ids_t = torch.as_tensor(
                 env_ids, device=self.device, dtype=torch.long
             ).reshape(-1)
-        slices = self.expert_macro_feature_slices(horizon_steps)
-        if "expert_motion" not in slices:
-            raise RuntimeError(
-                "expert_motion feature slice unavailable for achieved macro state."
-            )
-        start, end = slices["expert_motion"]
+        batch_size = int(env_ids_t.numel())
+        if batch_size <= 0:
+            raise ValueError("env_ids must select at least one environment.")
+
         joint_pos = self.robot.data.joint_pos.index_select(0, env_ids_t)
         joint_vel = self.robot.data.joint_vel.index_select(0, env_ids_t)
         achieved_motion = torch.cat([joint_pos, joint_vel], dim=-1).to(
             device=self.device, dtype=torch.float32
         )
-        expected_width = int(end) - int(start)
-        if int(achieved_motion.shape[-1]) != expected_width:
-            raise ValueError(
-                "Achieved motion width mismatch: expected "
-                f"{expected_width} (expert_motion slice), got "
-                f"{int(achieved_motion.shape[-1])} from robot joint state."
+        anchor_pos_b = torch.zeros((batch_size, 3), device=self.device)
+        anchor_ori_b = torch.zeros((batch_size, 6), device=self.device)
+        anchor_ori_b[:, 0] = 1.0
+        anchor_ori_b[:, 4] = 1.0
+
+        window_steps = state_history_steps + horizon_steps + 1
+
+        def repeat_window(term: torch.Tensor) -> torch.Tensor:
+            return (
+                term[:, None, :]
+                .expand(batch_size, window_steps, int(term.shape[-1]))
+                .reshape(batch_size, -1)
+                .contiguous()
             )
-        state = batch.get(("hl", "state")).clone()
-        state[:, int(start) : int(end)] = achieved_motion
-        batch.set(("hl", "state"), state)
-        state_history = batch.get(("hl", "state_history"))
-        if state_history is not None:
-            state_history = state_history.clone()
-            state_history[:, -1, int(start) : int(end)] = achieved_motion
-            batch.set(("hl", "state_history"), state_history)
-        return batch
+
+        terms = {
+            "expert_motion": repeat_window(achieved_motion),
+            "expert_anchor_pos_b": repeat_window(anchor_pos_b),
+            "expert_anchor_ori_b": repeat_window(anchor_ori_b),
+        }
+        sequence = self._expert_macro_state_sequence_from_terms(
+            terms,
+            batch_size=batch_size,
+            window_steps=window_steps,
+        )
+        self._expert_macro_feature_slices = (
+            self._expert_macro_state_feature_slices_from_terms(
+                terms,
+                batch_size=batch_size,
+                window_steps=window_steps,
+            )
+        )
+        current_index = state_history_steps
+        state = sequence[:, current_index, :].contiguous()
+        future_window = sequence[:, current_index + 1 :, :].contiguous()
+        target = sequence[:, -1, :].contiguous()
+
+        tm = getattr(self, "trajectory_manager", None)
+        if tm is not None:
+            traj_rank = tm.env_traj_rank.index_select(
+                0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
+            ).to(device=self.device, dtype=torch.long)
+        else:
+            traj_rank = torch.zeros(batch_size, device=self.device, dtype=torch.long)
+
+        hl_payload = {
+            "state": state,
+            "future_window": future_window,
+            "target": target,
+            "traj_rank": traj_rank,
+        }
+        if state_history_steps > 0:
+            hl_payload["state_history"] = sequence[
+                :, : current_index + 1, :
+            ].contiguous()
+        hl = TensorDict(hl_payload, batch_size=[batch_size], device=self.device)
+        return TensorDict({"hl": hl}, batch_size=[batch_size], device=self.device)
 
     def expert_macro_feature_slices(
         self,

@@ -113,6 +113,45 @@ parser.add_argument(
     default=480,
     help="Per-env video height in pixels.",
 )
+parser.add_argument(
+    "--video_camera_mode",
+    type=str,
+    choices=("tracking", "fixed"),
+    default="tracking",
+    help=(
+        "Camera mode for recorded videos. 'tracking' follows each env's root; "
+        "'fixed' preserves the original camera fixed at each env origin."
+    ),
+)
+parser.add_argument(
+    "--video_camera_eye_offset",
+    nargs=3,
+    type=float,
+    default=(2.5, 2.5, 1.4),
+    metavar=("X", "Y", "Z"),
+    help="Tracking/fixed camera eye offset in meters.",
+)
+parser.add_argument(
+    "--video_camera_target_height",
+    type=float,
+    default=0.8,
+    help="Camera look-at target height above each tracked root position.",
+)
+parser.add_argument(
+    "--env_spacing",
+    type=float,
+    default=None,
+    help=(
+        "Optional env spacing in meters. Defaults to an estimate from CSV root "
+        "XY extents plus camera/margin clearance."
+    ),
+)
+parser.add_argument(
+    "--env_spacing_margin",
+    type=float,
+    default=8.0,
+    help="Extra clearance used when estimating env spacing from motion root extents.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 if args_cli.video:
@@ -125,6 +164,7 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import torch
+from pxr import UsdGeom
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg
@@ -135,6 +175,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import (
     axis_angle_from_quat,
+    create_rotation_matrix_from_view,
     quat_from_matrix,
     quat_conjugate,
     quat_mul,
@@ -168,6 +209,12 @@ class MotionJob:
     root_z_alignment: str = "none"
     max_frames: int | None = None
     max_scan_rows: int = 100_000
+
+
+@dataclass(frozen=True)
+class RootXYStats:
+    span_extent: float
+    max_radius: float
 
 
 def _normalize_frame_range(value: object) -> tuple[int, int] | None:
@@ -246,6 +293,14 @@ def _look_at_quat_world(
     return tuple(float(x) for x in quat.tolist())
 
 
+def _camera_eye_offset() -> tuple[float, float, float]:
+    return tuple(float(value) for value in args_cli.video_camera_eye_offset)
+
+
+def _camera_fixed_target() -> tuple[float, float, float]:
+    return (0.0, 0.0, float(args_cli.video_camera_target_height))
+
+
 @configclass
 class ReplayMotionsSceneCfg(InteractiveSceneCfg):
     """Configuration for a replay motions scene."""
@@ -267,8 +322,11 @@ class ReplayMotionsSceneCfg(InteractiveSceneCfg):
         video_camera: TiledCameraCfg = TiledCameraCfg(
             prim_path="{ENV_REGEX_NS}/VideoCamera",
             offset=TiledCameraCfg.OffsetCfg(
-                pos=(2.5, 2.5, 1.4),
-                rot=_look_at_quat_world((2.5, 2.5, 1.4), (0.0, 0.0, 0.8)),
+                pos=_camera_eye_offset(),
+                rot=_look_at_quat_world(
+                    _camera_eye_offset(),
+                    _camera_fixed_target(),
+                ),
                 convention="world",
             ),
             data_types=["rgb"],
@@ -670,6 +728,69 @@ def _load_jobs(jobs_json_path: Path) -> list[MotionJob]:
     return jobs
 
 
+def _effective_frame_range(job: MotionJob) -> tuple[int, int] | None:
+    if job.frame_range is not None:
+        return job.frame_range
+    if args_cli.frame_range is not None:
+        return tuple(args_cli.frame_range)
+    return None
+
+
+def _csv_root_xy_stats(job: MotionJob) -> RootXYStats | None:
+    if job.source_type != "csv" or job.input_file is None:
+        return None
+    frame_range = _effective_frame_range(job)
+    load_kwargs: dict[str, object] = {
+        "fname": job.input_file,
+        "delimiter": ",",
+        "usecols": (0, 1),
+    }
+    if frame_range is not None:
+        load_kwargs["skiprows"] = frame_range[0] - 1
+        load_kwargs["max_rows"] = frame_range[1] - frame_range[0] + 1
+    root_xy = np.loadtxt(**load_kwargs)
+    root_xy = np.asarray(root_xy, dtype=np.float32)
+    if root_xy.ndim == 1:
+        root_xy = root_xy.reshape(1, -1)
+    if root_xy.shape[0] == 0:
+        return None
+    span = np.ptp(root_xy, axis=0)
+    radius = np.linalg.norm(root_xy, ord=2, axis=1)
+    return RootXYStats(
+        span_extent=float(np.linalg.norm(span, ord=2)),
+        max_radius=float(np.max(radius)),
+    )
+
+
+def _resolve_env_spacing(jobs: list[MotionJob]) -> float:
+    if args_cli.env_spacing is not None:
+        spacing = float(args_cli.env_spacing)
+        if spacing <= 0.0:
+            raise ValueError("--env_spacing must be positive.")
+        print(f"[INFO] Using user env spacing: {spacing:.3f} m")
+        return spacing
+
+    stats = [stats for job in jobs if (stats := _csv_root_xy_stats(job)) is not None]
+    max_span_extent = max((item.span_extent for item in stats), default=0.0)
+    max_root_xy_radius = max((item.max_radius for item in stats), default=0.0)
+    eye_xy_radius = float(np.linalg.norm(np.asarray(_camera_eye_offset()[:2])))
+    spacing = max(
+        2.0,
+        max_span_extent + 2.0 * eye_xy_radius + float(args_cli.env_spacing_margin),
+        2.0 * max_root_xy_radius
+        + 2.0 * eye_xy_radius
+        + float(args_cli.env_spacing_margin),
+    )
+    print(
+        "[INFO] Estimated env spacing: "
+        f"{spacing:.3f} m (max_root_xy_span={max_span_extent:.3f} m, "
+        f"max_root_xy_radius={max_root_xy_radius:.3f} m, "
+        f"camera_xy_radius={eye_xy_radius:.3f} m, "
+        f"margin={float(args_cli.env_spacing_margin):.3f} m)"
+    )
+    return spacing
+
+
 def _pad_sequence(sequence: torch.Tensor, target_length: int) -> torch.Tensor:
     if sequence.shape[0] == target_length:
         return sequence
@@ -810,6 +931,33 @@ def _close_video_writers(writers: list[imageio.core.format.Writer | None]) -> No
             writer.close()
 
 
+def _set_tracking_camera_poses(video_camera, root_positions_b: torch.Tensor) -> None:
+    if video_camera is None or args_cli.video_camera_mode != "tracking":
+        return
+    root_positions_b = root_positions_b.to(device=video_camera.device)
+    eye_offset = torch.tensor(
+        _camera_eye_offset(),
+        dtype=root_positions_b.dtype,
+        device=root_positions_b.device,
+    )
+    eyes = root_positions_b + eye_offset.unsqueeze(0)
+    targets = root_positions_b.clone()
+    targets[:, 2] += float(args_cli.video_camera_target_height)
+    up_axis = UsdGeom.GetStageUpAxis(video_camera.stage)
+    orientations = quat_from_matrix(
+        create_rotation_matrix_from_view(
+            eyes,
+            targets,
+            up_axis,
+            device=video_camera.device,
+        )
+    )
+    video_camera._view.set_local_poses(  # noqa: SLF001 - local USD poses update tiled render products reliably.
+        translations=eyes,
+        orientations=orientations,
+    )
+
+
 def run_simulator(
     sim: sim_utils.SimulationContext,
     scene: InteractiveScene,
@@ -860,6 +1008,19 @@ def run_simulator(
     default_joint_pos = robot.data.default_joint_pos.clone()
     default_joint_vel = robot.data.default_joint_vel.clone()
     if video_camera is not None:
+        initial_root_states = default_root_state.clone()
+        initial_root_states[:, :3] = batched.base_pos[:, 0]
+        initial_root_states[:, :2] += scene.env_origins[:, :2]
+        initial_root_states[:, 3:7] = batched.base_rot[:, 0]
+        initial_root_states[:, 7:10] = batched.base_lin_vel[:, 0]
+        initial_root_states[:, 10:] = batched.base_ang_vel[:, 0]
+        initial_joint_pos = default_joint_pos.clone()
+        initial_joint_vel = default_joint_vel.clone()
+        initial_joint_pos[:, robot_joint_indexes] = batched.dof_pos[:, 0]
+        initial_joint_vel[:, robot_joint_indexes] = batched.dof_vel[:, 0]
+        robot.write_root_state_to_sim(initial_root_states)
+        robot.write_joint_state_to_sim(initial_joint_pos, initial_joint_vel)
+        _set_tracking_camera_poses(video_camera, batched.base_pos[:, 0])
         # Warm up tiled camera textures before writing frame 0 to avoid blank first frames.
         for _ in range(5):
             sim.render()
@@ -907,6 +1068,7 @@ def run_simulator(
 
                 robot.write_root_state_to_sim(root_states)
                 robot.write_joint_state_to_sim(joint_pos, joint_vel)
+                _set_tracking_camera_poses(video_camera, batched.base_pos[:, step])
                 sim.render()
                 scene.update(sim.get_physics_dt())
 
@@ -950,13 +1112,17 @@ def run_simulator(
 
 def main() -> None:
     jobs = _load_jobs(Path(args_cli.jobs_json).expanduser().resolve())
+    env_spacing = _resolve_env_spacing(jobs)
     sim_cfg = sim_utils.SimulationCfg(device=args_cli.device)
     sim_cfg.dt = 1.0 / args_cli.output_fps
     sim = SimulationContext(sim_cfg)
-    scene_cfg = ReplayMotionsSceneCfg(num_envs=len(jobs), env_spacing=2.0)
+    scene_cfg = ReplayMotionsSceneCfg(num_envs=len(jobs), env_spacing=env_spacing)
     scene = InteractiveScene(scene_cfg)
     sim.reset()
-    print(f"[INFO] Setup complete for {len(jobs)} motion(s).")
+    print(
+        f"[INFO] Setup complete for {len(jobs)} motion(s) "
+        f"with env_spacing={env_spacing:.3f} m."
+    )
     run_simulator(sim=sim, scene=scene, jobs=jobs)
 
 

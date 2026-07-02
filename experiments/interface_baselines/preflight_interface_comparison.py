@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-SUPPORTED_MODEL_SIZES = {"tiny", "small", "medium", "large"}
+SUPPORTED_MODEL_SIZES = {"tiny", "small", "medium_slim", "medium", "large"}
 HAND_DESIGNED_INTERFACES = {"ee_trajectory", "full_body_trajectory"}
 
 

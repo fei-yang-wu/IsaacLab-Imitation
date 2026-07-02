@@ -52,6 +52,21 @@ parser.add_argument("--command_past_steps", type=int, default=0)
 parser.add_argument("--command_future_steps", type=int, default=25)
 parser.add_argument("--flow_num_inference_steps", type=int, default=16)
 parser.add_argument("--flow_inference_noise_std", type=float, default=0.0)
+parser.add_argument(
+    "--video", action="store_true", default=False, help="Record closed-loop video."
+)
+parser.add_argument(
+    "--video_length",
+    type=int,
+    default=200,
+    help="Length of each recorded closed-loop video in env steps.",
+)
+parser.add_argument(
+    "--video_interval",
+    type=int,
+    default=1_000_000,
+    help="Interval between recorded video starts in env steps.",
+)
 parser.add_argument("--reset_schedule", type=str, default="sequential")
 parser.add_argument("--reference_start_frame", type=int, default=0)
 parser.add_argument("--refresh_zarr_dataset", action="store_true", default=False)
@@ -61,6 +76,8 @@ parser.add_argument(
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.video:
+    args_cli.enable_cameras = True
 
 sys.argv = [sys.argv[0]] + hydra_args
 app_launcher = AppLauncher(args_cli)
@@ -70,6 +87,7 @@ import gymnasium as gym
 import isaaclab_imitation.tasks  # noqa: F401
 import isaaclab_tasks  # noqa: F401
 import torch
+from isaaclab.utils.dict import print_dict
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -499,9 +517,21 @@ def main(
     if hasattr(agent_cfg, "device"):
         agent_cfg.device = env_cfg.sim.device
 
-    raw_env = gym.make(args_cli.task, cfg=env_cfg)
+    raw_env = gym.make(
+        args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None
+    )
     if isinstance(raw_env.unwrapped, DirectMARLEnv):
         raise NotImplementedError("DirectMARLEnv is not supported.")
+    if args_cli.video:
+        video_kwargs = {
+            "video_folder": str(output_root / "videos" / "closed_loop"),
+            "step_trigger": lambda step: step % int(args_cli.video_interval) == 0,
+            "video_length": int(args_cli.video_length),
+            "disable_logger": True,
+        }
+        print("[INFO] Recording videos during closed-loop planner evaluation.")
+        print_dict(video_kwargs, nesting=4)
+        raw_env = gym.wrappers.RecordVideo(raw_env, **video_kwargs)
     env = IsaacLabWrapper(raw_env)
     env = env.set_info_dict_reader(
         IsaacLabTerminalObsReader(
@@ -664,6 +694,9 @@ def main(
             "command_future_steps": int(args_cli.command_future_steps),
             "flow_num_inference_steps": int(args_cli.flow_num_inference_steps),
             "flow_inference_noise_std": float(args_cli.flow_inference_noise_std),
+            "video": bool(args_cli.video),
+            "video_length": int(args_cli.video_length),
+            "video_interval": int(args_cli.video_interval),
             "planner_target_dim": int(target_spec.target_dim),
             "planner_metadata": planner_metadata,
             "num_envs": int(num_envs),

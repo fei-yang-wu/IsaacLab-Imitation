@@ -51,6 +51,15 @@ MODEL_PRESETS: dict[str, dict[str, int | float]] = {
         "num_state_tokens": 2,
         "dropout": 0.0,
     },
+    "medium_slim": {
+        "d_model": 416,
+        "num_layers": 6,
+        "num_heads": 8,
+        "feedforward_dim": 1664,
+        "patch_dim": 32,
+        "num_state_tokens": 4,
+        "dropout": 0.0,
+    },
     "medium": {
         "d_model": 512,
         "num_layers": 6,

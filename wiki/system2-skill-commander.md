@@ -133,27 +133,126 @@ Also `get_ith_traj_info(rank, ordered_traj_list)` in
 
 `scripts/rlopt/build_language_goal_embeddings.py` (this repo).
 
-- Reads a manifest → unique motion names → cleans each to a phrase
-  (`humanize_motion_name`: `dance1_subject1` → "dance",
-  `fallAndGetUp1_subject4` → "fall and get up"; `--raw_names` to skip).
-- Embeds unique phrases, L2-normalizes, expands to one row **per motion name**.
-- Backends: `--backend dummy` (default; deterministic, seeded by phrase, no
-  dep) and `--backend sentence-transformer` (lazy import; default model
+- Reads a manifest -> unique motion names -> resolves each to an offline prompt.
+  If manifest entries contain `language.<prompt_tier>`, those captions are used
+  directly; otherwise it falls back to built-in LaFAN1 templates
+  (`humanize_motion_name`: `dance1_subject1` -> "dance").
+- Prompt tiers: `raw_name`, `category`, `robot_instruction`,
+  `kinematic_description`, `event_level`, `attribute_text`. Default is
+  `category`, preserving the old cleaned-name behavior.
+- `--prompt_json` can still override manifest or built-in prompts by raw
+  motion name or category for curated ablations. Explicit prompt JSON takes
+  precedence over manifest-embedded captions.
+- Embeds unique prompts, L2-normalizes, expands to one row **per motion name**.
+- Backends: `--backend dummy` (default; deterministic, seeded by prompt text,
+  no dep) and `--backend sentence-transformer` (lazy import; default model
   `all-MiniLM-L6-v2`, 384-d).
 - Output table (`data/lafan1/language/g1_lafan1_name_embeddings.pt`, **not
-  committed**): keys `names`, `phrases`, `name_to_index`, `embeddings[N,D]`,
-  `embed_dim`, `backend`, `model`, `raw_names`, `manifest`.
+  committed**): keys `names`, `phrases` (back-compatible prompt alias),
+  `prompt_texts`, `categories`, `prompt_tier`, `name_to_index`,
+  `embeddings[N,D]`, `embed_dim`, `backend`, `model`, `embedding_model`,
+  `normalized`, `raw_names`, `manifest`, `manifest_sha256`, `prompt_json`,
+  `manifest_prompt_count`, `prompt_json_prompt_count`.
 - Validated on the 40-motion manifest → **8 phrases**
   (`dance, fall and get up, fight, fight and sports, jumps, run, sprint, walk`),
   table `[40, 384]`, unit-normalized, deterministic, phrase-grouping confirmed
   (two `dance*` names share a vector; dance vs walk ≈ orthogonal). `ruff` clean.
 
-Run:
+Run the old category baseline:
 
 ```bash
 pixi run python scripts/rlopt/build_language_goal_embeddings.py \
-  --manifest data/lafan1/manifests/g1_lafan1_manifest.json --backend dummy
+  --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
+  --backend dummy \
+  --prompt_tier category
 ```
+
+Run the captioned-manifest path used for current language-conditioning tests:
+
+```bash
+pixi run python scripts/rlopt/build_language_goal_embeddings.py \
+  --manifest data/lafan1/language/g1_lafan1_manifest.with_codex_storyboard_language_v1.json \
+  --backend sentence-transformer \
+  --model all-MiniLM-L6-v2 \
+  --prompt_tier attribute_text \
+  --output data/lafan1/language/g1_lafan1_minilm_attribute_codex_storyboard_v1.pt
+```
+
+### Language prompt and embedding audits - OFFLINE INFRA READY
+
+- `scripts/rlopt/language_prompts.py` owns deterministic prompt tiers for the
+  current LaFAN1 categories: `dance`, `fall and get up`, `fight`,
+  `fight and sports`, `jumps`, `run`, `sprint`, `walk`.
+- `scripts/rlopt/audit_language_embeddings.py` audits saved embedding tables
+  without Isaac: cosine statistics, nearest neighbors, category clustering,
+  intra/inter-category separation, and expected semantic checks such as
+  `walk` near `run`/`sprint` and `run` near `sprint`.
+- `scripts/rlopt/audit_language_motion_alignment.py` optionally compares a
+  saved embedding table against precomputed oracle-`z` centroids or samples;
+  if no z file is supplied, it exits after language-space diagnostics and does
+  not launch Isaac.
+- Recommended primary ablation model: `Qwen/Qwen3-Embedding-8B` through the
+  `sentence-transformer` backend when local memory allows. Fallbacks:
+  `Qwen/Qwen3-Embedding-4B` or `voyageai/voyage-4-nano`; keep MiniLM, dummy,
+  and no-language as baselines.
+- Dance102 has only one motion in the current manifest, so it is useful for
+  closed-loop smoke/debug but is **not** a language-discrimination benchmark by
+  itself.
+
+### LaFAN1 motion-description drafting - OFFLINE INFRA READY
+
+`scripts/rlopt/draft_lafan1_motion_descriptions.py` creates a reviewable
+language sidecar from the G1 LaFAN1 NPZ files. It computes root speed, root
+travel, height change, turning, arm/leg activity, and simple rhythm statistics,
+then writes deterministic draft fields keyed by raw motion name:
+`short_caption`, `robot_instruction`, `kinematic_description`, `event_level`,
+`attribute_text`, `distinguishing_features`, `stats_summary`, and
+`review_status="draft"`.
+
+The sidecar is directly usable as a prompt override. Once captions are baked
+into a manifest via `--manifest_output`, pass that captioned manifest directly
+to `build_language_goal_embeddings.py` and omit `--prompt_json` unless making
+an explicit override ablation:
+
+```bash
+pixi run python scripts/rlopt/draft_lafan1_motion_descriptions.py \
+  --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
+  --output /tmp/g1_lafan1_motion_descriptions.draft.json \
+  --markdown_output /tmp/g1_lafan1_motion_descriptions.draft.md
+
+pixi run python scripts/rlopt/build_language_goal_embeddings.py \
+  --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
+  --backend sentence-transformer \
+  --model Qwen/Qwen3-Embedding-8B \
+  --prompt_tier kinematic_description \
+  --prompt_json /tmp/g1_lafan1_motion_descriptions.draft.json \
+  --output /tmp/g1_lafan1_qwen8b_kinematic_descriptions.pt
+```
+
+For visual review, first render/reference-record videos with the existing Isaac
+tools, then build compact contact sheets without launching Isaac:
+
+```bash
+pixi run python scripts/rlopt/make_motion_storyboards.py \
+  --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
+  --video_dir /path/to/rendered/lafan1/videos \
+  --output_dir /tmp/lafan1_storyboards \
+  --sample_count 16 \
+  --columns 4
+
+pixi run python scripts/rlopt/draft_lafan1_motion_descriptions.py \
+  --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
+  --storyboard_dir /tmp/lafan1_storyboards \
+  --output /tmp/g1_lafan1_motion_descriptions.with_storyboards.json \
+  --markdown_output /tmp/g1_lafan1_motion_descriptions.with_storyboards.md
+```
+
+Review workflow: inspect each storyboard/video plus its stats, ask Codex or a
+vision-language model for JSON edits only to semantically wrong or insufficiently
+distinct language fields, then rebuild embedding tables and run
+`audit_language_embeddings.py`. If we want captions embedded in the manifest for
+future loaders, pass `--manifest_output /tmp/g1_lafan1_manifest.with_language.json`;
+the source manifest is not modified by default.
 
 ### M1 — Commander network + distillation trainer (offline) — DONE (unit-tested)
 

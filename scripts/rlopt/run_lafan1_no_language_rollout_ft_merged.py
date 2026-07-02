@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect multi-motion oracle rollouts and finetune one no-language planner."""
+"""Collect multi-motion oracle rollouts and finetune one SkillCommander."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python_bin", default=os.environ.get("PYTHON_BIN", "python"))
     parser.add_argument("--task", default="Isaac-Imitation-G1-Latent-v0")
-    parser.add_argument("--algorithm", default="IPMD_BILINEAR")
+    parser.add_argument("--algorithm", default="IPMD")
     parser.add_argument(
         "--manifest",
         default="data/lafan1/manifests/g1_lafan1_manifest.json",
@@ -39,6 +39,14 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--skill_checkpoint", required=True, help="Frozen skill encoder checkpoint."
+    )
+    parser.add_argument(
+        "--language_embeddings",
+        default="",
+        help=(
+            "Optional language embedding table. Leave empty for no-language "
+            "planner checkpoints."
+        ),
     )
     parser.add_argument("--output_root", default=None)
     parser.add_argument(
@@ -82,6 +90,18 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--eval_metric_interval", type=int, default=1)
     parser.add_argument("--eval_max_steps", type=int, default=0)
     parser.add_argument("--z_dim", type=int, default=256)
+    parser.add_argument(
+        "--command_mode",
+        choices=("z", "phi", "z_phi"),
+        default="z",
+        help="Low-level skill command mode used by the trained IPMD policy.",
+    )
+    parser.add_argument(
+        "--command_code_dim",
+        type=int,
+        default=None,
+        help="Pre-phase command width. Defaults to --z_dim for backward compatibility.",
+    )
     parser.add_argument("--horizon_steps", type=int, default=10)
     return parser.parse_args()
 
@@ -203,18 +223,20 @@ def _sample_paths(sample_dir: Path) -> list[Path]:
 def _latent_overrides(
     args: argparse.Namespace, manifest: Path, dataset_path: Path
 ) -> list[str]:
+    command_code_dim = int(args.command_code_dim or args.z_dim)
+    latent_dim = command_code_dim + 2
     return [
         f"env.lafan1_manifest_path={manifest}",
         f"env.dataset_path={dataset_path}",
         "env.refresh_zarr_dataset=false",
-        f"env.latent_command_dim={int(args.z_dim) + 2}",
-        f"agent.ipmd.latent_dim={int(args.z_dim) + 2}",
+        f"env.latent_command_dim={latent_dim}",
+        f"agent.ipmd.latent_dim={latent_dim}",
         f"agent.ipmd.hl_skill_horizon_steps={args.horizon_steps}",
-        "agent.ipmd.hl_skill_command_mode=z",
+        f"agent.ipmd.hl_skill_command_mode={args.command_mode}",
         f"agent.ipmd.latent_steps_min={args.horizon_steps}",
         f"agent.ipmd.latent_steps_max={args.horizon_steps}",
         "agent.ipmd.latent_learning.command_phase_mode=sin_cos",
-        f"agent.ipmd.latent_learning.code_latent_dim={args.z_dim}",
+        f"agent.ipmd.latent_learning.code_latent_dim={command_code_dim}",
         f"agent.ipmd.latent_learning.code_period={args.horizon_steps}",
         "agent.ipmd.reward_loss_coeff=0.0",
         "agent.ipmd.reward_l2_coeff=0.0",
@@ -232,6 +254,7 @@ def _collect_cmd(
     checkpoint: Path,
     planner_checkpoint: Path,
     skill_checkpoint: Path,
+    language_embeddings: Path | None,
     motion: str,
     seed: int,
     output_dir: Path,
@@ -267,7 +290,11 @@ def _collect_cmd(
         "--motion_name",
         str(motion),
         "--save_rollout_training_samples",
+        "--rollout_sample_chunk_rows",
+        str(args.chunk_rows),
     ]
+    if language_embeddings is not None:
+        cmd.extend(["--language_embeddings", str(language_embeddings)])
     if int(args.max_steps) > 0:
         cmd.extend(["--max_steps", str(args.max_steps)])
     cmd.extend(
@@ -324,6 +351,7 @@ def _eval_cmd(
     checkpoint: Path,
     skill_checkpoint: Path,
     planner_checkpoint: Path,
+    language_embeddings: Path | None,
     motion: str,
     seed: int,
     output_dir: Path,
@@ -360,15 +388,22 @@ def _eval_cmd(
         "--motion_name",
         str(motion),
     ]
+    if language_embeddings is not None:
+        cmd.extend(["--language_embeddings", str(language_embeddings)])
     if int(args.eval_max_steps) > 0:
         cmd.extend(["--max_steps", str(args.eval_max_steps)])
     if video:
         cmd.extend(["--video", "--video_length", str(args.eval_video_length)])
+    embeddings_override = (
+        f"agent.ipmd.skill_commander_embeddings_path={language_embeddings}"
+        if language_embeddings is not None
+        else "agent.ipmd.skill_commander_embeddings_path="
+    )
     cmd.extend(
         [
             "agent.ipmd.command_source=skill_commander",
             f"agent.ipmd.skill_commander_checkpoint_path={planner_checkpoint}",
-            "agent.ipmd.skill_commander_embeddings_path=",
+            embeddings_override,
             f"agent.ipmd.skill_commander_flow_num_inference_steps={args.flow_num_inference_steps}",
             f"agent.ipmd.skill_commander_flow_inference_noise_std={args.flow_inference_noise_std}",
             "agent.ipmd.skill_commander_use_achieved_state=true",
@@ -488,6 +523,11 @@ def main() -> int:
     checkpoint = _resolve(args.checkpoint)
     planner_checkpoint = _resolve(args.planner_checkpoint)
     skill_checkpoint = _resolve(args.skill_checkpoint)
+    language_embeddings = (
+        _resolve(args.language_embeddings)
+        if str(args.language_embeddings).strip()
+        else None
+    )
     root = _output_root(args.output_root)
     merged_dir = root / "merged_rollout_training_samples"
     collect_root = root / "collect"
@@ -504,6 +544,10 @@ def main() -> int:
     ):
         if not path.exists():
             raise FileNotFoundError(f"{label} does not exist: {path}")
+    if language_embeddings is not None and not language_embeddings.exists():
+        raise FileNotFoundError(
+            f"language_embeddings does not exist: {language_embeddings}"
+        )
     if int(args.chunk_rows) <= 0:
         raise ValueError("--chunk_rows must be > 0.")
 
@@ -528,6 +572,9 @@ def main() -> int:
         "checkpoint": str(checkpoint),
         "planner_checkpoint": str(planner_checkpoint),
         "skill_checkpoint": str(skill_checkpoint),
+        "language_embeddings": (
+            str(language_embeddings) if language_embeddings is not None else ""
+        ),
         "ranks": ranks,
         "seeds": seeds,
         "eval_ranks": eval_ranks,
@@ -580,6 +627,7 @@ def main() -> int:
                         checkpoint=checkpoint,
                         planner_checkpoint=planner_checkpoint,
                         skill_checkpoint=skill_checkpoint,
+                        language_embeddings=language_embeddings,
                         motion=motion,
                         seed=int(seed),
                         output_dir=collect_dir,
@@ -688,6 +736,7 @@ def main() -> int:
             checkpoint=checkpoint,
             skill_checkpoint=skill_checkpoint,
             planner_checkpoint=finetuned_checkpoint,
+            language_embeddings=language_embeddings,
             motion=motion,
             seed=seeds[0] if seeds else 0,
             output_dir=eval_dir,
