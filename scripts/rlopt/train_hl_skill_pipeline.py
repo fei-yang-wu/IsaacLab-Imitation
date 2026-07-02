@@ -184,6 +184,8 @@ def _pretrain_cmd(args: argparse.Namespace, output_dir: Path) -> list[str]:
             str(args.diffsr_feature_dim),
             "--diffsr_embed_dim",
             str(args.diffsr_embed_dim),
+            "--diffsr_phi_parameterization",
+            args.diffsr_phi_parameterization,
             "--batch_size",
             str(args.pretrain_batch_size),
             "--num_updates",
@@ -398,6 +400,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--vq-dead-code-reset-iters", type=int, default=0)
     parser.add_argument("--diffsr-feature-dim", type=int, default=256)
     parser.add_argument("--diffsr-embed-dim", type=int, default=512)
+    parser.add_argument(
+        "--diffsr-phi-parameterization",
+        choices=("concat", "bilinear"),
+        default="concat",
+        help="DiffSR phi(s,z) parameterization forwarded to skill pretraining.",
+    )
     parser.add_argument(
         "--pretrain-override",
         action="append",
