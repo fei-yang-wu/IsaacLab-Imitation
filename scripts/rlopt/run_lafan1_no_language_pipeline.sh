@@ -14,8 +14,14 @@ export ACCEPT_EULA="${ACCEPT_EULA:-Y}"
 export PRIVACY_CONSENT="${PRIVACY_CONSENT:-Y}"
 export TMPDIR="${TMPDIR:-/data/tmp/isaaclab_pipeline}"
 export ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT="${ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT:-/data/tmp/isaaclab_unitree_usd}"
-mkdir -p "${TMPDIR}"
-mkdir -p "${ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT}"
+if ! mkdir -p "${TMPDIR}" 2>/dev/null; then
+    export TMPDIR="${REPO_ROOT}/.tmp/isaaclab_pipeline"
+    mkdir -p "${TMPDIR}"
+fi
+if ! mkdir -p "${ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT}" 2>/dev/null; then
+    export ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT="${REPO_ROOT}/.tmp/isaaclab_unitree_usd"
+    mkdir -p "${ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT}"
+fi
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 TASK="${TASK:-Isaac-Imitation-G1-Latent-v0}"
@@ -44,6 +50,21 @@ PLANNER_FLOW_TIME_DIM="${PLANNER_FLOW_TIME_DIM:-64}"
 PLANNER_FLOW_TRAIN_NOISE_STD="${PLANNER_FLOW_TRAIN_NOISE_STD:-1.0}"
 PLANNER_FLOW_INFERENCE_NOISE_STD="${PLANNER_FLOW_INFERENCE_NOISE_STD:-1.0}"
 PLANNER_EVAL_FLOW_NOISE_STD="${PLANNER_EVAL_FLOW_NOISE_STD:-0.0}"
+PLANNER_DIFFUSION_TRAIN_TIMESTEPS="${PLANNER_DIFFUSION_TRAIN_TIMESTEPS:-100}"
+PLANNER_DIFFUSION_STEPS="${PLANNER_DIFFUSION_STEPS:-16}"
+PLANNER_DIFFUSION_TIME_DIM="${PLANNER_DIFFUSION_TIME_DIM:-64}"
+PLANNER_DIFFUSION_BETA_SCHEDULE="${PLANNER_DIFFUSION_BETA_SCHEDULE:-squaredcos_cap_v2}"
+PLANNER_DIFFUSION_SCHEDULER="${PLANNER_DIFFUSION_SCHEDULER:-ddim}"
+PLANNER_DIFFUSION_DDIM_ETA="${PLANNER_DIFFUSION_DDIM_ETA:-0.0}"
+PLANNER_DIFFUSION_INFERENCE_NOISE_STD="${PLANNER_DIFFUSION_INFERENCE_NOISE_STD:-1.0}"
+PLANNER_EVAL_DIFFUSION_NOISE_STD="${PLANNER_EVAL_DIFFUSION_NOISE_STD:-0.0}"
+PLANNER_DIT_MODEL_DIM="${PLANNER_DIT_MODEL_DIM:-176}"
+PLANNER_DIT_NUM_LAYERS="${PLANNER_DIT_NUM_LAYERS:-4}"
+PLANNER_DIT_NUM_HEADS="${PLANNER_DIT_NUM_HEADS:-8}"
+PLANNER_DIT_FEEDFORWARD_DIM="${PLANNER_DIT_FEEDFORWARD_DIM:-704}"
+PLANNER_DIT_PATCH_DIM="${PLANNER_DIT_PATCH_DIM:-16}"
+PLANNER_DIT_NUM_STATE_TOKENS="${PLANNER_DIT_NUM_STATE_TOKENS:-4}"
+PLANNER_DIT_DROPOUT="${PLANNER_DIT_DROPOUT:-0.0}"
 LOW_LEVEL_MAX_ITERATIONS="${LOW_LEVEL_MAX_ITERATIONS:-10000}"
 LOW_LEVEL_VIDEO_LENGTH="${LOW_LEVEL_VIDEO_LENGTH:-500}"
 LOW_LEVEL_VIDEO_INTERVAL="${LOW_LEVEL_VIDEO_INTERVAL:-2500}"
@@ -69,7 +90,7 @@ ROLLOUT_FT_BATCH_SIZE="${ROLLOUT_FT_BATCH_SIZE:-256}"
 ROLLOUT_FT_LR="${ROLLOUT_FT_LR:-1.0e-4}"
 ROLLOUT_FT_FLOW_LOSS_COEFF="${ROLLOUT_FT_FLOW_LOSS_COEFF:-1.0}"
 ROLLOUT_FT_ENDPOINT_LOSS_COEFF="${ROLLOUT_FT_ENDPOINT_LOSS_COEFF:-1.0}"
-RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_lafan1_h${HORIZON_STEPS}_hist$((STATE_HISTORY_STEPS + 1))_no_language_flow}"
+RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_lafan1_h${HORIZON_STEPS}_hist$((STATE_HISTORY_STEPS + 1))_no_language_${PLANNER_TYPE}}"
 RUN_ROOT="${RUN_ROOT:-logs/lafan1_no_language_pipeline/${RUN_ID}}"
 
 if [[ ! -f "${MANIFEST_PATH}" ]]; then
@@ -115,7 +136,7 @@ manifest_path=${MANIFEST_ABS}
 dataset_path=${DATASET_ABS}
 language_condition=${LANGUAGE_CONDITION}
 system0=low_level_policy
-system1=no_language_history_flow_planner
+system1=no_language_history_${PLANNER_TYPE}_planner
 system2=absent
 horizon_steps=${HORIZON_STEPS}
 planner_state_history_steps=${STATE_HISTORY_STEPS}
@@ -199,6 +220,20 @@ else
         --flow_time_embed_dim "${PLANNER_FLOW_TIME_DIM}" \
         --flow_train_noise_std "${PLANNER_FLOW_TRAIN_NOISE_STD}" \
         --flow_inference_noise_std "${PLANNER_FLOW_INFERENCE_NOISE_STD}" \
+        --diffusion_num_train_timesteps "${PLANNER_DIFFUSION_TRAIN_TIMESTEPS}" \
+        --diffusion_num_inference_steps "${PLANNER_DIFFUSION_STEPS}" \
+        --diffusion_time_embed_dim "${PLANNER_DIFFUSION_TIME_DIM}" \
+        --diffusion_beta_schedule "${PLANNER_DIFFUSION_BETA_SCHEDULE}" \
+        --diffusion_inference_scheduler "${PLANNER_DIFFUSION_SCHEDULER}" \
+        --diffusion_ddim_eta "${PLANNER_DIFFUSION_DDIM_ETA}" \
+        --diffusion_inference_noise_std "${PLANNER_DIFFUSION_INFERENCE_NOISE_STD}" \
+        --dit_model_dim "${PLANNER_DIT_MODEL_DIM}" \
+        --dit_num_layers "${PLANNER_DIT_NUM_LAYERS}" \
+        --dit_num_heads "${PLANNER_DIT_NUM_HEADS}" \
+        --dit_feedforward_dim "${PLANNER_DIT_FEEDFORWARD_DIM}" \
+        --dit_patch_dim "${PLANNER_DIT_PATCH_DIM}" \
+        --dit_num_state_tokens "${PLANNER_DIT_NUM_STATE_TOKENS}" \
+        --dit_dropout "${PLANNER_DIT_DROPOUT}" \
         --batch_size "${PLANNER_BATCH_SIZE}" \
         --num_updates "${PLANNER_UPDATES}" \
         --log_interval 100 \
@@ -236,6 +271,10 @@ if [[ "${RUN_M1_EVAL}" == "1" ]]; then
         --per_trajectory_batches 4 \
         --flow_inference_noise_std "${PLANNER_EVAL_FLOW_NOISE_STD}" \
         --flow_num_inference_steps "${PLANNER_FLOW_STEPS}" \
+        --diffusion_num_inference_steps "${PLANNER_DIFFUSION_STEPS}" \
+        --diffusion_inference_scheduler "${PLANNER_DIFFUSION_SCHEDULER}" \
+        --diffusion_ddim_eta "${PLANNER_DIFFUSION_DDIM_ETA}" \
+        --diffusion_inference_noise_std "${PLANNER_EVAL_DIFFUSION_NOISE_STD}" \
         "env.lafan1_manifest_path=${MANIFEST_ABS}" \
         "env.dataset_path=${DATASET_ABS}" \
         "env.refresh_zarr_dataset=false"
@@ -260,6 +299,14 @@ COMMON_LATENT_OVERRIDES=(
     "agent.ipmd.reward_logit_reg_coeff=0.0"
     "agent.ipmd.reward_param_weight_decay_coeff=0.0"
 )
+LATENT_EXTRA_OVERRIDES="${LATENT_EXTRA_OVERRIDES:-}"
+if [[ -n "${LATENT_EXTRA_OVERRIDES}" ]]; then
+    # Optional space-separated Hydra overrides for checkpoint-era low-levels.
+    # Example: LATENT_EXTRA_OVERRIDES='agent.bilinear.phi_parameterization=bilinear'
+    # shellcheck disable=SC2206
+    LATENT_EXTRA_OVERRIDES_LIST=(${LATENT_EXTRA_OVERRIDES})
+    COMMON_LATENT_OVERRIDES+=("${LATENT_EXTRA_OVERRIDES_LIST[@]}")
+fi
 
 LOW_LEVEL_LOG_DIR="${LOW_LEVEL_LOG_DIR:-}"
 LOW_LEVEL_CHECKPOINT="${LOW_LEVEL_CHECKPOINT:-}"
@@ -322,6 +369,10 @@ CLOSED_LOOP_COMMON_ARGS=(
     --metric_interval "${ROLLOUT_FT_METRIC_INTERVAL}"
     --flow_num_inference_steps "${PLANNER_FLOW_STEPS}"
     --flow_inference_noise_std "${PLANNER_EVAL_FLOW_NOISE_STD}"
+    --diffusion_num_inference_steps "${PLANNER_DIFFUSION_STEPS}"
+    --diffusion_inference_scheduler "${PLANNER_DIFFUSION_SCHEDULER}"
+    --diffusion_ddim_eta "${PLANNER_DIFFUSION_DDIM_ETA}"
+    --diffusion_inference_noise_std "${PLANNER_EVAL_DIFFUSION_NOISE_STD}"
 )
 if [[ -n "${ROLLOUT_FT_MOTION_NAME}" ]]; then
     CLOSED_LOOP_COMMON_ARGS+=(--motion_name "${ROLLOUT_FT_MOTION_NAME}")
@@ -365,6 +416,10 @@ else
         "agent.ipmd.skill_commander_embeddings_path=" \
         "agent.ipmd.skill_commander_flow_num_inference_steps=${PLANNER_FLOW_STEPS}" \
         "agent.ipmd.skill_commander_flow_inference_noise_std=${PLANNER_EVAL_FLOW_NOISE_STD}" \
+        "agent.ipmd.skill_commander_diffusion_num_inference_steps=${PLANNER_DIFFUSION_STEPS}" \
+        "agent.ipmd.skill_commander_diffusion_inference_scheduler=${PLANNER_DIFFUSION_SCHEDULER}" \
+        "agent.ipmd.skill_commander_diffusion_ddim_eta=${PLANNER_DIFFUSION_DDIM_ETA}" \
+        "agent.ipmd.skill_commander_diffusion_inference_noise_std=${PLANNER_EVAL_DIFFUSION_NOISE_STD}" \
         "agent.ipmd.skill_commander_use_achieved_state=false" \
         "agent.ipmd.hl_skill_finetune_enabled=false" \
         "${COMMON_LATENT_OVERRIDES[@]}"
@@ -416,7 +471,11 @@ run_cmd "${PYTHON_BIN}" scripts/rlopt/finetune_skill_commander_rollout.py \
     --flow_loss_coeff "${ROLLOUT_FT_FLOW_LOSS_COEFF}" \
     --endpoint_loss_coeff "${ROLLOUT_FT_ENDPOINT_LOSS_COEFF}" \
     --flow_num_inference_steps "${PLANNER_FLOW_STEPS}" \
-    --flow_inference_noise_std "${PLANNER_EVAL_FLOW_NOISE_STD}"
+    --flow_inference_noise_std "${PLANNER_EVAL_FLOW_NOISE_STD}" \
+    --diffusion_num_inference_steps "${PLANNER_DIFFUSION_STEPS}" \
+    --diffusion_inference_scheduler "${PLANNER_DIFFUSION_SCHEDULER}" \
+    --diffusion_ddim_eta "${PLANNER_DIFFUSION_DDIM_ETA}" \
+    --diffusion_inference_noise_std "${PLANNER_EVAL_DIFFUSION_NOISE_STD}"
 
 if [[ ! -f "${ROLLOUT_FT_CHECKPOINT}" ]]; then
     log "Missing rollout-finetuned planner checkpoint: ${ROLLOUT_FT_CHECKPOINT}"
@@ -434,6 +493,10 @@ ROLLOUT_FT_EVAL_ARGS=(
     "agent.ipmd.skill_commander_embeddings_path="
     "agent.ipmd.skill_commander_flow_num_inference_steps=${PLANNER_FLOW_STEPS}"
     "agent.ipmd.skill_commander_flow_inference_noise_std=${PLANNER_EVAL_FLOW_NOISE_STD}"
+    "agent.ipmd.skill_commander_diffusion_num_inference_steps=${PLANNER_DIFFUSION_STEPS}"
+    "agent.ipmd.skill_commander_diffusion_inference_scheduler=${PLANNER_DIFFUSION_SCHEDULER}"
+    "agent.ipmd.skill_commander_diffusion_ddim_eta=${PLANNER_DIFFUSION_DDIM_ETA}"
+    "agent.ipmd.skill_commander_diffusion_inference_noise_std=${PLANNER_EVAL_DIFFUSION_NOISE_STD}"
     "agent.ipmd.skill_commander_use_achieved_state=true"
     "agent.ipmd.hl_skill_finetune_enabled=false"
     "${COMMON_LATENT_OVERRIDES[@]}"

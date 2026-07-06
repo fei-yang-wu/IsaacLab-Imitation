@@ -149,6 +149,12 @@ parser.add_argument(
     help="Continue after env done/reset events instead of stopping at first done.",
 )
 parser.add_argument(
+    "--disable_env_terminations",
+    action="store_true",
+    default=False,
+    help="Disable all env termination terms before env creation; outer --max_steps controls rollout length.",
+)
+parser.add_argument(
     "--save_rollout_training_samples",
     action="store_true",
     default=False,
@@ -338,6 +344,15 @@ def _skill_commander_planner_metadata(
         "diffusion_num_inference_steps",
         "flow_inference_noise_std",
         "diffusion_inference_noise_std",
+        "diffusion_inference_scheduler",
+        "diffusion_ddim_eta",
+        "dit_model_dim",
+        "dit_num_layers",
+        "dit_num_heads",
+        "dit_feedforward_dim",
+        "dit_patch_dim",
+        "dit_num_state_tokens",
+        "dit_dropout",
     ):
         value = config_values.get(key)
         if value not in (None, ""):
@@ -642,6 +657,28 @@ def _disable_non_reference_terminations(terminations: Any) -> None:
             setattr(terminations, name, None)
 
 
+def _disable_all_terminations(terminations: Any) -> list[str]:
+    names = set(getattr(terminations, "__dict__", {}).keys())
+    names.update(
+        (
+            "time_out",
+            "reference_finished",
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "base_too_low",
+        )
+    )
+    disabled: list[str] = []
+    for name in sorted(names):
+        if name.startswith("_"):
+            continue
+        if hasattr(terminations, name) and getattr(terminations, name) is not None:
+            setattr(terminations, name, None)
+            disabled.append(str(name))
+    return disabled
+
+
 def _planner_state(batch: Any, state_history_steps: int) -> Tensor:
     if int(state_history_steps) > 0:
         state_history = batch.get(("hl", "state_history"))
@@ -812,10 +849,17 @@ def main(
             if hasattr(env_cfg, name):
                 setattr(env_cfg, name, value)
     terminations = getattr(env_cfg, "terminations", None)
-    if not args_cli.keep_time_out:
+    disabled_termination_terms: list[str] = []
+    if args_cli.disable_env_terminations:
+        if terminations is not None:
+            disabled_termination_terms = _disable_all_terminations(terminations)
+    elif not args_cli.keep_time_out:
         if terminations is not None and hasattr(terminations, "time_out"):
             terminations.time_out = None
-    if not args_cli.keep_early_terminations:
+    if (
+        not args_cli.disable_env_terminations
+        and not args_cli.keep_early_terminations
+    ):
         if terminations is not None:
             _disable_non_reference_terminations(terminations)
 
@@ -850,6 +894,8 @@ def main(
         "keep_time_out": bool(args_cli.keep_time_out),
         "keep_early_terminations": bool(args_cli.keep_early_terminations),
         "continue_after_reset": bool(args_cli.continue_after_reset),
+        "disable_env_terminations": bool(args_cli.disable_env_terminations),
+        "disabled_termination_terms": disabled_termination_terms,
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),
         "command": " ".join(sys.orig_argv),
     }
@@ -923,7 +969,16 @@ def main(
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
-    agent.load_model(str(checkpoint_path))
+    try:
+        agent.load_model(str(checkpoint_path))
+    except Exception as exc:
+        print(
+            "[ERROR] Failed to load low-level checkpoint "
+            f"{checkpoint_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise
     collector_policy = agent.collector_policy
     collector_policy.eval()
 
@@ -1138,6 +1193,7 @@ def main(
         "saved_rows": int(saved_sample_rows),
         "saved_steps": int(saved_sample_files),
         "sample_file_count": int(saved_sample_files),
+        "disabled_termination_terms": disabled_termination_terms,
     }
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))

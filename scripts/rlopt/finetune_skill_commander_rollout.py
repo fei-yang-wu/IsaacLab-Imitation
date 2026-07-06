@@ -14,6 +14,7 @@ import torch
 import torch.nn.functional as F
 import yaml
 from rlopt.agent.skill_commander import (
+    DiTLatentSkillCommander,
     DiffusionSkillCommander,
     FlowMatchingSkillCommander,
     _build_skill_commander_generator_from_checkpoint,
@@ -74,6 +75,31 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Override flow inference noise std for endpoint loss/eval.",
+    )
+    parser.add_argument(
+        "--diffusion_num_inference_steps",
+        type=int,
+        default=None,
+        help="Override diffusion inference steps for endpoint loss/eval.",
+    )
+    parser.add_argument(
+        "--diffusion_inference_scheduler",
+        type=str,
+        default=None,
+        choices=("ddpm", "ddim"),
+        help="Override diffusion inference scheduler for endpoint loss/eval.",
+    )
+    parser.add_argument(
+        "--diffusion_ddim_eta",
+        type=float,
+        default=None,
+        help="Override DDIM eta for endpoint loss/eval.",
+    )
+    parser.add_argument(
+        "--diffusion_inference_noise_std",
+        type=float,
+        default=None,
+        help="Override diffusion inference noise std for endpoint loss/eval.",
     )
     return parser.parse_args()
 
@@ -198,7 +224,7 @@ def _loss(
         loss = loss + float(flow_loss_coeff) * flow_loss
         metrics.update({f"train/{key}": value for key, value in flow_metrics.items()})
         metrics["train/flow_loss"] = float(flow_loss.detach().item())
-    elif isinstance(generator, DiffusionSkillCommander):
+    elif isinstance(generator, (DiffusionSkillCommander, DiTLatentSkillCommander)):
         diffusion_loss, diffusion_metrics = generator.diffusion_loss(
             state, lang, z_target
         )
@@ -256,6 +282,10 @@ def main() -> None:
     config_overrides = {
         "flow_num_inference_steps": args.flow_num_inference_steps,
         "flow_inference_noise_std": args.flow_inference_noise_std,
+        "diffusion_num_inference_steps": args.diffusion_num_inference_steps,
+        "diffusion_inference_scheduler": args.diffusion_inference_scheduler,
+        "diffusion_ddim_eta": args.diffusion_ddim_eta,
+        "diffusion_inference_noise_std": args.diffusion_inference_noise_std,
     }
     generator = _build_skill_commander_generator_from_checkpoint(
         checkpoint,
@@ -337,6 +367,20 @@ def main() -> None:
     if args.flow_num_inference_steps is not None:
         config["flow_num_inference_steps"] = int(args.flow_num_inference_steps)
     config["flow_inference_noise_std"] = float(args.flow_inference_noise_std)
+    if args.diffusion_num_inference_steps is not None:
+        config["diffusion_num_inference_steps"] = int(
+            args.diffusion_num_inference_steps
+        )
+    if args.diffusion_inference_scheduler is not None:
+        config["diffusion_inference_scheduler"] = str(
+            args.diffusion_inference_scheduler
+        )
+    if args.diffusion_ddim_eta is not None:
+        config["diffusion_ddim_eta"] = float(args.diffusion_ddim_eta)
+    if args.diffusion_inference_noise_std is not None:
+        config["diffusion_inference_noise_std"] = float(
+            args.diffusion_inference_noise_std
+        )
     output_checkpoint["config"] = config
     output_checkpoint["generator_state_dict"] = generator.state_dict()
     output_checkpoint["optimizer_state_dict"] = optimizer.state_dict()
@@ -375,6 +419,20 @@ def main() -> None:
     if args.flow_num_inference_steps is not None:
         checkpoint_metadata["flow_num_inference_steps"] = int(
             args.flow_num_inference_steps
+        )
+    if args.diffusion_num_inference_steps is not None:
+        checkpoint_metadata["diffusion_num_inference_steps"] = int(
+            args.diffusion_num_inference_steps
+        )
+    if args.diffusion_inference_scheduler is not None:
+        checkpoint_metadata["diffusion_inference_scheduler"] = str(
+            args.diffusion_inference_scheduler
+        )
+    if args.diffusion_ddim_eta is not None:
+        checkpoint_metadata["diffusion_ddim_eta"] = float(args.diffusion_ddim_eta)
+    if args.diffusion_inference_noise_std is not None:
+        checkpoint_metadata["diffusion_inference_noise_std"] = float(
+            args.diffusion_inference_noise_std
         )
     output_checkpoint["metadata"] = checkpoint_metadata
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)

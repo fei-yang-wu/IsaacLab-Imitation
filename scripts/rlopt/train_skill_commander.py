@@ -90,7 +90,7 @@ parser.add_argument(
     "--planner_type",
     type=str,
     default=None,
-    choices=("mlp", "flow_matching", "diffusion_policy"),
+    choices=("mlp", "flow_matching", "diffusion_policy", "dit", "dit_diffusion"),
     help="Planner architecture for (state, language) -> skill z.",
 )
 parser.add_argument(
@@ -167,6 +167,48 @@ parser.add_argument(
     type=float,
     default=None,
     help="Gaussian source std for diffusion-policy inference.",
+)
+parser.add_argument(
+    "--dit_model_dim",
+    type=int,
+    default=None,
+    help="Transformer width for dit_diffusion planner.",
+)
+parser.add_argument(
+    "--dit_num_layers",
+    type=int,
+    default=None,
+    help="Transformer layer count for dit_diffusion planner.",
+)
+parser.add_argument(
+    "--dit_num_heads",
+    type=int,
+    default=None,
+    help="Attention head count for dit_diffusion planner.",
+)
+parser.add_argument(
+    "--dit_feedforward_dim",
+    type=int,
+    default=None,
+    help="Transformer feedforward width for dit_diffusion planner.",
+)
+parser.add_argument(
+    "--dit_patch_dim",
+    type=int,
+    default=None,
+    help="Latent z patch width for dit_diffusion planner.",
+)
+parser.add_argument(
+    "--dit_num_state_tokens",
+    type=int,
+    default=None,
+    help="Number of state-conditioning tokens for dit_diffusion planner.",
+)
+parser.add_argument(
+    "--dit_dropout",
+    type=float,
+    default=None,
+    help="Transformer dropout probability for dit_diffusion planner.",
 )
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
 parser.add_argument("--num_updates", type=int, default=2000, help="Training updates.")
@@ -377,6 +419,13 @@ def _build_trainer_config() -> SkillCommanderConfig:
         ("diffusion_inference_scheduler", "diffusion_inference_scheduler"),
         ("diffusion_ddim_eta", "diffusion_ddim_eta"),
         ("diffusion_inference_noise_std", "diffusion_inference_noise_std"),
+        ("dit_model_dim", "dit_model_dim"),
+        ("dit_num_layers", "dit_num_layers"),
+        ("dit_num_heads", "dit_num_heads"),
+        ("dit_feedforward_dim", "dit_feedforward_dim"),
+        ("dit_patch_dim", "dit_patch_dim"),
+        ("dit_num_state_tokens", "dit_num_state_tokens"),
+        ("dit_dropout", "dit_dropout"),
         ("state_feature_dropout_prob", "state_feature_dropout_prob"),
         ("state_feature_dropout_mode", "state_feature_dropout_mode"),
         (

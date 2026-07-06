@@ -43,6 +43,13 @@ parser.add_argument("--output_json", type=Path, default=None)
 parser.add_argument("--output_csv", type=Path, default=None)
 parser.add_argument("--append_csv", action="store_true", default=False)
 parser.add_argument("--label", type=str, default="")
+parser.add_argument("--video", action="store_true", default=False, help="Record video.")
+parser.add_argument(
+    "--video_length",
+    type=int,
+    default=0,
+    help="Recorded video length in steps. <=0 uses --steps.",
+)
 parser.add_argument("--motion_manifest", type=Path, default=None)
 parser.add_argument("--num_envs", type=int, default=128)
 parser.add_argument("--steps", type=int, default=1000)
@@ -57,10 +64,19 @@ parser.add_argument("--reference_start_frame", type=int, default=0)
 parser.add_argument("--refresh_zarr_dataset", action="store_true", default=False)
 parser.add_argument("--keep_after_done", action="store_true", default=False)
 parser.add_argument(
+    "--disable_env_terminations",
+    action="store_true",
+    default=False,
+    help="Disable env termination terms before env creation; outer --steps controls rollout length.",
+)
+parser.add_argument(
     "--enable_observation_corruption", action="store_true", default=False
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+
+if args_cli.video:
+    args_cli.enable_cameras = True
 
 sys.argv = [sys.argv[0]] + hydra_args
 app_launcher = AppLauncher(args_cli)
@@ -189,6 +205,22 @@ def _sync_env_window_params(env_cfg: object) -> None:
             method()
 
 
+def _disable_env_terminations(env_cfg: object) -> list[str]:
+    terminations = getattr(env_cfg, "terminations", None)
+    if terminations is None:
+        return []
+    disabled: list[str] = []
+    for name in dir(terminations):
+        if name.startswith("_"):
+            continue
+        value = getattr(terminations, name, None)
+        if value is None or callable(value):
+            continue
+        setattr(terminations, name, None)
+        disabled.append(str(name))
+    return disabled
+
+
 def _configured_step_dt(env_cfg: object) -> float | None:
     sim_cfg = getattr(env_cfg, "sim", None)
     sim_dt = float(getattr(sim_cfg, "dt", 0.0) or 0.0)
@@ -226,6 +258,28 @@ def _optional_flat_tensor(
             f"Expected at least {num_envs} values for {key}, got {flat.numel()}."
         )
     return flat[:num_envs]
+
+
+def _termination_term_masks(
+    base_env: ImitationRLEnv, num_envs: int
+) -> dict[str, torch.Tensor]:
+    manager = getattr(base_env, "termination_manager", None)
+    active_terms = tuple(getattr(manager, "active_terms", ()) or ())
+    masks: dict[str, torch.Tensor] = {}
+    for term_name in active_terms:
+        try:
+            value = manager.get_term(term_name)
+        except Exception:
+            continue
+        if not isinstance(value, torch.Tensor):
+            continue
+        flat = value.detach().reshape(-1).to(device="cpu", dtype=torch.bool)
+        if flat.numel() == 1 and num_envs > 1:
+            flat = flat.expand(num_envs)
+        if flat.numel() < num_envs:
+            continue
+        masks[str(term_name)] = flat[:num_envs]
+    return masks
 
 
 def _resolve_existing_body_names(
@@ -467,6 +521,9 @@ def main(
             resolve_manifest_config()
     if hasattr(env_cfg, "refresh_zarr_dataset"):
         env_cfg.refresh_zarr_dataset = bool(args_cli.refresh_zarr_dataset)
+    disabled_termination_terms: list[str] = []
+    if args_cli.disable_env_terminations:
+        disabled_termination_terms = _disable_env_terminations(env_cfg)
     if hasattr(env_cfg, "reference_start_frame"):
         env_cfg.reference_start_frame = int(args_cli.reference_start_frame)
     if hasattr(env_cfg, "random_reset_full_trajectory"):
@@ -499,7 +556,27 @@ def main(
     if hasattr(agent_cfg, "device"):
         agent_cfg.device = env_cfg.sim.device
 
-    raw_env = gym.make(args_cli.task, cfg=env_cfg)
+    render_mode = "rgb_array" if args_cli.video else None
+    raw_env = gym.make(args_cli.task, cfg=env_cfg, render_mode=render_mode)
+    video_folder: Path | None = None
+    video_length = 0
+    if args_cli.video:
+        video_folder = output_root / "videos" / "play"
+        video_length = max(
+            1,
+            int(args_cli.video_length)
+            if int(args_cli.video_length) > 0
+            else int(args_cli.steps),
+        )
+        video_kwargs = {
+            "video_folder": str(video_folder),
+            "step_trigger": lambda step: step == 0,
+            "video_length": video_length,
+            "disable_logger": True,
+        }
+        print("[INFO] Recording interface planner video.")
+        print(f"[INFO] Video options: {video_kwargs}")
+        raw_env = gym.wrappers.RecordVideo(raw_env, **video_kwargs)
     if isinstance(raw_env.unwrapped, DirectMARLEnv):
         raise NotImplementedError("DirectMARLEnv is not supported.")
     env = IsaacLabWrapper(raw_env)
@@ -531,6 +608,11 @@ def main(
     survival_steps = torch.zeros(num_envs, dtype=torch.float32)
     return_sum = torch.zeros(num_envs, dtype=torch.float32)
     done_events = torch.zeros(num_envs, dtype=torch.float32)
+    terminated_events = torch.zeros(num_envs, dtype=torch.float32)
+    truncated_events = torch.zeros(num_envs, dtype=torch.float32)
+    done_first_step = torch.full((num_envs,), -1, dtype=torch.int64)
+    termination_counts: dict[str, int] = {}
+    termination_first_step: dict[str, int] = {}
     metric_stats: dict[str, list[torch.Tensor]] = {}
     previous_action: torch.Tensor | None = None
     valid_transition_count = 0
@@ -619,7 +701,22 @@ def main(
         done_any = dones | terminateds | truncateds
         return_sum += rewards.float() * step_active.float()
         survival_steps += step_active.float()
+        newly_done = done_any & step_active & (done_events <= 0)
         done_events += (done_any & step_active).float()
+        terminated_events += (terminateds & step_active).float()
+        truncated_events += (truncateds & step_active).float()
+        if bool(newly_done.any()):
+            done_first_step[newly_done] = int(step_idx + 1)
+            for term_name, term_mask in _termination_term_masks(
+                base_env, num_envs
+            ).items():
+                hit_count = int((term_mask & newly_done.cpu()).sum().item())
+                if hit_count <= 0:
+                    continue
+                termination_counts[term_name] = (
+                    termination_counts.get(term_name, 0) + hit_count
+                )
+                termination_first_step.setdefault(term_name, int(step_idx + 1))
 
         metric_mask = (
             step_active if args_cli.keep_after_done else step_active & ~done_any
@@ -648,6 +745,16 @@ def main(
         "done_rate": float((done_events[active_mask] > 0).float().mean().item())
         if bool(active_mask.any())
         else float("nan"),
+        "terminated_rate": float(
+            (terminated_events[active_mask] > 0).float().mean().item()
+        )
+        if bool(active_mask.any())
+        else float("nan"),
+        "truncated_rate": float(
+            (truncated_events[active_mask] > 0).float().mean().item()
+        )
+        if bool(active_mask.any())
+        else float("nan"),
         "valid_transition_count": int(valid_transition_count),
         "planner_publish_count": int(planner_publish_count),
     }
@@ -664,6 +771,9 @@ def main(
             "command_future_steps": int(args_cli.command_future_steps),
             "flow_num_inference_steps": int(args_cli.flow_num_inference_steps),
             "flow_inference_noise_std": float(args_cli.flow_inference_noise_std),
+            "video_folder": str(video_folder) if video_folder is not None else None,
+            "video_length": int(video_length) if args_cli.video else None,
+            "disabled_termination_terms": disabled_termination_terms,
             "planner_target_dim": int(target_spec.target_dim),
             "planner_metadata": planner_metadata,
             "num_envs": int(num_envs),
@@ -673,6 +783,14 @@ def main(
             else None,
         },
         "aggregate": aggregate,
+        "termination": {
+            "counts": termination_counts,
+            "first_step": termination_first_step,
+            "done_first_step": [
+                int(value)
+                for value in done_first_step[active_mask].detach().cpu().tolist()
+            ],
+        },
         "metrics": _finalize_metric_stats(metric_stats),
     }
     output_json = args_cli.output_json
