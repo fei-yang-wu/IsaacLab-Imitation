@@ -350,6 +350,8 @@ CLUSTER_WANDB_API_KEY_FILE="$(prefix_home_if_relative "$HOME" "${CLUSTER_WANDB_A
 container_home="${CLUSTER_CONTAINER_HOME:-/home/${USER}}"
 container_triton_cache_dir="${container_home}/.cache/triton"
 container_torchinductor_cache_dir="${container_home}/.cache/torchinductor"
+container_tmpdir="${CLUSTER_CONTAINER_TMPDIR:-/data/tmp/isaaclab-${SLURM_JOB_ID:-$$}}"
+container_unitree_usd_cache_root="${ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT:-/data/tmp/isaaclab_unitree_usd}"
 allow_torch_compile_debug="${CLUSTER_ALLOW_TORCH_COMPILE_DEBUG:-0}"
 auto_setup_g1_data="${CLUSTER_AUTO_SETUP_G1_DATA:-1}"
 cluster_g1_expected_motion_count="${CLUSTER_G1_EXPECTED_MOTION_COUNT:-40}"
@@ -483,7 +485,7 @@ if [ "${auto_setup_g1_data}" = "1" ]; then
     preflight_cmd="$(build_g1_preflight_cmd "${cluster_g1_data_root}" "${cluster_g1_manifest_path}" "${cluster_g1_expected_motion_count}" "${cluster_g1_repo_id}" "${cluster_g1_manifest_refresh_policy}")"
 fi
 printf -v workload_cmd '%q ' /isaac-sim/python.sh "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
-container_entry_cmd="export ACCEPT_EULA=${ACCEPT_EULA:-Y} && export PRIVACY_CONSENT=${PRIVACY_CONSENT:-Y} && export OMNI_KIT_ACCEPT_EULA=YES && export HOME=${container_home} && export XDG_CACHE_HOME=${container_home}/.cache && export XDG_DATA_HOME=${container_home}/.local/share && export ISAACLAB_WORKSPACE_PATH=/workspace/isaaclab/project && export ISAACLAB_PATH=/workspace/isaaclab/project/IsaacLab && export ISAACSIM_PATH=/workspace/isaaclab/project/IsaacLab/_isaac_sim && export ISAACLAB_DATA_DIR=/data && export CLUSTER_DATA_DIR=${CLUSTER_DATA_DIR} && export PYTHONPATH=${container_pythonpath} && export TRITON_CACHE_DIR=${container_triton_cache_dir} && export TORCHINDUCTOR_CACHE_DIR=${container_torchinductor_cache_dir} && export RL_WARNINGS=${RL_WARNINGS:-False} && if [ \"${allow_torch_compile_debug}\" != \"1\" ]; then unset TORCH_LOGS; export TORCHDYNAMO_VERBOSE=0; export TORCH_COMPILE_DEBUG=0; fi && cd /workspace/isaaclab/project"
+container_entry_cmd="mkdir -p ${container_tmpdir} ${container_unitree_usd_cache_root} && export ACCEPT_EULA=${ACCEPT_EULA:-Y} && export PRIVACY_CONSENT=${PRIVACY_CONSENT:-Y} && export OMNI_KIT_ACCEPT_EULA=YES && export HOME=${container_home} && export XDG_CACHE_HOME=${container_home}/.cache && export XDG_DATA_HOME=${container_home}/.local/share && export TMPDIR=${container_tmpdir} && export ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT=${container_unitree_usd_cache_root} && export ISAACLAB_WORKSPACE_PATH=/workspace/isaaclab/project && export ISAACLAB_PATH=/workspace/isaaclab/project/IsaacLab && export ISAACSIM_PATH=/workspace/isaaclab/project/IsaacLab/_isaac_sim && export ISAACLAB_DATA_DIR=/data && export CLUSTER_DATA_DIR=${CLUSTER_DATA_DIR} && export PYTHONPATH=${container_pythonpath} && export TRITON_CACHE_DIR=${container_triton_cache_dir} && export TORCHINDUCTOR_CACHE_DIR=${container_torchinductor_cache_dir} && export RL_WARNINGS=${RL_WARNINGS:-False} && if [ \"${allow_torch_compile_debug}\" != \"1\" ]; then unset TORCH_LOGS; export TORCHDYNAMO_VERBOSE=0; export TORCH_COMPILE_DEBUG=0; fi && cd /workspace/isaaclab/project"
 if [ -n "${preflight_cmd}" ]; then
     container_entry_cmd="${container_entry_cmd} && ${preflight_cmd}"
 fi

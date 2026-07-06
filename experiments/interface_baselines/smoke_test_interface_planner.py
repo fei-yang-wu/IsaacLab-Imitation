@@ -2368,6 +2368,85 @@ def _test_preflight_interface_comparison(tmp: Path) -> None:
     assert report["latent_dataset_path"] == str(latent_dataset)
 
 
+def _test_fixed_planner_dataset_audit(tmp: Path) -> None:
+    samples_dir = tmp / "fixed_dataset_audit_latent_samples"
+    samples_dir.mkdir(exist_ok=True)
+    torch.save(
+        {
+            "step": 0,
+            "planner_state": torch.randn(3, 7),
+            "expert_planner_state": torch.randn(3, 7),
+            "lang": torch.empty(3, 0),
+            "z_target": torch.randn(3, 5),
+            "traj_rank": torch.zeros(3, dtype=torch.long),
+        },
+        samples_dir / "sample_step_000000.pt",
+    )
+    output_json = tmp / "fixed_dataset_audit.json"
+    script = Path(__file__).with_name("audit_fixed_planner_datasets.py")
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(samples_dir),
+            "--require_same_hash",
+            "--write_manifest",
+            "--json_out",
+            str(output_json),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    summary = payload["datasets"][0]
+    assert summary["kind"] == "latent_skill"
+    assert summary["sample_row_count"] == 3
+    assert (samples_dir / "dataset_manifest.json").is_file()
+
+
+def _test_low_level_oracle_fairness_audit(tmp: Path) -> None:
+    summaries = []
+    for index, survival in enumerate((100.0, 98.0)):
+        path = tmp / f"oracle_{index}" / "summary.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "metadata": {"interface": f"interface_{index}"},
+                    "aggregate": {
+                        "survival_steps_mean": survival,
+                        "return_sum_mean": 50.0 + float(index),
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        summaries.append(path)
+    output_json = tmp / "oracle_fairness.json"
+    script = Path(__file__).with_name("audit_low_level_oracle_fairness.py")
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            *(str(path) for path in summaries),
+            "--survival_rel_tol",
+            "0.05",
+            "--return_rel_tol",
+            "0.05",
+            "--json_out",
+            str(output_json),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    assert payload["pass"] is True
+    assert len(payload["rows"]) == 2
+
+
 def main() -> None:
     _test_target_roundtrip()
     with tempfile.TemporaryDirectory() as tmp:
@@ -2401,6 +2480,8 @@ def main() -> None:
         _test_lafan1_heldout_multiseed_wrapper_missing_manifest(tmp_path)
         _test_manifest_splitter_rebases_relative_paths(tmp_path)
         _test_preflight_interface_comparison(tmp_path)
+        _test_fixed_planner_dataset_audit(tmp_path)
+        _test_low_level_oracle_fairness_audit(tmp_path)
     _test_manifest_splitter()
     _test_analyze_interface_sweep()
     _test_flow_training_reduces_error()

@@ -2,9 +2,9 @@
 
 This is a thin orchestration wrapper around the existing Isaac/RLOpt entrypoints:
 
-1. ``scripts/rlopt/train_hl_skill_diffsr.py`` writes a frozen skill encoder
-   checkpoint to ``<pretrain-output-dir>/checkpoints/latest.pt``.
-2. ``scripts/rlopt/train.py`` consumes that checkpoint with
+1. ``scripts/rlopt/train_hl_skill_diffsr.py`` writes frozen skill encoder
+   checkpoints to ``<pretrain-output-dir>/checkpoints/``.
+2. ``scripts/rlopt/train.py`` consumes the selected checkpoint with
    ``agent.ipmd.command_source=hl_skill`` and trains the low-level policy.
 """
 
@@ -86,6 +86,10 @@ def _default_train_exp_name(
     phase_mode: str,
 ) -> str:
     return f"pipeline_{pretrain_output_dir.name}_{phase_mode}"
+
+
+def _selected_pretrain_checkpoint(args: argparse.Namespace, output_dir: Path) -> Path:
+    return output_dir / "checkpoints" / f"{args.pretrain_checkpoint_selection}.pt"
 
 
 def _wandb_api_key_from_netrc(host: str = "api.wandb.ai") -> str | None:
@@ -415,6 +419,15 @@ def _parse_args() -> argparse.Namespace:
         help="Run only high-level skill pretraining and stop after checkpointing.",
     )
     parser.add_argument(
+        "--pretrain-checkpoint-selection",
+        choices=("latest", "best"),
+        default="latest",
+        help=(
+            "High-level skill checkpoint consumed by low-level training after "
+            "pretraining. 'best' selects the lowest held-out eval-loss checkpoint."
+        ),
+    )
+    parser.add_argument(
         "--pretrained-checkpoint",
         default=None,
         help="Existing high-level skill checkpoint used with --skip-pretrain.",
@@ -534,11 +547,14 @@ def main() -> None:
             if args.pretrain_output_dir
             else _default_pretrain_output_dir(args)
         )
-        checkpoint_path = pretrain_output_dir / "checkpoints" / "latest.pt"
+        checkpoint_path = _selected_pretrain_checkpoint(args, pretrain_output_dir)
         print(f"[INFO] High-level skill pretrain output: {pretrain_output_dir}")
         _run(_pretrain_cmd(args, pretrain_output_dir), env=env, dry_run=args.dry_run)
         if args.dry_run:
-            print(f"[INFO] Expected high-level skill checkpoint: {checkpoint_path}")
+            print(
+                "[INFO] Expected high-level skill checkpoint "
+                f"({args.pretrain_checkpoint_selection}): {checkpoint_path}"
+            )
         elif not checkpoint_path.is_file():
             raise FileNotFoundError(
                 "High-level skill pretrain finished without expected checkpoint: "
