@@ -29,6 +29,7 @@ from ...lafan1_manifest import (
     dataset_path_from_entries,
     infer_npz_manifest_control_freq,
     load_lafan1_manifest,
+    load_lafan1_manifest_loader_options,
 )
 
 
@@ -644,6 +645,8 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
     wrap_steps: bool = False
     sync_control_rate_to_manifest: bool = True
     preferred_manifest_physics_fps: float = 240.0
+    lafan1_loader_chunk_size: int | None = None
+    lafan1_loader_shard_size: int | None = None
     reconstructed_reference_action: bool = True
     reconstructed_reference_action_mode = "next_pose"
     random_reset_full_trajectory: bool = True
@@ -790,6 +793,15 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
             return
 
         _, manifest_entries = load_lafan1_manifest(self.lafan1_manifest_path)
+        manifest_loader_options = load_lafan1_manifest_loader_options(
+            self.lafan1_manifest_path
+        )
+        loader_chunk_size = self.lafan1_loader_chunk_size
+        if loader_chunk_size is None:
+            loader_chunk_size = manifest_loader_options.get("chunk_size")
+        loader_shard_size = self.lafan1_loader_shard_size
+        if loader_shard_size is None:
+            loader_shard_size = manifest_loader_options.get("shard_size")
         self._sync_control_rate_to_manifest_entries(
             manifest_entries,
             timing_explicit=timing_explicit,
@@ -800,6 +812,8 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
             sim_dt=float(self.sim.dt),
             decimation=int(self.decimation),
             joint_names=list(self.reference_joint_names),
+            chunk_size=loader_chunk_size,
+            shard_size=loader_shard_size,
         )
 
         if dataset_path_explicit and self.dataset_path is not None:

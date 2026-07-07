@@ -1,0 +1,4 @@
+interface:
+  display_name: "Skynet Job Submission"
+  short_description: "Submit IsaacLab jobs on Skynet safely"
+  default_prompt: "Use $skynet-job-submission to prepare and submit a Skynet Slurm job."

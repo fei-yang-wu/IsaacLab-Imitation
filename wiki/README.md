@@ -18,6 +18,9 @@ Start with:
 - [Closed-Loop Skill Commander Eval](closed-loop-skill-commander-eval.md):
   practical M1, oracle-drive, rollout-finetune, and M3 eval recipe used for the
   Dance102 planner-debug workflow.
+- [BONES Seed Language Planner Memory](bones-seed-language-planner-memory.md):
+  durable snapshot for the BONES demo8 merged language-planner experiment,
+  including artifacts, metrics, paired video outputs, and rerun commands.
 - [Experiment Workflow](experiment-workflow.md): local tests, full cluster job
   submission, and experiment tracking conventions.
 - [Command-Space Ablation](command-space-ablation.md): two-level oracle and
