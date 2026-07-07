@@ -15,6 +15,7 @@ import json
 import random
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -884,44 +885,48 @@ def main(
         print_dict(video_kwargs, nesting=4)
         gym_env = gym.wrappers.RecordVideo(gym_env, **video_kwargs)
 
-    wrapped_env = IsaacLabWrapper(gym_env)
-    wrapped_env = wrapped_env.set_info_dict_reader(
-        IsaacLabTerminalObsReader(
-            observation_spec=wrapped_env.observation_spec, backend="gymnasium"
+    try:
+        wrapped_env = IsaacLabWrapper(gym_env)
+        wrapped_env = wrapped_env.set_info_dict_reader(
+            IsaacLabTerminalObsReader(
+                observation_spec=wrapped_env.observation_spec, backend="gymnasium"
+            )
         )
-    )
-    env = TransformedEnv(
-        base_env=wrapped_env,
-        transform=Compose(
-            RewardSum(),
-            StepCounter(max_steps + 1),
-            RewardClipping(-10.0, 5.0),
-        ),
-    )
-    if not isinstance(raw_isaac_env, ImitationRLEnv):
-        raise TypeError("Expected the unwrapped gym env to be an ImitationRLEnv.")
-    base_env = raw_isaac_env
-    tracked_body_names = _resolve_existing_body_names(
-        base_env, list(G1_TRACKED_BODY_NAMES)
-    )
-    ee_body_names = _resolve_existing_body_names(
-        base_env,
-        list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
-    )
+        env = TransformedEnv(
+            base_env=wrapped_env,
+            transform=Compose(
+                RewardSum(),
+                StepCounter(max_steps + 1),
+                RewardClipping(-10.0, 5.0),
+            ),
+        )
+        if not isinstance(raw_isaac_env, ImitationRLEnv):
+            raise TypeError("Expected the unwrapped gym env to be an ImitationRLEnv.")
+        base_env = raw_isaac_env
+        tracked_body_names = _resolve_existing_body_names(
+            base_env, list(G1_TRACKED_BODY_NAMES)
+        )
+        ee_body_names = _resolve_existing_body_names(
+            base_env,
+            list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
+        )
 
-    planner_checkpoint = torch.load(
-        planner_checkpoint_path,
-        map_location="cpu",
-        weights_only=False,
-    )
-    trainer_config = _trainer_config_from_checkpoint(planner_checkpoint)
-    trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
-    trainer.generator.load_state_dict(planner_checkpoint["generator_state_dict"])
-    trainer.update = int(planner_checkpoint.get("update", 0))
-    trainer.generator.eval()
+        planner_checkpoint = torch.load(
+            planner_checkpoint_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+        trainer_config = _trainer_config_from_checkpoint(planner_checkpoint)
+        trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
+        trainer.generator.load_state_dict(planner_checkpoint["generator_state_dict"])
+        trainer.update = int(planner_checkpoint.get("update", 0))
+        trainer.generator.eval()
 
-    agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
-    agent = agent_class(env=env, config=agent_cfg)
+        agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
+        agent = agent_class(env=env, config=agent_cfg)
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        raise
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
     agent.load_model(str(checkpoint_path))
     collector_policy = agent.collector_policy
