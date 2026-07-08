@@ -45,6 +45,24 @@ parser.add_argument(
     help="Log M3 diagnostics every N simulation steps.",
 )
 parser.add_argument(
+    "--tracking_success_root_height_threshold",
+    type=float,
+    default=0.25,
+    help=(
+        "Tracking failure threshold for absolute root-height "
+        "deviation from the reference. Set <=0 to disable this criterion."
+    ),
+)
+parser.add_argument(
+    "--tracking_success_root_ori_threshold",
+    type=float,
+    default=1.0,
+    help=(
+        "Tracking failure threshold for root orientation error in "
+        "radians. Set <=0 to disable this criterion."
+    ),
+)
+parser.add_argument(
     "--disable_fabric",
     action="store_true",
     default=False,
@@ -473,12 +491,39 @@ def _mean_body_pose_errors(
     return pos_error, ori_error.mean(dim=-1)
 
 
+def _body_tracking_tensors(
+    base_env: ImitationRLEnv,
+    names: list[str],
+) -> dict[str, Tensor] | None:
+    if len(names) == 0:
+        return None
+    body_ids = [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
+    actual_pos, actual_quat = base_env._get_robot_body_pose_w_fast(body_ids)
+    ref_pos, ref_quat = base_env._get_reference_body_pose_w_fast(tuple(names))
+    actual_ang_vel, actual_lin_vel = base_env._get_robot_body_velocity_w_fast(body_ids)
+    ref_ang_vel, ref_lin_vel = base_env._get_reference_body_velocity_w_fast(
+        tuple(names)
+    )
+    return {
+        "actual_pos": actual_pos,
+        "actual_quat": actual_quat,
+        "actual_ang_vel": actual_ang_vel,
+        "actual_lin_vel": actual_lin_vel,
+        "ref_pos": ref_pos,
+        "ref_quat": ref_quat,
+        "ref_ang_vel": ref_ang_vel,
+        "ref_lin_vel": ref_lin_vel,
+    }
+
+
 def _tracking_metrics(
     base_env: ImitationRLEnv,
     *,
     tracked_body_names: list[str],
     ee_body_names: list[str],
-) -> dict[str, Tensor]:
+    tracking_success_root_height_threshold: float,
+    tracking_success_root_ori_threshold: float,
+) -> tuple[dict[str, Tensor], tuple[Tensor, Tensor] | None, Tensor]:
     robot_data = base_env.robot.data
     root_pos_ref, root_quat_ref, root_lin_vel_ref, root_ang_vel_ref = (
         base_env._get_reference_root_state_w_fast()
@@ -486,11 +531,23 @@ def _tracking_metrics(
     joint_pos_ref = base_env.current_expert_frame["joint_pos"]
     joint_vel_ref = base_env.current_expert_frame["joint_vel"]
     root_pos_error = robot_data.root_pos_w - root_pos_ref
+    root_ori_error = math_utils.quat_error_magnitude(
+        robot_data.root_quat_w, root_quat_ref
+    )
+    root_height_error = torch.abs(root_pos_error[:, 2])
+    tracking_failure = torch.zeros_like(root_height_error, dtype=torch.bool)
+    if float(tracking_success_root_height_threshold) > 0.0:
+        tracking_failure |= root_height_error > float(
+            tracking_success_root_height_threshold
+        )
+    if float(tracking_success_root_ori_threshold) > 0.0:
+        tracking_failure |= root_ori_error > float(tracking_success_root_ori_threshold)
     metrics = {
+        "tracking_failure": tracking_failure.float(),
+        "root_pos_xyz_error_m": torch.linalg.vector_norm(root_pos_error, dim=-1),
         "root_pos_xy_error_m": torch.linalg.vector_norm(root_pos_error[:, :2], dim=-1),
-        "root_ori_error_rad": math_utils.quat_error_magnitude(
-            robot_data.root_quat_w, root_quat_ref
-        ),
+        "root_height_error_m": root_height_error,
+        "root_ori_error_rad": root_ori_error,
         "joint_pos_rmse_rad": torch.sqrt(
             torch.mean((robot_data.joint_pos - joint_pos_ref).square(), dim=-1)
         ),
@@ -504,15 +561,45 @@ def _tracking_metrics(
             torch.mean((robot_data.root_ang_vel_w - root_ang_vel_ref).square(), dim=-1)
         ),
     }
-    tracked_errors = _mean_body_pose_errors(base_env, tracked_body_names)
-    if tracked_errors is not None:
-        metrics["tracked_body_pos_error_m"] = tracked_errors[0]
-        metrics["tracked_body_ori_error_rad"] = tracked_errors[1]
+    tracked_body_lin_vel: tuple[Tensor, Tensor] | None = None
+    tracked_tensors = _body_tracking_tensors(base_env, tracked_body_names)
+    if tracked_tensors is not None:
+        tracked_pos_error = torch.linalg.vector_norm(
+            tracked_tensors["actual_pos"] - tracked_tensors["ref_pos"], dim=-1
+        )
+        tracked_ori_error = math_utils.quat_error_magnitude(
+            tracked_tensors["actual_quat"].reshape(-1, 4),
+            tracked_tensors["ref_quat"].reshape(-1, 4),
+        ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
+        actual_root_rel = (
+            tracked_tensors["actual_pos"] - robot_data.root_pos_w[:, None, :]
+        )
+        ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
+        tracking_mpjpe_m = torch.linalg.vector_norm(
+            actual_root_rel - ref_root_rel, dim=-1
+        ).mean(dim=-1)
+        body_lin_vel_error = torch.linalg.vector_norm(
+            tracked_tensors["actual_lin_vel"] - tracked_tensors["ref_lin_vel"], dim=-1
+        ).mean(dim=-1)
+        body_ang_vel_error = torch.linalg.vector_norm(
+            tracked_tensors["actual_ang_vel"] - tracked_tensors["ref_ang_vel"], dim=-1
+        ).mean(dim=-1)
+        metrics["tracked_body_pos_error_m"] = tracked_pos_error.mean(dim=-1)
+        metrics["tracked_body_ori_error_rad"] = tracked_ori_error.mean(dim=-1)
+        metrics["tracked_body_lin_vel_error_mps"] = body_lin_vel_error
+        metrics["tracked_body_ang_vel_error_radps"] = body_ang_vel_error
+        metrics["tracking_mpjpe_m"] = tracking_mpjpe_m
+        metrics["tracking_mpjpe_mm"] = tracking_mpjpe_m * 1000.0
+        metrics["tracking_velocity_distance_mps"] = body_lin_vel_error
+        tracked_body_lin_vel = (
+            tracked_tensors["actual_lin_vel"].detach(),
+            tracked_tensors["ref_lin_vel"].detach(),
+        )
     ee_errors = _mean_body_pose_errors(base_env, ee_body_names)
     if ee_errors is not None:
         metrics["ee_pos_error_m"] = ee_errors[0]
         metrics["ee_ori_error_rad"] = ee_errors[1]
-    return metrics
+    return metrics, tracked_body_lin_vel, tracking_failure
 
 
 def _accumulate_metric(
@@ -851,6 +938,12 @@ def main(
         "keep_early_terminations": bool(args_cli.keep_early_terminations),
         "continue_after_reset": bool(args_cli.continue_after_reset),
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),
+        "tracking_success_root_height_threshold": float(
+            args_cli.tracking_success_root_height_threshold
+        ),
+        "tracking_success_root_ori_threshold": float(
+            args_cli.tracking_success_root_ori_threshold
+        ),
         "command": " ".join(sys.orig_argv),
     }
     (log_dir / "config.yaml").write_text(
@@ -928,6 +1021,8 @@ def main(
     collector_policy.eval()
 
     dt = getattr(env, "step_dt", None)
+    if dt is None:
+        dt = getattr(raw_isaac_env, "step_dt", None)
     env_ids = torch.arange(
         int(env_cfg.scene.num_envs),
         device=torch.device(getattr(raw_isaac_env, "device", env_cfg.sim.device)),
@@ -951,6 +1046,9 @@ def main(
     done_events = torch.zeros(num_envs, dtype=torch.float32)
     rollout_metric_stats: dict[str, list[Tensor]] = {}
     previous_action: Tensor | None = None
+    previous_body_lin_vel: tuple[Tensor, Tensor] | None = None
+    previous_velocity_valid = torch.zeros(num_envs, dtype=torch.bool)
+    tracking_failure_events = torch.zeros(num_envs, dtype=torch.float32)
     valid_transition_count = 0
     rows: list[dict[str, Any]] = []
     samples_dir = log_dir / "rollout_training_samples"
@@ -1046,14 +1144,40 @@ def main(
                 else step_active & ~done_any
             )
             valid_transition_count += int(metric_mask.sum().item())
-            for metric_name, values in _tracking_metrics(
+            tracking_metrics, body_lin_vel, tracking_failure = _tracking_metrics(
                 base_env,
                 tracked_body_names=tracked_body_names,
                 ee_body_names=ee_body_names,
-            ).items():
+                tracking_success_root_height_threshold=float(
+                    args_cli.tracking_success_root_height_threshold
+                ),
+                tracking_success_root_ori_threshold=float(
+                    args_cli.tracking_success_root_ori_threshold
+                ),
+            )
+            tracking_failure_events += (tracking_failure.cpu() & step_active).float()
+            for metric_name, values in tracking_metrics.items():
                 _accumulate_metric(
                     rollout_metric_stats, metric_name, values.cpu(), metric_mask
                 )
+            if body_lin_vel is not None:
+                if previous_body_lin_vel is not None and dt is not None:
+                    actual_lin_vel, ref_lin_vel = body_lin_vel
+                    prev_actual_lin_vel, prev_ref_lin_vel = previous_body_lin_vel
+                    actual_acc = (actual_lin_vel - prev_actual_lin_vel) / float(dt)
+                    ref_acc = (ref_lin_vel - prev_ref_lin_vel) / float(dt)
+                    acceleration_distance = torch.linalg.vector_norm(
+                        actual_acc - ref_acc, dim=-1
+                    ).mean(dim=-1)
+                    acceleration_mask = metric_mask & previous_velocity_valid
+                    _accumulate_metric(
+                        rollout_metric_stats,
+                        "tracking_acceleration_distance_mps2",
+                        acceleration_distance.cpu(),
+                        acceleration_mask,
+                    )
+                previous_body_lin_vel = (body_lin_vel[0].clone(), body_lin_vel[1].clone())
+                previous_velocity_valid = step_active & ~done_any
             if not args_cli.continue_after_reset:
                 active &= ~done_any
             done = _any_done(stepped_td)
@@ -1088,6 +1212,27 @@ def main(
         "done_rate": float((done_events[active_mask] > 0).float().mean().item())
         if bool(active_mask.any())
         else float("nan"),
+        "tracking_success_rate": float(
+            (tracking_failure_events[active_mask] == 0).float().mean().item()
+        )
+        if bool(active_mask.any())
+        else float("nan"),
+        "tracking_failure_rate": float(
+            (tracking_failure_events[active_mask] > 0).float().mean().item()
+        )
+        if bool(active_mask.any())
+        else float("nan"),
+        "tracking_failed_env_count": int(
+            (tracking_failure_events[active_mask] > 0).sum().item()
+        )
+        if bool(active_mask.any())
+        else 0,
+        "tracking_success_root_height_threshold": float(
+            args_cli.tracking_success_root_height_threshold
+        ),
+        "tracking_success_root_ori_threshold": float(
+            args_cli.tracking_success_root_ori_threshold
+        ),
         "valid_transition_count": int(valid_transition_count),
     }
     metric_means = _mean_dict(rows)
