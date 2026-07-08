@@ -534,8 +534,19 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             root_quat = motion.motion_base_rots.cpu().numpy().astype(np.float32)
             root_lin_vel = motion.motion_base_lin_vels.cpu().numpy().astype(np.float32)
             root_ang_vel = motion.motion_base_ang_vels.cpu().numpy().astype(np.float32)
-            joint_pos_target = motion.motion_dof_poss.cpu().numpy().astype(np.float32)
-            joint_vel_target = motion.motion_dof_vels.cpu().numpy().astype(np.float32)
+            # Revert of dd1db87: store joint states in the robot's articulation
+            # (USD) joint order rather than the SDK/source order. The env applies
+            # the reference directly to robot.data.joint_pos (articulation order)
+            # with an identity reference->target remap, so saving articulation
+            # order is what actually matches the robot. `robot_joint_indexes`
+            # maps SDK column k -> articulation slot, mirroring the in-loop
+            # scatter used to drive the robot above.
+            _dof_pos_art = torch.zeros_like(motion.motion_dof_poss)
+            _dof_vel_art = torch.zeros_like(motion.motion_dof_vels)
+            _dof_pos_art[:, robot_joint_indexes] = motion.motion_dof_poss
+            _dof_vel_art[:, robot_joint_indexes] = motion.motion_dof_vels
+            joint_pos_target = _dof_pos_art.cpu().numpy().astype(np.float32)
+            joint_vel_target = _dof_vel_art.cpu().numpy().astype(np.float32)
             log["root_pos"] = root_pos
             log["root_quat"] = root_quat
             log["root_lin_vel"] = root_lin_vel
@@ -548,9 +559,12 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             log["qvel"] = np.concatenate(
                 [root_lin_vel, root_ang_vel, joint_vel_target], axis=-1
             ).astype(np.float32)
-            log["joint_names"] = np.asarray(
-                scene.cfg.robot.joint_sdk_names, dtype=np.str_
-            )
+            # Self-describing: save the honest joint order the arrays are in,
+            # i.e. the robot's articulation (USD) joint order. Downstream the
+            # loader records this as reference_joint_names and remaps it onto
+            # target_joint_names (the robot articulation order), so the data is
+            # correct regardless of the source ordering.
+            log["joint_names"] = np.asarray(robot.joint_names, dtype=np.str_)
 
             np.savez(args_cli.output_name, **log)
             print("[INFO]: Motion npz file saved to", args_cli.output_name)

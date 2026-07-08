@@ -271,9 +271,14 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         target_joint_names = list(getattr(cfg, "target_joint_names", []))
         dataset_joint_names = self._read_reference_joint_names_from_zarr(zarr_path)
         if len(dataset_joint_names) > 0:
-            if len(reference_joint_names) == 0:
-                reference_joint_names = dataset_joint_names
-            elif len(reference_joint_names) != len(dataset_joint_names):
+            # The dataset (zarr) is authoritative for the reference joint order.
+            # The zarr is written in canonical (articulation) order at build time,
+            # so this normally equals the configured order; adopt it whenever it
+            # differs so `reference -> target` remaps correctly for any source.
+            if (
+                len(reference_joint_names) == 0
+                or reference_joint_names != dataset_joint_names
+            ):
                 reference_joint_names = dataset_joint_names
 
         first_transition = rb[0]
