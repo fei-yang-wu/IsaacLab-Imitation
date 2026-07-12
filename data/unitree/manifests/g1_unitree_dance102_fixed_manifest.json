@@ -1,0 +1,41 @@
+{
+  "dataset_name": "lafan1",
+  "dataset": {
+    "trajectories": {
+      "lafan1_csv": [
+        {
+          "name": "dance102",
+          "path": "../npz/g1_fixed/G1_Take_102.bvh_60hz.npz",
+          "input_fps": 50.0,
+          "frame_range": [
+            1,
+            1457
+          ]
+        }
+      ]
+    }
+  },
+  "metadata": {
+    "csv_dir": "../raw/g1",
+    "npz_dir": "../npz/g1_fixed",
+    "num_motions": 1,
+    "input_fps": 60.0,
+    "output_fps": 50.0,
+    "converter_script": "../../../scripts/csv_to_npz.py",
+    "assume_npz_exists": true,
+    "trimmed_motion_count": 1,
+    "source_trim_applied_in_manifest": true,
+    "source_trim_baked_into_npz": false,
+    "requested_frame_range": null,
+    "auto_trim": {
+      "mode": "g1_shoulder_roll",
+      "search_frames": 800,
+      "shoulder_roll_threshold": 1.0,
+      "hold_frames": 5,
+      "pre_roll": 5
+    },
+    "record_videos": false,
+    "video_dir": null,
+    "paths_are_relative_to_manifest": true
+  }
+}
