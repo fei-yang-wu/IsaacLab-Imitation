@@ -16,6 +16,8 @@ SCRIPT_BY_MODE = {
     "dance102-strong-multiseed": "run_dance102_strong_interface_multiseed.sh",
     "lafan1-heldout": "run_lafan1_heldout_strong_interface_comparison.sh",
     "lafan1-heldout-multiseed": "run_lafan1_heldout_strong_interface_multiseed.sh",
+    "lafan1-motion-tracking": "run_lafan1_motion_tracking_evaluation.sh",
+    "lafan1-single-trajectory": "run_lafan1_motion_tracking_evaluation.sh",
     "multimotion-heldout": "run_multimotion_heldout_interface_comparison.sh",
 }
 

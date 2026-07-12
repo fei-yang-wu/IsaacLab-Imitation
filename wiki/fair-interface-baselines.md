@@ -154,6 +154,39 @@ The full fair runner also writes latent `eval_pretrained_expert_state` and
 `eval_finetuned_achieved_state` summaries from saved latent rollout samples, so
 offline target error is available for all three interfaces.
 
+## LAFAN1 Motion Tracking Evaluation
+
+Use this runner when you want to run the LAFAN1 motions one by one. It can reuse
+existing latent checkpoints or train the base stack first, then runs oracle
+tracking, planner eval, per-motion planner finetuning, and finetuned planner
+tracking.
+
+Run a smoke pass on one trajectory:
+
+```bash
+DRY_RUN=1 \
+RANKS=0 \
+LIMIT=1 \
+RUN_BASE_PIPELINE=0 \
+SKILL_CHECKPOINT=/path/to/skill_encoder.pt \
+PLANNER_CHECKPOINT=/path/to/base_planner.pt \
+LOW_LEVEL_CHECKPOINT=/path/to/ipmd_low_level.pt \
+experiments/interface_baselines/run_lafan1_single_trajectory_ll_policy_comparison.sh
+```
+
+Baselines are off by default. To run a command-chunk baseline, turn them on,
+pick one interface, and pass the matching checkpoint. It is usually cleaner to
+run `ee_trajectory` and `full_body_trajectory` as separate jobs.
+
+```bash
+RUN_HAND_DESIGNED_BASELINES=1 \
+BASELINE_INTERFACES=ee_trajectory \
+EE_TRAJECTORY_CHECKPOINT=/path/to/ee_ipmd.pt \
+experiments/interface_baselines/run_lafan1_single_trajectory_ll_policy_comparison.sh
+```
+
+The chunk length defaults to the same horizon as the latent policy.
+
 For repeat seeds, prefer the multiseed wrapper. It runs the strong
 hand-designed baseline once per seed, aggregates the per-seed roots, audits the
 selected variant when the run has a single model/sample setting, and writes the
