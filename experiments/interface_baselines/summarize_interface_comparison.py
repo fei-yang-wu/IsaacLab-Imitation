@@ -609,6 +609,10 @@ def _wide_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 wide_row[f"{setting_column}_{metric_column}"] = row.get(
                     source_column, ""
                 )
+            if row.get("tracking_success_rate") not in (None, ""):
+                wide_row[f"{setting_column}_tracking_success_rate"] = row.get(
+                    "tracking_success_rate"
+                )
             continue
         offline_setting_column = OFFLINE_SETTING_COLUMNS.get(setting)
         if offline_setting_column is None:
@@ -681,9 +685,12 @@ def _add_oracle_ratios(row: dict[str, Any]) -> None:
 
 def _add_success_rates(row: dict[str, Any]) -> None:
     for setting in PRIMARY_SETTING_COLUMNS.values():
+        tracking_success_rate = _as_float(row.get(f"{setting}_tracking_success_rate"))
         done_rate = _as_float(row.get(f"{setting}_done_rate"))
         success_key = f"{setting}_success_rate"
-        if done_rate is None:
+        if tracking_success_rate is not None:
+            row[success_key] = tracking_success_rate
+        elif done_rate is None:
             row[success_key] = ""
         else:
             row[success_key] = 1.0 - done_rate

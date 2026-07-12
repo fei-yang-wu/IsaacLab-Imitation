@@ -171,7 +171,7 @@ RUN_BASE_PIPELINE=0 \
 SKILL_CHECKPOINT=/path/to/skill_encoder.pt \
 PLANNER_CHECKPOINT=/path/to/base_planner.pt \
 LOW_LEVEL_CHECKPOINT=/path/to/ipmd_low_level.pt \
-experiments/interface_baselines/run_lafan1_single_trajectory_ll_policy_comparison.sh
+experiments/interface_baselines/run_lafan1_motion_tracking_evaluation.sh
 ```
 
 Baselines are off by default. To run a command-chunk baseline, turn them on,
@@ -182,7 +182,7 @@ run `ee_trajectory` and `full_body_trajectory` as separate jobs.
 RUN_HAND_DESIGNED_BASELINES=1 \
 BASELINE_INTERFACES=ee_trajectory \
 EE_TRAJECTORY_CHECKPOINT=/path/to/ee_ipmd.pt \
-experiments/interface_baselines/run_lafan1_single_trajectory_ll_policy_comparison.sh
+experiments/interface_baselines/run_lafan1_motion_tracking_evaluation.sh
 ```
 
 The chunk length defaults to the same horizon as the latent policy.
