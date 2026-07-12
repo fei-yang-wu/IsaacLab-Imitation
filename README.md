@@ -237,6 +237,29 @@ python scripts/rlopt/train.py \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
+### LAFAN1 local pretrain + low-level pipeline (reproducible)
+
+The recommended reproducible recipe trains a G1 LAFAN1 policy in two stages — pretrain a
+DiffSR skill encoder from expert motion, then train the low-level "oracle" IPMD policy
+conditioned on that encoder. One script chains both stages with the validated defaults
+(builds the zarr cache, wires the fresh skill checkpoint into the low-level run):
+
+```bash
+bash scripts/rlopt/run_local_pretrain_lowlevel.sh
+```
+
+Defaults: skill encoder `W=25`, `z_dim=256`, DiffSR `128/512`, 5000 updates; low-level
+`--algo IPMD` on `Isaac-Imitation-G1-Latent-v0` to 2B frames, 4096 envs, video + wandb.
+Every value is env-overridable, e.g. a quick smoke run:
+
+```bash
+TOTAL_FRAMES=20000000 LOGGER_BACKEND=none bash scripts/rlopt/run_local_pretrain_lowlevel.sh
+```
+
+Expected low-level curve: `r_ep` climbs from <1 to ~18 by ~150M frames and refines toward
+convergence by 2B. The full per-stage commands, expected metrics, joint-order verification,
+and troubleshooting are in [wiki/lafan1-local-training.md](wiki/lafan1-local-training.md).
+
 For imitation-based RL, the recommended starting point in this repo is RLOpt IPMD on
 `Isaac-Imitation-G1-Latent-v0`. If you want a smaller single-motion setup for the
 retargeted Unitree `dance102` clip, use:
