@@ -15,6 +15,7 @@ ntasks="${CLUSTER_SLURM_NTASKS:-1}"
 cpus_per_task="${CLUSTER_SLURM_CPUS_PER_TASK:-8}"
 mem="${CLUSTER_SLURM_MEM:-96G}"
 gpu_gres="${CLUSTER_SLURM_GPU_GRES:-gpu:a40:1}"
+nodelist="${CLUSTER_SLURM_NODELIST:-}"
 job_name_prefix="${CLUSTER_SLURM_JOB_NAME_PREFIX:-isaaclab-pixi}"
 output_dir="${CLUSTER_SLURM_OUTPUT_DIR:-logs/slurm}"
 pixi_env="${CLUSTER_PIXI_ENV:-isaaclab}"
@@ -50,6 +51,12 @@ printf -v quoted_hf_token_file '%q' "${CLUSTER_HF_TOKEN_FILE:-}"
 printf -v quoted_wandb_key_file '%q' "${CLUSTER_WANDB_API_KEY_FILE:-}"
 printf -v quoted_job_args '%q ' "${job_args[@]}"
 
+nodelist_directive=""
+if [ -n "$nodelist" ]; then
+    nodelist_directive="#SBATCH --nodelist=${nodelist}"
+    echo "[INFO] Constraining to nodes: ${nodelist}"
+fi
+
 cat <<EOT > job.sh
 #!/bin/bash
 
@@ -64,6 +71,7 @@ cat <<EOT > job.sh
 #SBATCH --mem=${mem}
 #SBATCH --gres=${gpu_gres}
 #SBATCH --time=${time_limit}
+${nodelist_directive}
 
 set -euo pipefail
 export PATH="/opt/slurm/Ubuntu-20.04/24.11.0/bin:/nethome/${USER}/.pixi/bin:\$PATH"
@@ -131,8 +139,11 @@ if [ "$print_job_script" = "1" ]; then
     sed 's/^/[SBATCH] /' job.sh
 fi
 
-sbatch < job.sh
-
-if [ "$keep_job_script" != "1" ]; then
-    rm job.sh
+if [ "${CLUSTER_SLURM_DRY_RUN:-0}" = "1" ]; then
+    echo "[INFO] CLUSTER_SLURM_DRY_RUN=1: not submitting. Job script above (job.sh) left in place."
+else
+    sbatch < job.sh
+    if [ "$keep_job_script" != "1" ]; then
+        rm job.sh
+    fi
 fi
