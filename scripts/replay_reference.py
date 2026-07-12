@@ -1059,14 +1059,14 @@ def _apply_motion_source_override(env_cfg) -> None:
             control_freq = float(args_cli.motion_control_freq)
 
         env_cfg.loader_type = "lafan1_csv"
+        target_joint_names = list(getattr(env_cfg, "target_joint_names", []) or [])
         env_cfg.loader_kwargs = build_lafan1_loader_kwargs(
             entries=entries,
             sim_dt=float(env_cfg.sim.dt),
             decimation=int(env_cfg.decimation),
             joint_names=reference_joint_names,
             control_freq=control_freq,
-            chunk_size=int(args_cli.motion_loader_chunk_size),
-            shard_size=int(args_cli.motion_loader_shard_size),
+            canonical_joint_names=target_joint_names or None,
         )
 
         if args_cli.motion_dataset_path is not None:

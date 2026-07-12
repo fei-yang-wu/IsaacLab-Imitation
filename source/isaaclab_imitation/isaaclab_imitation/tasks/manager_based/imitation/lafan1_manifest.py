@@ -144,10 +144,15 @@ def build_lafan1_loader_kwargs(
     joint_names: list[str],
     control_freq: float | None = None,
     dataset_name: str = "lafan1",
-    chunk_size: int | None = None,
-    shard_size: int | None = None,
+    canonical_joint_names: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Build normalized LAFAN1 loader kwargs from resolved source entries."""
+    """Build normalized LAFAN1 loader kwargs from resolved source entries.
+
+    ``joint_names`` is the *native* joint-order fallback used only for sources
+    whose NPZ carries no ``joint_names``. ``canonical_joint_names`` (when given)
+    is the order every trajectory is unified to at zarr-build time (the robot
+    articulation order), so training reads a single canonical layout.
+    """
     normalized_entries = normalize_lafan1_entries(copy.deepcopy(entries))
     if len(normalized_entries) == 0:
         raise ValueError("LAFAN1 loader entries must be a non-empty list.")
@@ -162,10 +167,8 @@ def build_lafan1_loader_kwargs(
         "decimation": int(decimation),
         "joint_names": list(joint_names),
     }
-    if chunk_size is not None:
-        loader_kwargs["chunk_size"] = int(chunk_size)
-    if shard_size is not None:
-        loader_kwargs["shard_size"] = int(shard_size)
+    if canonical_joint_names is not None:
+        loader_kwargs["canonical_joint_names"] = list(canonical_joint_names)
     return loader_kwargs
 
 

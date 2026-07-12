@@ -44,6 +44,44 @@ VELOCITY_RANGE = {
 
 G1_29DOF_JOINT_NAMES: list[str] = list(UNITREE_G1_29DOF_SDK_JOINT_NAMES)
 
+# IsaacLab G1 articulation (USD) joint order, i.e. the order of
+# ``robot.joint_names`` / ``robot.data.joint_pos`` at runtime. This is a
+# breadth-first (level-order) traversal and is NOT the Unitree SDK/URDF order.
+# The env applies the reference directly to the articulation, so this is the
+# ground-truth ``target_joint_names``. Verified against a live articulation via
+# ``robot.joint_names``; guarded at runtime in the env.
+G1_29DOF_ISAACLAB_JOINT_NAMES: list[str] = [
+    "left_hip_pitch_joint",
+    "right_hip_pitch_joint",
+    "waist_yaw_joint",
+    "left_hip_roll_joint",
+    "right_hip_roll_joint",
+    "waist_roll_joint",
+    "left_hip_yaw_joint",
+    "right_hip_yaw_joint",
+    "waist_pitch_joint",
+    "left_knee_joint",
+    "right_knee_joint",
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "left_ankle_pitch_joint",
+    "right_ankle_pitch_joint",
+    "left_shoulder_roll_joint",
+    "right_shoulder_roll_joint",
+    "left_ankle_roll_joint",
+    "right_ankle_roll_joint",
+    "left_shoulder_yaw_joint",
+    "right_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "right_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "right_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_wrist_yaw_joint",
+]
+
 # Body tracking set aligned with the original Unitree G1 mimic tracking config.
 G1_TRACKED_BODY_NAMES: list[str] = [
     "pelvis",
@@ -555,8 +593,13 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     print_reference_velocity: bool = False
     print_reference_velocity_every: int = 50
 
-    reference_joint_names: list[str] = G1_29DOF_JOINT_NAMES.copy()
-    target_joint_names: list[str] = G1_29DOF_JOINT_NAMES.copy()
+    # `target_joint_names` MUST be the robot articulation (USD) order because the
+    # reference is written directly onto robot.data.joint_pos. `reference_joint_names`
+    # is the default order assumed for reference data; it is overridden at runtime
+    # by the dataset's own `joint_names` when present (self-describing data), and the
+    # reference->target remap converts to articulation order.
+    reference_joint_names: list[str] = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
+    target_joint_names: list[str] = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
     command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
     command_observation_source: str = "reference"
 
@@ -634,7 +677,8 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
         "control_freq": 50.0,
         "sim": {"dt": 0.005},
         "decimation": 4,
-        "joint_names": G1_29DOF_JOINT_NAMES,
+        "joint_names": G1_29DOF_ISAACLAB_JOINT_NAMES,
+        "canonical_joint_names": G1_29DOF_ISAACLAB_JOINT_NAMES,
     }
     reset_schedule: str = "random"
     refresh_zarr_dataset: bool = False
@@ -812,8 +856,7 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
             sim_dt=float(self.sim.dt),
             decimation=int(self.decimation),
             joint_names=list(self.reference_joint_names),
-            chunk_size=loader_chunk_size,
-            shard_size=loader_shard_size,
+            canonical_joint_names=list(self.target_joint_names),
         )
 
         if dataset_path_explicit and self.dataset_path is not None:
