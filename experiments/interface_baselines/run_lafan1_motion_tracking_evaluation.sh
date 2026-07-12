@@ -248,6 +248,7 @@ mapfile -t TRAJECTORIES < <("${PYTHON_CMD[@]}" experiments/interface_baselines/s
     --manifest "${MANIFEST_ABS}" \
     --ranks "${RANKS}" \
     --limit "${LIMIT}" \
+    --fallback_steps "${BASELINE_DEFAULT_STEPS}" \
     --output_root "${RUN_ROOT_ABS}/per_trajectory")
 if [[ "${#TRAJECTORIES[@]}" -eq 0 ]]; then
     echo "[ERROR] No trajectories selected by RANKS=${RANKS} LIMIT=${LIMIT}" >&2

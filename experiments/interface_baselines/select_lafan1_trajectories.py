@@ -90,7 +90,12 @@ def write_single_manifest(
     output_path.write_text(json.dumps(single, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def infer_steps(entry: dict[str, Any], manifest_path: Path) -> int:
+def infer_steps(
+    entry: dict[str, Any],
+    manifest_path: Path,
+    *,
+    fallback_steps: int | None,
+) -> int:
     frame_range = entry.get("frame_range")
     if isinstance(frame_range, list) and len(frame_range) == 2:
         return max(1, int(frame_range[1]) - int(frame_range[0]))
@@ -105,26 +110,32 @@ def infer_steps(entry: dict[str, Any], manifest_path: Path) -> int:
         if not source_path.is_absolute():
             source_path = manifest_path.parent / source_path
         if source_path.is_file() and source_path.suffix.lower() == ".npz":
-            import numpy as np
+            try:
+                import numpy as np
 
-            with np.load(source_path, allow_pickle=False) as npz:
-                for npz_key in (
-                    "body_pos_w",
-                    "body_pos",
-                    "joint_pos",
-                    "dof_pos",
-                    "root_pos_w",
-                    "root_pos",
-                    "motion",
-                ):
-                    value = npz.get(npz_key)
-                    if value is not None and getattr(value, "ndim", 0) >= 1:
-                        return max(1, int(value.shape[0]))
-                for npz_key in npz.files:
-                    value = npz[npz_key]
-                    if getattr(value, "ndim", 0) >= 1:
-                        return max(1, int(value.shape[0]))
+                with np.load(source_path, allow_pickle=False) as npz:
+                    for npz_key in (
+                        "body_pos_w",
+                        "body_pos",
+                        "joint_pos",
+                        "dof_pos",
+                        "root_pos_w",
+                        "root_pos",
+                        "motion",
+                    ):
+                        value = npz.get(npz_key)
+                        if value is not None and getattr(value, "ndim", 0) >= 1:
+                            return max(1, int(value.shape[0]))
+                    for npz_key in npz.files:
+                        value = npz[npz_key]
+                        if getattr(value, "ndim", 0) >= 1:
+                            return max(1, int(value.shape[0]))
+            except Exception:
+                if fallback_steps is None:
+                    raise
 
+    if fallback_steps is not None:
+        return max(1, int(fallback_steps))
     raise SystemExit(f"Could not infer steps for trajectory: {entry}")
 
 
@@ -134,6 +145,12 @@ def main() -> None:
     parser.add_argument("--ranks", default="all")
     parser.add_argument("--limit", default=0, type=int)
     parser.add_argument("--output_root", required=True, type=Path)
+    parser.add_argument(
+        "--fallback_steps",
+        default=0,
+        type=int,
+        help="Step count to use when motion length cannot be inferred.",
+    )
     args = parser.parse_args()
 
     manifest_path = args.manifest.resolve()
@@ -150,7 +167,11 @@ def main() -> None:
         trajectory_root = args.output_root / f"rank_{rank}_{clean_name}"
         single_manifest = trajectory_root / "manifest_single.json"
         write_single_manifest(payload, absolutize_entry_path(entry, manifest_path), single_manifest)
-        steps = infer_steps(entry, manifest_path)
+        steps = infer_steps(
+            entry,
+            manifest_path,
+            fallback_steps=args.fallback_steps if args.fallback_steps > 0 else None,
+        )
         print(f"{rank}\t{name}\t{clean_name}\t{trajectory_root}\t{single_manifest}\t{steps}")
 
 
