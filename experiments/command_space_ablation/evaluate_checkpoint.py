@@ -83,6 +83,18 @@ parser.add_argument(
     default=None,
     help="Optional manifest used to condition evaluation on a motion set.",
 )
+parser.add_argument(
+    "--motion_name",
+    type=str,
+    default=None,
+    help="Optional single motion name to evaluate from the manifest.",
+)
+parser.add_argument(
+    "--dataset_path",
+    type=Path,
+    default=None,
+    help="Optional zarr dataset/cache path. Useful on clusters where /tmp is small.",
+)
 parser.add_argument("--num_envs", type=int, default=128)
 parser.add_argument("--steps", type=int, default=1000)
 parser.add_argument("--seed", type=int, default=None)
@@ -310,12 +322,37 @@ def _mean_body_pose_errors(
     return pos_error, ori_error.mean(dim=-1)
 
 
+def _body_tracking_tensors(
+    base_env: ImitationRLEnv,
+    names: list[str],
+) -> dict[str, torch.Tensor] | None:
+    if len(names) == 0:
+        return None
+    body_ids = _body_ids_for_names(base_env, names)
+    actual_pos, actual_quat = base_env._get_robot_body_pose_w_fast(body_ids)
+    ref_pos, ref_quat = base_env._get_reference_body_pose_w_fast(tuple(names))
+    actual_ang_vel, actual_lin_vel = base_env._get_robot_body_velocity_w_fast(body_ids)
+    ref_ang_vel, ref_lin_vel = base_env._get_reference_body_velocity_w_fast(
+        tuple(names)
+    )
+    return {
+        "actual_pos": actual_pos,
+        "actual_quat": actual_quat,
+        "actual_ang_vel": actual_ang_vel,
+        "actual_lin_vel": actual_lin_vel,
+        "ref_pos": ref_pos,
+        "ref_quat": ref_quat,
+        "ref_ang_vel": ref_ang_vel,
+        "ref_lin_vel": ref_lin_vel,
+    }
+
+
 def _tracking_metrics(
     base_env: ImitationRLEnv,
     *,
     tracked_body_names: list[str],
     ee_body_names: list[str],
-) -> dict[str, torch.Tensor]:
+) -> tuple[dict[str, torch.Tensor], tuple[torch.Tensor, torch.Tensor] | None]:
     robot_data = base_env.robot.data
     root_pos_ref, root_quat_ref, root_lin_vel_ref, root_ang_vel_ref = (
         base_env._get_reference_root_state_w_fast()
@@ -326,14 +363,17 @@ def _tracking_metrics(
     root_pos_error = robot_data.root_pos_w - root_pos_ref
     root_lin_vel_error = robot_data.root_lin_vel_w - root_lin_vel_ref
     root_ang_vel_error = robot_data.root_ang_vel_w - root_ang_vel_ref
+    root_ori_error = math_utils.quat_error_magnitude(
+        robot_data.root_quat_w,
+        root_quat_ref,
+    )
+    root_height_error = root_pos_error[:, 2].abs()
 
     metrics = {
         "root_pos_xy_error_m": torch.linalg.vector_norm(root_pos_error[:, :2], dim=-1),
-        "root_pos_z_abs_error_m": root_pos_error[:, 2].abs(),
-        "root_ori_error_rad": math_utils.quat_error_magnitude(
-            robot_data.root_quat_w,
-            root_quat_ref,
-        ),
+        "root_pos_xyz_error_m": torch.linalg.vector_norm(root_pos_error, dim=-1),
+        "root_height_error_m": root_height_error,
+        "root_ori_error_rad": root_ori_error,
         "root_lin_vel_rmse_mps": torch.sqrt(
             torch.mean(root_lin_vel_error.square(), dim=-1)
         ),
@@ -348,17 +388,47 @@ def _tracking_metrics(
         ),
     }
 
-    tracked_errors = _mean_body_pose_errors(base_env, tracked_body_names)
-    if tracked_errors is not None:
-        metrics["tracked_body_pos_error_m"] = tracked_errors[0]
-        metrics["tracked_body_ori_error_rad"] = tracked_errors[1]
+    tracked_body_lin_vel: tuple[torch.Tensor, torch.Tensor] | None = None
+    tracked_tensors = _body_tracking_tensors(base_env, tracked_body_names)
+    if tracked_tensors is not None:
+        tracked_pos_error = torch.linalg.vector_norm(
+            tracked_tensors["actual_pos"] - tracked_tensors["ref_pos"], dim=-1
+        )
+        tracked_ori_error = math_utils.quat_error_magnitude(
+            tracked_tensors["actual_quat"].reshape(-1, 4),
+            tracked_tensors["ref_quat"].reshape(-1, 4),
+        ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
+        actual_root_rel = (
+            tracked_tensors["actual_pos"] - robot_data.root_pos_w[:, None, :]
+        )
+        ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
+        tracking_mpjpe_m = torch.linalg.vector_norm(
+            actual_root_rel - ref_root_rel, dim=-1
+        ).mean(dim=-1)
+        body_lin_vel_error = torch.linalg.vector_norm(
+            tracked_tensors["actual_lin_vel"] - tracked_tensors["ref_lin_vel"], dim=-1
+        ).mean(dim=-1)
+        body_ang_vel_error = torch.linalg.vector_norm(
+            tracked_tensors["actual_ang_vel"] - tracked_tensors["ref_ang_vel"], dim=-1
+        ).mean(dim=-1)
+        metrics["tracked_body_pos_error_m"] = tracked_pos_error.mean(dim=-1)
+        metrics["tracked_body_ori_error_rad"] = tracked_ori_error.mean(dim=-1)
+        metrics["tracked_body_lin_vel_error_mps"] = body_lin_vel_error
+        metrics["tracked_body_ang_vel_error_radps"] = body_ang_vel_error
+        metrics["tracking_mpjpe_m"] = tracking_mpjpe_m
+        metrics["tracking_mpjpe_mm"] = tracking_mpjpe_m * 1000.0
+        metrics["tracking_velocity_distance_mps"] = body_lin_vel_error
+        tracked_body_lin_vel = (
+            tracked_tensors["actual_lin_vel"].detach(),
+            tracked_tensors["ref_lin_vel"].detach(),
+        )
 
     ee_errors = _mean_body_pose_errors(base_env, ee_body_names)
     if ee_errors is not None:
         metrics["ee_pos_error_m"] = ee_errors[0]
         metrics["ee_ori_error_rad"] = ee_errors[1]
 
-    return metrics
+    return metrics, tracked_body_lin_vel
 
 
 def _trajectory_command_terms(command_space: str) -> tuple[str, ...]:
@@ -825,6 +895,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.command_observation_source = "planner"
     _sync_env_window_params(env_cfg)
 
+    if args_cli.dataset_path is not None:
+        if not hasattr(env_cfg, "dataset_path"):
+            raise TypeError(f"Task {args_cli.task} does not support --dataset_path.")
+        env_cfg.dataset_path = str(args_cli.dataset_path.expanduser().resolve())
+
     env_cfg.scene.num_envs = int(args_cli.num_envs)
     env_cfg.seed = (
         args_cli.seed if args_cli.seed is not None else getattr(agent_cfg, "seed", None)
@@ -838,7 +913,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.lafan1_manifest_path = str(motion_manifest)
         resolve_manifest_config = getattr(env_cfg, "_resolve_manifest_config", None)
         if callable(resolve_manifest_config):
-            resolve_manifest_config()
+            resolve_manifest_config(dataset_path_explicit=args_cli.dataset_path is not None)
+    if args_cli.motion_name is not None:
+        if not hasattr(env_cfg, "motions"):
+            raise TypeError(f"Task {args_cli.task} does not support --motion_name.")
+        env_cfg.motions = [str(args_cli.motion_name)]
     if hasattr(env_cfg, "refresh_zarr_dataset"):
         env_cfg.refresh_zarr_dataset = bool(args_cli.refresh_zarr_dataset)
     if hasattr(env_cfg, "reference_start_frame"):
@@ -947,6 +1026,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     truncated_events = torch.zeros(num_envs, dtype=torch.float32)
     metric_stats: dict[str, dict[str, float]] = {}
     previous_action: torch.Tensor | None = None
+    previous_body_lin_vel: tuple[torch.Tensor, torch.Tensor] | None = None
+    previous_velocity_valid = torch.zeros(num_envs, dtype=torch.bool)
     steps_executed = 0
     valid_transition_count = 0
     planner_publish_count = 0
@@ -1048,7 +1129,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             step_active if args_cli.keep_after_done else step_active & ~done_any
         )
         valid_transition_count += int(metric_mask.sum().item())
-        tracking = _tracking_metrics(
+        tracking, body_lin_vel = _tracking_metrics(
             base_env,
             tracked_body_names=tracked_body_names,
             ee_body_names=ee_body_names,
@@ -1057,6 +1138,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             _accumulate_metric(
                 metric_stats, metric_name, metric_values.cpu(), metric_mask
             )
+        if body_lin_vel is not None and dt > 0.0:
+            if previous_body_lin_vel is not None:
+                actual_lin_vel, ref_lin_vel = body_lin_vel
+                prev_actual_lin_vel, prev_ref_lin_vel = previous_body_lin_vel
+                actual_acc = (actual_lin_vel - prev_actual_lin_vel) / float(dt)
+                ref_acc = (ref_lin_vel - prev_ref_lin_vel) / float(dt)
+                acceleration_distance = torch.linalg.vector_norm(
+                    actual_acc - ref_acc, dim=-1
+                ).mean(dim=-1)
+                acceleration_mask = metric_mask & previous_velocity_valid
+                _accumulate_metric(
+                    metric_stats,
+                    "tracking_acceleration_distance_mps2",
+                    acceleration_distance.cpu(),
+                    acceleration_mask,
+                )
+            previous_body_lin_vel = (body_lin_vel[0].clone(), body_lin_vel[1].clone())
+            previous_velocity_valid = step_active & ~done_any
 
         if not args_cli.keep_after_done:
             active &= ~done_any
@@ -1106,6 +1205,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "motion_manifest": str(motion_manifest)
             if motion_manifest is not None
             else None,
+            "motion_name": args_cli.motion_name,
             "command_space": command_space,
             "command_observation_source": str(
                 getattr(base_env, "_command_observation_source", "unknown")
