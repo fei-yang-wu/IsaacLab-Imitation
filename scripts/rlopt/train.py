@@ -436,6 +436,33 @@ def main(
     if args_cli.log_interval is not None:
         agent_cfg.trainer.log_interval = max(1, int(args_cli.log_interval))
     agent_cfg.collector.frames_per_batch *= env_cfg.scene.num_envs
+    # Keep the on-policy rollout buffer and minibatching consistent when num_envs
+    # or the per-env horizon (collector.frames_per_batch) differ from the config
+    # defaults. On-policy IPMD/PPO use a single-rollout buffer (buffer == one
+    # collected batch), but the config sizes replay_buffer.size / mini_batch_size
+    # with a literal 4096-env assumption. Rescale the buffer to the actual batch
+    # and keep the configured minibatch SIZE (so per-gradient-step memory is
+    # constant; the number of minibatches grows with the batch). The default
+    # 4096-env / horizon-24 configuration is unchanged by this.
+    _ONPOLICY_SINGLE_ROLLOUT_ALGOS = {"PPO", "IPMD", "IPMD_SR", "IPMD_BILINEAR"}
+    if args_cli.algorithm in _ONPOLICY_SINGLE_ROLLOUT_ALGOS:
+        scaled_frames_per_batch = int(agent_cfg.collector.frames_per_batch)
+        replay_buffer_cfg = getattr(agent_cfg, "replay_buffer", None)
+        if replay_buffer_cfg is not None and getattr(replay_buffer_cfg, "size", 0):
+            if int(replay_buffer_cfg.size) != scaled_frames_per_batch:
+                logger.warning(
+                    "Rescaling replay_buffer.size %d -> %d to match the on-policy "
+                    "rollout batch (num_envs=%d x horizon).",
+                    int(replay_buffer_cfg.size),
+                    scaled_frames_per_batch,
+                    int(env_cfg.scene.num_envs),
+                )
+            replay_buffer_cfg.size = scaled_frames_per_batch
+        loss_cfg = getattr(agent_cfg, "loss", None)
+        if loss_cfg is not None and getattr(loss_cfg, "mini_batch_size", 0):
+            loss_cfg.mini_batch_size = min(
+                int(loss_cfg.mini_batch_size), scaled_frames_per_batch
+            )
     # max_iterations is expressed in rollout iterations, so override total_frames
     # after scaling frames_per_batch to the actual number of simulated envs.
     if args_cli.max_iterations is not None:
