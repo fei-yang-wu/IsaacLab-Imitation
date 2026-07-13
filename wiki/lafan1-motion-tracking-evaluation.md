@@ -7,15 +7,16 @@ This file records how to rerun the LAFAN1 motion tracking experiment.
 Run 40 LAFAN1 motions and compare:
 
 - Oracle latent tracking
-- Base planner tracking
+- Base planner offline eval
 - Finetuned planner tracking
 - EE chunk planner baseline
 - Whole-body chunk planner baseline
 
 Finetune setup:
-    1. Collect oracle rollout
-    2. Finetune Planner
-    3. Eval on this motion
+
+1. Collect oracle rollout
+2. Finetune planner
+3. Eval on this motion
 
 So each motion has its own finetuned planner. They all start from the same base
 planner checkpoint.
@@ -100,7 +101,19 @@ The script will call:
 scripts/rlopt/run_lafan1_no_language_pipeline.sh
 ```
 
+## Optional Base Planner Tracking
 
+Base planner closed-loop tracking is off by default:
+
+```bash
+RUN_BASE_PLANNER_LL_EVAL=0
+```
+
+Turn it on with:
+
+```bash
+RUN_BASE_PLANNER_LL_EVAL=1
+```
 
 ## Per-Motion Outputs
 
@@ -140,6 +153,12 @@ Run EE and whole-body separately.
 EE:
 
 ```bash
+RUN_ORACLE_RECON_EVAL=0 \
+RUN_BASE_PLANNER_PREDICT_EVAL=0 \
+RUN_ORACLE_LL_EVAL=0 \
+RUN_PLANNER_ROLLOUT_FINETUNE=0 \
+RUN_FINETUNED_PLANNER_PREDICT_EVAL=0 \
+RUN_FINETUNED_PLANNER_LL_EVAL=0 \
 RUN_HAND_DESIGNED_BASELINES=1 \
 BASELINE_INTERFACES=ee_trajectory \
 EE_TRAJECTORY_CHECKPOINT=/path/to/ee_chunk_ipmd.pt \
@@ -149,6 +168,12 @@ experiments/interface_baselines/run_lafan1_motion_tracking_evaluation.sh
 Whole-body:
 
 ```bash
+RUN_ORACLE_RECON_EVAL=0 \
+RUN_BASE_PLANNER_PREDICT_EVAL=0 \
+RUN_ORACLE_LL_EVAL=0 \
+RUN_PLANNER_ROLLOUT_FINETUNE=0 \
+RUN_FINETUNED_PLANNER_PREDICT_EVAL=0 \
+RUN_FINETUNED_PLANNER_LL_EVAL=0 \
 RUN_HAND_DESIGNED_BASELINES=1 \
 BASELINE_INTERFACES=full_body_trajectory \
 FULL_BODY_TRAJECTORY_CHECKPOINT=/path/to/full_body_chunk_ipmd.pt \
@@ -197,9 +222,11 @@ Main metrics:
 
 
 Success threshold:
+
 For all steps:
-    1. root height error <= 0.25 m
-    2. root orientation error <= 1.0 rad
+
+1. root height error <= 0.25 m
+2. root orientation error <= 1.0 rad
 
 
 
@@ -208,12 +235,11 @@ For all steps:
 
 | Method                             | N   | Success | MPJPE-L (mm) | Root H (m) | Root Ori (rad) | EE Pos (m) | Joint Pos (rad) | Joint Vel (rad/s) | Vel Dist (m/s) | Acc Dist (m/s^2) |
 | ---------------------------------- | --- | ------- | ------------ | ---------- | -------------- | ---------- | --------------- | ----------------- | -------------- | ---------------- |
-| Oracle recon                       | 40  | 0.100   | 216.33       | 0.215      | 0.994          | 3.095      | 0.369           | 1.681             | 0.802          | 8.781            |
+| Oracle latent tracking             | 40  | 0.100   | 216.33       | 0.215      | 0.994          | 3.095      | 0.369           | 1.681             | 0.802          | 8.781            |
 | Planner base closed-loop           | 40  | 0.000   | 459.45       | 0.588      | 2.122          | 3.462      | 0.735           | 3.008             | 1.179          | 17.271           |
 | Planner finetuned closed-loop      | 40  | 0.025   | 342.52       | 0.412      | 1.574          | 2.710      | 0.491           | 1.961             | 0.888          | 10.116           |
 | EE chunk planner base              | 40  | 0.675   | 60.80        | 0.028      | 0.217          | 0.744      | 0.222           | 1.286             | 0.545          | 6.487            |
 | EE chunk planner finetuned         | 40  | 0.825   | 57.20        | 0.026      | 0.219          | 0.651      | 0.221           | 1.200             | 0.515          | 6.148            |
 | Whole-body chunk planner base      | 40  | 0.825   | 54.91        | 0.020      | 0.182          | 0.473      | 0.196           | 1.346             | 0.520          | 6.575            |
 | Whole-body chunk planner finetuned | 40  | 0.875   | 46.79        | 0.022      | 0.181          | 0.512      | 0.182           | 1.107             | 0.477          | 6.301            |
-
 
