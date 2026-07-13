@@ -36,6 +36,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--frame-cap", type=int, default=2_000_000_000)
     p.add_argument("--train-num-envs", type=int, default=4096)
+    # Per-env rollout horizon (collector.frames_per_batch before x num_envs).
+    # train.py auto-rescales replay_buffer.size / mini_batch_size to num_envs x horizon.
+    p.add_argument("--frames-per-env-batch", type=int, default=24)
     p.add_argument("--horizon-steps", type=int, default=25)
     p.add_argument("--z-dim", type=int, default=256)
     p.add_argument("--encoder-window-mode", default="intermediate")
@@ -130,6 +133,7 @@ def main() -> None:
                 "--task", args.task,
                 "--algo", args.algorithm,
                 "--seed", str(args.seed),
+                f"agent.collector.frames_per_batch={args.frames_per_env_batch}",
                 f"agent.collector.total_frames={args.frame_cap}",
                 f"agent.logger.backend={args.logger_backend}",
                 f"agent.logger.project_name={args.wandb_project}",
