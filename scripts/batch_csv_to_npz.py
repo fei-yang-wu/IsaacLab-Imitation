@@ -937,12 +937,22 @@ def run_simulator(
                 )
                 progress_bar.update()
 
+        # Revert of dd1db87: convert the SDK/source-order dofs into the robot's
+        # articulation (USD) joint order before saving, mirroring the in-loop
+        # scatter used to drive the robot. Saved `joint_names` then honestly
+        # describe this order (robot.joint_names).
+        _dof_pos_art = torch.zeros_like(batched.dof_pos)
+        _dof_vel_art = torch.zeros_like(batched.dof_vel)
+        _dof_pos_art[..., robot_joint_indexes] = batched.dof_pos
+        _dof_vel_art[..., robot_joint_indexes] = batched.dof_vel
+        batched.dof_pos = _dof_pos_art
+        batched.dof_vel = _dof_vel_art
         _save_outputs(
             jobs=jobs,
             lengths=batched.lengths.cpu().numpy(),
             batched=batched,
             log_data=log_data,
-            joint_names=list(scene.cfg.robot.joint_sdk_names),
+            joint_names=list(robot.joint_names),
         )
     finally:
         _close_video_writers(video_writers)

@@ -88,6 +88,30 @@ def load_lafan1_manifest(
     return manifest_file, entries
 
 
+def load_lafan1_manifest_loader_options(manifest_path: str | Path) -> dict[str, int]:
+    """Load optional ILTools loader options from manifest metadata."""
+    manifest_file = Path(manifest_path).expanduser().resolve()
+    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    metadata = data.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return {}
+    raw_options = metadata.get("loader_kwargs", {})
+    if not isinstance(raw_options, dict):
+        return {}
+
+    options: dict[str, int] = {}
+    for key in ("chunk_size", "shard_size"):
+        if key not in raw_options or raw_options[key] is None:
+            continue
+        value = int(raw_options[key])
+        if value <= 0:
+            raise ValueError(f"Manifest loader_kwargs.{key} must be positive.")
+        options[key] = value
+    return options
+
+
 def infer_npz_manifest_control_freq(entries: list[dict[str, Any]]) -> float | None:
     """Infer a single control frequency from NPZ manifest entries.
 
@@ -120,15 +144,22 @@ def build_lafan1_loader_kwargs(
     joint_names: list[str],
     control_freq: float | None = None,
     dataset_name: str = "lafan1",
+    canonical_joint_names: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Build normalized LAFAN1 loader kwargs from resolved source entries."""
+    """Build normalized LAFAN1 loader kwargs from resolved source entries.
+
+    ``joint_names`` is the *native* joint-order fallback used only for sources
+    whose NPZ carries no ``joint_names``. ``canonical_joint_names`` (when given)
+    is the order every trajectory is unified to at zarr-build time (the robot
+    articulation order), so training reads a single canonical layout.
+    """
     normalized_entries = normalize_lafan1_entries(copy.deepcopy(entries))
     if len(normalized_entries) == 0:
         raise ValueError("LAFAN1 loader entries must be a non-empty list.")
     if control_freq is None:
         control_freq = 1.0 / (float(sim_dt) * float(decimation))
 
-    return {
+    loader_kwargs: dict[str, Any] = {
         "dataset_name": str(dataset_name),
         "dataset": {"trajectories": {"lafan1_csv": normalized_entries}},
         "control_freq": float(control_freq),
@@ -136,6 +167,9 @@ def build_lafan1_loader_kwargs(
         "decimation": int(decimation),
         "joint_names": list(joint_names),
     }
+    if canonical_joint_names is not None:
+        loader_kwargs["canonical_joint_names"] = list(canonical_joint_names)
+    return loader_kwargs
 
 
 def _sanitize_cache_name(value: str) -> str:
