@@ -48,6 +48,15 @@ DEFAULT_OUTPUT = (
 # Matches sentence-transformers/all-MiniLM-L6-v2 so the table width is stable
 # whether or not the dummy backend is used.
 DEFAULT_EMBED_DIM = 384
+LANGUAGE_FIELD_PRIORITY = (
+    "language_goal",
+    "robot_instruction",
+    "kinematic_description",
+    "short_caption",
+    "event_level",
+    "technical_description",
+    "fallback_category_prompt",
+)
 
 
 def humanize_motion_name(name: str) -> str:
@@ -98,6 +107,61 @@ def load_motion_names(manifest_path: Path) -> list[str]:
         names.append(str(name))
     # De-duplicate while preserving manifest order.
     return list(dict.fromkeys(names))
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _language_phrase(payload: dict[str, Any]) -> str | None:
+    return _first_text(*(payload.get(field) for field in LANGUAGE_FIELD_PRIORITY))
+
+
+def load_language_phrases(language_sidecar_path: Path) -> dict[str, str]:
+    """Load optional motion-name -> language phrase annotations.
+
+    Supported inputs include the merged ``motions`` sidecar, the LAFAN1
+    ``prompts`` files, and manifests whose entries contain an embedded
+    ``language`` object.
+    """
+    data = json.loads(language_sidecar_path.read_text(encoding="utf-8"))
+    phrases: dict[str, str] = {}
+
+    def add(name: Any, payload: Any) -> None:
+        if not name or not isinstance(payload, dict):
+            return
+        phrase = _language_phrase(payload)
+        if phrase is not None:
+            phrases[str(name)] = phrase
+
+    if isinstance(data, dict):
+        motions = data.get("motions")
+        if isinstance(motions, list):
+            for item in motions:
+                if isinstance(item, dict):
+                    add(item.get("name"), item)
+
+        prompts = data.get("prompts")
+        if isinstance(prompts, dict):
+            for name, payload in prompts.items():
+                add(name, payload)
+
+        entries = data.get("dataset", {}).get("trajectories", {}).get("lafan1_csv")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                payload = entry.get("language")
+                add(entry.get("name"), payload if isinstance(payload, dict) else entry)
+    elif isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                add(item.get("name"), item)
+
+    return phrases
 
 
 def _dummy_embedding(phrase: str, dim: int, seed: int) -> torch.Tensor:
@@ -184,6 +248,21 @@ def main() -> None:
         help="Embed the literal motion name instead of a cleaned phrase.",
     )
     parser.add_argument(
+        "--language_sidecar",
+        type=str,
+        default=None,
+        help=(
+            "Optional JSON sidecar with language phrases keyed by motion name. "
+            "When provided, sidecar text takes precedence over name-derived phrases."
+        ),
+    )
+    parser.add_argument(
+        "--require_language_sidecar_matches",
+        action="store_true",
+        default=False,
+        help="Fail if --language_sidecar is missing any manifest motion name.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=0,
@@ -196,7 +275,33 @@ def main() -> None:
         raise SystemExit(f"Manifest not found: {manifest_path}")
 
     names = load_motion_names(manifest_path)
-    phrases = [n if args.raw_names else humanize_motion_name(n) for n in names]
+    language_phrases: dict[str, str] = {}
+    language_sidecar_path: Path | None = None
+    if args.language_sidecar is not None:
+        language_sidecar_path = Path(args.language_sidecar).expanduser().resolve()
+        if not language_sidecar_path.is_file():
+            raise SystemExit(f"Language sidecar not found: {language_sidecar_path}")
+        language_phrases = load_language_phrases(language_sidecar_path)
+
+    missing_language = [
+        name for name in names if args.language_sidecar is not None and name not in language_phrases
+    ]
+    if missing_language and args.require_language_sidecar_matches:
+        preview = ", ".join(missing_language[:10])
+        suffix = " ..." if len(missing_language) > 10 else ""
+        raise SystemExit(
+            "Language sidecar is missing manifest motion names: "
+            f"{preview}{suffix}"
+        )
+
+    phrases = [
+        language_phrases.get(name, name if args.raw_names else humanize_motion_name(name))
+        for name in names
+    ]
+    phrase_sources = [
+        "language_sidecar" if name in language_phrases else "raw_name" if args.raw_names else "motion_name"
+        for name in names
+    ]
 
     # Embed each unique phrase once, then expand to one row per motion name so
     # the table can always be looked up by the exact name the env emits.
@@ -222,6 +327,10 @@ def main() -> None:
         "model": model_name,
         "raw_names": bool(args.raw_names),
         "manifest": str(manifest_path),
+        "language_sidecar": str(language_sidecar_path)
+        if language_sidecar_path is not None
+        else None,
+        "phrase_sources": phrase_sources,
     }
 
     output_path = Path(args.output).expanduser().resolve()
@@ -233,6 +342,11 @@ def main() -> None:
     print(f"[M0] backend:        {args.backend}{model_suffix}")
     print(f"[M0] motion names:   {len(names)}")
     print(f"[M0] unique phrases: {len(unique_phrases)}")
+    if language_sidecar_path is not None:
+        print(f"[M0] language JSON:  {language_sidecar_path}")
+        print(
+            f"[M0] sidecar hits:    {len(names) - len(missing_language)} / {len(names)}"
+        )
     print(f"[M0] embedding dim:  {embed_dim}")
     print(f"[M0] saved table ->  {output_path}")
     preview = ", ".join(

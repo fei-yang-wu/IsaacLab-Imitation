@@ -188,10 +188,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     from omegaconf import DictConfig
 
                     loader_cfg = DictConfig(loader_kwargs)
+                    loader_build_kwargs = {
+                        key: int(loader_kwargs[key])
+                        for key in ("chunk_size", "shard_size")
+                        if key in loader_kwargs and loader_kwargs[key] is not None
+                    }
                     _ = Lafan1CsvLoader(
                         cfg=loader_cfg,
                         build_zarr_dataset=True,
                         zarr_path=str(zarr_path),
+                        **loader_build_kwargs,
                     )
                 else:
                     raise ValueError(

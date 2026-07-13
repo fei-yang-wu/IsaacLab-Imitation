@@ -88,6 +88,30 @@ def load_lafan1_manifest(
     return manifest_file, entries
 
 
+def load_lafan1_manifest_loader_options(manifest_path: str | Path) -> dict[str, int]:
+    """Load optional ILTools loader options from manifest metadata."""
+    manifest_file = Path(manifest_path).expanduser().resolve()
+    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        return {}
+    metadata = data.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return {}
+    raw_options = metadata.get("loader_kwargs", {})
+    if not isinstance(raw_options, dict):
+        return {}
+
+    options: dict[str, int] = {}
+    for key in ("chunk_size", "shard_size"):
+        if key not in raw_options or raw_options[key] is None:
+            continue
+        value = int(raw_options[key])
+        if value <= 0:
+            raise ValueError(f"Manifest loader_kwargs.{key} must be positive.")
+        options[key] = value
+    return options
+
+
 def infer_npz_manifest_control_freq(entries: list[dict[str, Any]]) -> float | None:
     """Infer a single control frequency from NPZ manifest entries.
 

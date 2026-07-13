@@ -665,6 +665,13 @@ capture_cluster_env_overrides() {
     local var_name
 
     for var_name in \
+        CLUSTER_ISAAC_SIM_CACHE_DIR \
+        CLUSTER_ISAACLAB_DIR \
+        CLUSTER_SIF_PATH \
+        CLUSTER_DATA_DIR \
+        CLUSTER_HF_TOKEN_FILE \
+        CLUSTER_WANDB_API_KEY_FILE \
+        CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
         CLUSTER_APPEND_DEFAULT_G1_MANIFEST \
         CLUSTER_AUTO_SETUP_G1_DATA \
@@ -680,6 +687,9 @@ capture_cluster_env_overrides() {
         CLUSTER_USE_SHARED_SIF \
         CLUSTER_SHARED_SIF_PATH \
         CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK \
+        CLUSTER_PIXI_CACHE_DIR \
+        CLUSTER_PIXI_ENV \
         CLUSTER_GIT_SYNC_FIRST \
         CLUSTER_EXTRA_RSYNC_EXCLUDES \
         CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS \
@@ -688,7 +698,9 @@ capture_cluster_env_overrides() {
         CLUSTER_RLOPT_LOCAL_PATH \
         CLUSTER_IMITATION_TOOLS_LOCAL_PATH \
         CLUSTER_EXTRA_PYTHONPATH_REL \
-        CLUSTER_EXTRA_RSYNC_SPECS; do
+        CLUSTER_EXTRA_RSYNC_SPECS \
+        REMOVE_CODE_COPY_AFTER_JOB \
+        REMOVE_OVERLAY_AFTER_JOB; do
         capture_requested_env_var "$var_name"
     done
 }
@@ -697,6 +709,13 @@ restore_cluster_env_overrides() {
     local var_name
 
     for var_name in \
+        CLUSTER_ISAAC_SIM_CACHE_DIR \
+        CLUSTER_ISAACLAB_DIR \
+        CLUSTER_SIF_PATH \
+        CLUSTER_DATA_DIR \
+        CLUSTER_HF_TOKEN_FILE \
+        CLUSTER_WANDB_API_KEY_FILE \
+        CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
         CLUSTER_APPEND_DEFAULT_G1_MANIFEST \
         CLUSTER_AUTO_SETUP_G1_DATA \
@@ -712,6 +731,9 @@ restore_cluster_env_overrides() {
         CLUSTER_USE_SHARED_SIF \
         CLUSTER_SHARED_SIF_PATH \
         CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK \
+        CLUSTER_PIXI_CACHE_DIR \
+        CLUSTER_PIXI_ENV \
         CLUSTER_GIT_SYNC_FIRST \
         CLUSTER_EXTRA_RSYNC_EXCLUDES \
         CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS \
@@ -720,7 +742,9 @@ restore_cluster_env_overrides() {
         CLUSTER_RLOPT_LOCAL_PATH \
         CLUSTER_IMITATION_TOOLS_LOCAL_PATH \
         CLUSTER_EXTRA_PYTHONPATH_REL \
-        CLUSTER_EXTRA_RSYNC_SPECS; do
+        CLUSTER_EXTRA_RSYNC_SPECS \
+        REMOVE_CODE_COPY_AFTER_JOB \
+        REMOVE_OVERLAY_AFTER_JOB; do
         restore_requested_env_var "$var_name"
     done
 }
@@ -729,6 +753,13 @@ build_remote_job_env_args() {
     local var_name
 
     REMOTE_JOB_ENV_ARGS=()
+    add_remote_env_arg_if_set CLUSTER_ISAAC_SIM_CACHE_DIR
+    add_remote_env_arg_if_set CLUSTER_ISAACLAB_DIR
+    add_remote_env_arg_if_set CLUSTER_SIF_PATH
+    add_remote_env_arg_if_set CLUSTER_DATA_DIR
+    add_remote_env_arg_if_set CLUSTER_HF_TOKEN_FILE
+    add_remote_env_arg_if_set CLUSTER_WANDB_API_KEY_FILE
+    add_remote_env_arg_if_set CLUSTER_CONTAINER_HOME
     add_remote_env_arg_if_set CLUSTER_PYTHON_EXECUTABLE
     add_remote_env_arg_if_set CLUSTER_AUTO_SETUP_G1_DATA
     add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
@@ -744,6 +775,8 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
     add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
     add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
+    add_remote_env_arg_if_set REMOVE_CODE_COPY_AFTER_JOB
+    add_remote_env_arg_if_set REMOVE_OVERLAY_AFTER_JOB
 
     while IFS= read -r var_name; do
         add_remote_env_arg_if_set "$var_name"
@@ -813,6 +846,13 @@ build_remote_job_env_args() {
     local var_name
 
     REMOTE_JOB_ENV_ARGS=()
+    add_remote_env_arg_if_set CLUSTER_ISAAC_SIM_CACHE_DIR
+    add_remote_env_arg_if_set CLUSTER_ISAACLAB_DIR
+    add_remote_env_arg_if_set CLUSTER_SIF_PATH
+    add_remote_env_arg_if_set CLUSTER_DATA_DIR
+    add_remote_env_arg_if_set CLUSTER_HF_TOKEN_FILE
+    add_remote_env_arg_if_set CLUSTER_WANDB_API_KEY_FILE
+    add_remote_env_arg_if_set CLUSTER_CONTAINER_HOME
     add_remote_env_arg_if_set CLUSTER_PYTHON_EXECUTABLE
     add_remote_env_arg_if_set CLUSTER_AUTO_SETUP_G1_DATA
     add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
@@ -823,6 +863,16 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_SKIP_CACHE_COPY
     add_remote_env_arg_if_set CLUSTER_OVERLAY_SIZE_MB
     add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
+    add_remote_env_arg_if_set CLUSTER_JOB_TMPDIR_ROOT
+    add_remote_env_arg_if_set CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB
+    add_remote_env_arg_if_set CLUSTER_USE_SHARED_SIF
+    add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
+    add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
+    add_remote_env_arg_if_set CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK
+    add_remote_env_arg_if_set CLUSTER_PIXI_CACHE_DIR
+    add_remote_env_arg_if_set CLUSTER_PIXI_ENV
+    add_remote_env_arg_if_set REMOVE_CODE_COPY_AFTER_JOB
+    add_remote_env_arg_if_set REMOVE_OVERLAY_AFTER_JOB
 
     while IFS= read -r var_name; do
         add_remote_env_arg_if_set "$var_name"
@@ -1255,8 +1305,13 @@ case $command in
         # Append current date and time to CLUSTER_ISAACLAB_DIR
         CLUSTER_ISAACLAB_DIR="${CLUSTER_ISAACLAB_BASE_DIR}_${current_datetime}"
         init_incremental_sync_state
-        # Check if singularity image exists on the remote host
-        check_singularity_image_exists isaac-lab-$profile
+        # Check if singularity image exists on the remote host unless the
+        # selected submitter runs directly through Pixi.
+        if is_truthy "${CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK:-0}"; then
+            echo "[INFO] Skipping Singularity image precheck via CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK."
+        else
+            check_singularity_image_exists isaac-lab-$profile
+        fi
         # make sure target directory exists
         ssh $CLUSTER_LOGIN "mkdir -p $CLUSTER_ISAACLAB_DIR"
         # Sync Isaac Lab imitation code

@@ -156,6 +156,21 @@ parser.add_argument(
     help="Optional zarr cache path used with --motion_path.",
 )
 parser.add_argument(
+    "--motion_loader_chunk_size",
+    type=int,
+    default=1,
+    help=(
+        "ILTools Zarr chunk size for motion-source overrides. A small default "
+        "keeps short unpadded trajectories valid with Zarr sharding."
+    ),
+)
+parser.add_argument(
+    "--motion_loader_shard_size",
+    type=int,
+    default=512,
+    help="ILTools Zarr shard size for motion-source overrides.",
+)
+parser.add_argument(
     "--motion_refresh_dataset",
     action="store_true",
     default=False,
