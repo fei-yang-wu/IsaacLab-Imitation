@@ -35,10 +35,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--algorithm", default="IPMD")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--frame-cap", type=int, default=2_000_000_000)
-    p.add_argument("--train-num-envs", type=int, default=4096)
+    # Default scaled to the h100 (80GB): 8192 envs x horizon 32 = 262k batch,
+    # ~60.8GB peak (measured), fastest-to-2B and best memory use in the sweep.
+    # NOTE: this exceeds a 48GB a40 -- override to 4096x24 (or 4096x48, ~45GB) there.
+    p.add_argument("--train-num-envs", type=int, default=8192)
     # Per-env rollout horizon (collector.frames_per_batch before x num_envs).
     # train.py auto-rescales replay_buffer.size / mini_batch_size to num_envs x horizon.
-    p.add_argument("--frames-per-env-batch", type=int, default=24)
+    # 32 > the 25-step latent period (code_period), a "sufficiently long" unroll.
+    p.add_argument("--frames-per-env-batch", type=int, default=32)
     p.add_argument("--horizon-steps", type=int, default=25)
     p.add_argument("--z-dim", type=int, default=256)
     p.add_argument("--encoder-window-mode", default="intermediate")

@@ -178,7 +178,7 @@ def main() -> None:
             "--task", args.task, "--algo", "IPMD", "--seed", str(args.seed),
             "--max_iterations", str(args.iters),
             f"agent.collector.frames_per_batch={horizon}",
-            "agent.logger.backend=none", "agent.logger.video=false",
+            "agent.logger.backend=csv", "agent.logger.video=false",
             "agent.save_interval=100000000000",
             f"agent.ipmd.hl_skill_checkpoint_path={skill_ckpt}",
             f"env.lafan1_manifest_path={manifest}", f"env.dataset_path={dataset_path}",
