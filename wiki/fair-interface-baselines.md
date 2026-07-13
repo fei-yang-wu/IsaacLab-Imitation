@@ -161,6 +161,9 @@ existing latent checkpoints or train the base stack first, then runs oracle
 tracking, planner eval, per-motion planner finetuning, and finetuned planner
 tracking.
 
+For the full reproduction recipe and current result table, see
+[`lafan1-motion-tracking-evaluation.md`](lafan1-motion-tracking-evaluation.md).
+
 Run a smoke pass on one trajectory:
 
 ```bash
