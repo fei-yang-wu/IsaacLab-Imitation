@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cluster entry: pretrain DiffSR skill encoder + low-level oracle IPMD on BONES-SEED-100.
 
-Mirrors the validated local launcher (scripts/rlopt/run_local_pretrain_lowlevel.sh)
+Mirrors the validated LAFAN1 pipeline (scripts/rlopt/train_hl_skill_pipeline.py)
 as a single Python entry the cluster interface can invoke via
 ``pixi run -e isaaclab python scripts/rlopt/run_bones_seed_100_pretrain_lowlevel.py <args>``.
 
@@ -48,8 +48,15 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--encoder-window-mode", default="intermediate")
     p.add_argument("--diffsr-feature-dim", type=int, default=128)
     p.add_argument("--diffsr-embed-dim", type=int, default=512)
-    p.add_argument("--pretrain-updates", type=int, default=5000)
+    # Keep the representation-learning protocol aligned with the LAFAN1 pipeline.
+    # These values are passed explicitly below so changes to the direct trainer's
+    # defaults cannot silently change this comparison.
+    p.add_argument("--pretrain-updates", type=int, default=50_000)
     p.add_argument("--pretrain-batch-size", type=int, default=8192)
+    p.add_argument("--eval-trajectory-fraction", type=float, default=0.1)
+    p.add_argument("--categorical-groups", type=int, default=64)
+    p.add_argument("--categorical-categories", type=int, default=128)
+    p.add_argument("--gumbel-hard", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--video-length", type=int, default=500)
     p.add_argument("--video-interval", type=int, default=2500)
     p.add_argument("--save-interval", type=int, default=100_000_000)
@@ -108,9 +115,12 @@ def main() -> None:
                 "--log_interval", "100",
                 "--eval_batches", "4",
                 "--eval_batch_size", str(args.pretrain_batch_size),
-                "--train_split", "all", "--eval_split", "all",
-                "--eval_trajectory_fraction", "0.5",
+                "--train_split", "train", "--eval_split", "eval",
+                "--eval_trajectory_fraction", str(args.eval_trajectory_fraction),
                 "--trajectory_split_seed", str(args.seed),
+                "--categorical_groups", str(args.categorical_groups),
+                "--categorical_categories", str(args.categorical_categories),
+                "--gumbel_hard" if args.gumbel_hard else "--no-gumbel_hard",
                 "--reconstruction_eval", "--window_probe_eval",
                 "--window_probe_train_batches", "8",
                 "--window_probe_eval_batches", "4",
