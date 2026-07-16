@@ -186,6 +186,13 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   root, joint, and EE errors as metrics; define survival as completing the
   episode without `base_too_low`. Low-level oracle qualification remains strict
   and keeps all original termination terms.
+- Every low-level oracle evaluation and M3 planner evaluation must also include
+  a full-horizon diagnostic pass with all early terminations disabled, including
+  `base_too_low`, so MPJPE is measured over the intended evaluation horizon
+  rather than a termination-truncated rollout. Render and retain a video from
+  that same non-terminating pass for visual inspection. This diagnostic is in
+  addition to, not a replacement for, strict oracle qualification and the
+  standard M3 survival pass with `base_too_low` active.
 - BONES-SEED oracle demonstrations may be collected in one balanced
   multi-environment run per interface because motion identity is a supervised
   label there. Planner-driven collection and evaluation must still receive an
