@@ -789,6 +789,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> 
         joint_pos[:, robot_joint_indexes] = joint_pos_target
         joint_vel[:, robot_joint_indexes] = joint_vel_target
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
+        # Update articulation link transforms before optional NPZ logging.
+        sim.forward()
         if args_cli.print_joint_debug and not printed_first_write_debug:
             write_error = (
                 (joint_pos[:, robot_joint_indexes] - joint_pos_target).abs().max()

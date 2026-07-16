@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 import random
@@ -46,6 +47,24 @@ parser.add_argument(
 )
 parser.add_argument("--label", type=str, default="")
 parser.add_argument("--command_space", type=str, default=None)
+parser.add_argument(
+    "--policy_only_checkpoint",
+    action="store_true",
+    default=False,
+    help=(
+        "Strict-load only policy_state_dict. Required when evaluating a frozen "
+        "vanilla actor independently of training-only critic/optimizer shapes."
+    ),
+)
+parser.add_argument(
+    "--low_level_command_mode",
+    choices=("native", "streamed_vanilla"),
+    default="native",
+    help=(
+        "streamed_vanilla treats --command_space as a full-body planner target "
+        "but executes its current slot with the unchanged vanilla tracker."
+    ),
+)
 parser.add_argument("--command_past_steps", type=int, default=None)
 parser.add_argument("--command_future_steps", type=int, default=None)
 parser.add_argument(
@@ -106,6 +125,17 @@ parser.add_argument(
     default=False,
     help="Compare reference, planner_oracle, and planner observation tensors, then exit.",
 )
+parser.add_argument(
+    "--certify_streamed_vanilla_equivalence",
+    action="store_true",
+    default=False,
+    help=(
+        "Verify that oracle full-body chunk slots and deterministic actions match "
+        "direct vanilla commands across every held-command phase, then exit."
+    ),
+)
+parser.add_argument("--equivalence_steps", type=int, default=20)
+parser.add_argument("--equivalence_atol", type=float, default=5.0e-5)
 parser.add_argument("--refresh_zarr_dataset", action="store_true", default=False)
 parser.add_argument(
     "--keep_after_done",
@@ -149,12 +179,24 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env
     G1_EE_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
 )
+from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
+    VANILLA_POLICY_INPUT_KEYS,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
 from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import InteractionType
 from torchrl.envs import Compose, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
+
+
+INTERFACE_BASELINES_DIR = Path(__file__).resolve().parents[1] / "interface_baselines"
+if str(INTERFACE_BASELINES_DIR) not in sys.path:
+    sys.path.append(str(INTERFACE_BASELINES_DIR))
+
+from low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
+from paper_protocol_metadata import interval_event_metadata  # noqa: E402
+from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
 
 ALGORITHM_CLASS_MAP = {
@@ -471,6 +513,185 @@ def _refresh_tensordict_observations(
     return td
 
 
+def _certify_streamed_vanilla_equivalence(
+    env: TransformedEnv,
+    base_env: ImitationRLEnv,
+    collector_policy: torch.nn.Module,
+    *,
+    num_steps: int,
+    atol: float,
+) -> dict[str, Any]:
+    """Certify oracle chunk-current-slot and direct vanilla equivalence."""
+    if base_env.policy_command_mode != "full_body_chunk_current_slot":
+        raise ValueError(
+            "Equivalence certification requires streamed_vanilla command mode."
+        )
+    if getattr(base_env, "_command_observation_source", None) != "planner_oracle":
+        raise ValueError(
+            "Equivalence certification requires planner_mode=none so the exact "
+            "planner_oracle packet drives the adapter."
+        )
+    if int(num_steps) <= 0:
+        raise ValueError("--equivalence_steps must be positive.")
+    if float(atol) < 0.0:
+        raise ValueError("--equivalence_atol must be non-negative.")
+
+    command_keys = (
+        ("policy", "expert_motion"),
+        ("policy", "expert_anchor_pos_b"),
+        ("policy", "expert_anchor_ori_b"),
+    )
+    policy_keys = tuple(VANILLA_POLICY_INPUT_KEYS)
+    expected_policy_widths = {
+        ("policy", "expert_motion"): 58,
+        ("policy", "expert_anchor_pos_b"): 3,
+        ("policy", "expert_anchor_ori_b"): 6,
+        ("policy", "base_ang_vel"): 3,
+        ("policy", "joint_pos_rel"): 29,
+        ("policy", "joint_vel_rel"): 29,
+        ("policy", "last_action"): 29,
+    }
+    if set(policy_keys) != set(expected_policy_widths):
+        raise RuntimeError(
+            "Vanilla policy-key contract changed without updating equivalence widths."
+        )
+    state_before = {
+        key: value.detach().clone()
+        for key, value in collector_policy.state_dict().items()
+    }
+    max_abs_by_key = {"/".join(key): 0.0 for key in policy_keys}
+    max_action_abs = 0.0
+    observed_phases: set[int] = set()
+    hold_steps = int(getattr(base_env, "_command_hold_steps", 0))
+    async_rephase_required = (
+        int(base_env.num_envs) > 1 and int(num_steps) > hold_steps + 1
+    )
+    async_rephase_exercised = False
+    td = env.reset()
+
+    try:
+        for step_index in range(int(num_steps)):
+            if async_rephase_required and step_index == hold_steps + 1:
+                # Desynchronize one environment's publication phase without
+                # perturbing its robot/reference state. This exercises the same
+                # row-wise renewal path used immediately after an async reset.
+                base_env.episode_length_buf[0] = 0
+                async_rephase_exercised = True
+            phases = base_env._command_hold_phase().detach().cpu().tolist()
+            observed_phases.update(int(phase) for phase in phases)
+
+            base_env._policy_command_mode = "full_body_chunk_current_slot"
+            adapter_td = _refresh_tensordict_observations(td.clone(), base_env)
+            base_env._policy_command_mode = "reference"
+            direct_td = _refresh_tensordict_observations(td.clone(), base_env)
+            base_env._policy_command_mode = "full_body_chunk_current_slot"
+
+            for key in policy_keys:
+                adapter_value = adapter_td.get(key)
+                direct_value = direct_td.get(key)
+                if not isinstance(adapter_value, torch.Tensor) or not isinstance(
+                    direct_value, torch.Tensor
+                ):
+                    raise KeyError(f"Missing vanilla tracker input key {key!r}.")
+                expected_width = expected_policy_widths[key]
+                if (
+                    adapter_value.ndim < 2
+                    or direct_value.shape != adapter_value.shape
+                    or int(adapter_value.shape[-1]) != expected_width
+                ):
+                    raise RuntimeError(
+                        f"Vanilla input {key!r} shape mismatch: "
+                        f"adapter={tuple(adapter_value.shape)}, "
+                        f"direct={tuple(direct_value.shape)}, "
+                        f"expected_width={expected_width}."
+                    )
+                max_abs = float(
+                    torch.max(torch.abs(adapter_value - direct_value)).item()
+                )
+                max_abs_by_key["/".join(key)] = max(
+                    max_abs_by_key["/".join(key)], max_abs
+                )
+
+            with (
+                torch.inference_mode(),
+                set_exploration_type(InteractionType.DETERMINISTIC),
+            ):
+                adapter_action_td = collector_policy(adapter_td.clone())
+                direct_action_td = collector_policy(direct_td.clone())
+            adapter_action = adapter_action_td.get("action")
+            direct_action = direct_action_td.get("action")
+            if not isinstance(adapter_action, torch.Tensor) or not isinstance(
+                direct_action, torch.Tensor
+            ):
+                raise RuntimeError("Vanilla tracker did not produce an action.")
+            if (
+                adapter_action.ndim < 2
+                or direct_action.shape != adapter_action.shape
+                or int(adapter_action.shape[-1]) != 29
+            ):
+                raise RuntimeError(
+                    "Vanilla tracker action shape mismatch: "
+                    f"adapter={tuple(adapter_action.shape)}, "
+                    f"direct={tuple(direct_action.shape)}, expected_width=29."
+                )
+            max_action_abs = max(
+                max_action_abs,
+                float(torch.max(torch.abs(adapter_action - direct_action)).item()),
+            )
+            adapter_action_td.set("action", adapter_action)
+            with torch.inference_mode():
+                td_step = env.step(adapter_action_td)
+            td = step_mdp(
+                td_step,
+                exclude_reward=True,
+                exclude_done=False,
+                exclude_action=True,
+            )
+    finally:
+        base_env._policy_command_mode = "full_body_chunk_current_slot"
+
+    for key, value in collector_policy.state_dict().items():
+        if not torch.equal(value, state_before[key]):
+            raise RuntimeError(f"Frozen tracker state changed during rollout: {key}.")
+
+    expected_phases = set(range(hold_steps))
+    missing_phases = sorted(expected_phases - observed_phases)
+    command_max = max(max_abs_by_key["/".join(key)] for key in command_keys)
+    all_input_max = max(max_abs_by_key.values())
+    passed = (
+        not missing_phases
+        and (not async_rephase_required or async_rephase_exercised)
+        and all_input_max <= float(atol)
+        and max_action_abs <= float(atol)
+    )
+    result = {
+        "passed": bool(passed),
+        "steps": int(num_steps),
+        "atol": float(atol),
+        "hold_steps": hold_steps,
+        "command_future_steps": int(base_env._latent_patch_future_steps),
+        "window_steps": int(base_env._latent_patch_future_steps) + 1,
+        "observed_phases": sorted(observed_phases),
+        "missing_phases": missing_phases,
+        "asynchronous_rephase_required": async_rephase_required,
+        "asynchronous_rephase_exercised": async_rephase_exercised,
+        "expected_policy_widths": {
+            "/".join(key): width for key, width in expected_policy_widths.items()
+        },
+        "expected_action_width": 29,
+        "max_abs_by_policy_input": max_abs_by_key,
+        "max_all_policy_input_abs": all_input_max,
+        "max_command_abs": command_max,
+        "max_action_abs": max_action_abs,
+        "policy_state_unchanged": True,
+    }
+    if not passed:
+        raise RuntimeError(
+            f"Streamed-vanilla equivalence certification failed: {result}."
+        )
+    return result
+
+
 def _planner_command_terms(command_space: str) -> tuple[str, ...]:
     return _trajectory_command_terms(command_space)
 
@@ -480,6 +701,7 @@ def _current_reference_command_terms(
     *,
     command_space: str,
     ee_body_names: list[str],
+    env_ids: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     past_steps = int(getattr(base_env, "_latent_patch_past_steps", 0))
     future_steps = int(getattr(base_env, "_latent_patch_future_steps", 0))
@@ -489,6 +711,7 @@ def _current_reference_command_terms(
             term_name=term_name,
             past_steps=past_steps,
             future_steps=future_steps,
+            env_ids=env_ids,
             **ref_kwargs,
         )
         for term_name in _planner_command_terms(command_space)
@@ -530,6 +753,7 @@ def _build_planner_command_terms(
     ee_body_names: list[str],
     planner_mode: str,
     planner_noise_std: float,
+    env_ids: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
     terms = _planner_command_terms(command_space)
     if len(terms) == 0:
@@ -537,7 +761,10 @@ def _build_planner_command_terms(
     if planner_mode == "zero":
         return {
             term_name: torch.zeros_like(
-                base_env.get_agent_trajectory_command_term(term_name)
+                base_env.get_agent_trajectory_command_term(
+                    term_name,
+                    env_ids=env_ids,
+                )
             )
             for term_name in terms
         }
@@ -546,6 +773,7 @@ def _build_planner_command_terms(
         base_env,
         command_space=command_space,
         ee_body_names=ee_body_names,
+        env_ids=env_ids,
     )
     if planner_mode == "hold_current":
         command_terms = _hold_current_command_window(
@@ -573,24 +801,34 @@ def _maybe_publish_planner_command(
     planner_mode: str,
     planner_update_interval: int,
     planner_noise_std: float,
-    step_index: int,
-) -> bool:
+    active_mask: torch.Tensor,
+    initial_publication: bool,
+) -> int:
     if planner_mode == "none":
-        return False
-    update_interval = max(1, int(planner_update_interval))
-    if int(step_index) % update_interval != 0:
-        return False
+        return 0
+    renew_env_ids = planner_renew_env_ids(
+        base_env.episode_length_buf,
+        planner_update_interval,
+        initial_publication=initial_publication,
+    )
+    if int(renew_env_ids.numel()) == 0:
+        return 0
+    active_on_device = active_mask.to(device=renew_env_ids.device)
+    renew_env_ids = renew_env_ids[active_on_device.index_select(0, renew_env_ids)]
+    if int(renew_env_ids.numel()) == 0:
+        return 0
     command_terms = _build_planner_command_terms(
         base_env,
         command_space=command_space,
         ee_body_names=ee_body_names,
         planner_mode=planner_mode,
         planner_noise_std=planner_noise_std,
+        env_ids=renew_env_ids,
     )
     if len(command_terms) == 0:
-        return False
-    base_env.set_agent_trajectory_command(command_terms)
-    return True
+        return 0
+    base_env.set_agent_trajectory_command(command_terms, env_ids=renew_env_ids)
+    return int(renew_env_ids.numel())
 
 
 def _command_metrics(
@@ -613,16 +851,42 @@ def _command_metrics(
     invalid_mask = torch.zeros(
         base_env.num_envs, device=base_env.device, dtype=torch.bool
     )
+    window_steps = past_steps + future_steps + 1
     for term_name in terms:
-        command = base_env.get_agent_trajectory_command_term(term_name)
+        command = base_env.get_current_command_window_term(
+            term_name=term_name,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            **ref_kwargs,
+        )
         reference = base_env.get_current_expert_window_term(
             term_name=term_name,
             past_steps=past_steps,
             future_steps=future_steps,
             **ref_kwargs,
         )
+        if command.shape != reference.shape or command.shape[-1] % window_steps != 0:
+            raise RuntimeError(
+                f"Effective command shape mismatch for {term_name!r}: "
+                f"command={tuple(command.shape)}, reference={tuple(reference.shape)}, "
+                f"window_steps={window_steps}."
+            )
         invalid_mask |= ~torch.isfinite(command).all(dim=-1)
+        frame_width = int(command.shape[-1]) // window_steps
+        command_frames = command.reshape(base_env.num_envs, window_steps, frame_width)
+        reference_frames = reference.reshape(
+            base_env.num_envs, window_steps, frame_width
+        )
+        # The paper-facing command error is the frame actually consumed by the
+        # 50 Hz tracker. The full effective-window error remains diagnostic:
+        # held packets necessarily have a stale/tail-padded lookahead between
+        # 5 Hz publications even when their consumed current slot is exact.
+        current_command = command_frames[:, past_steps, :]
+        current_reference = reference_frames[:, past_steps, :]
         metrics[f"command_{term_name}_rmse"] = torch.sqrt(
+            torch.mean((current_command - current_reference).square(), dim=-1)
+        )
+        metrics[f"command_{term_name}_effective_window_rmse"] = torch.sqrt(
             torch.mean((command - reference).square(), dim=-1)
         )
     metrics["command_invalid"] = invalid_mask.to(dtype=torch.float32)
@@ -796,6 +1060,14 @@ def _json_default(value: object) -> object:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable.")
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _flatten_summary(summary: dict[str, Any]) -> dict[str, object]:
     metadata = summary["metadata"]
     aggregate = summary["aggregate"]
@@ -875,12 +1147,36 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if motion_manifest is not None and not motion_manifest.is_file():
         raise FileNotFoundError(f"Motion manifest not found: {motion_manifest}")
 
-    if args_cli.command_space is not None:
-        if not hasattr(agent_cfg, "command_space"):
-            raise TypeError(
-                f"Agent config for {args_cli.algorithm} has no command_space field."
+    if not hasattr(agent_cfg, "command_space"):
+        raise TypeError(
+            f"Agent config for {args_cli.algorithm} has no command_space field."
+        )
+    target_command_space = str(
+        args_cli.command_space
+        if args_cli.command_space is not None
+        else getattr(agent_cfg, "command_space", "unknown")
+    )
+    low_level_command_mode = str(args_cli.low_level_command_mode)
+    low_level_command_space = target_command_space
+    if low_level_command_mode == "streamed_vanilla":
+        if target_command_space != "full_body_trajectory":
+            raise ValueError(
+                "streamed_vanilla requires --command_space full_body_trajectory."
             )
-        agent_cfg.command_space = args_cli.command_space
+        if int(args_cli.planner_update_interval) <= 0:
+            raise ValueError("--planner_update_interval must be positive.")
+        low_level_command_space = "single_frame_full_body"
+        env_cfg.policy_command_mode = "full_body_chunk_current_slot"
+    else:
+        env_cfg.policy_command_mode = "reference"
+    if args_cli.policy_only_checkpoint and (
+        low_level_command_space != "single_frame_full_body"
+    ):
+        raise ValueError(
+            "--policy_only_checkpoint currently requires the vanilla "
+            "single_frame_full_body actor contract."
+        )
+    agent_cfg.command_space = low_level_command_space
     sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
     if callable(sync_input_keys):
         sync_input_keys()
@@ -889,7 +1185,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.latent_patch_past_steps = int(args_cli.command_past_steps)
     if args_cli.command_future_steps is not None:
         env_cfg.latent_patch_future_steps = int(args_cli.command_future_steps)
-    if args_cli.command_observation_source is not None:
+    if low_level_command_mode == "streamed_vanilla":
+        if int(getattr(env_cfg, "latent_patch_past_steps", 0)) != 0:
+            raise ValueError("streamed_vanilla requires command_past_steps=0.")
+        if int(getattr(env_cfg, "latent_patch_future_steps", 0)) + 1 < int(
+            args_cli.planner_update_interval
+        ):
+            raise ValueError(
+                "streamed_vanilla requires command_future_steps + 1 >= "
+                "planner_update_interval."
+            )
+        env_cfg.command_hold_steps = int(args_cli.planner_update_interval)
+        env_cfg.command_observation_source = (
+            "planner" if args_cli.planner_mode != "none" else "planner_oracle"
+        )
+    elif args_cli.command_observation_source is not None:
         env_cfg.command_observation_source = args_cli.command_observation_source
     elif args_cli.planner_mode != "none":
         env_cfg.command_observation_source = "planner"
@@ -913,7 +1223,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.lafan1_manifest_path = str(motion_manifest)
         resolve_manifest_config = getattr(env_cfg, "_resolve_manifest_config", None)
         if callable(resolve_manifest_config):
-            resolve_manifest_config(dataset_path_explicit=args_cli.dataset_path is not None)
+            resolve_manifest_config(
+                dataset_path_explicit=args_cli.dataset_path is not None
+            )
     if args_cli.motion_name is not None:
         if not hasattr(env_cfg, "motions"):
             raise TypeError(f"Task {args_cli.task} does not support --motion_name.")
@@ -934,6 +1246,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.wrap_steps = False
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
+    if args_cli.certify_streamed_vanilla_equivalence:
+        # Certification isolates command/action equivalence from controller
+        # quality. Normal evaluation keeps the strict tracking terminations.
+        terminations = getattr(env_cfg, "terminations", None)
+        for term_name in (
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "base_too_low",
+        ):
+            if terminations is not None and hasattr(terminations, term_name):
+                setattr(terminations, term_name, None)
 
     step_dt = _configured_step_dt(env_cfg)
     if (
@@ -987,7 +1311,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     )
     base_env = _unwrap_imitation_env(env)
 
-    command_space = str(getattr(agent_cfg, "command_space", "unknown"))
+    command_space = target_command_space
     if (
         args_cli.planner_mode != "none"
         and len(_planner_command_terms(command_space)) == 0
@@ -1013,9 +1337,64 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
     print(f"[INFO] Loading checkpoint: {checkpoint_path}")
-    agent.load_model(str(checkpoint_path))
-    collector_policy = agent.collector_policy
-    collector_policy.eval()
+    tracker_provenance: dict[str, Any] | None = None
+    policy_only_checkpoint = bool(
+        args_cli.policy_only_checkpoint or low_level_command_mode == "streamed_vanilla"
+    )
+    if policy_only_checkpoint:
+        frozen_tracker = load_frozen_low_level_tracker(
+            agent,
+            checkpoint_path,
+            expected_input_keys=VANILLA_POLICY_INPUT_KEYS,
+            map_location=env_cfg.sim.device,
+        )
+        collector_policy = frozen_tracker.policy
+        tracker_provenance = frozen_tracker.provenance
+    else:
+        agent.load_model(str(checkpoint_path))
+        collector_policy = agent.collector_policy
+        collector_policy.eval()
+
+    if args_cli.certify_streamed_vanilla_equivalence:
+        result = _certify_streamed_vanilla_equivalence(
+            env,
+            base_env,
+            collector_policy,
+            num_steps=int(args_cli.equivalence_steps),
+            atol=float(args_cli.equivalence_atol),
+        )
+        result["low_level_tracker"] = tracker_provenance
+        result["checkpoint"] = str(checkpoint_path)
+        result["checkpoint_sha256"] = _file_sha256(checkpoint_path)
+        result["motion_manifest"] = (
+            str(args_cli.motion_manifest.expanduser().resolve())
+            if args_cli.motion_manifest is not None
+            else None
+        )
+        result["motion_manifest_sha256"] = (
+            _file_sha256(args_cli.motion_manifest.expanduser().resolve())
+            if args_cli.motion_manifest is not None
+            else None
+        )
+        result["dataset_path"] = (
+            str(args_cli.dataset_path.expanduser().resolve())
+            if args_cli.dataset_path is not None
+            else str(getattr(env_cfg, "dataset_path", ""))
+        )
+        if args_cli.output_json is not None:
+            output_json = args_cli.output_json.expanduser().resolve()
+            output_json.parent.mkdir(parents=True, exist_ok=True)
+            output_json.write_text(
+                json.dumps(result, indent=2, default=_json_default) + "\n",
+                encoding="utf-8",
+            )
+        print(
+            "[PASS] Streamed vanilla equivalence: "
+            f"command_max={result['max_command_abs']:.3e} "
+            f"action_max={result['max_action_abs']:.3e}."
+        )
+        env.close()
+        return
 
     num_envs = int(args_cli.num_envs)
     active = torch.ones(num_envs, dtype=torch.bool)
@@ -1024,6 +1403,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     done_events = torch.zeros(num_envs, dtype=torch.float32)
     terminated_events = torch.zeros(num_envs, dtype=torch.float32)
     truncated_events = torch.zeros(num_envs, dtype=torch.float32)
+    trajectory_ranks = torch.full((num_envs,), -1, dtype=torch.long)
+    motion_names = [f"env_{env_id}" for env_id in range(num_envs)]
+    termination_term_names = list(base_env.termination_manager.active_terms)
+    termination_hits = {
+        term_name: torch.zeros(num_envs, dtype=torch.bool)
+        for term_name in termination_term_names
+    }
+    tracking_failure_term_names: list[str] = []
+    for term_name in termination_term_names:
+        term_cfg = base_env.termination_manager.get_term_cfg(term_name)
+        if not term_cfg.time_out and term_name != "reference_finished":
+            tracking_failure_term_names.append(term_name)
     metric_stats: dict[str, dict[str, float]] = {}
     previous_action: torch.Tensor | None = None
     previous_body_lin_vel: tuple[torch.Tensor, torch.Tensor] | None = None
@@ -1034,6 +1425,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     dt = float(getattr(base_env, "step_dt", 0.0) or 0.0)
 
     td = env.reset()
+    trajectory_manager = base_env.trajectory_manager
+    env_traj_rank = getattr(trajectory_manager, "env_traj_rank", None)
+    if isinstance(env_traj_rank, torch.Tensor) and env_traj_rank.numel() >= num_envs:
+        trajectory_ranks = env_traj_rank[:num_envs].detach().cpu().long().clone()
+        ordered_motion_names = base_env.expert_trajectory_motion_names()
+        motion_names = [
+            ordered_motion_names[int(rank)]
+            if 0 <= int(rank) < len(ordered_motion_names)
+            else f"trajectory_rank_{int(rank)}"
+            for rank in trajectory_ranks.tolist()
+        ]
     print(
         "[INFO] Starting deterministic evaluation: "
         f"num_envs={num_envs}, steps={args_cli.steps}, command_space={command_space}"
@@ -1043,17 +1445,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if not bool(step_active.any()):
             break
 
-        published = _maybe_publish_planner_command(
+        published_rows = _maybe_publish_planner_command(
             base_env,
             command_space=command_space,
             ee_body_names=ee_body_names,
             planner_mode=args_cli.planner_mode,
             planner_update_interval=int(args_cli.planner_update_interval),
             planner_noise_std=float(args_cli.planner_noise_std),
-            step_index=step_idx,
+            active_mask=step_active,
+            initial_publication=step_idx == 0,
         )
-        if published:
-            planner_publish_count += 1
+        planner_publish_count += published_rows
         if args_cli.planner_mode != "none":
             td = _refresh_tensordict_observations(td, base_env)
 
@@ -1119,6 +1521,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             default=False,
         ).bool()
         done_any = dones | terminateds | truncateds
+        terminal_step_mask = done_any & step_active
+        for term_name in termination_term_names:
+            term_values = (
+                base_env.termination_manager.get_term(term_name)
+                .detach()
+                .reshape(-1)[:num_envs]
+                .to(device="cpu", dtype=torch.bool)
+            )
+            termination_hits[term_name] |= term_values & terminal_step_mask
         return_sum += rewards.float() * step_active.float()
         survival_steps += step_active.float()
         done_events += (done_any & step_active).float()
@@ -1169,6 +1580,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     return_mean, return_std = _tensor_mean_std(return_sum, active_mask)
     survival_mean, survival_std = _tensor_mean_std(survival_steps, active_mask)
     num_evaluated_envs = int(active_mask.sum().item())
+    tracking_failure = torch.zeros(num_envs, dtype=torch.bool)
+    for term_name in tracking_failure_term_names:
+        tracking_failure |= termination_hits[term_name]
+    tracking_success = active_mask & ~tracking_failure
+
+    def _term_rate(term_name: str) -> float:
+        if num_evaluated_envs == 0 or term_name not in termination_hits:
+            return float("nan")
+        return float(termination_hits[term_name][active_mask].float().mean().item())
 
     aggregate = {
         "return_sum_mean": return_mean,
@@ -1191,6 +1611,30 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "done_events_per_env": float(done_events[active_mask].mean().item())
         if num_evaluated_envs > 0
         else float("nan"),
+        "tracking_success_rate": float(
+            tracking_success[active_mask].float().mean().item()
+        )
+        if num_evaluated_envs > 0
+        else float("nan"),
+        "tracking_failure_rate": float(
+            tracking_failure[active_mask].float().mean().item()
+        )
+        if num_evaluated_envs > 0
+        else float("nan"),
+        "completed_requested_horizon_rate": float(
+            (done_events[active_mask] == 0).float().mean().item()
+        )
+        if num_evaluated_envs > 0
+        else float("nan"),
+        "reference_finished_rate": _term_rate("reference_finished"),
+        "time_out_rate": _term_rate("time_out"),
+        "termination_term_rates": {
+            term_name: _term_rate(term_name) for term_name in termination_term_names
+        },
+        "termination_cause_env_counts": {
+            term_name: int(termination_hits[term_name][active_mask].sum().item())
+            for term_name in termination_term_names
+        },
         "steps_executed": int(steps_executed),
         "valid_transition_count": int(valid_transition_count),
         "num_evaluated_envs": int(num_evaluated_envs),
@@ -1206,7 +1650,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if motion_manifest is not None
             else None,
             "motion_name": args_cli.motion_name,
+            "dataset_path": str(getattr(env_cfg, "dataset_path", "")),
             "command_space": command_space,
+            "low_level_command_mode": low_level_command_mode,
+            "low_level_command_space": low_level_command_space,
+            "policy_only_checkpoint": policy_only_checkpoint,
+            "policy_command_mode": str(
+                getattr(base_env, "policy_command_mode", "unknown")
+            ),
+            "low_level_tracker": tracker_provenance,
             "command_observation_source": str(
                 getattr(base_env, "_command_observation_source", "unknown")
             ),
@@ -1223,6 +1675,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "observation_corruption_enabled": bool(
                 args_cli.enable_observation_corruption
             ),
+            "policy_observation_corruption_enabled": bool(
+                getattr(
+                    getattr(getattr(env_cfg, "observations", None), "policy", None),
+                    "enable_corruption",
+                    False,
+                )
+            ),
+            "wrap_steps": bool(getattr(env_cfg, "wrap_steps", False)),
+            "early_terminations_enabled": True,
+            "time_out_enabled": True,
+            "episode_length_extension_enabled": not bool(
+                args_cli.preserve_episode_length
+            ),
+            "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
+            "reward_clipping_enabled": False,
+            "push_perturbation": interval_event_metadata(env_cfg, "push_robot"),
             "planner_mode": args_cli.planner_mode,
             "planner_update_interval": int(args_cli.planner_update_interval),
             "planner_noise_std": float(args_cli.planner_noise_std),
@@ -1231,6 +1699,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         },
         "aggregate": aggregate,
         "metrics": _finalize_metric_stats(metric_stats),
+        "max_steps": int(args_cli.steps),
+        "steps_run": int(steps_executed),
+        "stop_reason": (
+            "max_steps" if int(steps_executed) == int(args_cli.steps) else "all_envs_done"
+        ),
+        "per_environment": [
+            {
+                "env_id": env_id,
+                "trajectory_rank": int(trajectory_ranks[env_id].item()),
+                "motion_name": motion_names[env_id],
+                "return_sum": float(return_sum[env_id].item()),
+                "survival_steps": int(survival_steps[env_id].item()),
+                "done": bool(done_events[env_id].item() > 0),
+                "terminated": bool(terminated_events[env_id].item() > 0),
+                "truncated": bool(truncated_events[env_id].item() > 0),
+                "tracking_success": bool(tracking_success[env_id].item()),
+                "termination_terms": [
+                    term_name
+                    for term_name in termination_term_names
+                    if bool(termination_hits[term_name][env_id].item())
+                ],
+            }
+            for env_id in range(num_envs)
+            if bool(active_mask[env_id].item())
+        ],
     }
 
     output_json = args_cli.output_json
@@ -1253,6 +1746,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         f"return_sum_mean={aggregate['return_sum_mean']:.4f} "
         f"survival_steps_mean={aggregate['survival_steps_mean']:.1f} "
         f"done_rate={aggregate['done_rate']:.3f} "
+        f"tracking_success_rate={aggregate['tracking_success_rate']:.3f} "
         f"joint_pos_rmse_rad={metrics.get('joint_pos_rmse_rad', {}).get('mean', float('nan')):.4f} "
         f"ee_pos_error_m={metrics.get('ee_pos_error_m', {}).get('mean', float('nan')):.4f}"
     )

@@ -505,6 +505,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         joint_pos[:, robot_joint_indexes] = motion_dof_pos
         joint_vel[:, robot_joint_indexes] = motion_dof_vel
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
+        # Ensure link transforms correspond to the state written above. A render
+        # call does not reliably run articulation forward kinematics.
+        sim.forward()
         pos_lookat = root_states[0, :3].cpu().numpy()
         sim.set_camera_view(pos_lookat + np.array([2.0, 2.0, 0.5]), pos_lookat)
         sim.render()  # We don't want physic (sim.step())
@@ -534,8 +537,16 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             root_quat = motion.motion_base_rots.cpu().numpy().astype(np.float32)
             root_lin_vel = motion.motion_base_lin_vels.cpu().numpy().astype(np.float32)
             root_ang_vel = motion.motion_base_ang_vels.cpu().numpy().astype(np.float32)
-            joint_pos_target = motion.motion_dof_poss.cpu().numpy().astype(np.float32)
-            joint_vel_target = motion.motion_dof_vels.cpu().numpy().astype(np.float32)
+            joint_pos_articulation = torch.zeros_like(motion.motion_dof_poss)
+            joint_vel_articulation = torch.zeros_like(motion.motion_dof_vels)
+            joint_pos_articulation[:, robot_joint_indexes] = motion.motion_dof_poss
+            joint_vel_articulation[:, robot_joint_indexes] = motion.motion_dof_vels
+            joint_pos_target = (
+                joint_pos_articulation.cpu().numpy().astype(np.float32)
+            )
+            joint_vel_target = (
+                joint_vel_articulation.cpu().numpy().astype(np.float32)
+            )
             log["root_pos"] = root_pos
             log["root_quat"] = root_quat
             log["root_lin_vel"] = root_lin_vel
@@ -548,9 +559,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             log["qvel"] = np.concatenate(
                 [root_lin_vel, root_ang_vel, joint_vel_target], axis=-1
             ).astype(np.float32)
-            log["joint_names"] = np.asarray(
-                scene.cfg.robot.joint_sdk_names, dtype=np.str_
-            )
+            log["joint_names"] = np.asarray(robot.joint_names, dtype=np.str_)
+            log["body_names"] = np.asarray(robot.body_names, dtype=np.str_)
 
             np.savez(args_cli.output_name, **log)
             print("[INFO]: Motion npz file saved to", args_cli.output_name)

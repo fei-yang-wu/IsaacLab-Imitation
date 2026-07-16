@@ -85,6 +85,18 @@ LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
 
 LATENT_PRIOR_INPUT_KEYS: list[tuple[str, str]] = []
 
+FUTURE_CVAE_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
+    ("expert_window", "expert_motion"),
+    ("expert_window", "expert_anchor_pos_b"),
+    ("expert_window", "expert_anchor_ori_b"),
+]
+
+FUTURE_CVAE_PRIOR_INPUT_KEYS: list[tuple[str, str]] = [
+    ("policy", "expert_motion"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
+]
+
 LATENT_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
     ("critic", "latent_command"),
     ("critic", "expert_motion"),
@@ -286,3 +298,67 @@ class G1ImitationLatentRLOptIPMDConfig(_G1ImitationRLOptIPMDBaseConfig):
     """Latent-conditioned RLOpt IPMD configuration for G1 imitation."""
 
     _default_use_latent_command: bool = True
+
+
+@configclass
+class G1ImitationLatentFutureCVAERLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
+    """G1 latent policy whose oracle command compresses a 10-frame segment."""
+
+    def sync_input_keys(self) -> None:
+        super().sync_input_keys()
+        self.ipmd.latent_learning.posterior_input_keys = list(
+            FUTURE_CVAE_POSTERIOR_INPUT_KEYS
+        )
+        self.ipmd.latent_learning.prior_input_keys = list(FUTURE_CVAE_PRIOR_INPUT_KEYS)
+        self.ipmd.latent_learning.reconstruction_target_keys = list(
+            FUTURE_CVAE_POSTERIOR_INPUT_KEYS
+        )
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.ipmd.latent_dim = 256
+        self.ipmd.latent_steps_min = 10
+        self.ipmd.latent_steps_max = 10
+        self.ipmd.latent_learning.method = "future_cvae"
+        self.sync_input_keys()
+        self.ipmd.latent_learning.patch_past_steps = 0
+        self.ipmd.latent_learning.patch_future_steps = 9
+        self.ipmd.latent_learning.posterior_command_period = 10
+        self.ipmd.latent_learning.freeze_encoder = False
+        self.ipmd.latent_learning.train_posterior_through_policy = False
+        self.ipmd.latent_learning.recon_coeff = 1.0
+        self.ipmd.latent_learning.kl_coeff = 0.01
+
+
+@configclass
+class G1ImitationLatentPerStepVQRLOptIPMDConfig(
+    G1ImitationLatentRLOptIPMDConfig
+):
+    """G1 latent policy consuming one token from a ten-token packet per step."""
+
+    def sync_input_keys(self) -> None:
+        super().sync_input_keys()
+        self.ipmd.latent_learning.posterior_input_keys = list(
+            FUTURE_CVAE_POSTERIOR_INPUT_KEYS
+        )
+        self.ipmd.latent_learning.prior_input_keys = []
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.ipmd.latent_dim = 64
+        self.ipmd.latent_steps_min = 1
+        self.ipmd.latent_steps_max = 1
+        self.sync_input_keys()
+        self.ipmd.latent_learning.method = "per_step_vq_sequence"
+        self.ipmd.latent_learning.quantizer = "vq_ema"
+        self.ipmd.latent_learning.codebook_size = 512
+        self.ipmd.latent_learning.codebook_embed_dim = 64
+        self.ipmd.latent_learning.code_latent_dim = 64
+        self.ipmd.latent_learning.command_phase_mode = "none"
+        self.ipmd.latent_learning.token_sequence_horizon = 10
+        self.ipmd.latent_learning.patch_past_steps = 0
+        self.ipmd.latent_learning.patch_future_steps = 9
+        self.ipmd.latent_learning.freeze_encoder = False
+        self.ipmd.latent_learning.train_posterior_through_policy = False
+        self.ipmd.latent_learning.recon_coeff = 1.0
+        self.ipmd.latent_learning.action_recon_coeff = 0.0

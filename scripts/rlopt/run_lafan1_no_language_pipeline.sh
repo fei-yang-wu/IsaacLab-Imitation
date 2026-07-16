@@ -245,6 +245,10 @@ COMMON_LATENT_OVERRIDES=(
     "env.lafan1_manifest_path=${MANIFEST_ABS}"
     "env.dataset_path=${DATASET_ABS}"
     "env.refresh_zarr_dataset=false"
+    "env.random_reset_step_min=0"
+    "env.random_reset_step_max=200"
+    "env.random_reset_full_trajectory=false"
+    "env.reconstructed_reference_action=true"
     "env.latent_command_dim=$((Z_DIM + 2))"
     "agent.ipmd.latent_dim=$((Z_DIM + 2))"
     "agent.ipmd.hl_skill_horizon_steps=${HORIZON_STEPS}"
@@ -259,6 +263,10 @@ COMMON_LATENT_OVERRIDES=(
     "agent.ipmd.reward_grad_penalty_coeff=0.0"
     "agent.ipmd.reward_logit_reg_coeff=0.0"
     "agent.ipmd.reward_param_weight_decay_coeff=0.0"
+    "agent.ipmd.use_estimated_rewards_for_ppo=false"
+    "agent.ipmd.env_reward_weight=1.0"
+    "agent.ipmd.bc_coef=0.0"
+    "agent.ipmd.rollout_bc_coef=0.0"
 )
 
 LOW_LEVEL_LOG_DIR="${LOW_LEVEL_LOG_DIR:-}"
@@ -365,7 +373,7 @@ else
         "agent.ipmd.skill_commander_embeddings_path=" \
         "agent.ipmd.skill_commander_flow_num_inference_steps=${PLANNER_FLOW_STEPS}" \
         "agent.ipmd.skill_commander_flow_inference_noise_std=${PLANNER_EVAL_FLOW_NOISE_STD}" \
-        "agent.ipmd.skill_commander_use_achieved_state=false" \
+        "agent.ipmd.skill_commander_use_achieved_state=true" \
         "agent.ipmd.hl_skill_finetune_enabled=false" \
         "${COMMON_LATENT_OVERRIDES[@]}"
 

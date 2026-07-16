@@ -739,6 +739,7 @@ def _save_outputs(
     batched: BatchedMotionData,
     log_data: dict[str, np.ndarray],
     joint_names: list[str],
+    body_names: list[str],
 ) -> None:
     root_pos = batched.base_pos.detach().cpu().numpy().astype(np.float32)
     root_quat = batched.base_rot.detach().cpu().numpy().astype(np.float32)
@@ -747,6 +748,7 @@ def _save_outputs(
     joint_pos = batched.dof_pos.detach().cpu().numpy().astype(np.float32)
     joint_vel = batched.dof_vel.detach().cpu().numpy().astype(np.float32)
     joint_names_array = np.asarray(joint_names, dtype=np.str_)
+    body_names_array = np.asarray(body_names, dtype=np.str_)
     for env_id, job in enumerate(jobs):
         frame_count = int(lengths[env_id])
         root_pos_env = root_pos[env_id, :frame_count]
@@ -775,6 +777,7 @@ def _save_outputs(
             body_lin_vel_w=log_data["body_lin_vel_w"][env_id, :frame_count],
             body_ang_vel_w=log_data["body_ang_vel_w"][env_id, :frame_count],
             joint_names=joint_names_array,
+            body_names=body_names_array,
         )
         print(f"[INFO] Saved NPZ: {job.output_name}")
 
@@ -907,10 +910,20 @@ def run_simulator(
 
                 robot.write_root_state_to_sim(root_states)
                 robot.write_joint_state_to_sim(joint_pos, joint_vel)
+                # Propagate the newly written articulation state through PhysX before
+                # reading link transforms. Rendering alone can leave body transforms
+                # from the previous frame even though root and joint buffers are current.
+                sim.forward()
                 sim.render()
                 scene.update(sim.get_physics_dt())
 
-                body_pos_np = robot.data.body_pos_w.cpu().numpy()
+                # Isaac stores rigid-body positions in the shared world frame. The
+                # motion root arrays do not include the per-environment scene-grid
+                # origin, so remove it before saving to keep body_pos_w and root_pos
+                # in the same coordinate frame.
+                body_pos_np = (
+                    robot.data.body_pos_w - scene.env_origins[:, None, :]
+                ).cpu().numpy()
                 body_quat_np = robot.data.body_quat_w.cpu().numpy()
                 body_lin_vel_np = robot.data.body_lin_vel_w.cpu().numpy()
                 body_ang_vel_np = robot.data.body_ang_vel_w.cpu().numpy()
@@ -937,12 +950,22 @@ def run_simulator(
                 )
                 progress_bar.update()
 
+        # The source motion is in Unitree SDK order, while Isaac stores joint
+        # state in articulation order. Save the same articulation-order vector
+        # that was written to the robot so joint states and body FK agree.
+        dof_pos_articulation = torch.zeros_like(batched.dof_pos)
+        dof_vel_articulation = torch.zeros_like(batched.dof_vel)
+        dof_pos_articulation[..., robot_joint_indexes] = batched.dof_pos
+        dof_vel_articulation[..., robot_joint_indexes] = batched.dof_vel
+        batched.dof_pos = dof_pos_articulation
+        batched.dof_vel = dof_vel_articulation
         _save_outputs(
             jobs=jobs,
             lengths=batched.lengths.cpu().numpy(),
             batched=batched,
             log_data=log_data,
-            joint_names=list(scene.cfg.robot.joint_sdk_names),
+            joint_names=list(robot.joint_names),
+            body_names=list(robot.body_names),
         )
     finally:
         _close_video_writers(video_writers)

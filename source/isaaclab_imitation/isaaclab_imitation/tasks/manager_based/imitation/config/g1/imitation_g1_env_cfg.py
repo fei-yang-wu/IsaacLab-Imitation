@@ -43,6 +43,40 @@ VELOCITY_RANGE = {
 
 G1_29DOF_JOINT_NAMES: list[str] = list(UNITREE_G1_29DOF_SDK_JOINT_NAMES)
 
+# Isaac articulation order (`robot.joint_names` / `robot.data.joint_pos`).
+# It differs from Unitree SDK order even though both contain the same joints.
+G1_29DOF_ISAACLAB_JOINT_NAMES: list[str] = [
+    "left_hip_pitch_joint",
+    "right_hip_pitch_joint",
+    "waist_yaw_joint",
+    "left_hip_roll_joint",
+    "right_hip_roll_joint",
+    "waist_roll_joint",
+    "left_hip_yaw_joint",
+    "right_hip_yaw_joint",
+    "waist_pitch_joint",
+    "left_knee_joint",
+    "right_knee_joint",
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "left_ankle_pitch_joint",
+    "right_ankle_pitch_joint",
+    "left_shoulder_roll_joint",
+    "right_shoulder_roll_joint",
+    "left_ankle_roll_joint",
+    "right_ankle_roll_joint",
+    "left_shoulder_yaw_joint",
+    "right_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "right_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "right_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_wrist_yaw_joint",
+]
+
 # Body tracking set aligned with the original Unitree G1 mimic tracking config.
 G1_TRACKED_BODY_NAMES: list[str] = [
     "pelvis",
@@ -153,18 +187,16 @@ class G1ObservationCfg:
         """Policy observations."""
 
         expert_motion = ObsTerm(
-            func=mdp.expert_motion_command,
+            func=mdp.policy_expert_motion_command,
             params=_g1_expert_motion_obs_params(),
         )
         expert_anchor_pos_b = ObsTerm(
-            func=mdp.expert_anchor_pos_b,
+            func=mdp.policy_expert_anchor_pos_b,
             params=_g1_expert_anchor_obs_params(),
-            noise=Unoise(n_min=-0.25, n_max=0.25),
         )
         expert_anchor_ori_b = ObsTerm(
-            func=mdp.expert_anchor_ori_b,
+            func=mdp.policy_expert_anchor_ori_b,
             params=_g1_expert_anchor_obs_params(),
-            noise=Unoise(n_min=-0.05, n_max=0.05),
         )
         base_lin_vel = ObsTerm(
             func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5)
@@ -302,11 +334,22 @@ class G1ObservationCfg:
         def __post_init__(self):
             self.concatenate_terms = False
 
+    @configclass
+    class PolicySupervisionCfg(ObsGroup):
+        """Training-only labels excluded from every actor and planner input."""
+
+        expert_action = ObsTerm(func=mdp.reconstructed_reference_action)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
     expert_state: ExpertStateCfg = ExpertStateCfg()
     expert_window: ExpertWindowCfg = ExpertWindowCfg()
     reward_input: RewardInputCfg = RewardInputCfg()
+    policy_supervision: PolicySupervisionCfg = PolicySupervisionCfg()
 
 
 @configclass
@@ -539,6 +582,12 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     latent_command_dim: int = 64
     latent_patch_past_steps: int = 0
     latent_patch_future_steps: int = 0
+    # Hold command-window observations for N control steps between renewals
+    # (VLA-style chunk consumption): the window is snapshotted every N steps in
+    # the renewal-time anchor frame and consumed as a time-shifted view with
+    # tail padding. 0 keeps the per-step sliding-window behavior. Requires
+    # latent_patch_past_steps == 0 when enabled.
+    command_hold_steps: int = 0
     random_reset_step_min: int = 0
     random_reset_step_max: int = 0
     random_reset_full_trajectory: bool = False
@@ -554,10 +603,13 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     print_reference_velocity: bool = False
     print_reference_velocity_every: int = 50
 
-    reference_joint_names: list[str] = G1_29DOF_JOINT_NAMES.copy()
-    target_joint_names: list[str] = G1_29DOF_JOINT_NAMES.copy()
+    reference_joint_names: list[str] = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
+    target_joint_names: list[str] = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
     command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
     command_observation_source: str = "reference"
+    # The chunk adapter redirects only the three policy command tensors while
+    # preserving the vanilla actor keys and 67-D command contract.
+    policy_command_mode: str = "reference"
 
     def _sync_expert_window_observation_params(self) -> None:
         past_steps = int(self.latent_patch_past_steps)
@@ -609,6 +661,24 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             raise ValueError("latent_patch_past_steps must be >= 0.")
         if int(self.latent_patch_future_steps) < 0:
             raise ValueError("latent_patch_future_steps must be >= 0.")
+        if int(self.command_hold_steps) < 0:
+            raise ValueError("command_hold_steps must be >= 0.")
+        if int(self.command_hold_steps) > 0 and int(self.latent_patch_past_steps) > 0:
+            raise ValueError(
+                "command_hold_steps requires latent_patch_past_steps == 0; "
+                "held chunk consumption is only defined for future-only windows."
+            )
+        normalized_policy_mode = (
+            str(self.policy_command_mode).strip().lower().replace("-", "_")
+        )
+        if normalized_policy_mode not in {
+            "reference",
+            "full_body_chunk_current_slot",
+        }:
+            raise ValueError(
+                "policy_command_mode must be reference or full_body_chunk_current_slot."
+            )
+        self.policy_command_mode = normalized_policy_mode
         if int(self.random_reset_step_min) < 0:
             raise ValueError("random_reset_step_min must be >= 0.")
         if int(self.random_reset_step_max) < int(self.random_reset_step_min):
@@ -633,7 +703,8 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
         "control_freq": 50.0,
         "sim": {"dt": 0.005},
         "decimation": 4,
-        "joint_names": G1_29DOF_JOINT_NAMES,
+        "joint_names": G1_29DOF_ISAACLAB_JOINT_NAMES,
+        "canonical_joint_names": G1_29DOF_ISAACLAB_JOINT_NAMES,
     }
     reset_schedule: str = "random"
     refresh_zarr_dataset: bool = False
@@ -800,6 +871,7 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
             sim_dt=float(self.sim.dt),
             decimation=int(self.decimation),
             joint_names=list(self.reference_joint_names),
+            canonical_joint_names=list(self.target_joint_names),
         )
 
         if dataset_path_explicit and self.dataset_path is not None:

@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-import csv
-import json
 import argparse
+import csv
+import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -45,6 +46,7 @@ from interface_planner_common import (
     save_planner_checkpoint,
     unflatten_command_target,
 )
+from planner_sample_schema import add_sample_format_metadata, build_planner_sample
 from preflight_interface_comparison import run_preflight
 from split_lafan1_manifest import _rebase_manifest_paths, split_manifest
 from summarize_interface_comparison import (
@@ -68,30 +70,64 @@ def _test_target_roundtrip() -> None:
         assert torch.allclose(restored[key], value)
 
 
+def _sample_metadata(
+    *,
+    interface: str,
+    target_spec: dict,
+    history_frames: int,
+    frame_dim: int,
+) -> dict:
+    return add_sample_format_metadata(
+        {
+            "interface": interface,
+            "target_spec": target_spec,
+            "planner_observation_spec": {
+                "history_steps": history_frames - 1,
+                "history_frames": history_frames,
+                "frame_dim": frame_dim,
+                "flat_dim": history_frames * frame_dim,
+                "reference_features": [],
+            },
+        },
+        collection_stage="oracle_rollout",
+        planner_interval_steps=10,
+    )
+
+
 def _test_samples_and_checkpoint(tmp: Path) -> None:
     terms = {
-        "expert_motion": torch.randn(3, 58),
-        "expert_anchor_pos_b": torch.randn(3, 3),
-        "expert_anchor_ori_b": torch.randn(3, 6),
+        "expert_motion": torch.randn(3, 580),
+        "expert_anchor_pos_b": torch.randn(3, 30),
+        "expert_anchor_ori_b": torch.randn(3, 60),
     }
     target, spec = flatten_command_terms("full_body_trajectory", terms)
-    sample = {
-        "step": 0,
-        "planner_state": torch.randn(3, 67),
-        "expert_planner_state": torch.randn(3, 67),
-        "target": target,
-        "traj_rank": torch.zeros(3, dtype=torch.long),
-        "metadata": {
-            "interface": "full_body_trajectory",
-            "target_spec": spec.to_dict(),
-        },
-    }
+    sample = build_planner_sample(
+        causal_state_history=torch.randn(3, 10, 93),
+        demonstration_state_history=torch.randn(3, 10, 93),
+        causal_target=target,
+        demonstration_target=target,
+        trajectory_rank=torch.zeros(3, dtype=torch.long),
+        episode_id=torch.tensor([0, 1, 2]),
+        control_step=torch.tensor([0, 10, 20]),
+        planner_step=torch.tensor([0, 1, 2]),
+        motion_names=["walk", "dance", "run"],
+        metadata=_sample_metadata(
+            interface="full_body_trajectory",
+            target_spec=spec.to_dict(),
+            history_frames=10,
+            frame_dim=93,
+        ),
+    )
     torch.save(sample, tmp / "sample_step_000000.pt")
     data, metadata = load_rollout_samples(tmp)
-    assert data["planner_state"].shape == (3, 67)
-    assert data["target"].shape == (3, spec.target_dim)
+    assert data["planner_state"].shape == (3, 930)
+    assert data["causal_target"].shape == (3, spec.target_dim)
+    assert data["demonstration_target"].shape == (3, spec.target_dim)
     assert data["traj_rank"].shape == (3,)
     assert data["step"].tolist() == [0, 0, 0]
+    assert data["episode_id"].tolist() == [0, 1, 2]
+    assert data["control_step"].tolist() == [0, 10, 20]
+    assert data["planner_step"].tolist() == [0, 1, 2]
     assert metadata["target_spec"]["target_dim"] == spec.target_dim
 
     missing_metadata_dir = tmp / "missing_metadata"
@@ -111,11 +147,7 @@ def _test_samples_and_checkpoint(tmp: Path) -> None:
     torch.save(sample, mismatched_metadata_dir / "sample_step_000000.pt")
     other_sample = dict(sample)
     other_sample["step"] = 1
-    other_sample["metadata"] = {
-        "interface": "full_body_trajectory",
-        "target_spec": spec.to_dict(),
-        "seed": 123,
-    }
+    other_sample["metadata"] = {**sample["metadata"], "seed": 123}
     torch.save(other_sample, mismatched_metadata_dir / "sample_step_000001.pt")
     try:
         load_rollout_samples(mismatched_metadata_dir)
@@ -125,7 +157,7 @@ def _test_samples_and_checkpoint(tmp: Path) -> None:
         raise AssertionError("load_rollout_samples accepted mixed sample metadata.")
 
     planner = InterfaceFlowPlanner(
-        state_dim=67, target_dim=spec.target_dim, hidden_dims=(32,)
+        state_dim=930, target_dim=spec.target_dim, hidden_dims=(32,)
     )
     assert parameter_counts(planner)["parameter_count"] > 0
     optimizer = torch.optim.AdamW(planner.parameters(), lr=1.0e-3)
@@ -140,7 +172,7 @@ def _test_samples_and_checkpoint(tmp: Path) -> None:
     loaded, loaded_spec, metadata = load_planner_checkpoint(ckpt)
     assert loaded_spec == spec
     assert metadata["smoke"] is True
-    pred = loaded(torch.randn(2, 67), num_inference_steps=2)
+    pred = loaded(torch.randn(2, 930), num_inference_steps=2)
     assert pred.shape == (2, spec.target_dim)
 
     offline_summary = evaluate_planner_checkpoint(
@@ -223,20 +255,24 @@ def _test_chunked_transformer_microbatch_training(tmp: Path) -> None:
                 "expert_ee_ori_b": torch.randn(1, 12),
             },
         )
-        torch.save(
-            {
-                "step": step,
-                "planner_state": torch.randn(1, 9),
-                "expert_planner_state": torch.randn(1, 9),
-                "target": target,
-                "traj_rank": torch.zeros(1, dtype=torch.long),
-                "metadata": {
-                    "interface": "ee_trajectory",
-                    "target_spec": spec.to_dict(),
-                },
-            },
-            samples_dir / f"sample_step_{step:06d}.pt",
+        sample = build_planner_sample(
+            causal_state_history=torch.randn(1, 1, 9),
+            demonstration_state_history=torch.randn(1, 1, 9),
+            causal_target=target,
+            demonstration_target=target,
+            trajectory_rank=torch.zeros(1, dtype=torch.long),
+            episode_id=0,
+            control_step=step * 10,
+            planner_step=step,
+            motion_names=["smoke"],
+            metadata=_sample_metadata(
+                interface="ee_trajectory",
+                target_spec=spec.to_dict(),
+                history_frames=1,
+                frame_dim=9,
+            ),
         )
+        torch.save(sample, samples_dir / f"sample_step_{step:06d}.pt")
 
     output_dir = tmp / "microbatch_planner"
     subprocess.run(
@@ -1825,6 +1861,215 @@ def _test_cluster_job_launcher_dry_run() -> None:
     assert "summarize_interface_comparison.py" in result.stdout
 
 
+def _test_bones_multigoal_cluster_launcher_dry_run(tmp: Path) -> None:
+    launcher = Path(__file__).resolve().parent / "run_interface_baseline_job.py"
+    checkpoint = tmp / "checkpoint.pt"
+    checkpoint.write_bytes(b"placeholder")
+    manifest = tmp / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "dataset": {
+                    "trajectories": {
+                        "lafan1_csv": [
+                            {"name": "goal_a", "path": "a.npz"},
+                            {"name": "goal_b", "path": "b.npz"},
+                        ]
+                    }
+                }
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    language = tmp / "language.pt"
+    torch.save(
+        {
+            "names": ["goal_a", "goal_b"],
+            "embeddings": torch.zeros(2, 384),
+            "backend": "test",
+            "model": "test",
+        },
+        language,
+    )
+    checkpoint_sha = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+    manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    preparation = tmp / "preparation.json"
+    preparation.write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "artifacts": {"manifest_sha256": manifest_sha},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    vanilla_audit = tmp / "vanilla_audit.json"
+    vanilla_audit.write_text(
+        json.dumps(
+            {
+                "protocol_passed": True,
+                "oracle_passed": True,
+                "success_rate": 0.9,
+                "checkpoint_sha256": checkpoint_sha,
+                "manifest_sha256": manifest_sha,
+                "dataset_path": str((tmp / "vanilla_cache").resolve()),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    latent_audit = tmp / "latent_audit.json"
+    latent_audit.write_text(
+        json.dumps(
+            {
+                "protocol_passed": True,
+                "oracle_passed": True,
+                "tracking_success_rate": 0.9,
+                "low_level_checkpoint_sha256": checkpoint_sha,
+                "skill_checkpoint_sha256": checkpoint_sha,
+                "low_level_skill_binding": {
+                    "passed": True,
+                    "low_level_checkpoint_sha256": checkpoint_sha,
+                    "skill_checkpoint_sha256": checkpoint_sha,
+                },
+                "manifest_sha256": manifest_sha,
+                "dataset_path": str((tmp / "cache").resolve()),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    equivalence = tmp / "equivalence.json"
+    equivalence.write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "checkpoint_sha256": checkpoint_sha,
+                "motion_manifest_sha256": manifest_sha,
+                "dataset_path": str((tmp / "vanilla_cache").resolve()),
+                "observed_phases": list(range(10)),
+                "missing_phases": [],
+                "asynchronous_rephase_exercised": True,
+                "policy_state_unchanged": True,
+                "low_level_tracker": {"checkpoint_sha256": checkpoint_sha},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    common_env = [
+        "--env",
+        f"LATENT_LOW_LEVEL_CHECKPOINT={checkpoint}",
+        "--env",
+        f"LATENT_SKILL_CHECKPOINT={checkpoint}",
+        "--env",
+        f"VANILLA_TRACKER_CHECKPOINT={checkpoint}",
+        "--env",
+        f"MANIFEST={manifest}",
+        "--env",
+        f"LANGUAGE_EMBEDDINGS={language}",
+        "--env",
+        f"LATENT_DATASET_PATH={tmp / 'cache'}",
+        "--env",
+        f"VANILLA_DATASET_PATH={tmp / 'vanilla_cache'}",
+        "--env",
+        f"PREPARATION_RECORD={preparation}",
+        "--env",
+        f"VANILLA_QUALIFICATION_AUDIT={vanilla_audit}",
+        "--env",
+        f"LATENT_QUALIFICATION_AUDIT={latent_audit}",
+        "--env",
+        f"STREAMED_EQUIVALENCE_CERTIFICATE={equivalence}",
+        "--env",
+        f"OUTPUT_ROOT={tmp / 'output'}",
+        "--env",
+        f"INTERFACE_BASELINE_PYTHON_CMD={sys.executable}",
+        "--env",
+        f"INTERFACE_BASELINE_ISAACLAB_PYTHON_CMD={sys.executable}",
+    ]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(launcher),
+            "--mode",
+            "bones-seed-multigoal-language",
+            "--dry_run",
+            *common_env,
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "run_bones_seed_multigoal_language_comparison.sh" in result.stdout
+    assert "--language_goal_name goal_a" in result.stdout
+    assert "--language_goal_name goal_b" in result.stdout
+    assert (
+        "--motion_names goal_a goal_b --balanced_motion_names goal_a goal_b "
+        "--balanced_rows_per_motion 1000"
+    ) in result.stdout
+    assert "demonstration_batched/full_body" in result.stdout
+    assert f"--dataset_path {tmp / 'vanilla_cache'}" in result.stdout
+    assert "demonstration_batched/latent_skill" in result.stdout
+    assert "--metric_interval 40001" in result.stdout
+    assert "demonstration_per_goal" not in result.stdout
+    assert "audit_bones_seed_multigoal_language_comparison.py" in result.stdout
+    assert "summarize_bones_seed_multigoal_language_comparison.py" in result.stdout
+
+    def run_stage(stage: str, goal_index: int | None = None) -> str:
+        stage_env = ["--env", f"PIPELINE_STAGE={stage}"]
+        if goal_index is not None:
+            stage_env.extend(["--env", f"GOAL_INDEX={goal_index}"])
+        stage_result = subprocess.run(
+            [
+                sys.executable,
+                str(launcher),
+                "--mode",
+                "bones-seed-multigoal-language",
+                "--dry_run",
+                *common_env,
+                *stage_env,
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return stage_result.stdout
+
+    prepare_stdout = run_stage("prepare")
+    assert "demonstration_batched/full_body" in prepare_stdout
+    assert "planner_pretrain_demonstration" in prepare_stdout
+    assert "planner_rollout_per_goal" not in prepare_stdout
+    assert "eval_finetuned_per_goal" not in prepare_stdout
+
+    rollout_stdout = run_stage("rollout", goal_index=0)
+    assert "--language_goal_name goal_a" in rollout_stdout
+    assert "--language_goal_name goal_b" not in rollout_stdout
+    assert "planner_rollout_per_goal/0000_goal_a" in rollout_stdout
+    assert "demonstration_batched" not in rollout_stdout
+    assert "planner_finetune_planner_rollout" not in rollout_stdout
+
+    finetune_stdout = run_stage("finetune")
+    assert "planner_rollout_samples" in finetune_stdout
+    assert "planner_finetune_planner_rollout" in finetune_stdout
+    assert "eval_interface_planner_closed_loop.py" not in finetune_stdout
+    assert "eval_skill_commander_closed_loop.py" not in finetune_stdout
+
+    final_stdout = run_stage("final-eval", goal_index=1)
+    assert "--language_goal_name goal_b" in final_stdout
+    assert "--language_goal_name goal_a" not in final_stdout
+    assert "eval_finetuned_per_goal/0001_goal_b" in final_stdout
+    assert "planner_rollout_per_goal" not in final_stdout
+
+    summarize_stdout = run_stage("summarize")
+    assert "summarize_bones_seed_multigoal_language_comparison.py" in summarize_stdout
+    assert "audit_bones_seed_multigoal_language_comparison.py" in summarize_stdout
+    assert "eval_interface_planner_closed_loop.py" not in summarize_stdout
+
+
 def _test_run_provenance_writer(tmp: Path) -> None:
     script = Path(__file__).resolve().parent / "write_interface_run_provenance.py"
     output_json = tmp / "provenance" / "run.json"
@@ -1912,8 +2157,9 @@ def _test_cluster_submitter_dry_run() -> None:
         in result.stdout
     )
     assert "CLUSTER_GIT_SYNC_FIRST=0" in result.stdout
-    assert "CLUSTER_EXTRA_RSYNC_EXCLUDES=IsaacLab/ RLOpt/ ImitationLearningTools/" in (
-        result.stdout
+    assert (
+        "CLUSTER_EXTRA_RSYNC_EXCLUDES=data/ .tmp/ IsaacLab/ RLOpt/ ImitationLearningTools/"
+        in result.stdout
     )
     assert "CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS=1" in result.stdout
     assert "CLUSTER_SKIP_CACHE_COPY=1" in result.stdout
@@ -2029,8 +2275,13 @@ def _test_cluster_interface_forwards_remote_env_args() -> None:
     assert 'submit_job "$@"' in text
     assert "add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_PATH" in text
     assert "add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_REFRESH_POLICY" in text
+    assert "add_remote_env_arg_if_set CLUSTER_G1_REPO_REVISION" in text
+    assert "add_remote_env_arg_if_set CLUSTER_G1_FORCE_DOWNLOAD" in text
     assert "CLUSTER_RLOPT_LOCAL_PATH" in text
     assert "CLUSTER_IMITATION_TOOLS_LOCAL_PATH" in text
+    assert "CLUSTER_ARCHIVE_SYNC" in text
+    assert "sync_workspace_archive_to_cluster" in text
+    assert "workspace.tar.gz.sha256" in text
     assert "CLUSTER_GIT_SYNC_FIRST" in text
     assert "CLUSTER_EXTRA_RSYNC_EXCLUDES" in text
     assert "CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS" in text
@@ -2048,11 +2299,71 @@ def _test_cluster_interface_forwards_remote_env_args() -> None:
     assert '--exclude=".codex/"' in text
     assert '--exclude="logs/"' in text
 
+    submit_script = (
+        Path(__file__).resolve().parents[2] / "docker/cluster/submit_job_slurm.sh"
+    )
+    submit_text = submit_script.read_text(encoding="utf-8")
+    assert "CLUSTER_SLURM_DEPENDENCY" in submit_text
+    assert "#SBATCH --dependency=" in submit_text
+    assert 'workspace_archive="$workspace_root/workspace.tar.gz"' in submit_text
+    assert "Extracting submitted workspace archive into compute-local storage" in (
+        submit_text
+    )
+    assert "isaaclab-submission-" in submit_text
+
+    job_launcher = (
+        Path(__file__).resolve().parent / "run_interface_baseline_job.py"
+    ).read_text(encoding="utf-8")
+    assert '"bones-seed-low-level-qualification"' in job_launcher
+    qualification = (
+        Path(__file__).resolve().parent / "run_bones_seed_low_level_qualification.sh"
+    ).read_text(encoding="utf-8")
+    assert "--certify_streamed_vanilla_equivalence" in qualification
+    assert "--require_pass" in qualification
+    assert 'NUM_ENVS}" != "100"' in qualification
+    assert 'EVAL_STEPS}" != "1000"' in qualification
+
+    lafan1_qualification = (
+        Path(__file__).resolve().parent / "run_lafan1_low_level_qualification.sh"
+    ).read_text(encoding="utf-8")
+    assert "--certify_streamed_vanilla_equivalence" in lafan1_qualification
+    assert lafan1_qualification.count("--require_pass") == 2
+    assert 'NUM_ENVS}" != "40"' in lafan1_qualification
+    assert "LATENT_LOW_LEVEL_RUN_ID" in lafan1_qualification
+    assert "resolve_low_level_checkpoint.py" in lafan1_qualification
+    assert 'EXPECTED_LATENT_CHECKPOINT_BASENAME:-model_step_5000232960.pt' in (
+        lafan1_qualification
+    )
+
+    lafan1_latent_submitter = (
+        Path(__file__).resolve().parent
+        / "run_lafan1_diffsr_low_level_skynet.sh"
+    ).read_text(encoding="utf-8")
+    assert "SUBMIT_EE" not in lafan1_latent_submitter
+    assert "SUBMIT_FB" not in lafan1_latent_submitter
+    assert "COMMAND_SPACES" not in lafan1_latent_submitter
+    assert "MAX_ITERATIONS=\"${MAX_ITERATIONS:-50865}\"" in lafan1_latent_submitter
+    assert "WALLTIME=\"${WALLTIME:-4-00:00:00}\"" in lafan1_latent_submitter
+    assert "RUN_HAND_DESIGNED_BASELINES=0" in lafan1_latent_submitter
+    assert "RUN_PLANNER_ROLLOUT_FINETUNE=0" in lafan1_latent_submitter
+    assert "SKIP_EVAL=1" in lafan1_latent_submitter
+    assert "EXPECTED_MANIFEST_SHA256" in lafan1_latent_submitter
+
+    legacy_lafan1_runner = (
+        Path(__file__).resolve().parent / "run_lafan1_from_scratch_comparison.sh"
+    ).read_text(encoding="utf-8")
+    assert "ALLOW_LEGACY_THREE_INTERFACE" in legacy_lafan1_runner
+    assert "require_legacy_interface_opt_in" in legacy_lafan1_runner
+    assert "historical appendix diagnostics" in legacy_lafan1_runner
+
     runtime_script = (
         Path(__file__).resolve().parents[2] / "docker/cluster/run_singularity.sh"
     )
     runtime_text = runtime_script.read_text(encoding="utf-8")
     assert "prefix_home_if_relative()" in runtime_text
+    assert "CLUSTER_G1_REPO_REVISION" in runtime_text
+    assert "CLUSTER_G1_FORCE_DOWNLOAD" in runtime_text
+    assert "--force-download" in runtime_text
     assert 'base_tmpdir="$(prefix_home_if_relative "$HOME" "$base_tmpdir")"' in (
         runtime_text
     )
@@ -2062,6 +2373,10 @@ def _test_cluster_interface_forwards_remote_env_args() -> None:
     )
     assert "sync_project_logs_back()" in runtime_text
     assert "Syncing per-job project logs back to permanent workspace" in runtime_text
+    assert 'printf -v quoted_slurm_array_task_id' in runtime_text
+    assert (
+        'container_entry_cmd="export SLURM_ARRAY_TASK_ID=' in runtime_text
+    )
     assert "seed_shared_project_logs_from_submission()" in runtime_text
     assert "Seeding shared project logs from submitted workspace" in runtime_text
     assert "seed_shared_project_logs_from_submission\n\ncontainer_image=" in (
@@ -2390,6 +2705,7 @@ def main() -> None:
         _test_fair_runner_omits_empty_latent_motion_filter()
         _test_strong_runner_allows_empty_interfaces()
         _test_cluster_job_launcher_dry_run()
+        _test_bones_multigoal_cluster_launcher_dry_run(tmp_path)
         _test_run_provenance_writer(tmp_path)
         _test_unitree_usd_cache_env_hook()
         _test_cluster_submitter_dry_run()

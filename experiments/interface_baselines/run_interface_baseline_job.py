@@ -11,6 +11,9 @@ from pathlib import Path
 
 
 SCRIPT_BY_MODE = {
+    "bones-seed-low-level-qualification": "run_bones_seed_low_level_qualification.sh",
+    "lafan1-low-level-qualification": "run_lafan1_low_level_qualification.sh",
+    "bones-seed-multigoal-language": "run_bones_seed_multigoal_language_comparison.sh",
     "dance102-fair": "run_dance102_fair_interface_comparison.sh",
     "dance102-strong": "run_dance102_strong_interface_comparison.sh",
     "dance102-strong-multiseed": "run_dance102_strong_interface_multiseed.sh",
@@ -19,6 +22,7 @@ SCRIPT_BY_MODE = {
     "lafan1-motion-tracking": "run_lafan1_motion_tracking_evaluation.sh",
     "lafan1-single-trajectory": "run_lafan1_motion_tracking_evaluation.sh",
     "multimotion-heldout": "run_multimotion_heldout_interface_comparison.sh",
+    "phase4-no-language": "run_phase4_no_language_sweep.sh",
 }
 
 

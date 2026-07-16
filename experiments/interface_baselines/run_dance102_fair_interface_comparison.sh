@@ -45,7 +45,8 @@ EVAL_STEPS="${EVAL_STEPS:-${STEPS}}"
 COLLECT_STEPS="${COLLECT_STEPS:-${STEPS}}"
 LATENT_EVAL_STEPS="${LATENT_EVAL_STEPS:-${EVAL_STEPS}}"
 LATENT_COLLECT_STEPS="${LATENT_COLLECT_STEPS:-${COLLECT_STEPS}}"
-STATE_HISTORY_STEPS="${STATE_HISTORY_STEPS:-0}"
+STATE_HISTORY_STEPS="${STATE_HISTORY_STEPS:-9}"
+PLANNER_UPDATE_INTERVAL="${PLANNER_UPDATE_INTERVAL:-10}"
 COMMAND_PAST_STEPS="${COMMAND_PAST_STEPS:-0}"
 COMMAND_FUTURE_STEPS="${COMMAND_FUTURE_STEPS:-25}"
 FINETUNE_UPDATES="${FINETUNE_UPDATES:-2000}"
@@ -89,6 +90,7 @@ export COLLECT_STEPS
 export LATENT_EVAL_STEPS
 export LATENT_COLLECT_STEPS
 export STATE_HISTORY_STEPS
+export PLANNER_UPDATE_INTERVAL
 export COMMAND_PAST_STEPS
 export COMMAND_FUTURE_STEPS
 export PRETRAIN_UPDATES
@@ -392,6 +394,7 @@ for interface in ${INTERFACES}; do
         --steps "${COLLECT_STEPS}" \
         --seed "${SEED}" \
         --state_history_steps "${STATE_HISTORY_STEPS}" \
+        --planner_interval_steps "${PLANNER_UPDATE_INTERVAL}" \
         --command_past_steps "${COMMAND_PAST_STEPS}" \
         --command_future_steps "${COMMAND_FUTURE_STEPS}" \
         --kit_args=--/app/extensions/fsWatcherEnabled=false
@@ -436,6 +439,7 @@ for interface in ${INTERFACES}; do
         --steps "${EVAL_STEPS}" \
         --seed "${SEED}" \
         --state_history_steps "${STATE_HISTORY_STEPS}" \
+        --planner_update_interval "${PLANNER_UPDATE_INTERVAL}" \
         --command_past_steps "${COMMAND_PAST_STEPS}" \
         --command_future_steps "${COMMAND_FUTURE_STEPS}" \
         --flow_num_inference_steps "${FLOW_STEPS}" \
@@ -483,6 +487,7 @@ for interface in ${INTERFACES}; do
         --steps "${EVAL_STEPS}" \
         --seed "${SEED}" \
         --state_history_steps "${STATE_HISTORY_STEPS}" \
+        --planner_update_interval "${PLANNER_UPDATE_INTERVAL}" \
         --command_past_steps "${COMMAND_PAST_STEPS}" \
         --command_future_steps "${COMMAND_FUTURE_STEPS}" \
         --flow_num_inference_steps "${FLOW_STEPS}" \

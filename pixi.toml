@@ -11,7 +11,7 @@ lint = "ruff check ."
 format-check = "ruff format --check ."
 typecheck = "pyrefly check"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
-test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_hl_skill_diffsr.py tests/test_skill_commander.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
+test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
 test-default = { depends-on = ["test-rlopt"] }
 
 [dependencies]
@@ -59,9 +59,12 @@ isaaclab = { version = "==2.3.2.post1", extras = ["isaacsim", "all"], index = "h
 isaaclab_imitation = { path = "./source/isaaclab_imitation", editable = true }
 
 [feature.isaaclab.tasks]
-test-isaaclab = "env TERM=xterm pytest source/isaaclab_imitation/test_reference_patch_env.py"
+test-isaaclab = "env TERM=xterm pytest source/isaaclab_imitation/test_causal_planner_observation.py source/isaaclab_imitation/test_policy_supervision_contract.py"
 zero-agent = "env TERM=xterm python scripts/zero_agent.py --task Isaac-Imitation-G1-LafanTrack-v0"
 smoke-ipmd = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train.py --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --num_envs 16 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend="
+smoke-future-cvae = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train.py --task Isaac-Imitation-G1-Latent-FutureCVAE-v0 --algo IPMD --num_envs 4 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend="
+smoke-per-step-vq = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train.py --task Isaac-Imitation-G1-Latent-PerStepVQ-v0 --algo IPMD --num_envs 4 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend="
+smoke-causal-planner = "env TERM=xterm PYTHONUNBUFFERED=1 python experiments/interface_baselines/smoke_test_causal_planner_env.py --headless --kit_args=--/app/extensions/fsWatcherEnabled=false --task Isaac-Imitation-G1-Latent-v0 --num_envs 4 --motion_manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json"
 hl-skill-pipeline = "env TERM=xterm PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_hl_skill_pipeline.py"
 
 [feature.lerobot.pypi-dependencies]

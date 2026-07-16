@@ -47,6 +47,32 @@ _LATENT_GOAL_TASK_KWARGS = {
     ),
 }
 
+_LATENT_FUTURE_CVAE_TASK_KWARGS = {
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentFutureCVAEEnvCfg"
+    ),
+    "rlopt_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentFutureCVAERLOptIPMDConfig"
+    ),
+    "rlopt_ipmd_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentFutureCVAERLOptIPMDConfig"
+    ),
+}
+
+_LATENT_PER_STEP_VQ_TASK_KWARGS = {
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentPerStepVQEnvCfg"
+    ),
+    "rlopt_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_cfg:"
+        "G1ImitationLatentPerStepVQRLOptIPMDConfig"
+    ),
+    "rlopt_ipmd_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_cfg:"
+        "G1ImitationLatentPerStepVQRLOptIPMDConfig"
+    ),
+}
+
 _LATENT_VQVAE_TASK_KWARGS = {
     "env_cfg_entry_point": (
         f"{__name__}.imitation_g1_latent_vqvae_env_cfg:ImitationG1LatentVQVAEEnvCfg"
@@ -92,6 +118,20 @@ gym.register(
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
     kwargs=_LATENT_GOAL_TASK_KWARGS,
+)
+
+gym.register(
+    id="Isaac-Imitation-G1-Latent-FutureCVAE-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_FUTURE_CVAE_TASK_KWARGS,
+)
+
+gym.register(
+    id="Isaac-Imitation-G1-Latent-PerStepVQ-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_PER_STEP_VQ_TASK_KWARGS,
 )
 
 gym.register(

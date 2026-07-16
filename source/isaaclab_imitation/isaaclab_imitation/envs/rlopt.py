@@ -122,6 +122,26 @@ class IsaacLabWrapper(GymWrapper):
             state_history_steps=state_history_steps,
         )
 
+    def sample_causal_planner_training_batch(
+        self,
+        batch_size: int,
+        horizon_steps: int,
+        split: str | None = None,
+        eval_fraction: float = 0.1,
+        split_seed: int = 0,
+        trajectory_ranks=None,
+        history_steps: int = 9,
+    ):
+        return self._base_isaac_env().sample_causal_planner_training_batch(
+            batch_size=batch_size,
+            horizon_steps=horizon_steps,
+            split=split,
+            eval_fraction=eval_fraction,
+            split_seed=split_seed,
+            trajectory_ranks=trajectory_ranks,
+            history_steps=history_steps,
+        )
+
     def current_expert_macro_transition_batch(
         self,
         horizon_steps: int,
@@ -144,6 +164,36 @@ class IsaacLabWrapper(GymWrapper):
             horizon_steps=horizon_steps,
             env_ids=env_ids,
             state_history_steps=state_history_steps,
+        )
+
+    def current_causal_planner_observation(
+        self,
+        env_ids=None,
+        history_steps: int = 9,
+    ):
+        return self._base_isaac_env().current_causal_planner_observation(
+            env_ids=env_ids,
+            history_steps=history_steps,
+        )
+
+    def causal_planner_observation_spec(self, history_steps: int = 9):
+        return self._base_isaac_env().causal_planner_observation_spec(
+            history_steps=history_steps,
+        )
+
+    def causal_planner_observation_from_expert_frame(self, expert_frame):
+        return self._base_isaac_env().causal_planner_observation_from_expert_frame(
+            expert_frame
+        )
+
+    def current_offline_demo_planner_observation(
+        self,
+        env_ids=None,
+        history_steps: int = 9,
+    ):
+        return self._base_isaac_env().current_offline_demo_planner_observation(
+            env_ids=env_ids,
+            history_steps=history_steps,
         )
 
     def expert_macro_feature_slices(self, horizon_steps: int):

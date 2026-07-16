@@ -17,15 +17,18 @@ ISAACLAB_PYTHON_CMD=(${ISAACLAB_PYTHON_CMD_STR})
 TASK="${TASK:-Isaac-Imitation-G1-v0}"
 ALGORITHM="${ALGORITHM:-IPMD}"
 LOW_LEVEL_CHECKPOINT="${LOW_LEVEL_CHECKPOINT:-}"
+VANILLA_TRACKER_CHECKPOINT="${VANILLA_TRACKER_CHECKPOINT:-${LOW_LEVEL_CHECKPOINT}}"
 FULL_BODY_TRAJECTORY_CHECKPOINT="${FULL_BODY_TRAJECTORY_CHECKPOINT:-${LOW_LEVEL_CHECKPOINT}}"
 EE_TRAJECTORY_CHECKPOINT="${EE_TRAJECTORY_CHECKPOINT:-${LOW_LEVEL_CHECKPOINT}}"
+FULL_BODY_LOW_LEVEL_COMMAND_MODE="${FULL_BODY_LOW_LEVEL_COMMAND_MODE:-native}"
 MANIFEST="${MANIFEST:-data/unitree/manifests/g1_unitree_dance102_manifest.json}"
 TRAIN_MANIFEST="${TRAIN_MANIFEST:-${MANIFEST}}"
 EVAL_MANIFEST="${EVAL_MANIFEST:-${MANIFEST}}"
+DATASET_PATH="${DATASET_PATH:-}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-logs/interface_baselines/dance102_strong_interface_comparison}"
 INTERFACES="${INTERFACES-full_body_trajectory ee_trajectory}"
 NUM_ENVS="${NUM_ENVS:-1}"
-STEPS="${STEPS:-1000}"
+STEPS="${STEPS:-500}"
 COLLECT_STEPS_WAS_SET=0
 if [[ -n "${COLLECT_STEPS:-}" ]]; then
     COLLECT_STEPS_WAS_SET=1
@@ -33,9 +36,16 @@ fi
 EVAL_STEPS="${EVAL_STEPS:-${STEPS}}"
 COLLECT_STEPS="${COLLECT_STEPS:-${STEPS}}"
 SEED="${SEED:-0}"
-STATE_HISTORY_STEPS="${STATE_HISTORY_STEPS:-0}"
+STATE_HISTORY_STEPS="${STATE_HISTORY_STEPS:-9}"
 COMMAND_PAST_STEPS="${COMMAND_PAST_STEPS:-0}"
 COMMAND_FUTURE_STEPS="${COMMAND_FUTURE_STEPS:-25}"
+# Held-chunk contract: planner queried every N steps at eval
+# (PLANNER_UPDATE_INTERVAL) and the low-level consumes held command windows
+# (COMMAND_HOLD_STEPS, applied to oracle eval and sample collection).
+# Main paper protocol: one planner decision and held command every ten 50 Hz
+# control steps, giving a 5 Hz high-level interface.
+PLANNER_UPDATE_INTERVAL="${PLANNER_UPDATE_INTERVAL:-10}"
+COMMAND_HOLD_STEPS="${COMMAND_HOLD_STEPS:-10}"
 MODEL_SIZE="${MODEL_SIZE:-medium}"
 MODEL_SIZES="${MODEL_SIZES:-${MODEL_SIZE}}"
 SAMPLE_BUDGETS="${SAMPLE_BUDGETS:-1000}"
@@ -48,6 +58,8 @@ WEIGHT_DECAY="${WEIGHT_DECAY:-1.0e-4}"
 FLOW_STEPS="${FLOW_STEPS:-16}"
 TRAIN_ENDPOINT_STEPS="${TRAIN_ENDPOINT_STEPS:-4}"
 FLOW_NOISE_STD="${FLOW_NOISE_STD:-0.0}"
+LANGUAGE_EMBEDDINGS="${LANGUAGE_EMBEDDINGS:-}"
+LANGUAGE_GOAL_NAME="${LANGUAGE_GOAL_NAME:-}"
 FORCE_COLLECT="${FORCE_COLLECT:-0}"
 RUN_ORACLE="${RUN_ORACLE:-1}"
 USE_CHECKPOINT_NORMALIZATION="${USE_CHECKPOINT_NORMALIZATION:-0}"
@@ -80,11 +92,14 @@ fi
 export TASK
 export ALGORITHM
 export LOW_LEVEL_CHECKPOINT
+export VANILLA_TRACKER_CHECKPOINT
 export FULL_BODY_TRAJECTORY_CHECKPOINT
 export EE_TRAJECTORY_CHECKPOINT
+export FULL_BODY_LOW_LEVEL_COMMAND_MODE
 export MANIFEST
 export TRAIN_MANIFEST
 export EVAL_MANIFEST
+export DATASET_PATH
 export OUTPUT_ROOT
 export INTERFACES
 export NUM_ENVS
@@ -107,6 +122,10 @@ export WEIGHT_DECAY
 export FLOW_STEPS
 export TRAIN_ENDPOINT_STEPS
 export FLOW_NOISE_STD
+export LANGUAGE_EMBEDDINGS
+export LANGUAGE_GOAL_NAME
+export PLANNER_UPDATE_INTERVAL
+export COMMAND_HOLD_STEPS
 export FORCE_COLLECT
 export RUN_ORACLE
 export USE_CHECKPOINT_NORMALIZATION
@@ -183,10 +202,35 @@ if [[ "${USE_CHECKPOINT_NORMALIZATION}" == "1" ]]; then
     finetune_normalization_args+=(--use_checkpoint_normalization)
 fi
 
+language_collection_args=()
+language_eval_args=()
+dataset_args=()
+if [[ -n "${DATASET_PATH}" ]]; then
+    dataset_args+=(--dataset_path "${DATASET_PATH}")
+fi
+if [[ -n "${LANGUAGE_EMBEDDINGS}" ]]; then
+    language_collection_args+=(--language_embeddings "${LANGUAGE_EMBEDDINGS}")
+    if [[ -z "${LANGUAGE_GOAL_NAME}" ]]; then
+        echo "[ERROR] LANGUAGE_GOAL_NAME is required for language-conditioned closed-loop evaluation." >&2
+        exit 2
+    fi
+    language_eval_args+=(
+        --language_embeddings "${LANGUAGE_EMBEDDINGS}"
+        --language_goal_name "${LANGUAGE_GOAL_NAME}"
+        --motion_name "${LANGUAGE_GOAL_NAME}"
+    )
+fi
+
 for interface in ${INTERFACES}; do
+    interface_command_mode=native
     case "${interface}" in
         full_body_trajectory)
-            interface_checkpoint="${FULL_BODY_TRAJECTORY_CHECKPOINT}"
+            interface_command_mode="${FULL_BODY_LOW_LEVEL_COMMAND_MODE}"
+            if [[ "${interface_command_mode}" == "streamed_vanilla" ]]; then
+                interface_checkpoint="${VANILLA_TRACKER_CHECKPOINT}"
+            else
+                interface_checkpoint="${FULL_BODY_TRAJECTORY_CHECKPOINT}"
+            fi
             ;;
         ee_trajectory)
             interface_checkpoint="${EE_TRAJECTORY_CHECKPOINT}"
@@ -200,7 +244,11 @@ for interface in ${INTERFACES}; do
         exit 1
     fi
 
-    interface_root="${OUTPUT_ROOT}/${interface}"
+    interface_result_name="${interface}"
+    if [[ "${interface_command_mode}" != "native" ]]; then
+        interface_result_name="${interface}_${interface_command_mode}"
+    fi
+    interface_root="${OUTPUT_ROOT}/${interface_result_name}"
     oracle_dir="${interface_root}/oracle_low_level"
     samples_dir="${interface_root}/oracle_drive_samples"
     samples_tensor_dir="${samples_dir}/rollout_training_samples"
@@ -213,18 +261,22 @@ for interface in ${INTERFACES}; do
             --task "${TASK}" \
             --algo "${ALGORITHM}" \
             --checkpoint "${interface_checkpoint}" \
+            --low_level_command_mode "${interface_command_mode}" \
             --command_space "${interface}" \
             --command_past_steps "${COMMAND_PAST_STEPS}" \
             --command_future_steps "${COMMAND_FUTURE_STEPS}" \
+            --planner_update_interval "${PLANNER_UPDATE_INTERVAL}" \
             --command_observation_source reference \
             --motion_manifest "${EVAL_MANIFEST}" \
+            "${dataset_args[@]}" \
             --num_envs "${NUM_ENVS}" \
             --steps "${EVAL_STEPS}" \
             --seed "${SEED}" \
             --label "${interface}_oracle" \
             --output_json "${oracle_dir}/summary.json" \
             --output_csv "${oracle_dir}/summary.csv" \
-            --kit_args=--/app/extensions/fsWatcherEnabled=false
+            --kit_args=--/app/extensions/fsWatcherEnabled=false \
+            "env.command_hold_steps=${COMMAND_HOLD_STEPS}"
     fi
 
     existing_sample_count="$(sample_row_count "${samples_tensor_dir}")"
@@ -238,16 +290,23 @@ for interface in ${INTERFACES}; do
             --task "${TASK}" \
             --algo "${ALGORITHM}" \
             --checkpoint "${interface_checkpoint}" \
+            --low_level_command_mode "${interface_command_mode}" \
             --interface "${interface}" \
             --output_dir "${samples_dir}" \
             --motion_manifest "${TRAIN_MANIFEST}" \
+            "${dataset_args[@]}" \
+            "${language_collection_args[@]}" \
             --num_envs "${NUM_ENVS}" \
             --steps "${COLLECT_STEPS}" \
             --seed "${SEED}" \
             --state_history_steps "${STATE_HISTORY_STEPS}" \
+            --planner_interval_steps "${PLANNER_UPDATE_INTERVAL}" \
             --command_past_steps "${COMMAND_PAST_STEPS}" \
             --command_future_steps "${COMMAND_FUTURE_STEPS}" \
-            --kit_args=--/app/extensions/fsWatcherEnabled=false
+            --keep_configured_episode_length \
+            --disable_tracking_terminations \
+            --kit_args=--/app/extensions/fsWatcherEnabled=false \
+            "env.command_hold_steps=${COMMAND_HOLD_STEPS}"
     else
         echo "[INFO] Reusing existing samples: ${samples_tensor_dir} (${existing_sample_count} rows)"
     fi
@@ -263,9 +322,19 @@ for interface in ${INTERFACES}; do
             pretrain_dir="${run_root}/planner_pretrain_expert_state"
             pretrained_offline_eval_dir="${run_root}/eval_pretrained_expert_state"
             pretrained_eval_dir="${run_root}/eval_pretrained_closed_loop"
-            finetune_dir="${run_root}/planner_finetune_achieved_state"
-            finetuned_offline_eval_dir="${run_root}/eval_finetuned_achieved_state"
+            planner_rollout_dir="${run_root}/planner_rollout_collection"
+            planner_rollout_samples_dir="${planner_rollout_dir}/rollout_training_samples"
+            merged_samples_dir="${run_root}/demonstration_and_planner_rollout_samples"
+            finetune_dir="${run_root}/planner_finetune_planner_rollout"
+            finetuned_offline_eval_dir="${run_root}/eval_finetuned_planner_rollout"
             finetuned_eval_dir="${run_root}/eval_finetuned_closed_loop"
+
+            if [[ "${max_samples}" == "0" ]]; then
+                dagger_planner_samples="${COLLECT_STEPS}"
+            else
+                dagger_planner_samples="${max_samples}"
+            fi
+            dagger_control_steps="$((dagger_planner_samples * PLANNER_UPDATE_INTERVAL))"
 
             run_cmd "${PYTHON_CMD[@]}" experiments/interface_baselines/train_chunked_transformer_planner.py \
                 --samples_dir "${samples_tensor_dir}" \
@@ -308,30 +377,75 @@ for interface in ${INTERFACES}; do
                 --task "${TASK}" \
                 --algo "${ALGORITHM}" \
                 --checkpoint "${interface_checkpoint}" \
+                --low_level_command_mode "${interface_command_mode}" \
                 --planner_checkpoint "${pretrain_dir}/checkpoints/latest.pt" \
                 --output_json "${pretrained_eval_dir}/summary.json" \
                 --output_csv "${pretrained_eval_dir}/summary.csv" \
                 --label "${interface}_chunked_${model_size}_${budget_label}_pretrained_closed_loop" \
                 --motion_manifest "${EVAL_MANIFEST}" \
+                "${dataset_args[@]}" \
+                "${language_eval_args[@]}" \
                 --num_envs "${NUM_ENVS}" \
                 --steps "${EVAL_STEPS}" \
                 --seed "${SEED}" \
                 --state_history_steps "${STATE_HISTORY_STEPS}" \
                 --command_past_steps "${COMMAND_PAST_STEPS}" \
                 --command_future_steps "${COMMAND_FUTURE_STEPS}" \
+                --planner_update_interval "${PLANNER_UPDATE_INTERVAL}" \
+                --keep_configured_episode_length \
+                --disable_tracking_terminations \
                 --flow_num_inference_steps "${FLOW_STEPS}" \
                 --flow_inference_noise_std "${FLOW_NOISE_STD}" \
                 --kit_args=--/app/extensions/fsWatcherEnabled=false
 
+            if [[ "${DRY_RUN}" != "1" ]]; then
+                rm -rf "${planner_rollout_dir}" "${merged_samples_dir}"
+            fi
+            run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/interface_baselines/eval_interface_planner_closed_loop.py \
+                --headless \
+                --task "${TASK}" \
+                --algo "${ALGORITHM}" \
+                --checkpoint "${interface_checkpoint}" \
+                --low_level_command_mode "${interface_command_mode}" \
+                --planner_checkpoint "${pretrain_dir}/checkpoints/latest.pt" \
+                --output_json "${planner_rollout_dir}/summary.json" \
+                --label "${interface}_chunked_${model_size}_${budget_label}_planner_rollout_collection" \
+                --motion_manifest "${TRAIN_MANIFEST}" \
+                "${dataset_args[@]}" \
+                "${language_eval_args[@]}" \
+                --num_envs "${NUM_ENVS}" \
+                --steps "${dagger_control_steps}" \
+                --seed "${SEED}" \
+                --state_history_steps "${STATE_HISTORY_STEPS}" \
+                --command_past_steps "${COMMAND_PAST_STEPS}" \
+                --command_future_steps "${COMMAND_FUTURE_STEPS}" \
+                --planner_update_interval "${PLANNER_UPDATE_INTERVAL}" \
+                --keep_configured_episode_length \
+                --disable_tracking_terminations \
+                --flow_num_inference_steps "${FLOW_STEPS}" \
+                --flow_inference_noise_std "${FLOW_NOISE_STD}" \
+                --keep_after_done \
+                --save_rollout_training_samples \
+                --samples_output_dir "${planner_rollout_samples_dir}" \
+                --kit_args=--/app/extensions/fsWatcherEnabled=false
+
+            run_cmd "${PYTHON_CMD[@]}" experiments/interface_baselines/merge_planner_samples.py \
+                --source "${samples_tensor_dir}" \
+                --source_limit "${max_samples}" \
+                --source "${planner_rollout_samples_dir}" \
+                --source_limit "${max_samples}" \
+                --seed "${SEED}" \
+                --output_dir "${merged_samples_dir}"
+
             run_cmd "${PYTHON_CMD[@]}" experiments/interface_baselines/train_chunked_transformer_planner.py \
-                --samples_dir "${samples_tensor_dir}" \
+                --samples_dir "${merged_samples_dir}" \
                 --output_dir "${finetune_dir}" \
                 --interface "${interface}" \
                 --state_key planner_state \
                 --checkpoint "${pretrain_dir}/checkpoints/latest.pt" \
                 --model_size "${model_size}" \
                 --seed "${SEED}" \
-                --max_samples "${max_samples}" \
+                --max_samples 0 \
                 --num_updates "${FINETUNE_UPDATES}" \
                 --batch_size "${BATCH_SIZE}" \
                 --micro_batch_size "${MICRO_BATCH_SIZE}" \
@@ -343,35 +457,40 @@ for interface in ${INTERFACES}; do
                 "${finetune_normalization_args[@]}"
 
             run_cmd "${PYTHON_CMD[@]}" experiments/interface_baselines/eval_interface_planner_offline.py \
-                --samples_dir "${samples_tensor_dir}" \
+                --samples_dir "${merged_samples_dir}" \
                 --planner_checkpoint "${finetune_dir}/checkpoints/latest.pt" \
                 --output_json "${finetuned_offline_eval_dir}/summary.json" \
                 --output_csv "${finetuned_offline_eval_dir}/summary.csv" \
                 --interface "${interface}" \
                 --state_key planner_state \
-                --setting eval_finetuned_achieved_state \
-                --label "${interface}_chunked_${model_size}_${budget_label}_finetuned_achieved_state" \
+                --setting eval_finetuned_planner_rollout \
+                --label "${interface}_chunked_${model_size}_${budget_label}_finetuned_planner_rollout" \
                 --seed "${SEED}" \
                 --flow_num_inference_steps "${FLOW_STEPS}" \
-                --flow_inference_noise_std "${FLOW_NOISE_STD}" \
-                "${offline_eval_filter_args[@]}"
+                --flow_inference_noise_std "${FLOW_NOISE_STD}"
 
             run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/interface_baselines/eval_interface_planner_closed_loop.py \
                 --headless \
                 --task "${TASK}" \
                 --algo "${ALGORITHM}" \
                 --checkpoint "${interface_checkpoint}" \
+                --low_level_command_mode "${interface_command_mode}" \
                 --planner_checkpoint "${finetune_dir}/checkpoints/latest.pt" \
                 --output_json "${finetuned_eval_dir}/summary.json" \
                 --output_csv "${finetuned_eval_dir}/summary.csv" \
                 --label "${interface}_chunked_${model_size}_${budget_label}_finetuned_closed_loop" \
                 --motion_manifest "${EVAL_MANIFEST}" \
+                "${dataset_args[@]}" \
+                "${language_eval_args[@]}" \
                 --num_envs "${NUM_ENVS}" \
                 --steps "${EVAL_STEPS}" \
                 --seed "${SEED}" \
                 --state_history_steps "${STATE_HISTORY_STEPS}" \
                 --command_past_steps "${COMMAND_PAST_STEPS}" \
                 --command_future_steps "${COMMAND_FUTURE_STEPS}" \
+                --planner_update_interval "${PLANNER_UPDATE_INTERVAL}" \
+                --keep_configured_episode_length \
+                --disable_tracking_terminations \
                 --flow_num_inference_steps "${FLOW_STEPS}" \
                 --flow_inference_noise_std "${FLOW_NOISE_STD}" \
                 --kit_args=--/app/extensions/fsWatcherEnabled=false
