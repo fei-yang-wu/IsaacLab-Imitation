@@ -45,7 +45,7 @@ parser.add_argument("--horizon_steps", type=int, default=25, help="Macro horizon
 parser.add_argument(
     "--encoder_window_mode",
     type=str,
-    default="full",
+    default="intermediate",
     choices=("full", "intermediate"),
     help=(
         "Future window visible to E_skill. 'full' keeps legacy s_{t+1:t+W}; "
@@ -82,14 +82,14 @@ parser.add_argument(
 parser.add_argument(
     "--categorical_groups",
     type=int,
-    default=8,
+    default=64,
     help="Number of categorical groups G for --latent_mode categorical (must divide "
     "z_dim; per-group code dim = z_dim // G).",
 )
 parser.add_argument(
     "--categorical_categories",
     type=int,
-    default=32,
+    default=128,
     help="Categories per group (vocab size) for --latent_mode categorical. Independent "
     "of z_dim; larger = more capacity per group.",
 )
@@ -100,7 +100,7 @@ parser.add_argument("--gumbel_tau_start", type=float, default=2.0)
 parser.add_argument("--gumbel_tau_end", type=float, default=0.5)
 parser.add_argument("--gumbel_tau_anneal_iters", type=int, default=2000)
 parser.add_argument(
-    "--gumbel_hard", action=argparse.BooleanOptionalAction, default=True
+    "--gumbel_hard", action=argparse.BooleanOptionalAction, default=False
 )
 parser.add_argument(
     "--fsq_levels",
@@ -120,7 +120,7 @@ parser.add_argument(
 parser.add_argument(
     "--diffsr_feature_dim",
     type=int,
-    default=128,
+    default=256,
     help="DiffSR spectral feature dimension.",
 )
 parser.add_argument(
@@ -130,7 +130,7 @@ parser.add_argument(
     help="DiffSR bilinear embedding dimension.",
 )
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
-parser.add_argument("--num_updates", type=int, default=2000, help="Training updates.")
+parser.add_argument("--num_updates", type=int, default=50_000, help="Training updates.")
 parser.add_argument("--log_interval", type=int, default=100, help="Log cadence.")
 parser.add_argument(
     "--eval_batches",
@@ -197,7 +197,7 @@ parser.add_argument(
 parser.add_argument(
     "--window_probe_train_batches",
     type=int,
-    default=4,
+    default=8,
     help="Train batches for eval-only closed-form window probes.",
 )
 parser.add_argument(

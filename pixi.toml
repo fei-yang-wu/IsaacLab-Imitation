@@ -53,6 +53,7 @@ libc = { family = "glibc", version = "2.35" }
 
 [feature.isaaclab.dependencies]
 libxml2 = "<2.14"
+libglu = ">=9.0.3,<10"
 
 [feature.isaaclab.pypi-dependencies]
 isaaclab = { version = "==2.3.2.post1", extras = ["isaacsim", "all"], index = "https://pypi.nvidia.com" }

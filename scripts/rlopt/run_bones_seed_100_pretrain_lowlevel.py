@@ -18,6 +18,7 @@ The cluster submit script remaps a leading ``/data`` to the node-local data dir.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -31,6 +32,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--data-root", default="/data/bones_seed_100")
     p.add_argument("--run-root", default=None)
     p.add_argument("--device", default="cuda:0")
+    p.add_argument(
+        "--app-arg",
+        action="append",
+        default=[],
+        help="Extra Isaac AppLauncher argument forwarded to both child commands.",
+    )
     p.add_argument("--task", default="Isaac-Imitation-G1-Latent-v0")
     p.add_argument("--algorithm", default="IPMD")
     p.add_argument("--seed", type=int, default=0)
@@ -45,8 +52,13 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--frames-per-env-batch", type=int, default=32)
     p.add_argument("--horizon-steps", type=int, default=25)
     p.add_argument("--z-dim", type=int, default=256)
+    p.add_argument(
+        "--latent-mode",
+        choices=("deterministic", "gaussian", "categorical", "gumbel_multicat", "gumbel", "fsq", "vq"),
+        default="deterministic",
+    )
     p.add_argument("--encoder-window-mode", default="intermediate")
-    p.add_argument("--diffsr-feature-dim", type=int, default=128)
+    p.add_argument("--diffsr-feature-dim", type=int, default=256)
     p.add_argument("--diffsr-embed-dim", type=int, default=512)
     # Keep the representation-learning protocol aligned with the LAFAN1 pipeline.
     # These values are passed explicitly below so changes to the direct trainer's
@@ -56,12 +68,19 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--eval-trajectory-fraction", type=float, default=0.1)
     p.add_argument("--categorical-groups", type=int, default=64)
     p.add_argument("--categorical-categories", type=int, default=128)
-    p.add_argument("--gumbel-hard", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--gumbel-hard", action=argparse.BooleanOptionalAction, default=False)
+    p.add_argument(
+        "--train-video",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Record and logger-sync low-level training videos.",
+    )
     p.add_argument("--video-length", type=int, default=500)
     p.add_argument("--video-interval", type=int, default=2500)
     p.add_argument("--save-interval", type=int, default=100_000_000)
     p.add_argument("--logger-backend", default="wandb")
     p.add_argument("--wandb-project", default="g1-bones-seed-100-hl-skill-2b")
+    p.add_argument("--wandb-entity", default=None)
     p.add_argument("--exp-name", default=None)
     p.add_argument("--skip-pretrain", action="store_true")
     p.add_argument("--skip-low-level", action="store_true")
@@ -94,6 +113,11 @@ def main() -> None:
     print(f"[INFO] data_root={data_root}")
     print(f"[INFO] manifest={manifest}")
     print(f"[INFO] run_root={run_root}")
+    if args.wandb_entity:
+        # Isaac Lab's config updater rejects a string override when the current
+        # optional logger entity is None. W&B natively reads this environment
+        # variable when RLOpt passes entity=None.
+        os.environ["WANDB_ENTITY"] = args.wandb_entity
 
     # Stage 1: skill-encoder pretrain (builds the Zarr cache with refresh=true).
     if not args.skip_pretrain:
@@ -101,6 +125,7 @@ def main() -> None:
             [
                 sys.executable, "scripts/rlopt/train_hl_skill_diffsr.py",
                 "--headless", "--device", args.device,
+                *args.app_arg,
                 "--task", args.task,
                 "--num_envs", str(args.train_num_envs),
                 "--seed", str(args.seed),
@@ -108,6 +133,7 @@ def main() -> None:
                 "--horizon_steps", str(args.horizon_steps),
                 "--encoder_window_mode", args.encoder_window_mode,
                 "--z_dim", str(args.z_dim),
+                "--latent_mode", args.latent_mode,
                 "--diffsr_feature_dim", str(args.diffsr_feature_dim),
                 "--diffsr_embed_dim", str(args.diffsr_embed_dim),
                 "--batch_size", str(args.pretrain_batch_size),
@@ -124,6 +150,9 @@ def main() -> None:
                 "--reconstruction_eval", "--window_probe_eval",
                 "--window_probe_train_batches", "8",
                 "--window_probe_eval_batches", "4",
+                "--logger_backend", args.logger_backend,
+                "--wandb_project", args.wandb_project,
+                *(["--wandb_entity", args.wandb_entity] if args.wandb_entity else []),
                 f"env.lafan1_manifest_path={manifest}",
                 f"env.dataset_path={dataset_path}",
                 "env.refresh_zarr_dataset=true",
@@ -139,10 +168,18 @@ def main() -> None:
         _run(
             [
                 sys.executable, "scripts/rlopt/train.py",
-                "--headless", "--video",
-                "--video_length", str(args.video_length),
-                "--video_interval", str(args.video_interval),
+                "--headless",
+                *(
+                    [
+                        "--video",
+                        "--video_length", str(args.video_length),
+                        "--video_interval", str(args.video_interval),
+                    ]
+                    if args.train_video
+                    else []
+                ),
                 "--device", args.device,
+                *args.app_arg,
                 "--num_envs", str(args.train_num_envs),
                 "--task", args.task,
                 "--algo", args.algorithm,
@@ -152,7 +189,7 @@ def main() -> None:
                 f"agent.logger.backend={args.logger_backend}",
                 f"agent.logger.project_name={args.wandb_project}",
                 f"agent.logger.exp_name={run_id}_oracle_low_level",
-                "agent.logger.video=true",
+                f"agent.logger.video={'true' if args.train_video else 'false'}",
                 f"agent.save_interval={args.save_interval}",
                 f"agent.ipmd.hl_skill_checkpoint_path={skill_ckpt}",
                 f"env.lafan1_manifest_path={manifest}",
