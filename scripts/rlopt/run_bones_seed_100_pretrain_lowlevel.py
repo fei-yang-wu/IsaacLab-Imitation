@@ -104,7 +104,7 @@ def main() -> None:
     run_id = args.exp_name or f"bones_seed_100_h{args.horizon_steps}_z{args.z_dim}_pretrain_lowlevel_seed{args.seed}"
     run_root = Path(args.run_root or (REPO_ROOT / "logs" / "bones_seed_100_pretrain_lowlevel" / f"{run_id}_{timestamp}")).resolve()
     skill_dir = run_root / f"skill_encoder_h{args.horizon_steps}_z{args.z_dim}"
-    skill_ckpt = skill_dir / "checkpoints" / "best.pt"
+    skill_ckpt = skill_dir / "checkpoints" / "latest.pt"
     run_root.mkdir(parents=True, exist_ok=True)
 
     if not args.dry_run and not manifest.is_file():

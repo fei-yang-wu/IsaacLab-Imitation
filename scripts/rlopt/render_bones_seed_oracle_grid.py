@@ -6,7 +6,9 @@
 Each Isaac environment is permanently assigned one randomly selected expert
 trajectory. The frozen high-level skill encoder converts the current 25-step
 reference segment into the latent command consumed by the low-level IPMD policy.
-Selections are sampled without replacement and recorded next to the video.
+Selections are sampled without replacement and recorded next to the video. When
+a reference finishes, that humanoid resets to frame zero and repeats the same
+motion while the shared recording continues.
 """
 
 from __future__ import annotations
@@ -84,8 +86,11 @@ parser.add_argument(
     "--grid_spacing",
     dest="grid_spacing",
     type=float,
-    default=3.0,
-    help="Spacing in meters between humanoid environments (default: 3.0).",
+    default=2.5,
+    help=(
+        "Spacing in meters between humanoid environments; defaults to the "
+        "G1 training environment spacing (2.5)."
+    ),
 )
 parser.add_argument(
     "--video",
@@ -154,6 +159,9 @@ DEFAULT_MANIFEST = Path("manifests/g1_bones_seed_100_manifest.json")
 DEFAULT_DATASET_CACHE = Path("g1_hl_diffsr")
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
+# Match the low, three-quarter side view used by the policy/reference playback.
+# The vector is scaled to the selected environment grid in _set_overview_camera.
+TRAINING_CAMERA_OFFSET = (3.0, -5.0, 2.0)
 
 
 def _resolve_checkpoint(path_value: str) -> Path:
@@ -278,11 +286,15 @@ def _unwrap_imitation_env(env: Any) -> ImitationRLEnv:
     raise TypeError("Could not unwrap an ImitationRLEnv from the environment.")
 
 
-def _disable_terms(config_group: Any, *, label: str) -> None:
+def _disable_terms(
+    config_group: Any, *, label: str, keep: frozenset[str] = frozenset()
+) -> None:
     if config_group is None:
         return
     disabled: list[str] = []
     for name in getattr(config_group, "__dataclass_fields__", {}):
+        if name in keep:
+            continue
         if getattr(config_group, name, None) is None:
             continue
         setattr(config_group, name, None)
@@ -377,8 +389,13 @@ def _set_overview_camera(base_env: ImitationRLEnv) -> None:
         float(args_cli.grid_spacing),
     )
     lookat = center.clone()
-    lookat[2] = 0.8
-    eye = lookat + torch.tensor([0.0, -0.75 * span, 1.35 * span])
+    lookat[2] = 0.9
+    # Preserve the familiar training/playback camera direction while scaling
+    # its distance so the complete multi-environment grid remains in frame.
+    camera_offset = torch.tensor(TRAINING_CAMERA_OFFSET, dtype=lookat.dtype)
+    # A quarter-span scale keeps approximately the old camera-to-grid distance,
+    # avoiding crop while lowering the elevation angle substantially.
+    eye = lookat + camera_offset * (0.25 * span)
     base_env.sim.set_camera_view(eye.tolist(), lookat.tolist())
     print(f"[INFO] Overview camera eye={eye.tolist()} lookat={lookat.tolist()}")
 
@@ -416,6 +433,7 @@ def _assignment_payload(
         "command_source": "hl_skill",
         "command_mode": "z",
         "horizon_steps": 25,
+        "restart_finished_motions": True,
         "assignments": rows,
     }
 
@@ -493,7 +511,11 @@ def main(
     if hasattr(env_cfg, "viewer"):
         env_cfg.viewer.resolution = (VIDEO_WIDTH, VIDEO_HEIGHT)
 
-    _disable_terms(getattr(env_cfg, "terminations", None), label="termination terms")
+    _disable_terms(
+        getattr(env_cfg, "terminations", None),
+        label="termination terms",
+        keep=frozenset({"reference_finished"}),
+    )
     _disable_terms(getattr(env_cfg, "rewards", None), label="reward terms")
     _configure_exact_reference_reset(env_cfg)
 
@@ -611,6 +633,10 @@ def main(
         f"[INFO] Starting deterministic oracle rollout for {max_steps} steps "
         f"({args_cli.num_envs} distinct motions)."
     )
+    print(
+        "[INFO] Finished references reset independently and repeat their assigned "
+        "motion from frame zero."
+    )
     timestep = 0
     try:
         while simulation_app.is_running() and timestep < max_steps:
@@ -630,6 +656,13 @@ def main(
                 sleep_time = float(dt) - (time.time() - start_time)
                 if sleep_time > 0.0:
                     time.sleep(sleep_time)
+
+        final_ranks = tm.env_traj_rank.detach().cpu().to(dtype=torch.long)
+        if not torch.equal(final_ranks, selected_ranks):
+            raise RuntimeError(
+                "Trajectory assignment changed during rollout: "
+                f"expected={selected_ranks.tolist()}, actual={final_ranks.tolist()}."
+            )
     finally:
         env.close()
 
