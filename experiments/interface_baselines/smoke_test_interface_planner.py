@@ -2013,7 +2013,7 @@ def _test_bones_multigoal_cluster_launcher_dry_run(tmp: Path) -> None:
     assert "demonstration_batched/full_body" in result.stdout
     assert f"--dataset_path {tmp / 'vanilla_cache'}" in result.stdout
     assert "demonstration_batched/latent_skill" in result.stdout
-    assert "--metric_interval 40001" in result.stdout
+    assert "--metric_interval 80001" in result.stdout
     assert "demonstration_per_goal" not in result.stdout
     assert "audit_bones_seed_multigoal_language_comparison.py" in result.stdout
     assert "summarize_bones_seed_multigoal_language_comparison.py" in result.stdout

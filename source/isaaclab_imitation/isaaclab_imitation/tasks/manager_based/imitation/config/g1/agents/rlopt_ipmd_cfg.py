@@ -348,6 +348,8 @@ class G1ImitationLatentFutureCVAERLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfi
         self.ipmd.latent_steps_min = 10
         self.ipmd.latent_steps_max = 10
         self.ipmd.latent_learning.method = "future_cvae"
+        self.ipmd.latent_learning.code_latent_dim = 256
+        self.ipmd.latent_learning.command_phase_mode = "none"
         self.sync_input_keys()
         self.ipmd.latent_learning.patch_past_steps = 0
         self.ipmd.latent_learning.patch_future_steps = 9
