@@ -21,7 +21,17 @@ parser.add_argument(
     dest="algorithm",
     type=str.upper,
     default="IPMD",
-    choices=["PPO", "SAC", "FASTSAC", "IPMD", "IPMD_SR", "IPMD_BILINEAR", "GAIL", "AMP", "ASE"],
+    choices=[
+        "PPO",
+        "SAC",
+        "FASTSAC",
+        "IPMD",
+        "IPMD_SR",
+        "IPMD_BILINEAR",
+        "GAIL",
+        "AMP",
+        "ASE",
+    ],
 )
 parser.add_argument("--checkpoint", type=Path, required=True)
 parser.add_argument("--output_npz", type=Path, required=True)
@@ -102,7 +112,12 @@ import isaaclab_imitation.tasks  # noqa: F401
 import isaaclab_tasks  # noqa: F401
 import numpy as np
 import torch
-from isaaclab.envs import DirectMARLEnv, DirectMARLEnvCfg, DirectRLEnvCfg, ManagerBasedRLEnvCfg
+from isaaclab.envs import (
+    DirectMARLEnv,
+    DirectMARLEnvCfg,
+    DirectRLEnvCfg,
+    ManagerBasedRLEnvCfg,
+)
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
 from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
@@ -206,7 +221,13 @@ def _disable_observation_corruption(env_cfg: object) -> None:
     observations = getattr(env_cfg, "observations", None)
     if observations is None:
         return
-    for group_name in ("policy", "critic", "expert_state", "expert_window", "reward_input"):
+    for group_name in (
+        "policy",
+        "critic",
+        "expert_state",
+        "expert_window",
+        "reward_input",
+    ):
         group = getattr(observations, group_name, None)
         if group is not None and hasattr(group, "enable_corruption"):
             group.enable_corruption = False
@@ -240,7 +261,9 @@ def _configured_step_dt(env_cfg: object) -> float | None:
     return None
 
 
-def _snapshot_robot_state(base_env: ImitationRLEnv, env_id: int = 0) -> dict[str, np.ndarray]:
+def _snapshot_robot_state(
+    base_env: ImitationRLEnv, env_id: int = 0
+) -> dict[str, np.ndarray]:
     robot_data = base_env.robot.data
     return {
         "root_pos": _copy_env_vector(robot_data.root_pos_w, env_id=env_id),
@@ -256,7 +279,9 @@ def _snapshot_robot_state(base_env: ImitationRLEnv, env_id: int = 0) -> dict[str
     }
 
 
-def _stack_rollout_frames(frames: list[dict[str, np.ndarray]], fps: float) -> dict[str, np.ndarray]:
+def _stack_rollout_frames(
+    frames: list[dict[str, np.ndarray]], fps: float
+) -> dict[str, np.ndarray]:
     arrays = {
         "fps": np.asarray([float(fps)], dtype=np.float32),
     }
@@ -272,7 +297,14 @@ def _stack_rollout_frames(frames: list[dict[str, np.ndarray]], fps: float) -> di
         "body_lin_vel_w",
         "body_ang_vel_w",
     ):
-        arrays[key] = np.stack([frame[key] for frame in frames], axis=0).astype(np.float32)
+        arrays[key] = np.stack([frame[key] for frame in frames], axis=0).astype(
+            np.float32
+        )
+
+    # The NPZ dataset format stores quaternions scalar-first (w, x, y, z),
+    # while Isaac Lab 3.0 sim state is scalar-last (x, y, z, w).
+    for key in ("root_quat", "body_quat_w"):
+        arrays[key] = arrays[key][..., [3, 0, 1, 2]]
 
     arrays["qpos"] = np.concatenate(
         [arrays["root_pos"], arrays["root_quat"], arrays["joint_pos"]],
@@ -350,13 +382,17 @@ def _filter_state_schema(
         requested_keys = [key for key in schema_data.files if key in arrays]
         if "fps" in schema_keys and "fps" not in requested_keys:
             requested_keys.insert(0, "fps")
-        if not any(key in requested_keys for key in ("qpos", "joint_pos", "body_pos_w")):
+        if not any(
+            key in requested_keys for key in ("qpos", "joint_pos", "body_pos_w")
+        ):
             raise ValueError(
                 f"Schema reference NPZ {schema_npz} does not share a supported state key "
                 "with the rollout arrays."
             )
         for key in requested_keys:
-            projected_array, note = _adapt_array_to_schema(key, arrays[key], schema_data[key])
+            projected_array, note = _adapt_array_to_schema(
+                key, arrays[key], schema_data[key]
+            )
             projected[key] = projected_array
             if note is not None:
                 projection_notes.append(note)
@@ -469,7 +505,9 @@ def _write_rollout_npz(
 ) -> Path | None:
     transition_count = len(transition_actions)
     if transition_count <= 0:
-        print(f"[WARNING] Skipping rollout {rollout_index}: no valid transitions recorded.")
+        print(
+            f"[WARNING] Skipping rollout {rollout_index}: no valid transitions recorded."
+        )
         return None
 
     frame_count = transition_count + 1
@@ -509,7 +547,9 @@ def _write_rollout_npz(
     arrays["transition_terminated"] = np.asarray(transition_terminated, dtype=np.bool_)
     arrays["transition_truncated"] = np.asarray(transition_truncated, dtype=np.bool_)
     arrays["transition_local_step"] = np.asarray(transition_local_steps, dtype=np.int64)
-    arrays["action_label_metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
+    arrays["action_label_metadata_json"] = np.asarray(
+        json.dumps(metadata, sort_keys=True)
+    )
     arrays["rollout_metadata_json"] = arrays["action_label_metadata_json"]
 
     output_path = _output_path_for_rollout(output_npz, rollout_index, total_rollouts)
@@ -558,8 +598,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         raise FileNotFoundError(f"Motion manifest not found: {motion_manifest}")
 
     env_cfg.scene.num_envs = num_envs
-    env_cfg.seed = args_cli.seed if args_cli.seed is not None else getattr(agent_cfg, "seed", None)
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    env_cfg.seed = (
+        args_cli.seed if args_cli.seed is not None else getattr(agent_cfg, "seed", None)
+    )
+    env_cfg.sim.device = (
+        args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    )
     env_cfg.log_dir = str(output_npz.parent)
     if motion_manifest is not None:
         if not hasattr(env_cfg, "lafan1_manifest_path"):
@@ -630,11 +674,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     env = IsaacLabWrapper(raw_env)
     env = env.set_info_dict_reader(
-        IsaacLabTerminalObsReader(observation_spec=env.observation_spec, backend="gymnasium")
+        IsaacLabTerminalObsReader(
+            observation_spec=env.observation_spec, backend="gymnasium"
+        )
     )
     env = TransformedEnv(
         base_env=env,
-        transform=Compose(RewardSum(), StepCounter(args_cli.steps + 2), RewardClipping(-10.0, 5.0)),
+        transform=Compose(
+            RewardSum(), StepCounter(args_cli.steps + 2), RewardClipping(-10.0, 5.0)
+        ),
     )
     base_env = _unwrap_imitation_env(env)
 
@@ -666,11 +714,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     td = env.reset()
     for env_idx in range(num_envs):
         frames[env_idx].append(_snapshot_robot_state(base_env, env_id=env_idx))
-    print(f"[INFO] Recording up to {steps} rollout transitions for {num_envs} env(s)...")
+    print(
+        f"[INFO] Recording up to {steps} rollout transitions for {num_envs} env(s)..."
+    )
     for _step_idx in range(steps):
         local_steps = base_env._current_local_steps(env_ids).detach().cpu().reshape(-1)
 
-        with torch.inference_mode(), set_exploration_type(InteractionType.DETERMINISTIC):
+        with (
+            torch.inference_mode(),
+            set_exploration_type(InteractionType.DETERMINISTIC),
+        ):
             td = collector_policy(td)
 
         action = td.get("action")
@@ -702,7 +755,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             done_bool = bool(dones[env_idx].item())
             terminated_bool = bool(terminateds[env_idx].item())
             truncated_bool = bool(truncateds[env_idx].item())
-            if (done_bool or terminated_bool or truncated_bool) and not args_cli.keep_after_done:
+            if (
+                done_bool or terminated_bool or truncated_bool
+            ) and not args_cli.keep_after_done:
                 if truncated_bool:
                     stop_reasons[env_idx] = "truncated"
                 elif terminated_bool:
@@ -717,8 +772,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 )
                 continue
 
-            transition_actions[env_idx].append(_copy_env_vector(action_2d, env_id=env_idx))
-            transition_targets[env_idx].append(_copy_env_vector(processed_action, env_id=env_idx))
+            transition_actions[env_idx].append(
+                _copy_env_vector(action_2d, env_id=env_idx)
+            )
+            transition_targets[env_idx].append(
+                _copy_env_vector(processed_action, env_id=env_idx)
+            )
             transition_rewards[env_idx].append(float(rewards[env_idx].item()))
             transition_dones[env_idx].append(done_bool)
             transition_terminated[env_idx].append(terminated_bool)
@@ -730,7 +789,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             print("[INFO] All envs reached done/truncated before requested steps.")
             break
 
-        td = step_mdp(td_step, exclude_reward=True, exclude_done=False, exclude_action=True)
+        td = step_mdp(
+            td_step, exclude_reward=True, exclude_done=False, exclude_action=True
+        )
 
     if not any(len(actions) > 0 for actions in transition_actions):
         raise RuntimeError("No valid rollout transitions were recorded.")
@@ -740,7 +801,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "task": args_cli.task,
         "algorithm": args_cli.algorithm,
         "checkpoint": str(checkpoint_path),
-        "motion_manifest": str(motion_manifest) if motion_manifest is not None else None,
+        "motion_manifest": str(motion_manifest)
+        if motion_manifest is not None
+        else None,
         "schema_reference_npz": (
             str(args_cli.schema_reference_npz.expanduser().resolve())
             if args_cli.schema_reference_npz is not None

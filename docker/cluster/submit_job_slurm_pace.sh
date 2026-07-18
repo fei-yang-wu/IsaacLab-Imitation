@@ -127,8 +127,11 @@ nvidia-smi || true
 ${module_block}
 
 # Pass the container profile first to run_singularity.sh, then all arguments intended for the executed script.
+# stdbuf forces line-buffered stdout/stderr so run_singularity progress + errors are
+# flushed to the Slurm log even if the job dies mid-step (block buffering otherwise
+# swallows the last output on failure).
 set +e
-${run_prefix} bash ${quoted_run_singularity_path} ${quoted_workspace_root} ${quoted_container_profile} ${quoted_job_args}
+${run_prefix} stdbuf -oL -eL bash ${quoted_run_singularity_path} ${quoted_workspace_root} ${quoted_container_profile} ${quoted_job_args}
 job_status=\$?
 set -e
 

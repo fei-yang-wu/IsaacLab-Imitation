@@ -67,8 +67,8 @@ Install the default development environment:
 pixi install
 ```
 
-The default environment is intentionally Isaac-light. It installs Python 3.11,
-PyTorch 2.7.0 / torchvision 0.22.0 from the CUDA 12.8 wheel index,
+The default environment is intentionally Isaac-light. It installs Python 3.12,
+PyTorch 2.11.0 / torchvision 0.26.0 from the CUDA 13.0 wheel index,
 TensorDict / TorchRL, and the local editable `RLOpt` and
 `ImitationLearningTools` submodules. It does not install Isaac Sim, Isaac Lab,
 or `isaaclab_imitation`, so RLOpt and ILTools tests do not trigger TorchRL's
@@ -81,7 +81,7 @@ playback, conversion, or tests:
 pixi install -e isaaclab
 ```
 
-The `isaaclab` environment adds `isaaclab[isaacsim,all]==2.3.2.post1` from
+The `isaaclab` environment adds `isaaclab[isaacsim,all]==3.0.0b2.post1` (Isaac Sim 6.0.1) from
 NVIDIA's PyPI index plus editable `source/isaaclab_imitation`. Pixi owns both
 Conda and PyPI dependencies through `pixi.toml`; do not install repo
 dependencies with `conda`, `pip`, or `uv`.
@@ -236,6 +236,29 @@ python scripts/rlopt/train.py \
     --headless \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
+
+### LAFAN1 local pretrain + low-level pipeline (reproducible)
+
+The recommended reproducible recipe trains a G1 LAFAN1 policy in two stages — pretrain a
+DiffSR skill encoder from expert motion, then train the low-level "oracle" IPMD policy
+conditioned on that encoder. One script chains both stages with the validated defaults
+(builds the zarr cache, wires the fresh skill checkpoint into the low-level run):
+
+```bash
+bash scripts/rlopt/run_local_pretrain_lowlevel.sh
+```
+
+Defaults: skill encoder `W=25`, `z_dim=256`, DiffSR `128/512`, 5000 updates; low-level
+`--algo IPMD` on `Isaac-Imitation-G1-Latent-v0` to 2B frames, 4096 envs, video + wandb.
+Every value is env-overridable, e.g. a quick smoke run:
+
+```bash
+TOTAL_FRAMES=20000000 LOGGER_BACKEND=none bash scripts/rlopt/run_local_pretrain_lowlevel.sh
+```
+
+Expected low-level curve: `r_ep` climbs from <1 to ~18 by ~150M frames and refines toward
+convergence by 2B. The full per-stage commands, expected metrics, joint-order verification,
+and troubleshooting are in [wiki/lafan1-local-training.md](wiki/lafan1-local-training.md).
 
 For imitation-based RL, the recommended starting point in this repo is RLOpt IPMD on
 `Isaac-Imitation-G1-Latent-v0`. If you want a smaller single-motion setup for the
@@ -623,6 +646,26 @@ pixi run python scripts/setup_g1_lafan1_npz_dataset.py \
 ```
 
 ## Playback and smoke tests
+
+### Physics backend smokes and benchmark (Isaac Lab 3.0)
+
+The G1 vanilla task supports both physics backends via a launch-time preset:
+`physics=physx` (default) or `physics=newton_mjwarp` (MuJoCo-Warp / Newton).
+Routine checks from the repo root:
+
+```bash
+# 1-iteration training smokes, one per backend (Dance102 motions)
+pixi run -e isaaclab smoke-vanilla-physx
+pixi run -e isaaclab smoke-vanilla-newton
+
+# Throughput benchmark across backends; writes JSON + per-run logs
+# under logs/benchmarks/. Quick = 1024 envs x 5 iters; full ~10M frames each.
+pixi run -e isaaclab bench-backends-quick
+pixi run -e isaaclab bench-backends
+```
+
+Any train/play command accepts the same `physics=<preset>` override, e.g.
+`... python scripts/rlopt/train.py --task Isaac-Imitation-G1-v0 ... physics=newton_mjwarp`.
 
 Run a zero-action smoke test:
 

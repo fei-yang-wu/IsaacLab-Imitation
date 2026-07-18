@@ -225,8 +225,10 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
         self.collector.total_frames = 5_000_000_000
         self.save_interval = 100  # rollout iterations
 
-        # Debug: latent posterior input mirrors the single-step vanilla tracker
-        # policy reference payload directly: expert_motion (58) + anchor_ori (6).
+        # Base ("posterior") latent width: the single-step reference payload
+        # mirrored directly -- expert_motion (58) + anchor_ori (6) = 64. This is
+        # the default for vanilla IPMD and for the posterior latent mode; the
+        # latent-conditioned config overrides it below (hl_skill, 258).
         self.ipmd.latent_dim = 64
         self.ipmd.latent_steps_min = 1
         self.ipmd.latent_steps_max = 1
@@ -242,9 +244,10 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
         self.ipmd.latent_learning.freeze_encoder = True
         self.ipmd.latent_learning.train_posterior_through_policy = True
 
-        # Debug mode still trains the autoencoder on expert reference patches,
-        # but the live latent_command path publishes the raw posterior features
-        # directly so data flow can be checked independently of the encoder.
+        # Posterior mode trains the autoencoder on expert reference patches and
+        # publishes the raw posterior features on the live latent_command path
+        # (encoder-independent data flow). The default latent scheme below uses a
+        # pretrained hl_skill encoder instead.
         self.ipmd.latent_learning.recon_coeff = 1.0
         self.ipmd.latent_learning.weight_decay_coeff = 0.0
         self.ipmd.latent_learning.kl_coeff = 0.0
@@ -279,11 +282,36 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
         self.ipmd.reward_grad_penalty_coeff = 0.0
         self.collector.no_cuda_sync = True
 
-        # Collector latents should consume the same observation-manager channel
-        # stored in the rollout TensorDict. Expert data enters through
-        # sample_expert_batch(...) during updates, not through live env getters.
+        # Default latent-conditioned scheme: consume a pretrained high-level
+        # diffsr skill encoder as the latent command (256-d skill code z + 2-d
+        # sin/cos phase = 258). This is the current production latent scheme.
+        # `command_source="posterior"` (raw posterior features, latent_dim=64) is
+        # still a valid mode -- select it via overrides if desired.
+        #
+        # NOTE: `hl_skill_checkpoint_path` MUST be provided per run (path to a
+        # pretrained skill-encoder best.pt from train_hl_skill_diffsr.py); there
+        # is no repo-default checkpoint.
         if self._default_use_latent_command:
-            self.ipmd.command_source = "posterior"
+            self.ipmd.latent_dim = 258
+            self.ipmd.command_source = "hl_skill"
+            self.ipmd.hl_skill_command_mode = "z"
+            self.ipmd.hl_skill_horizon_steps = 25
+            self.ipmd.hl_skill_finetune_enabled = False
+            self.ipmd.hl_skill_pg_coeff = 0.05
+            self.ipmd.hl_skill_anchor_coeff = 0.01
+            self.ipmd.hl_skill_offline_diffsr_coeff = 1.0
+            self.ipmd.hl_skill_lr = 3.0e-5
+            self.ipmd.latent_steps_min = 25
+            self.ipmd.latent_steps_max = 25
+            self.ipmd.latent_learning.command_phase_mode = "sin_cos"
+            self.ipmd.latent_learning.code_period = 25
+            self.ipmd.latent_learning.code_latent_dim = 256
+            # hl_skill drives the objective; disable the learned-reward terms.
+            self.ipmd.reward_loss_coeff = 0.0
+            self.ipmd.reward_l2_coeff = 0.0
+            self.ipmd.reward_grad_penalty_coeff = 0.0
+            self.ipmd.reward_logit_reg_coeff = 0.0
+            self.ipmd.reward_param_weight_decay_coeff = 0.0
 
 
 @configclass

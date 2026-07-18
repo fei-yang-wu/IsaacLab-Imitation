@@ -19,8 +19,12 @@ Start with:
   by distilling the frozen skill encoder; approved approach, milestone status,
   and grounded code reference map.
 - [Closed-Loop Skill Commander Eval](closed-loop-skill-commander-eval.md):
-  practical oracle-drive, rollout-finetune, and closed-loop evaluation recipes.
-- [Experiment Workflow](experiment-workflow.md): local tests, final cluster job
+  practical M1, oracle-drive, rollout-finetune, and M3 eval recipe used for the
+  Dance102 planner-debug workflow.
+- [BONES Seed Language Planner Memory](bones-seed-language-planner-memory.md):
+  durable snapshot for the BONES demo8 merged language-planner experiment,
+  including artifacts, metrics, paired video outputs, and rerun commands.
+- [Experiment Workflow](experiment-workflow.md): local tests, full cluster job
   submission, and experiment tracking conventions.
 - [Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md):
   authoritative paper contract for the focused DiffSR latent versus exact

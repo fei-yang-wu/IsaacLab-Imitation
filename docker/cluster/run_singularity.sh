@@ -275,6 +275,13 @@ capture_cluster_env_overrides() {
     local var_name
 
     for var_name in \
+        CLUSTER_ISAAC_SIM_CACHE_DIR \
+        CLUSTER_ISAACLAB_DIR \
+        CLUSTER_SIF_PATH \
+        CLUSTER_DATA_DIR \
+        CLUSTER_HF_TOKEN_FILE \
+        CLUSTER_WANDB_API_KEY_FILE \
+        CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
         CLUSTER_AUTO_SETUP_G1_DATA \
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
@@ -289,7 +296,9 @@ capture_cluster_env_overrides() {
         CLUSTER_USE_SHARED_SIF \
         CLUSTER_SHARED_SIF_PATH \
         CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
-        CLUSTER_EXTRA_PYTHONPATH_REL; do
+        CLUSTER_EXTRA_PYTHONPATH_REL \
+        REMOVE_CODE_COPY_AFTER_JOB \
+        REMOVE_OVERLAY_AFTER_JOB; do
         capture_requested_env_var "$var_name"
     done
 }
@@ -298,6 +307,13 @@ restore_cluster_env_overrides() {
     local var_name
 
     for var_name in \
+        CLUSTER_ISAAC_SIM_CACHE_DIR \
+        CLUSTER_ISAACLAB_DIR \
+        CLUSTER_SIF_PATH \
+        CLUSTER_DATA_DIR \
+        CLUSTER_HF_TOKEN_FILE \
+        CLUSTER_WANDB_API_KEY_FILE \
+        CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
         CLUSTER_AUTO_SETUP_G1_DATA \
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
@@ -312,7 +328,9 @@ restore_cluster_env_overrides() {
         CLUSTER_USE_SHARED_SIF \
         CLUSTER_SHARED_SIF_PATH \
         CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
-        CLUSTER_EXTRA_PYTHONPATH_REL; do
+        CLUSTER_EXTRA_PYTHONPATH_REL \
+        REMOVE_CODE_COPY_AFTER_JOB \
+        REMOVE_OVERLAY_AFTER_JOB; do
         restore_requested_env_var "$var_name"
     done
 }

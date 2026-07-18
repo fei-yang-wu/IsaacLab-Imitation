@@ -38,7 +38,7 @@ def joint_pos_target_l2(
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     joint_ids = env._get_joint_ids_tensor_fast(asset_cfg.joint_ids)
-    joint_pos = _select_last_dim(asset.data.joint_pos, joint_ids)
+    joint_pos = _select_last_dim(asset.data.joint_pos.torch, joint_ids)
     return joint_pos_target_l2_kernel(joint_pos, target)
 
 
@@ -48,7 +48,9 @@ def track_joint_pos(
     sigma: float = 0.25,
 ) -> torch.Tensor:
     joint_ids = env._get_joint_ids_tensor_fast(asset_cfg.joint_ids)
-    qpos_actual = _select_last_dim(env.scene[asset_cfg.name].data.joint_pos, joint_ids)
+    qpos_actual = _select_last_dim(
+        env.scene[asset_cfg.name].data.joint_pos.torch, joint_ids
+    )
     qpos_reference = _select_last_dim(env.current_expert_frame["joint_pos"], joint_ids)
     squared_error = torch.sum((qpos_actual - qpos_reference) ** 2, dim=1)
     return gaussian_from_squared_error(squared_error, sigma)
@@ -60,7 +62,9 @@ def track_joint_vel(
     sigma: float = 0.25,
 ) -> torch.Tensor:
     joint_ids = env._get_joint_ids_tensor_fast(asset_cfg.joint_ids)
-    qvel_actual = _select_last_dim(env.scene[asset_cfg.name].data.joint_vel, joint_ids)
+    qvel_actual = _select_last_dim(
+        env.scene[asset_cfg.name].data.joint_vel.torch, joint_ids
+    )
     qvel_reference = _select_last_dim(env.current_expert_frame["joint_vel"], joint_ids)
     squared_error = torch.sum((qvel_actual - qvel_reference) ** 2, dim=1)
     return gaussian_from_squared_error(squared_error, sigma)
@@ -70,7 +74,7 @@ def track_root_pos(
     env: ImitationRLEnv, asset_cfg: SceneEntityCfg | None = None, sigma: float = 0.1
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    root_pos_actual = asset.data.root_state_w[:, :3]
+    root_pos_actual = asset.data.root_state_w.torch[:, :3]
     root_pos_reference_w, _, _, _ = env._get_reference_root_state_w_fast()
     squared_error_xy = torch.sum(
         (root_pos_actual[..., :2] - root_pos_reference_w[..., :2]) ** 2, dim=1
@@ -82,7 +86,7 @@ def track_root_quat(
     env: ImitationRLEnv, asset_cfg: SceneEntityCfg | None = None, sigma: float = 0.1
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    root_quat_actual = asset.data.root_state_w[:, 3:7]
+    root_quat_actual = asset.data.root_state_w.torch[:, 3:7]
     _, root_quat_reference_w, _, _ = env._get_reference_root_state_w_fast()
     squared_error = quat_error_squared(root_quat_actual, root_quat_reference_w)
     return gaussian_from_squared_error(squared_error, sigma)
@@ -92,7 +96,7 @@ def track_root_ang(
     env: ImitationRLEnv, asset_cfg: SceneEntityCfg | None = None, sigma: float = 0.1
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    root_quat_actual = asset.data.root_quat_w
+    root_quat_actual = asset.data.root_quat_w.torch
     _, root_quat_reference_w, _, _ = env._get_reference_root_state_w_fast()
     squared_error = quat_error_squared(root_quat_actual, root_quat_reference_w)
     return gaussian_from_squared_error(squared_error, sigma)
@@ -102,7 +106,7 @@ def track_root_lin_vel(
     env: ImitationRLEnv, asset_cfg: SceneEntityCfg | None = None, sigma: float = 0.1
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    root_link_state_actual = asset.data.root_link_state_w
+    root_link_state_actual = asset.data.root_link_state_w.torch
     root_quat_actual = root_link_state_actual[:, 3:7]
     root_lin_vel_actual_b = quat_apply_inverse(
         root_quat_actual, root_link_state_actual[:, 7:10]
@@ -122,7 +126,7 @@ def track_root_ang_vel(
     env: ImitationRLEnv, asset_cfg: SceneEntityCfg | None = None, sigma: float = 0.1
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    root_ang_vel_actual = asset.data.root_link_state_w[:, 10:13]
+    root_ang_vel_actual = asset.data.root_link_state_w.torch[:, 10:13]
     _, _, _, root_ang_vel_reference_w = env._get_reference_root_state_w_fast()
     squared_error = torch.sum(
         (root_ang_vel_actual - root_ang_vel_reference_w) ** 2, dim=-1
@@ -139,11 +143,11 @@ def track_relative_body_pos(
     asset: Articulation = env.scene[asset_cfg.name]
     body_ids = env._get_body_ids_tensor_fast(asset_cfg.body_ids)
     if isinstance(body_ids, slice):
-        actual_pos = asset.data.body_link_pos_w
-        actual_quat = asset.data.body_link_quat_w
+        actual_pos = asset.data.body_link_pos_w.torch
+        actual_quat = asset.data.body_link_quat_w.torch
     else:
-        actual_pos = asset.data.body_link_pos_w.index_select(1, body_ids)
-        actual_quat = asset.data.body_link_quat_w.index_select(1, body_ids)
+        actual_pos = asset.data.body_link_pos_w.torch.index_select(1, body_ids)
+        actual_quat = asset.data.body_link_quat_w.torch.index_select(1, body_ids)
     actual_rel_pos, _ = relative_pose_from_bodies(actual_pos, actual_quat)
     ref_pos_w, ref_quat_w = env._get_reference_body_pose_w_fast(reference_body_names)
     ref_rel_pos, _ = relative_pose_from_bodies(ref_pos_w, ref_quat_w)
@@ -160,11 +164,11 @@ def track_relative_body_quat(
     asset: Articulation = env.scene[asset_cfg.name]
     body_ids = env._get_body_ids_tensor_fast(asset_cfg.body_ids)
     if isinstance(body_ids, slice):
-        actual_pos = asset.data.body_link_pos_w
-        actual_quat = asset.data.body_link_quat_w
+        actual_pos = asset.data.body_link_pos_w.torch
+        actual_quat = asset.data.body_link_quat_w.torch
     else:
-        actual_pos = asset.data.body_link_pos_w.index_select(1, body_ids)
-        actual_quat = asset.data.body_link_quat_w.index_select(1, body_ids)
+        actual_pos = asset.data.body_link_pos_w.torch.index_select(1, body_ids)
+        actual_quat = asset.data.body_link_quat_w.torch.index_select(1, body_ids)
     ref_pos_w, ref_quat_w = env._get_reference_body_pose_w_fast(reference_body_names)
     _, actual_rel_quat = relative_pose_from_bodies(actual_pos, actual_quat)
     _, ref_rel_quat = relative_pose_from_bodies(ref_pos_w, ref_quat_w)
@@ -183,13 +187,13 @@ def track_relative_body_vel(
     asset: Articulation = env.scene[asset_cfg.name]
     body_ids = env._get_body_ids_tensor_fast(asset_cfg.body_ids)
     if isinstance(body_ids, slice):
-        actual_quat = asset.data.body_link_quat_w
-        actual_ang_vel = asset.data.body_ang_vel_w
-        actual_lin_vel = asset.data.body_lin_vel_w
+        actual_quat = asset.data.body_link_quat_w.torch
+        actual_ang_vel = asset.data.body_ang_vel_w.torch
+        actual_lin_vel = asset.data.body_lin_vel_w.torch
     else:
-        actual_quat = asset.data.body_link_quat_w.index_select(1, body_ids)
-        actual_ang_vel = asset.data.body_ang_vel_w.index_select(1, body_ids)
-        actual_lin_vel = asset.data.body_lin_vel_w.index_select(1, body_ids)
+        actual_quat = asset.data.body_link_quat_w.torch.index_select(1, body_ids)
+        actual_ang_vel = asset.data.body_ang_vel_w.torch.index_select(1, body_ids)
+        actual_lin_vel = asset.data.body_lin_vel_w.torch.index_select(1, body_ids)
     actual_rel_vel = relative_velocity_from_bodies(
         actual_quat, actual_ang_vel, actual_lin_vel
     )

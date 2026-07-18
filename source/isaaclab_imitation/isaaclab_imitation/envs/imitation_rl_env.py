@@ -45,6 +45,38 @@ def _get_mdp_compiled_module() -> Any:
     return _MDP_COMPILED
 
 
+_REFERENCE_QUAT_KEYS = (
+    "root_quat",
+    "xquat",
+    "body_quat_w",
+    "next_root_quat",
+    "next_xquat",
+    "next_body_quat_w",
+)
+_WXYZ_TO_XYZW = [1, 2, 3, 0]
+
+
+def _convert_reference_quats_to_xyzw(reference: TensorDict) -> TensorDict:
+    """Convert dataset quaternions from WXYZ to Isaac Lab 3.0's XYZW layout.
+
+    Reference datasets (NPZ/zarr built by ImitationLearningTools) store
+    quaternions scalar-first (w, x, y, z). Isaac Lab 3.0 switched the
+    simulation state and all ``isaaclab.utils.math`` helpers to scalar-last
+    (x, y, z, w), so every reference frame is converted once at the
+    trajectory-manager boundary. Conversion is out-of-place so shared or lazy
+    replay-buffer storage is never mutated.
+    """
+    next_td = reference.get("next", None)
+    holders = (reference, next_td) if isinstance(next_td, TensorDict) else (reference,)
+    for holder in holders:
+        for key in _REFERENCE_QUAT_KEYS:
+            quat = holder.get(key, None)
+            if quat is None:
+                continue
+            holder.set(key, quat[..., _WXYZ_TO_XYZW])
+    return reference
+
+
 def _normalize_command_observation_source(value: str) -> str:
     source = str(value).strip().lower().replace("-", "_")
     if source not in _COMMAND_OBSERVATION_SOURCES:
@@ -141,6 +173,19 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         device = cfg.sim.device
         num_envs = cfg.scene.num_envs
 
+        # Isaac Lab 3.0's hydra integration applies `env.*` CLI overrides with a
+        # plain setattr on the config (no `from_dict` round-trip), so a
+        # `env.lafan1_manifest_path=...` override may arrive here without the
+        # manifest-derived loader config having been resolved yet.
+        if getattr(cfg, "lafan1_manifest_path", None) is not None and not (
+            self._lafan_source_entries_from_loader_kwargs(
+                getattr(cfg, "loader_kwargs", {})
+            )
+        ):
+            manifest_resolver = getattr(cfg, "_resolve_manifest_config", None)
+            if callable(manifest_resolver):
+                manifest_resolver()
+
         # Get dataset path and determine if we need to create it
         dataset_path = getattr(cfg, "dataset_path", None)
         loader_type = getattr(cfg, "loader_type", None)
@@ -207,10 +252,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     from omegaconf import DictConfig
 
                     loader_cfg = DictConfig(loader_kwargs)
+                    loader_build_kwargs = {
+                        key: int(loader_kwargs[key])
+                        for key in ("chunk_size", "shard_size")
+                        if key in loader_kwargs and loader_kwargs[key] is not None
+                    }
                     _ = Lafan1CsvLoader(
                         cfg=loader_cfg,
                         build_zarr_dataset=True,
                         zarr_path=str(zarr_path),
+                        **loader_build_kwargs,
                     )
                 else:
                     raise ValueError(
@@ -290,6 +341,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         target_joint_names = list(getattr(cfg, "target_joint_names", []))
         dataset_joint_names = self._read_reference_joint_names_from_zarr(zarr_path)
         if len(dataset_joint_names) > 0:
+            # The dataset (zarr) is authoritative for the reference joint order.
+            # The zarr is written in canonical (articulation) order at build time,
+            # so this normally equals the configured order; adopt it whenever it
+            # differs so `reference -> target` remaps correctly for any source.
             if (
                 len(reference_joint_names) == 0
                 or reference_joint_names != dataset_joint_names
@@ -344,8 +399,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._setup_adaptive_failure_reset_sampler(cfg)
 
         # Get initial reference data (this also initializes env assignments)
-        self.current_expert_frame: TensorDict = self.trajectory_manager.sample(
-            advance=False
+        self.current_expert_frame: TensorDict = _convert_reference_quats_to_xyzw(
+            self.trajectory_manager.sample(advance=False)
         )
         self._current_reference_local_step = self.trajectory_manager.env_step.to(
             device=device, dtype=torch.long
@@ -440,14 +495,59 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.robot: Articulation = self.scene["robot"]
+        self._align_reference_target_joints_to_articulation()
         self._expert_env_origins = self.scene.env_origins.clone()
-        self._expert_default_joint_pos = self.robot.data.default_joint_pos.clone()
-        self._expert_default_joint_vel = self.robot.data.default_joint_vel.clone()
+        self._expert_default_joint_pos = self.robot.data.default_joint_pos.torch.clone()
+        self._expert_default_joint_vel = self.robot.data.default_joint_vel.torch.clone()
         self._setup_reconstructed_reference_action_cache()
         self._finalize_reference_body_names()
         self._initialize_mdp_fast_paths()
         self._setup_reference_velocity_visualizer()
         self._initialize_causal_planner_history()
+
+    def _align_reference_target_joints_to_articulation(self) -> None:
+        """Retarget the trajectory manager to the live articulation joint order.
+
+        ``target_joint_names`` in the config describes one backend's joint
+        enumeration (PhysX is breadth-first). Other physics backends (Newton
+        is depth-first per limb) enumerate the same joints in a different
+        order, so the reference->target remap must be rebuilt against the
+        actual robot once the scene exists — otherwise reference joint
+        targets are silently scattered across the wrong joints.
+        """
+        tm = self.trajectory_manager
+        robot_joint_names = list(self.robot.joint_names)
+        if list(tm.target_joint_names) == robot_joint_names:
+            return
+        if sorted(tm.target_joint_names) != sorted(robot_joint_names):
+            raise RuntimeError(
+                "Configured target_joint_names and articulation joint names are "
+                "different sets; cannot retarget the reference. Difference: "
+                f"{sorted(set(tm.target_joint_names) ^ set(robot_joint_names))}"
+            )
+        logger.warning(
+            "Articulation joint order differs from configured target_joint_names "
+            "(physics-backend-specific enumeration); rebuilding the "
+            "reference->target joint remap for %d joints.",
+            len(robot_joint_names),
+        )
+        from iltools.datasets.utils import _map_reference_to_target
+
+        tm.target_joint_names = robot_joint_names
+        tm.ref_to_target_map, tm.target_to_ref_map = _map_reference_to_target(
+            tm.reference_joint_names,
+            tm.target_joint_names,
+            tm._state_device,
+        )
+        tm.target_mask = torch.zeros(
+            len(robot_joint_names), dtype=torch.bool, device=tm._state_device
+        )
+        tm.target_mask[tm.ref_to_target_map] = True
+        # Refresh everything that already captured target-ordered joint data.
+        self.current_expert_frame = _convert_reference_quats_to_xyzw(
+            self.trajectory_manager.sample(advance=False)
+        )
+        self._build_reward_input_cache(device=torch.device(self.device))
 
     @staticmethod
     def _read_reference_joint_names_from_zarr(zarr_path: Path) -> list[str]:
@@ -614,11 +714,11 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         kd_target = None
         if self._reconstructed_reference_action_mode == "pd_compensated":
             kp_target = self._resolve_static_joint_parameter(
-                self.robot.data.default_joint_stiffness[:, target_joint_ids],
+                self.robot.data.default_joint_stiffness.torch[:, target_joint_ids],
                 name="joint stiffness",
             )
             kd_target = self._resolve_static_joint_parameter(
-                self.robot.data.default_joint_damping[:, target_joint_ids],
+                self.robot.data.default_joint_damping.torch[:, target_joint_ids],
                 name="joint damping",
             )
             safe_kp = torch.where(
@@ -746,7 +846,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if torch.any(action_scale.abs() <= 1.0e-8):
             raise ValueError("JointPositionAction scale must not contain zeros.")
         default_root_height = float(
-            self.robot.data.default_root_state[0, 2].detach().cpu().item()
+            self.robot.data.default_root_state.torch[0, 2].detach().cpu().item()
         )
         return {
             "default_joint_pos": action_offset_pool[0].cpu().tolist(),
@@ -1040,13 +1140,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             return {}
 
         metrics = self._compute_rollout_state_alignment_metrics(
-            self.robot.data.joint_pos,
+            self.robot.data.joint_pos.torch,
             next_joint_pos.to(device=self.device, dtype=torch.float32),
             prefix="rollout_state/joint_pos",
         )
         metrics.update(
             self._compute_rollout_state_alignment_metrics(
-                self.robot.data.joint_vel,
+                self.robot.data.joint_vel.torch,
                 next_joint_vel.to(device=self.device, dtype=torch.float32),
                 prefix="rollout_state/joint_vel",
             )
@@ -1101,7 +1201,24 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             name.startswith("body_") and name[5:].isdigit()
             for name in self.reference_body_names
         )
-        if has_generic_names and len(robot_body_names) >= num_reference_bodies:
+        if not has_generic_names:
+            return
+        # Prefer the config-declared dataset body order: the live robot's body
+        # enumeration is physics-backend-specific (PhysX is breadth-first,
+        # Newton is depth-first), while the recorded body arrays have one
+        # fixed order.
+        cfg_body_names = list(getattr(self.cfg, "reference_body_names", []) or [])
+        if len(cfg_body_names) >= num_reference_bodies:
+            self.reference_body_names = cfg_body_names[:num_reference_bodies]
+        elif len(robot_body_names) >= num_reference_bodies:
+            # Legacy fallback: assumes the dataset was recorded with the same
+            # backend (and thus body order) as the running simulation.
+            logger.warning(
+                "Reference dataset has no body-name metadata and the env cfg "
+                "declares no reference_body_names; falling back to the live "
+                "robot's body order, which is only correct if the dataset was "
+                "recorded with the same physics backend."
+            )
             self.reference_body_names = robot_body_names[:num_reference_bodies]
 
     @staticmethod
@@ -1420,8 +1537,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         anchor_state = self._mdp_robot_anchor_state_cache.get(anchor_body_id)
         if anchor_state is None:
             anchor_state = (
-                self.robot.data.body_pos_w[:, anchor_body_id],
-                self.robot.data.body_quat_w[:, anchor_body_id],
+                self.robot.data.body_pos_w.torch[:, anchor_body_id],
+                self.robot.data.body_quat_w.torch[:, anchor_body_id],
             )
             self._mdp_robot_anchor_state_cache[anchor_body_id] = anchor_state
         return anchor_state
@@ -1436,11 +1553,14 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             return body_pose
         body_ids_t = self._get_body_ids_tensor_fast(body_ids)
         if isinstance(body_ids_t, slice):
-            body_pose = (self.robot.data.body_pos_w, self.robot.data.body_quat_w)
+            body_pose = (
+                self.robot.data.body_pos_w.torch,
+                self.robot.data.body_quat_w.torch,
+            )
         else:
             body_pose = (
-                self.robot.data.body_pos_w.index_select(1, body_ids_t),
-                self.robot.data.body_quat_w.index_select(1, body_ids_t),
+                self.robot.data.body_pos_w.torch.index_select(1, body_ids_t),
+                self.robot.data.body_quat_w.torch.index_select(1, body_ids_t),
             )
         self._mdp_robot_body_pose_w_cache[body_ids_key] = body_pose
         return body_pose
@@ -1456,13 +1576,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         body_ids_t = self._get_body_ids_tensor_fast(body_ids)
         if isinstance(body_ids_t, slice):
             body_velocity = (
-                self.robot.data.body_ang_vel_w,
-                self.robot.data.body_lin_vel_w,
+                self.robot.data.body_ang_vel_w.torch,
+                self.robot.data.body_lin_vel_w.torch,
             )
         else:
             body_velocity = (
-                self.robot.data.body_ang_vel_w.index_select(1, body_ids_t),
-                self.robot.data.body_lin_vel_w.index_select(1, body_ids_t),
+                self.robot.data.body_ang_vel_w.torch.index_select(1, body_ids_t),
+                self.robot.data.body_lin_vel_w.torch.index_select(1, body_ids_t),
             )
         self._mdp_robot_body_velocity_w_cache[body_ids_key] = body_velocity
         return body_velocity
@@ -2178,7 +2298,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
 
         align_quat = align_pos.new_zeros((align_pos.shape[0], 4))
-        align_quat[:, 0] = 1.0
+        # Identity quaternion in Isaac Lab 3.0's XYZW layout.
+        align_quat[:, 3] = 1.0
         return align_quat, align_pos
 
     def _transform_reference_pose_to_world(
@@ -2232,6 +2353,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     def _index_copy_reference_rows_(
         self, dst: TensorDict, src: TensorDict, env_ids: torch.Tensor
     ) -> None:
+        # Isaac Lab 3.0 hands out int32 env indices; index_copy_ needs int64.
+        env_ids = env_ids.to(dtype=torch.long)
         for key in src.keys():
             src_value = src.get(key)
             dst_value = dst.get(key)
@@ -2256,7 +2379,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         else:
             sampled_env_ids = env_ids.to(device=tm._state_device, dtype=torch.long)
         sampled_local_steps = tm.env_step.index_select(0, sampled_env_ids)
-        reference = self.trajectory_manager.sample(env_ids=env_ids, advance=advance)
+        reference = _convert_reference_quats_to_xyzw(
+            self.trajectory_manager.sample(env_ids=env_ids, advance=advance)
+        )
         if env_ids is None or self.current_expert_frame is None:
             self.current_expert_frame = reference
             self._current_reference_local_step.copy_(
@@ -2649,6 +2774,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             that all internal buffers (which live on ``self.device``) and the trajectory
             manager see consistent indexing.
         """
+        # Isaac Lab 3.0 hands out int32 env indices; normalize once here.
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
 
         # Reset trajectory tracking (reassigns trajectories and resets steps).
         reset_steps = None
@@ -2732,7 +2859,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Sample the current reference frame and advance the internal step by exactly one.
         # `sample(advance=True)` returns frame t and then increments to t+1.
         # This avoids double-advance while keeping reward computation aligned with frame t.
-        reference_for_step = self.trajectory_manager.sample(env_ids=None, advance=True)
+        reference_for_step = _convert_reference_quats_to_xyzw(
+            self.trajectory_manager.sample(env_ids=None, advance=True)
+        )
         self.current_expert_frame = reference_for_step
         self._invalidate_mdp_cache()
         self._replay_reference(reference=reference_for_step)
@@ -2897,11 +3026,72 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         expert_frame, env_ids_tm, global_indices = (
             self.trajectory_manager.sample_random_transitions(batch_size)
         )
+        expert_frame = _convert_reference_quats_to_xyzw(expert_frame)
         return (
             expert_frame.to(self.device),
             env_ids_tm.to(self.device),
             global_indices.to(self.device),
         )
+
+    def _offline_window_global_indices(
+        self,
+        traj_ranks: torch.Tensor,
+        local_steps: torch.Tensor,
+        *,
+        past_steps: int,
+        future_steps: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return clamped replay indices and trajectory starts for an expert window."""
+        tm = self.trajectory_manager
+        traj_ranks_tm = traj_ranks.to(device=tm._state_device, dtype=torch.long)
+        local_steps_tm = local_steps.to(device=tm._state_device, dtype=torch.long)
+        offsets = torch.arange(
+            -int(past_steps),
+            int(future_steps) + 1,
+            device=tm._state_device,
+            dtype=torch.long,
+        )
+        lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
+        steps = local_steps_tm.unsqueeze(1) + offsets.unsqueeze(0)
+        steps = steps.clamp(min=0)
+        steps = torch.minimum(steps, (lengths - 1).unsqueeze(1))
+        starts = tm._start.index_select(0, traj_ranks_tm).unsqueeze(1)
+        return (starts + steps).to(self.device), starts.to(self.device)
+
+    def _attach_offline_previous_action(
+        self,
+        expert_window: TensorDict,
+        *,
+        global_indices: torch.Tensor,
+        trajectory_starts: torch.Tensor,
+    ) -> TensorDict:
+        """Attach aligned previous actions, preferring recorded labels."""
+        if expert_window.get("last_action") is not None:
+            return expert_window
+        previous_indices = torch.maximum(global_indices - 1, trajectory_starts)
+        tm = self.trajectory_manager
+        previous = tm.rb[previous_indices.to(device=tm._storage_device)]
+        recorded_action = previous.get("action")
+        if recorded_action is not None:
+            last_action = recorded_action.to(self.device, dtype=torch.float32)
+        else:
+            flat_indices = previous_indices.reshape(-1)
+            reconstructed = self._sample_reconstructed_reference_actions(
+                global_indices=flat_indices,
+                env_ids=torch.zeros_like(flat_indices, device=self.device),
+            )
+            if reconstructed is None:
+                raise ValueError(
+                    "Offline causal planner observations require recorded action "
+                    "labels or reconstructed reference actions."
+                )
+            last_action = reconstructed.reshape(*previous_indices.shape, -1)
+        at_start = global_indices == trajectory_starts
+        last_action = torch.where(
+            at_start.unsqueeze(-1), torch.zeros_like(last_action), last_action
+        )
+        expert_window.set("last_action", last_action)
+        return expert_window
 
     @staticmethod
     def _normalize_expert_macro_split(split: str | None) -> str:
@@ -3010,67 +3200,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if getattr(tm, "_device", None) is not None:
             expert_window = expert_window.to(tm._device)
         expert_window = tm._attach_reference_fields(expert_window, use_buffers=False)
-        return expert_window.to(self.device)
-
-    def _offline_window_global_indices(
-        self,
-        traj_ranks: torch.Tensor,
-        local_steps: torch.Tensor,
-        *,
-        past_steps: int,
-        future_steps: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return clamped replay indices and trajectory starts for an expert window."""
-        tm = self.trajectory_manager
-        traj_ranks_tm = traj_ranks.to(device=tm._state_device, dtype=torch.long)
-        local_steps_tm = local_steps.to(device=tm._state_device, dtype=torch.long)
-        offsets = torch.arange(
-            -int(past_steps),
-            int(future_steps) + 1,
-            device=tm._state_device,
-            dtype=torch.long,
-        )
-        lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
-        steps = local_steps_tm.unsqueeze(1) + offsets.unsqueeze(0)
-        steps = steps.clamp(min=0)
-        steps = torch.minimum(steps, (lengths - 1).unsqueeze(1))
-        starts = tm._start.index_select(0, traj_ranks_tm).unsqueeze(1)
-        return (starts + steps).to(self.device), starts.to(self.device)
-
-    def _attach_offline_previous_action(
-        self,
-        expert_window: TensorDict,
-        *,
-        global_indices: torch.Tensor,
-        trajectory_starts: torch.Tensor,
-    ) -> TensorDict:
-        """Attach aligned previous actions, preferring recorded labels."""
-        if expert_window.get("last_action") is not None:
-            return expert_window
-        previous_indices = torch.maximum(global_indices - 1, trajectory_starts)
-        tm = self.trajectory_manager
-        previous = tm.rb[previous_indices.to(device=tm._storage_device)]
-        recorded_action = previous.get("action")
-        if recorded_action is not None:
-            last_action = recorded_action.to(self.device, dtype=torch.float32)
-        else:
-            flat_indices = previous_indices.reshape(-1)
-            reconstructed = self._sample_reconstructed_reference_actions(
-                global_indices=flat_indices,
-                env_ids=torch.zeros_like(flat_indices, device=self.device),
-            )
-            if reconstructed is None:
-                raise ValueError(
-                    "Offline causal planner observations require recorded action "
-                    "labels or reconstructed reference actions."
-                )
-            last_action = reconstructed.reshape(*previous_indices.shape, -1)
-        at_start = global_indices == trajectory_starts
-        last_action = torch.where(
-            at_start.unsqueeze(-1), torch.zeros_like(last_action), last_action
-        )
-        expert_window.set("last_action", last_action)
-        return expert_window
+        return _convert_reference_quats_to_xyzw(expert_window.to(self.device))
 
     def _build_reward_input_cache(self, *, device: torch.device) -> None:
         """Pre-materialize expert-side values for the `reward_input` obs group.
@@ -3262,7 +3392,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             start_steps=window_steps,
             mode="independent",
         )
-        return expert_window.to(self.device)
+        return _convert_reference_quats_to_xyzw(expert_window.to(self.device))
 
     def _expert_body_pose_fields(
         self, expert_td: TensorDict
@@ -4513,8 +4643,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 "expert_motion feature slice unavailable for achieved macro state."
             )
         start, end = slices["expert_motion"]
-        joint_pos = self.robot.data.joint_pos.index_select(0, env_ids_t)
-        joint_vel = self.robot.data.joint_vel.index_select(0, env_ids_t)
+        joint_pos = self.robot.data.joint_pos.torch.index_select(0, env_ids_t)
+        joint_vel = self.robot.data.joint_vel.torch.index_select(0, env_ids_t)
         achieved_motion = torch.cat([joint_pos, joint_vel], dim=-1).to(
             device=self.device, dtype=torch.float32
         )
@@ -4566,16 +4696,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
 
         if env_ids is None:
             ref = self.current_expert_frame if reference is None else reference
-            defaults_pos = self.robot.data.default_joint_pos
-            defaults_vel = self.robot.data.default_joint_vel
+            defaults_pos = self.robot.data.default_joint_pos.torch
+            defaults_vel = self.robot.data.default_joint_vel.torch
         else:
             env_ids_tensor = env_ids
             full_reference = (
                 self.current_expert_frame if reference is None else reference
             )
             ref = full_reference[env_ids_tensor]
-            defaults_pos = self.robot.data.default_joint_pos[env_ids_tensor]
-            defaults_vel = self.robot.data.default_joint_vel[env_ids_tensor]
+            defaults_pos = self.robot.data.default_joint_pos.torch[env_ids_tensor]
+            defaults_vel = self.robot.data.default_joint_vel.torch[env_ids_tensor]
 
         root_pos, root_quat_opt = self._transform_reference_pose_to_world(
             ref["root_pos"], ref["root_quat"], env_ids=env_ids

@@ -23,10 +23,10 @@ This file defines how coding agents should work in the `IsaacLab-Imitation` work
   with `conda`, `pip`, or `uv`.
 - Use `pixi run ...` for default-environment commands and
   `pixi run -e isaaclab ...` for Isaac Sim / Isaac Lab workflows.
-- The default Pixi environment contains Python 3.11, PyTorch, TensorDict,
+- The default Pixi environment contains Python 3.12, PyTorch, TensorDict,
   TorchRL, editable `RLOpt`, and editable `ImitationLearningTools`.
 - The `isaaclab` Pixi environment adds
-  `isaaclab[isaacsim,all]==2.3.2.post1` from NVIDIA's PyPI index plus editable
+  `isaaclab[isaacsim,all]==3.0.0b2.post1` (Isaac Sim 6.0.1) from NVIDIA's PyPI index plus editable
   `source/isaaclab_imitation`.
 - RLOpt tests should run in the default environment so TorchRL does not import
   IsaacLab or initialize Isaac Sim during lightweight testing.

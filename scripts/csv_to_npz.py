@@ -229,10 +229,9 @@ class MotionLoader:
             )
         motion = motion.to(torch.float32).to(self.device)
         self.motion_base_poss_input = motion[:, :3]
+        # CSV stores quaternions scalar-last (x, y, z, w), which matches the
+        # Isaac Lab 3.0 convention, so no reordering is needed anymore.
         self.motion_base_rots_input = motion[:, 3:7]
-        self.motion_base_rots_input = self.motion_base_rots_input[
-            :, [3, 0, 1, 2]
-        ]  # convert to wxyz
         self.motion_base_rots_input = self._make_quat_continuous(
             self._normalize_quat(self.motion_base_rots_input)
         )
@@ -491,7 +490,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         ) = motion.get_next_state()
 
         # set root state
-        root_states = robot.data.default_root_state.clone()
+        root_states = robot.data.default_root_state.torch.clone()
         root_states[:, :3] = motion_base_pos
         root_states[:, :2] += scene.env_origins[:, :2]
         root_states[:, 3:7] = motion_base_rot
@@ -500,8 +499,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         robot.write_root_state_to_sim(root_states)
 
         # set joint state
-        joint_pos = robot.data.default_joint_pos.clone()
-        joint_vel = robot.data.default_joint_vel.clone()
+        joint_pos = robot.data.default_joint_pos.torch.clone()
+        joint_vel = robot.data.default_joint_vel.torch.clone()
         joint_pos[:, robot_joint_indexes] = motion_dof_pos
         joint_vel[:, robot_joint_indexes] = motion_dof_vel
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
@@ -514,13 +513,17 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         scene.update(sim.get_physics_dt())
 
         if not file_saved:
-            log["body_pos_w"].append(robot.data.body_pos_w[0, :].cpu().numpy().copy())
-            log["body_quat_w"].append(robot.data.body_quat_w[0, :].cpu().numpy().copy())
+            log["body_pos_w"].append(
+                robot.data.body_pos_w.torch[0, :].cpu().numpy().copy()
+            )
+            log["body_quat_w"].append(
+                robot.data.body_quat_w.torch[0, :].cpu().numpy().copy()
+            )
             log["body_lin_vel_w"].append(
-                robot.data.body_lin_vel_w[0, :].cpu().numpy().copy()
+                robot.data.body_lin_vel_w.torch[0, :].cpu().numpy().copy()
             )
             log["body_ang_vel_w"].append(
-                robot.data.body_ang_vel_w[0, :].cpu().numpy().copy()
+                robot.data.body_ang_vel_w.torch[0, :].cpu().numpy().copy()
             )
 
         if reset_flag and not file_saved:
@@ -532,21 +535,33 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                 "body_ang_vel_w",
             ):
                 log[k] = np.stack(log[k], axis=0)
+            # The NPZ dataset format stores quaternions scalar-first (w, x, y, z),
+            # while Isaac Lab 3.0 sim state and this script's internal math are
+            # scalar-last (x, y, z, w). Convert at the write boundary.
+            log["body_quat_w"] = log["body_quat_w"][..., [3, 0, 1, 2]]
 
             root_pos = motion.motion_base_poss.cpu().numpy().astype(np.float32)
-            root_quat = motion.motion_base_rots.cpu().numpy().astype(np.float32)
+            root_quat = (
+                motion.motion_base_rots[:, [3, 0, 1, 2]]
+                .cpu()
+                .numpy()
+                .astype(np.float32)
+            )
             root_lin_vel = motion.motion_base_lin_vels.cpu().numpy().astype(np.float32)
             root_ang_vel = motion.motion_base_ang_vels.cpu().numpy().astype(np.float32)
-            joint_pos_articulation = torch.zeros_like(motion.motion_dof_poss)
-            joint_vel_articulation = torch.zeros_like(motion.motion_dof_vels)
-            joint_pos_articulation[:, robot_joint_indexes] = motion.motion_dof_poss
-            joint_vel_articulation[:, robot_joint_indexes] = motion.motion_dof_vels
-            joint_pos_target = (
-                joint_pos_articulation.cpu().numpy().astype(np.float32)
-            )
-            joint_vel_target = (
-                joint_vel_articulation.cpu().numpy().astype(np.float32)
-            )
+            # Revert of dd1db87: store joint states in the robot's articulation
+            # (USD) joint order rather than the SDK/source order. The env applies
+            # the reference directly to robot.data.joint_pos.torch (articulation order)
+            # with an identity reference->target remap, so saving articulation
+            # order is what actually matches the robot. `robot_joint_indexes`
+            # maps SDK column k -> articulation slot, mirroring the in-loop
+            # scatter used to drive the robot above.
+            _dof_pos_art = torch.zeros_like(motion.motion_dof_poss)
+            _dof_vel_art = torch.zeros_like(motion.motion_dof_vels)
+            _dof_pos_art[:, robot_joint_indexes] = motion.motion_dof_poss
+            _dof_vel_art[:, robot_joint_indexes] = motion.motion_dof_vels
+            joint_pos_target = _dof_pos_art.cpu().numpy().astype(np.float32)
+            joint_vel_target = _dof_vel_art.cpu().numpy().astype(np.float32)
             log["root_pos"] = root_pos
             log["root_quat"] = root_quat
             log["root_lin_vel"] = root_lin_vel
@@ -559,8 +574,12 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             log["qvel"] = np.concatenate(
                 [root_lin_vel, root_ang_vel, joint_vel_target], axis=-1
             ).astype(np.float32)
+            # Self-describing: save the honest joint order the arrays are in,
+            # i.e. the robot's articulation (USD) joint order. Downstream the
+            # loader records this as reference_joint_names and remaps it onto
+            # target_joint_names (the robot articulation order), so the data is
+            # correct regardless of the source ordering.
             log["joint_names"] = np.asarray(robot.joint_names, dtype=np.str_)
-            log["body_names"] = np.asarray(robot.body_names, dtype=np.str_)
 
             np.savez(args_cli.output_name, **log)
             print("[INFO]: Motion npz file saved to", args_cli.output_name)

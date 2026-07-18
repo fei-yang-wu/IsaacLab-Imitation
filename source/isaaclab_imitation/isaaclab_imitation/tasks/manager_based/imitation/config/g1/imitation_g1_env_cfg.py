@@ -14,7 +14,12 @@ from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.utils import configclass
-from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
+from isaaclab.utils.noise import UniformNoiseCfg as Unoise
+from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
+from isaaclab_newton.sensors import ContactSensorCfg as NewtonContactSensorCfg
+from isaaclab_physx.physics import PhysxCfg
+from isaaclab_physx.sensors import ContactSensorCfg as PhysXContactSensorCfg
+from isaaclab_tasks.utils import PresetCfg
 
 from isaaclab_imitation.assets.robots.unitree import (
     UNITREE_G1_29DOF_SDK_JOINT_NAMES,
@@ -29,6 +34,7 @@ from ...lafan1_manifest import (
     dataset_path_from_entries,
     infer_npz_manifest_control_freq,
     load_lafan1_manifest,
+    load_lafan1_manifest_loader_options,
 )
 
 
@@ -43,8 +49,12 @@ VELOCITY_RANGE = {
 
 G1_29DOF_JOINT_NAMES: list[str] = list(UNITREE_G1_29DOF_SDK_JOINT_NAMES)
 
-# Isaac articulation order (`robot.joint_names` / `robot.data.joint_pos`).
-# It differs from Unitree SDK order even though both contain the same joints.
+# IsaacLab G1 articulation (USD) joint order, i.e. the order of
+# ``robot.joint_names`` / ``robot.data.joint_pos.torch`` at runtime. This is a
+# breadth-first (level-order) traversal and is NOT the Unitree SDK/URDF order.
+# The env applies the reference directly to the articulation, so this is the
+# ground-truth ``target_joint_names``. Verified against a live articulation via
+# ``robot.joint_names``; guarded at runtime in the env.
 G1_29DOF_ISAACLAB_JOINT_NAMES: list[str] = [
     "left_hip_pitch_joint",
     "right_hip_pitch_joint",
@@ -77,6 +87,44 @@ G1_29DOF_ISAACLAB_JOINT_NAMES: list[str] = [
     "right_wrist_yaw_joint",
 ]
 
+# Canonical body order of the recorded NPZ reference datasets. The NPZ body
+# arrays carry no body-name metadata; they were recorded from the PhysX
+# articulation, whose breadth-first (level-order) body enumeration is captured
+# here. Do NOT derive this from the live robot at runtime: the Newton backend
+# enumerates bodies depth-first per limb, which silently permutes the mapping.
+G1_29DOF_DATASET_BODY_NAMES: list[str] = [
+    "pelvis",
+    "left_hip_pitch_link",
+    "right_hip_pitch_link",
+    "waist_yaw_link",
+    "left_hip_roll_link",
+    "right_hip_roll_link",
+    "waist_roll_link",
+    "left_hip_yaw_link",
+    "right_hip_yaw_link",
+    "torso_link",
+    "left_knee_link",
+    "right_knee_link",
+    "left_shoulder_pitch_link",
+    "right_shoulder_pitch_link",
+    "left_ankle_pitch_link",
+    "right_ankle_pitch_link",
+    "left_shoulder_roll_link",
+    "right_shoulder_roll_link",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link",
+    "left_shoulder_yaw_link",
+    "right_shoulder_yaw_link",
+    "left_elbow_link",
+    "right_elbow_link",
+    "left_wrist_roll_link",
+    "right_wrist_roll_link",
+    "left_wrist_pitch_link",
+    "right_wrist_pitch_link",
+    "left_wrist_yaw_link",
+    "right_wrist_yaw_link",
+]
+
 # Body tracking set aligned with the original Unitree G1 mimic tracking config.
 G1_TRACKED_BODY_NAMES: list[str] = [
     "pelvis",
@@ -103,6 +151,57 @@ G1_EE_BODY_NAMES: list[str] = [
 ]
 
 G1_OBS_ANCHOR_BODY_NAME = "torso_link"
+
+
+@configclass
+class G1ImitationPhysicsCfg(PresetCfg):
+    """Physics backend presets; select at launch with ``physics=physx`` or
+    ``physics=newton_mjwarp`` (default is PhysX).
+
+    Newton solver values mirror IsaacLab's official G1 flat-locomotion preset.
+    """
+
+    default = PhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
+    physx = PhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
+    newton_mjwarp = NewtonCfg(
+        solver_cfg=MJWarpSolverCfg(
+            njmax=95,
+            nconmax=10,
+            cone="pyramidal",
+            impratio=1,
+            integrator="implicitfast",
+        ),
+        num_substeps=1,
+        debug_mode=False,
+    )
+
+
+@configclass
+class G1ImitationContactSensorCfg(PresetCfg):
+    """Contact sensor presets matching the active physics backend."""
+
+    default = PhysXContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True
+    )
+    physx = PhysXContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True
+    )
+    newton_mjwarp = NewtonContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*", history_length=3, track_air_time=True
+    )
+
+
+def _set_contact_sensor_update_period(contact_cfg, update_period: float) -> None:
+    """Set update_period on a contact sensor cfg or on every preset variant."""
+    if isinstance(contact_cfg, G1ImitationContactSensorCfg):
+        for variant in (
+            contact_cfg.default,
+            contact_cfg.physx,
+            contact_cfg.newton_mjwarp,
+        ):
+            variant.update_period = update_period
+    else:
+        contact_cfg.update_period = update_period
 
 
 def _g1_tracked_body_asset_cfg() -> SceneEntityCfg:
@@ -603,8 +702,16 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     print_reference_velocity: bool = False
     print_reference_velocity_every: int = 50
 
+    # `target_joint_names` MUST be the robot articulation (USD) order because the
+    # reference is written directly onto robot.data.joint_pos.torch. `reference_joint_names`
+    # is the default order assumed for reference data; it is overridden at runtime
+    # by the dataset's own `joint_names` when present (self-describing data), and the
+    # reference->target remap converts to articulation order.
     reference_joint_names: list[str] = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
     target_joint_names: list[str] = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
+    # Body order of the recorded NPZ body arrays (PhysX enumeration). Used by
+    # the env instead of the live robot's body order, which is backend-specific.
+    reference_body_names: list[str] = G1_29DOF_DATASET_BODY_NAMES.copy()
     command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
     command_observation_source: str = "reference"
     # The chunk adapter redirects only the three policy command tensors while
@@ -643,12 +750,24 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
-        self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        # Isaac Lab 3.0: SimulationCfg.physx was replaced by the backend-selecting
+        # SimulationCfg.physics field. The PresetCfg resolves to PhysX by default
+        # and to Newton with the `physics=newton_mjwarp` CLI override.
+        self.sim.physics = G1ImitationPhysicsCfg()
 
         if self.scene.contact_forces is not None:
-            self.scene.contact_forces.update_period = self.sim.dt
-            self.scene.contact_forces.force_threshold = 10.0
-            self.scene.contact_forces.debug_vis = bool(self.enable_visualizers)
+            # Per-backend sensor implementations; keep every variant's runtime
+            # settings in sync because preset resolution happens after this.
+            contact_preset = G1ImitationContactSensorCfg()
+            for variant in (
+                contact_preset.default,
+                contact_preset.physx,
+                contact_preset.newton_mjwarp,
+            ):
+                variant.update_period = self.sim.dt
+                variant.force_threshold = 10.0
+                variant.debug_vis = bool(self.enable_visualizers)
+            self.scene.contact_forces = contact_preset
 
         # Reference marker visualizers are also gated by the master toggle.
         self.visualize_reference_arrows = bool(
@@ -715,6 +834,8 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
     wrap_steps: bool = False
     sync_control_rate_to_manifest: bool = True
     preferred_manifest_physics_fps: float = 240.0
+    lafan1_loader_chunk_size: int | None = None
+    lafan1_loader_shard_size: int | None = None
     reconstructed_reference_action: bool = True
     reconstructed_reference_action_mode = "next_pose"
     random_reset_full_trajectory: bool = True
@@ -835,7 +956,7 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
         self.sim.dt, self.decimation = timing
         self.sim.render_interval = self.decimation
         if self.scene.contact_forces is not None:
-            self.scene.contact_forces.update_period = self.sim.dt
+            _set_contact_sensor_update_period(self.scene.contact_forces, self.sim.dt)
 
     def _sync_control_rate_to_manifest_entries(
         self,
@@ -861,6 +982,15 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
             return
 
         _, manifest_entries = load_lafan1_manifest(self.lafan1_manifest_path)
+        manifest_loader_options = load_lafan1_manifest_loader_options(
+            self.lafan1_manifest_path
+        )
+        loader_chunk_size = self.lafan1_loader_chunk_size
+        if loader_chunk_size is None:
+            loader_chunk_size = manifest_loader_options.get("chunk_size")
+        loader_shard_size = self.lafan1_loader_shard_size
+        if loader_shard_size is None:
+            loader_shard_size = manifest_loader_options.get("shard_size")
         self._sync_control_rate_to_manifest_entries(
             manifest_entries,
             timing_explicit=timing_explicit,
