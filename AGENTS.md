@@ -190,7 +190,10 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   a full-horizon diagnostic pass with all early terminations disabled, including
   `base_too_low`, so MPJPE is measured over the intended evaluation horizon
   rather than a termination-truncated rollout. Render and retain a video from
-  that same non-terminating pass for visual inspection. This diagnostic is in
+  that same non-terminating pass for visual inspection. Whenever an evaluation
+  produces a video, print the video's absolute retained path to stdout; the
+  Codex app does not pass video files through remote SSH targets, so the path
+  must be visible for direct access on the target. This diagnostic is in
   addition to, not a replacement for, strict oracle qualification and the
   standard M3 survival pass with `base_too_low` active.
 - BONES-SEED oracle demonstrations may be collected in one balanced
