@@ -504,6 +504,8 @@ apptainer overlay create --size "$overlay_size_mb" $CLUSTER_ISAACLAB_DIR/$dir_na
 # execute command in singularity container
 # NOTE: ISAACLAB_PATH is normally set in `isaaclab.sh` but we directly call the isaac-sim python because we sync the entire
 # Isaac Lab directory to the compute node and remote the symbolic link to isaac-sim
+container_tmpdir="$TMPDIR/container-tmp"
+mkdir -p "$container_tmpdir"
 preflight_cmd=""
 if [ "${auto_setup_g1_data}" = "1" ]; then
     preflight_cmd="$(build_g1_preflight_cmd "${cluster_g1_data_root}" "${cluster_g1_manifest_path}" "${cluster_g1_expected_motion_count}" "${cluster_g1_repo_id}" "${cluster_g1_repo_revision}" "${cluster_g1_force_download}" "${cluster_g1_manifest_refresh_policy}")"
@@ -520,6 +522,7 @@ fi
 container_entry_cmd="${container_entry_cmd} && ${workload_cmd}"
 set +e
 singularity exec \
+    -B $container_tmpdir:/tmp:rw \
     -B $TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B $TMPDIR/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
     -B $TMPDIR/docker-isaac-sim/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
