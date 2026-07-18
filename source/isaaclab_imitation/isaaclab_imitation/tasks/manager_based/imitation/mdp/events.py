@@ -47,7 +47,9 @@ def randomize_joint_default_pos(
     distribution: Literal["uniform", "log_uniform", "gaussian"] = "uniform",
 ):
     asset: Articulation = env.scene[asset_cfg.name]
-    asset.data.default_joint_pos_nominal = torch.clone(asset.data.default_joint_pos[0])
+    asset.data.default_joint_pos_nominal = torch.clone(
+        asset.data.default_joint_pos.torch[0]
+    )
 
     if pos_distribution_params is None:
         return
@@ -63,7 +65,7 @@ def randomize_joint_default_pos(
         )
 
     randomized_pos = _randomize_prop_by_op(
-        asset.data.default_joint_pos.clone(),
+        asset.data.default_joint_pos.torch.clone(),
         pos_distribution_params,
         env_ids,
         joint_ids,
@@ -73,7 +75,7 @@ def randomize_joint_default_pos(
 
     env_ids_for_slice = env_ids[:, None] if joint_ids != slice(None) else env_ids
     selected_pos = randomized_pos[env_ids_for_slice, joint_ids]
-    asset.data.default_joint_pos[env_ids_for_slice, joint_ids] = selected_pos
+    asset.data.default_joint_pos.torch[env_ids_for_slice, joint_ids] = selected_pos
 
     joint_pos_action_term = env.action_manager.get_term("joint_pos")
     offset = getattr(joint_pos_action_term, "_offset", None)
@@ -91,10 +93,10 @@ def reset_joints_to_reference(
     reference_joint_pos = env.current_expert_frame["joint_pos"].index_select(0, env_ids)
     reference_joint_vel = env.current_expert_frame["joint_vel"].index_select(0, env_ids)
     joint_pos = replace_nan_with_default(
-        reference_joint_pos, asset.data.default_joint_pos.index_select(0, env_ids)
+        reference_joint_pos, asset.data.default_joint_pos.torch.index_select(0, env_ids)
     ).clone()
     joint_vel = replace_nan_with_default(
-        reference_joint_vel, asset.data.default_joint_vel.index_select(0, env_ids)
+        reference_joint_vel, asset.data.default_joint_vel.torch.index_select(0, env_ids)
     ).clone()
     asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
     asset.write_data_to_sim()
@@ -136,11 +138,11 @@ def reset_root_and_joints_to_reference_with_randomization(
 
     joint_pos = replace_nan_with_default(
         reference["joint_pos"].index_select(0, env_ids),
-        asset.data.default_joint_pos.index_select(0, env_ids),
+        asset.data.default_joint_pos.torch.index_select(0, env_ids),
     ).clone()
     joint_vel = replace_nan_with_default(
         reference["joint_vel"].index_select(0, env_ids),
-        asset.data.default_joint_vel.index_select(0, env_ids),
+        asset.data.default_joint_vel.torch.index_select(0, env_ids),
     ).clone()
 
     pose_delta = sample_uniform(
@@ -165,7 +167,9 @@ def reset_root_and_joints_to_reference_with_randomization(
             device=device,
         )
 
-    soft_joint_pos_limits = asset.data.soft_joint_pos_limits.index_select(0, env_ids)
+    soft_joint_pos_limits = asset.data.soft_joint_pos_limits.torch.index_select(
+        0, env_ids
+    )
     (
         randomized_root_pos,
         randomized_root_quat,

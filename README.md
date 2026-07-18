@@ -67,7 +67,7 @@ Install the default development environment:
 pixi install
 ```
 
-The default environment is intentionally Isaac-light. It installs Python 3.11,
+The default environment is intentionally Isaac-light. It installs Python 3.12,
 PyTorch 2.7.0 / torchvision 0.22.0 from the CUDA 12.8 wheel index,
 TensorDict / TorchRL, and the local editable `RLOpt` and
 `ImitationLearningTools` submodules. It does not install Isaac Sim, Isaac Lab,
@@ -81,7 +81,7 @@ playback, conversion, or tests:
 pixi install -e isaaclab
 ```
 
-The `isaaclab` environment adds `isaaclab[isaacsim,all]==2.3.2.post1` from
+The `isaaclab` environment adds `isaaclab[isaacsim,all]==3.0.0b2.post1` (Isaac Sim 6.0.1) from
 NVIDIA's PyPI index plus editable `source/isaaclab_imitation`. Pixi owns both
 Conda and PyPI dependencies through `pixi.toml`; do not install repo
 dependencies with `conda`, `pip`, or `uv`.
@@ -646,6 +646,26 @@ pixi run python scripts/setup_g1_lafan1_npz_dataset.py \
 ```
 
 ## Playback and smoke tests
+
+### Physics backend smokes and benchmark (Isaac Lab 3.0)
+
+The G1 vanilla task supports both physics backends via a launch-time preset:
+`physics=physx` (default) or `physics=newton_mjwarp` (MuJoCo-Warp / Newton).
+Routine checks from the repo root:
+
+```bash
+# 1-iteration training smokes, one per backend (Dance102 motions)
+pixi run -e isaaclab smoke-vanilla-physx
+pixi run -e isaaclab smoke-vanilla-newton
+
+# Throughput benchmark across backends; writes JSON + per-run logs
+# under logs/benchmarks/. Quick = 1024 envs x 5 iters; full ~10M frames each.
+pixi run -e isaaclab bench-backends-quick
+pixi run -e isaaclab bench-backends
+```
+
+Any train/play command accepts the same `physics=<preset>` override, e.g.
+`... python scripts/rlopt/train.py --task Isaac-Imitation-G1-v0 ... physics=newton_mjwarp`.
 
 Run a zero-action smoke test:
 

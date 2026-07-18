@@ -31,7 +31,7 @@ def reference_joint_pos_deviation_too_much(
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
     joint_ids = env._get_joint_ids_tensor_fast(asset_cfg.joint_ids)
-    joint_pos_actual = _select_last_dim(asset.data.joint_pos, joint_ids)
+    joint_pos_actual = _select_last_dim(asset.data.joint_pos.torch, joint_ids)
     joint_pos_reference = _select_last_dim(
         env.current_expert_frame["joint_pos"], joint_ids
     )
@@ -44,7 +44,7 @@ def reference_root_position_xy_deviation_too_much(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    root_pos_actual = asset.data.root_state_w[:, :3]
+    root_pos_actual = asset.data.root_state_w.torch[:, :3]
     root_pos_reference_w = env._get_reference_root_state_w_fast()[0]
     return (
         xy_error_norm(root_pos_actual[:, :2], root_pos_reference_w[:, :2]) > threshold
@@ -57,7 +57,7 @@ def reference_root_quat_deviation_too_much(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    root_quat_actual = asset.data.root_state_w[:, 3:7]
+    root_quat_actual = asset.data.root_state_w.torch[:, 3:7]
     root_quat_reference_w = env._get_reference_root_state_w_fast()[1]
     angular_error = torch.sqrt(
         quat_error_squared(root_quat_actual, root_quat_reference_w)
@@ -90,10 +90,10 @@ def bad_anchor_ori(
         :, 0, :
     ]
     reference_projected_gravity_b = quat_apply_inverse(
-        ref_anchor_quat_w, asset.data.GRAVITY_VEC_W
+        ref_anchor_quat_w, asset.data.GRAVITY_VEC_W.torch
     )
     robot_projected_gravity_b = quat_apply_inverse(
-        robot_anchor_quat_w, asset.data.GRAVITY_VEC_W
+        robot_anchor_quat_w, asset.data.GRAVITY_VEC_W.torch
     )
     return (
         reference_projected_gravity_b[:, 2] - robot_projected_gravity_b[:, 2]

@@ -342,7 +342,9 @@ class MotionLoader:
             )
         motion = motion.to(torch.float32).to(self.device)
         self.motion_base_poss_input = motion[:, :3]
-        self.motion_base_rots_input = motion[:, 3:7][:, [3, 0, 1, 2]]
+        # CSV stores quaternions scalar-last (x, y, z, w), which matches the
+        # Isaac Lab 3.0 convention, so no reordering is needed anymore.
+        self.motion_base_rots_input = motion[:, 3:7]
         self.motion_base_rots_input = self._make_quat_continuous(
             self._normalize_quat(self.motion_base_rots_input)
         )
@@ -425,9 +427,11 @@ class MotionLoader:
             )
 
         root_quat = motion[:, 3:7]
-        if self.job.quat_order == "xyzw":
-            root_quat = root_quat[:, [3, 0, 1, 2]]
-        elif self.job.quat_order != "wxyz":
+        # Internal math and the Isaac Lab 3.0 sim use scalar-last (x, y, z, w);
+        # convert scalar-first inputs at the load boundary.
+        if self.job.quat_order == "wxyz":
+            root_quat = root_quat[:, [1, 2, 3, 0]]
+        elif self.job.quat_order != "xyzw":
             raise ValueError(f"Unsupported LeRobot quat_order={self.job.quat_order!r}.")
         if self.job.root_z_alignment not in ("first_frame_to_default", "none"):
             raise ValueError(
@@ -741,7 +745,12 @@ def _save_outputs(
     joint_names: list[str],
 ) -> None:
     root_pos = batched.base_pos.detach().cpu().numpy().astype(np.float32)
-    root_quat = batched.base_rot.detach().cpu().numpy().astype(np.float32)
+    # The NPZ dataset format stores quaternions scalar-first (w, x, y, z), while
+    # Isaac Lab 3.0 sim state and this script's internal math are scalar-last
+    # (x, y, z, w). Convert at the write boundary.
+    root_quat = (
+        batched.base_rot[..., [3, 0, 1, 2]].detach().cpu().numpy().astype(np.float32)
+    )
     root_lin_vel = batched.base_lin_vel.detach().cpu().numpy().astype(np.float32)
     root_ang_vel = batched.base_ang_vel.detach().cpu().numpy().astype(np.float32)
     joint_pos = batched.dof_pos.detach().cpu().numpy().astype(np.float32)
@@ -771,7 +780,9 @@ def _save_outputs(
             joint_pos=joint_pos_env,
             joint_vel=joint_vel_env,
             body_pos_w=log_data["body_pos_w"][env_id, :frame_count],
-            body_quat_w=log_data["body_quat_w"][env_id, :frame_count],
+            body_quat_w=log_data["body_quat_w"][env_id, :frame_count][
+                ..., [3, 0, 1, 2]
+            ],
             body_lin_vel_w=log_data["body_lin_vel_w"][env_id, :frame_count],
             body_ang_vel_w=log_data["body_ang_vel_w"][env_id, :frame_count],
             joint_names=joint_names_array,
@@ -837,9 +848,9 @@ def run_simulator(
         f"[INFO] Replaying {num_envs} motion(s) for up to {max_frames} simulation steps "
         f"at output_fps={args_cli.output_fps}."
     )
-    body_pos_shape = tuple(robot.data.body_pos_w.shape[1:])
-    body_quat_shape = tuple(robot.data.body_quat_w.shape[1:])
-    body_vel_shape = tuple(robot.data.body_lin_vel_w.shape[1:])
+    body_pos_shape = tuple(robot.data.body_pos_w.torch.shape[1:])
+    body_quat_shape = tuple(robot.data.body_quat_w.torch.shape[1:])
+    body_vel_shape = tuple(robot.data.body_lin_vel_w.torch.shape[1:])
 
     log_data = {
         "body_pos_w": np.zeros(
@@ -856,9 +867,9 @@ def run_simulator(
         ),
     }
 
-    default_root_state = robot.data.default_root_state.clone()
-    default_joint_pos = robot.data.default_joint_pos.clone()
-    default_joint_vel = robot.data.default_joint_vel.clone()
+    default_root_state = robot.data.default_root_state.torch.clone()
+    default_joint_pos = robot.data.default_joint_pos.torch.clone()
+    default_joint_vel = robot.data.default_joint_vel.torch.clone()
     if video_camera is not None:
         # Warm up tiled camera textures before writing frame 0 to avoid blank first frames.
         for _ in range(5):
@@ -910,10 +921,10 @@ def run_simulator(
                 sim.render()
                 scene.update(sim.get_physics_dt())
 
-                body_pos_np = robot.data.body_pos_w.cpu().numpy()
-                body_quat_np = robot.data.body_quat_w.cpu().numpy()
-                body_lin_vel_np = robot.data.body_lin_vel_w.cpu().numpy()
-                body_ang_vel_np = robot.data.body_ang_vel_w.cpu().numpy()
+                body_pos_np = robot.data.body_pos_w.torch.cpu().numpy()
+                body_quat_np = robot.data.body_quat_w.torch.cpu().numpy()
+                body_lin_vel_np = robot.data.body_lin_vel_w.torch.cpu().numpy()
+                body_ang_vel_np = robot.data.body_ang_vel_w.torch.cpu().numpy()
 
                 active_np = active_mask.cpu().numpy()
                 log_data["body_pos_w"][active_np, step] = body_pos_np[active_np]

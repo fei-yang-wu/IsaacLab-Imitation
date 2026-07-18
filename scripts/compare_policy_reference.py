@@ -290,7 +290,7 @@ def _update_role_markers(
     *,
     reference_root_pos_w: torch.Tensor | None = None,
 ) -> None:
-    root_pos = base_env.robot.data.root_pos_w[[REFERENCE_ENV_ID, POLICY_ENV_ID]].clone()
+    root_pos = base_env.robot.data.root_pos_w.torch[[REFERENCE_ENV_ID, POLICY_ENV_ID]].clone()
     if reference_root_pos_w is not None:
         root_pos[0] = reference_root_pos_w.to(device=base_env.device).reshape(3)
     root_pos[:, 2] += MARKER_HEIGHT_OFFSET
@@ -378,7 +378,7 @@ def _set_comparison_camera(
     *,
     reference_root_pos_w: torch.Tensor | None = None,
 ) -> None:
-    policy_root = base_env.robot.data.root_pos_w[POLICY_ENV_ID].detach()
+    policy_root = base_env.robot.data.root_pos_w.torch[POLICY_ENV_ID].detach()
     if reference_root_pos_w is None:
         origins = base_env.scene.env_origins[[REFERENCE_ENV_ID, POLICY_ENV_ID]]
         lookat = origins.mean(dim=0).detach().clone()

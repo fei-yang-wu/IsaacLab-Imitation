@@ -578,7 +578,7 @@ def _compute_replay_reference_match_errors(
             "Failed to transform reference root quaternion for replay debug."
         )
 
-    actual_root_state = robot.data.root_state_w
+    actual_root_state = robot.data.root_state_w.torch
     actual_root_pos = actual_root_state[:, :3]
     actual_root_quat = actual_root_state[:, 3:7]
 
@@ -593,9 +593,9 @@ def _compute_replay_reference_match_errors(
     # Expected joint positions also follow _replay_reference (NaNs replaced by defaults).
     ref_joint_pos = reference["joint_pos"]
     expected_joint_pos = torch.where(
-        torch.isnan(ref_joint_pos), robot.data.default_joint_pos, ref_joint_pos
+        torch.isnan(ref_joint_pos), robot.data.default_joint_pos.torch, ref_joint_pos
     )
-    actual_joint_pos = robot.data.joint_pos
+    actual_joint_pos = robot.data.joint_pos.torch
     joint_abs_err = torch.abs(actual_joint_pos - expected_joint_pos)
     joint_linf_err = torch.max(joint_abs_err, dim=-1).values
     joint_l2_err = torch.linalg.norm(actual_joint_pos - expected_joint_pos, dim=-1)
@@ -626,7 +626,7 @@ def _compute_replay_reference_match_errors(
                 )
             )
 
-            actual_xpos_w = robot.data.body_link_pos_w[:, asset_body_ids, :]
+            actual_xpos_w = robot.data.body_link_pos_w.torch[:, asset_body_ids, :]
             xpos_abs_err_per_body = torch.linalg.norm(
                 actual_xpos_w - expected_xpos_w, dim=-1
             )

@@ -774,16 +774,18 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> 
             reset,
         ) = motion.get_next_state()
 
-        root_states = robot.data.default_root_state.clone()
+        root_states = robot.data.default_root_state.torch.clone()
         root_states[:, :3] = root_pos
         root_states[:, :2] += scene.env_origins[:, :2]
-        root_states[:, 3:7] = root_quat
+        # This script's motion pipeline is scalar-first (w, x, y, z); Isaac Lab
+        # 3.0 sim state is scalar-last (x, y, z, w).
+        root_states[:, 3:7] = root_quat[:, [1, 2, 3, 0]]
         root_states[:, 7:10] = root_lin_vel
         root_states[:, 10:] = root_ang_vel
         robot.write_root_state_to_sim(root_states)
 
-        joint_pos = robot.data.default_joint_pos.clone()
-        joint_vel = robot.data.default_joint_vel.clone()
+        joint_pos = robot.data.default_joint_pos.torch.clone()
+        joint_vel = robot.data.default_joint_vel.torch.clone()
         joint_pos_target = joint_pos_input.index_select(1, dataset_to_target_indexes)
         joint_vel_target = joint_vel_input.index_select(1, dataset_to_target_indexes)
         joint_pos[:, robot_joint_indexes] = joint_pos_target
@@ -819,13 +821,17 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene) -> 
             log["root_ang_vel"].append(root_ang_vel[0].cpu().numpy().copy())
             log["joint_pos"].append(joint_pos_target[0].cpu().numpy().copy())
             log["joint_vel"].append(joint_vel_target[0].cpu().numpy().copy())
-            log["body_pos_w"].append(robot.data.body_pos_w[0].cpu().numpy().copy())
-            log["body_quat_w"].append(robot.data.body_quat_w[0].cpu().numpy().copy())
+            log["body_pos_w"].append(
+                robot.data.body_pos_w.torch[0].cpu().numpy().copy()
+            )
+            log["body_quat_w"].append(
+                robot.data.body_quat_w.torch[0].cpu().numpy().copy()
+            )
             log["body_lin_vel_w"].append(
-                robot.data.body_lin_vel_w[0].cpu().numpy().copy()
+                robot.data.body_lin_vel_w.torch[0].cpu().numpy().copy()
             )
             log["body_ang_vel_w"].append(
-                robot.data.body_ang_vel_w[0].cpu().numpy().copy()
+                robot.data.body_ang_vel_w.torch[0].cpu().numpy().copy()
             )
 
         if reset:
