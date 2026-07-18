@@ -96,17 +96,23 @@ build_g1_preflight_cmd() {
     local manifest_path="$2"
     local expected_motion_count="$3"
     local repo_id="$4"
-    local manifest_refresh_policy="$5"
+    local repo_revision="$5"
+    local force_download="$6"
+    local manifest_refresh_policy="$7"
     local quoted_data_root=""
     local quoted_manifest_path=""
     local quoted_expected_motion_count=""
     local quoted_repo_id=""
+    local quoted_repo_revision=""
+    local quoted_force_download=""
     local quoted_manifest_refresh_policy=""
 
     printf -v quoted_data_root '%q' "$data_root"
     printf -v quoted_manifest_path '%q' "$manifest_path"
     printf -v quoted_expected_motion_count '%q' "$expected_motion_count"
     printf -v quoted_repo_id '%q' "$repo_id"
+    printf -v quoted_repo_revision '%q' "$repo_revision"
+    printf -v quoted_force_download '%q' "$force_download"
     printf -v quoted_manifest_refresh_policy '%q' "$manifest_refresh_policy"
 
     cat <<EOF
@@ -114,6 +120,8 @@ cluster_g1_data_root=${quoted_data_root}
 cluster_g1_manifest_path=${quoted_manifest_path}
 cluster_g1_expected_motion_count=${quoted_expected_motion_count}
 cluster_g1_repo_id=${quoted_repo_id}
+cluster_g1_repo_revision=${quoted_repo_revision}
+cluster_g1_force_download=${quoted_force_download}
 cluster_g1_manifest_refresh_policy=${quoted_manifest_refresh_policy}
 cluster_g1_npz_dir="\${cluster_g1_data_root}/npz/g1"
 cluster_g1_npz_count=0
@@ -124,11 +132,19 @@ fi
 
 echo "[INFO] Checking G1 dataset under '\${cluster_g1_data_root}' (npz_count=\${cluster_g1_npz_count}, expected=\${cluster_g1_expected_motion_count})"
 
-if [ "\${cluster_g1_npz_count}" -lt "\${cluster_g1_expected_motion_count}" ]; then
-    echo "[INFO] G1 dataset incomplete. Downloading from Hugging Face repo '\${cluster_g1_repo_id}'."
+if [ "\${cluster_g1_force_download}" = "1" ]; then
+    echo "[INFO] Force-refreshing G1 dataset from Hugging Face repo '\${cluster_g1_repo_id}' at revision '\${cluster_g1_repo_revision}'."
     /isaac-sim/python.sh scripts/setup_g1_lafan1_npz_dataset.py \\
         --data_root "\${cluster_g1_data_root}" \\
-        --repo_id "\${cluster_g1_repo_id}"
+        --repo_id "\${cluster_g1_repo_id}" \\
+        --revision "\${cluster_g1_repo_revision}" \\
+        --force-download
+elif [ "\${cluster_g1_npz_count}" -lt "\${cluster_g1_expected_motion_count}" ]; then
+    echo "[INFO] G1 dataset incomplete. Downloading from Hugging Face repo '\${cluster_g1_repo_id}' at revision '\${cluster_g1_repo_revision}'."
+    /isaac-sim/python.sh scripts/setup_g1_lafan1_npz_dataset.py \\
+        --data_root "\${cluster_g1_data_root}" \\
+        --repo_id "\${cluster_g1_repo_id}" \\
+        --revision "\${cluster_g1_repo_revision}"
 fi
 
 if [ ! -d "\${cluster_g1_npz_dir}" ]; then
@@ -373,6 +389,8 @@ auto_setup_g1_data="${CLUSTER_AUTO_SETUP_G1_DATA:-1}"
 cluster_g1_expected_motion_count="${CLUSTER_G1_EXPECTED_MOTION_COUNT:-40}"
 cluster_g1_data_root="${CLUSTER_G1_DATA_ROOT:-${CLUSTER_DATA_DIR}/lafan1}"
 cluster_g1_repo_id="${CLUSTER_G1_REPO_ID:-GeorgiaTech/g1_lafan1_50hz}"
+cluster_g1_repo_revision="${CLUSTER_G1_REPO_REVISION:-main}"
+cluster_g1_force_download="${CLUSTER_G1_FORCE_DOWNLOAD:-0}"
 cluster_g1_manifest_path="${CLUSTER_G1_MANIFEST_PATH:-${cluster_g1_data_root}/manifests/g1_lafan1_manifest.json}"
 cluster_g1_manifest_refresh_policy="${CLUSTER_G1_MANIFEST_REFRESH_POLICY:-auto}"
 cluster_hf_token="${CLUSTER_HF_TOKEN:-}"
@@ -410,6 +428,14 @@ if [ -n "${cluster_wandb_api_key}" ]; then
     echo "[INFO] Loaded W&B API key for container runtime."
 else
     echo "[INFO] No W&B API key configured for container runtime."
+fi
+
+# `--containall` isolates the workload environment, so Slurm's array index is
+# not inherited automatically. Staged array workflows use it to select an
+# explicit goal; forward it deliberately across the container boundary.
+if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+    export SINGULARITYENV_SLURM_ARRAY_TASK_ID="${SLURM_ARRAY_TASK_ID}"
+    export APPTAINERENV_SLURM_ARRAY_TASK_ID="${SLURM_ARRAY_TASK_ID}"
 fi
 
 # Construct PYTHONPATH entries from synced repos.
@@ -496,18 +522,25 @@ apptainer overlay create --size "$overlay_size_mb" $CLUSTER_ISAACLAB_DIR/$dir_na
 # execute command in singularity container
 # NOTE: ISAACLAB_PATH is normally set in `isaaclab.sh` but we directly call the isaac-sim python because we sync the entire
 # Isaac Lab directory to the compute node and remote the symbolic link to isaac-sim
+container_tmpdir="$TMPDIR/container-tmp"
+mkdir -p "$container_tmpdir"
 preflight_cmd=""
 if [ "${auto_setup_g1_data}" = "1" ]; then
-    preflight_cmd="$(build_g1_preflight_cmd "${cluster_g1_data_root}" "${cluster_g1_manifest_path}" "${cluster_g1_expected_motion_count}" "${cluster_g1_repo_id}" "${cluster_g1_manifest_refresh_policy}")"
+    preflight_cmd="$(build_g1_preflight_cmd "${cluster_g1_data_root}" "${cluster_g1_manifest_path}" "${cluster_g1_expected_motion_count}" "${cluster_g1_repo_id}" "${cluster_g1_repo_revision}" "${cluster_g1_force_download}" "${cluster_g1_manifest_refresh_policy}")"
 fi
 printf -v workload_cmd '%q ' /isaac-sim/python.sh "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
 container_entry_cmd="export ACCEPT_EULA=${ACCEPT_EULA:-Y} && export PRIVACY_CONSENT=${PRIVACY_CONSENT:-Y} && export OMNI_KIT_ACCEPT_EULA=YES && export HOME=${container_home} && export XDG_CACHE_HOME=${container_home}/.cache && export XDG_DATA_HOME=${container_home}/.local/share && export ISAACLAB_WORKSPACE_PATH=/workspace/isaaclab/project && export ISAACLAB_PATH=/workspace/isaaclab/project/IsaacLab && export ISAACSIM_PATH=/workspace/isaaclab/project/IsaacLab/_isaac_sim && export ISAACLAB_DATA_DIR=/data && export CLUSTER_DATA_DIR=${CLUSTER_DATA_DIR} && export PYTHONPATH=${container_pythonpath} && export TRITON_CACHE_DIR=${container_triton_cache_dir} && export TORCHINDUCTOR_CACHE_DIR=${container_torchinductor_cache_dir} && export RL_WARNINGS=${RL_WARNINGS:-False} && if [ \"${allow_torch_compile_debug}\" != \"1\" ]; then unset TORCH_LOGS; export TORCHDYNAMO_VERBOSE=0; export TORCH_COMPILE_DEBUG=0; fi && cd /workspace/isaaclab/project"
+if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+    printf -v quoted_slurm_array_task_id '%q' "${SLURM_ARRAY_TASK_ID}"
+    container_entry_cmd="export SLURM_ARRAY_TASK_ID=${quoted_slurm_array_task_id} && ${container_entry_cmd}"
+fi
 if [ -n "${preflight_cmd}" ]; then
     container_entry_cmd="${container_entry_cmd} && ${preflight_cmd}"
 fi
 container_entry_cmd="${container_entry_cmd} && ${workload_cmd}"
 set +e
 singularity exec \
+    -B $container_tmpdir:/tmp:rw \
     -B $TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
     -B $TMPDIR/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
     -B $TMPDIR/docker-isaac-sim/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \

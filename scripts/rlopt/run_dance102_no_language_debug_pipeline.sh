@@ -321,7 +321,7 @@ run_cmd "${PYTHON_BIN}" scripts/rlopt/play.py \
     "agent.ipmd.skill_commander_embeddings_path=" \
     "agent.ipmd.skill_commander_flow_num_inference_steps=${PLANNER_FLOW_STEPS}" \
     "agent.ipmd.skill_commander_flow_inference_noise_std=${PLANNER_EVAL_FLOW_NOISE_STD}" \
-    "agent.ipmd.skill_commander_use_achieved_state=false" \
+    "agent.ipmd.skill_commander_use_achieved_state=true" \
     "agent.ipmd.hl_skill_finetune_enabled=false" \
     "${COMMON_LATENT_OVERRIDES[@]}"
 

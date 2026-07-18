@@ -68,7 +68,7 @@ pixi install
 ```
 
 The default environment is intentionally Isaac-light. It installs Python 3.12,
-PyTorch 2.7.0 / torchvision 0.22.0 from the CUDA 12.8 wheel index,
+PyTorch 2.11.0 / torchvision 0.26.0 from the CUDA 13.0 wheel index,
 TensorDict / TorchRL, and the local editable `RLOpt` and
 `ImitationLearningTools` submodules. It does not install Isaac Sim, Isaac Lab,
 or `isaaclab_imitation`, so RLOpt and ILTools tests do not trigger TorchRL's

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -12,23 +13,70 @@ from typing import Any, Protocol
 import torch
 import torch.nn.functional as F
 import yaml
+from rlopt.agent.causal_interface_planner import (
+    CausalInterfaceTransformerCategoricalPlanner,
+    CausalInterfaceTransformerFlowPlanner,
+)
+from rlopt.agent.skill_commander import (
+    build_rank_embedding_lookup,
+    load_language_embedding_table,
+)
 from torch import nn
+
+from planner_sample_schema import PLANNER_SAMPLE_FORMAT, PLANNER_SAMPLE_VERSION
 
 
 INTERFACE_TERMS: dict[str, tuple[str, ...]] = {
+    "latent_skill": ("z",),
     "full_body_trajectory": (
         "expert_motion",
         "expert_anchor_pos_b",
         "expert_anchor_ori_b",
     ),
     "ee_trajectory": ("expert_ee_pos_b", "expert_ee_ori_b"),
+    "future_cvae": ("z",),
+    "per_step_token_sequence": ("token_ids",),
 }
 ROLLOUT_SAMPLE_TENSOR_KEYS = (
     "planner_state",
     "expert_planner_state",
-    "target",
+    "causal_target",
+    "demonstration_target",
     "traj_rank",
+    "episode_id",
+    "control_step",
+    "planner_step",
 )
+LANGUAGE_SAMPLE_KEY = "language_embedding"
+
+STATE_TARGET_KEYS = {
+    "planner_state": "causal_target",
+    "causal_state_history": "causal_target",
+    "expert_planner_state": "demonstration_target",
+    "demonstration_state_history": "demonstration_target",
+}
+
+
+def paired_target_key(state_key: str, metadata: dict[str, Any]) -> str:
+    """Return the target expressed for the selected planner state."""
+    key = str(state_key)
+    if key not in STATE_TARGET_KEYS:
+        raise ValueError(
+            f"Unsupported planner state key {key!r}; expected one of "
+            f"{sorted(STATE_TARGET_KEYS)}."
+        )
+    contract = metadata.get("paired_target_contract")
+    if not isinstance(contract, dict):
+        raise ValueError("Planner samples have no paired_target_contract metadata.")
+    target_key = STATE_TARGET_KEYS[key]
+    declared_targets = {
+        str(item.get("target")) for item in contract.values() if isinstance(item, dict)
+    }
+    if target_key not in declared_targets:
+        raise ValueError(
+            f"Planner sample contract does not declare target {target_key!r}."
+        )
+    return target_key
 
 
 @dataclass(frozen=True)
@@ -65,6 +113,78 @@ def empty_language(
     batch_size: int, *, device: torch.device, dtype: torch.dtype
 ) -> torch.Tensor:
     return torch.empty((int(batch_size), 0), device=device, dtype=dtype)
+
+
+def file_sha256(path: str | Path) -> str:
+    resolved = Path(path).expanduser().resolve()
+    digest = hashlib.sha256()
+    with resolved.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_rank_language_embeddings(
+    path: str | Path,
+    *,
+    motion_names: list[str],
+    device: torch.device | str,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Load a manifest-aligned language lookup and serializable provenance."""
+    resolved = Path(path).expanduser().resolve()
+    table = load_language_embedding_table(resolved)
+    lookup = build_rank_embedding_lookup(table, motion_names, device)
+    metadata = {
+        "enabled": True,
+        "embedding_dim": int(table["embed_dim"]),
+        "embedding_path": str(resolved),
+        "embedding_sha256": file_sha256(resolved),
+        "backend": table.get("backend"),
+        "model": table.get("model"),
+        "motion_count": len(motion_names),
+    }
+    if tuple(lookup.shape) != (len(motion_names), int(table["embed_dim"])):
+        raise ValueError(
+            "Rank-indexed language lookup shape does not match the active motions: "
+            f"{tuple(lookup.shape)}."
+        )
+    return lookup, metadata
+
+
+def load_language_goal_embedding(
+    path: str | Path,
+    *,
+    goal_name: str,
+    device: torch.device | str,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Load one explicit deployable language goal without reading a motion cursor."""
+    resolved = Path(path).expanduser().resolve()
+    table = load_language_embedding_table(resolved)
+    normalized_name = str(goal_name).strip()
+    index = table["name_to_index"].get(normalized_name)
+    if index is None:
+        raise ValueError(
+            f"Language embedding table has no explicit goal {normalized_name!r}."
+        )
+    embedding = table["embeddings"][int(index)].to(
+        device=device,
+        dtype=torch.float32,
+    )
+    metadata = {
+        "enabled": True,
+        "embedding_dim": int(table["embed_dim"]),
+        "embedding_path": str(resolved),
+        "embedding_sha256": file_sha256(resolved),
+        "backend": table.get("backend"),
+        "model": table.get("model"),
+        "goal_name": normalized_name,
+        "goal_phrase": (
+            table.get("phrases", [])[int(index)]
+            if int(index) < len(table.get("phrases", []))
+            else normalized_name
+        ),
+    }
+    return embedding.reshape(1, -1).contiguous(), metadata
 
 
 def flatten_command_terms(
@@ -124,9 +244,14 @@ def unflatten_command_target(
 
 
 def planner_state_from_batch(batch: Any, *, state_history_steps: int) -> torch.Tensor:
-    if int(state_history_steps) > 0 and ("hl", "state_history") in batch.keys(True):
-        return batch.get(("hl", "state_history")).reshape(batch.batch_size[0], -1)
-    return batch.get(("hl", "state")).reshape(batch.batch_size[0], -1)
+    group = "planner" if ("planner", "state") in batch.keys(True) else "hl"
+    history_key = (group, "state_history")
+    if int(state_history_steps) > 0 and history_key in batch.keys(True):
+        return batch.get(history_key).reshape(batch.batch_size[0], -1)
+    state = batch.get((group, "state"))
+    if state is None:
+        raise KeyError(f"Planner batch is missing {group}/state.")
+    return state.reshape(batch.batch_size[0], -1)
 
 
 def write_jsonl(path: Path, row: dict[str, Any]) -> None:
@@ -162,7 +287,67 @@ def _to_serializable(value: Any) -> Any:
 
 
 def _metadata_signature(metadata: dict[str, Any]) -> str:
-    return json.dumps(_to_serializable(metadata), sort_keys=True)
+    provenance = metadata.get("provenance", {})
+    stable_provenance = {}
+    if isinstance(provenance, dict):
+        stable_provenance = {
+            key: provenance.get(key)
+            for key in (
+                "low_level_checkpoint",
+                "low_level_tracker",
+                "motion_manifest",
+                "dataset_path",
+                "skill_checkpoint",
+            )
+            if key in provenance
+        }
+    language = metadata.get("language_conditioning", {})
+    stable_language = {}
+    if isinstance(language, dict):
+        stable_language = {
+            key: language.get(key)
+            for key in (
+                "enabled",
+                "embedding_dim",
+                "embedding_path",
+                "embedding_sha256",
+                "backend",
+                "model",
+            )
+            if key in language
+        }
+    contract = {
+        key: metadata.get(key)
+        for key in (
+            "sample_format",
+            "interface",
+            "low_level_command_mode",
+            "low_level_command_space",
+            "policy_command_mode",
+            "target_spec",
+            "state_history_steps",
+            "command_past_steps",
+            "command_future_steps",
+            "task",
+            "algorithm",
+            "seed",
+            "planner_observation_spec",
+            "control_rate_hz",
+            "planner_interval_steps",
+            "planner_rate_hz",
+            "reset_schedule",
+            "wrap_steps",
+            "policy_observation_corruption_enabled",
+            "early_terminations_enabled",
+            "time_out_enabled",
+            "episode_length_extension_enabled",
+            "reward_clipping_enabled",
+            "target_encoding",
+        )
+    }
+    contract["language_conditioning"] = stable_language
+    contract["provenance"] = stable_provenance
+    return json.dumps(_to_serializable(contract), sort_keys=True)
 
 
 def _sample_step(value: Any, *, sample_path: Path) -> int:
@@ -182,6 +367,7 @@ def _sample_tensor(
     key: str,
     *,
     sample_path: Path,
+    target_kind: str = "continuous",
 ) -> torch.Tensor:
     if key not in sample:
         raise KeyError(f"Sample {sample_path} is missing required key {key!r}.")
@@ -190,7 +376,7 @@ def _sample_tensor(
         raise TypeError(
             f"Sample {sample_path} key {key!r} must be a tensor, got {type(value).__name__}."
         )
-    if key == "traj_rank":
+    if key in {"traj_rank", "episode_id", "control_step", "planner_step"}:
         value = value.reshape(-1)
         return value.to(dtype=torch.long)
     if value.ndim == 1:
@@ -199,7 +385,13 @@ def _sample_tensor(
         raise ValueError(
             f"Sample {sample_path} key {key!r} must be rank-2, got {tuple(value.shape)}."
         )
-    return value.to(dtype=torch.float32)
+    dtype = (
+        torch.long
+        if key in {"causal_target", "demonstration_target"}
+        and target_kind == "categorical_sequence"
+        else torch.float32
+    )
+    return value.to(dtype=dtype)
 
 
 def _sample_metadata(sample: dict[str, Any], *, sample_path: Path) -> dict[str, Any]:
@@ -210,6 +402,15 @@ def _sample_metadata(sample: dict[str, Any], *, sample_path: Path) -> dict[str, 
         raise KeyError(f"Sample {sample_path} metadata is missing 'interface'.")
     if "target_spec" not in metadata:
         raise KeyError(f"Sample {sample_path} metadata is missing 'target_spec'.")
+    expected_format = {
+        "name": PLANNER_SAMPLE_FORMAT,
+        "version": PLANNER_SAMPLE_VERSION,
+    }
+    if metadata.get("sample_format") != expected_format:
+        raise ValueError(
+            f"Sample {sample_path} does not use the Phase 2 format: "
+            f"{metadata.get('sample_format')} != {expected_format}."
+        )
     return metadata
 
 
@@ -218,7 +419,11 @@ class InterfacePlanner(Protocol):
     target_dim: int
 
     def flow_matching_loss(
-        self, state: torch.Tensor, target: torch.Tensor
+        self,
+        state: torch.Tensor,
+        target: torch.Tensor,
+        *,
+        language: torch.Tensor | None = None,
     ) -> torch.Tensor: ...
 
     def forward(
@@ -227,6 +432,7 @@ class InterfacePlanner(Protocol):
         *,
         num_inference_steps: int = 16,
         inference_noise_std: float = 0.0,
+        language: torch.Tensor | None = None,
     ) -> torch.Tensor: ...
 
     def config_dict(self) -> dict[str, Any]: ...
@@ -267,8 +473,14 @@ class InterfaceFlowPlanner(nn.Module):
         return self.net(torch.cat([state, x_t, t.to(dtype=state.dtype)], dim=-1))
 
     def flow_matching_loss(
-        self, state: torch.Tensor, target: torch.Tensor
+        self,
+        state: torch.Tensor,
+        target: torch.Tensor,
+        *,
+        language: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if language is not None and int(language.shape[-1]) != 0:
+            raise ValueError("Legacy MLP planner does not accept language input.")
         noise = torch.randn_like(target)
         t = torch.rand((target.shape[0], 1), device=target.device, dtype=target.dtype)
         x_t = (1.0 - t) * noise + t * target
@@ -281,7 +493,10 @@ class InterfaceFlowPlanner(nn.Module):
         *,
         num_inference_steps: int = 16,
         inference_noise_std: float = 0.0,
+        language: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if language is not None and int(language.shape[-1]) != 0:
+            raise ValueError("Legacy MLP planner does not accept language input.")
         steps = max(1, int(num_inference_steps))
         if float(inference_noise_std) > 0.0:
             x_t = torch.randn(
@@ -316,7 +531,7 @@ class InterfaceFlowPlanner(nn.Module):
         }
 
 
-class ChunkedTransformerFlowPlanner(nn.Module):
+class _LegacyChunkedTransformerFlowPlanner(nn.Module):
     """Conditional Transformer flow planner over fixed-width command chunks.
 
     This is the stronger internal baseline: the command vector is padded into
@@ -580,6 +795,122 @@ class ChunkedTransformerFlowPlanner(nn.Module):
         }
 
 
+# Keep the public name stable for existing scripts and old checkpoints while
+# making every new continuous-interface run use the exact RLOpt runtime class.
+ChunkedTransformerFlowPlanner = CausalInterfaceTransformerFlowPlanner
+
+
+class CausalInterfaceTransformerDiffusionPlanner(CausalInterfaceTransformerFlowPlanner):
+    """DDIM-style chunk planner with the same Transformer parameters as flow."""
+
+    planner_type = "causal_interface_transformer_diffusion"
+
+    @staticmethod
+    def _alpha_bar(t: torch.Tensor) -> torch.Tensor:
+        # The small offset avoids a perfectly clean endpoint during training.
+        offset = 0.008
+        angle = (t + offset) / (1.0 + offset) * (math.pi / 2.0)
+        return torch.cos(angle).square().clamp(1.0e-5, 1.0)
+
+    def diffusion_loss(
+        self,
+        state: torch.Tensor,
+        target: torch.Tensor,
+        *,
+        language: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        target_norm = self.normalize_target(target)
+        noise = torch.randn_like(target_norm)
+        t = torch.rand(
+            (target_norm.shape[0], 1),
+            device=target_norm.device,
+            dtype=target_norm.dtype,
+        ).clamp_min(1.0e-4)
+        alpha_bar = self._alpha_bar(t)
+        x_t = alpha_bar.sqrt() * target_norm + (1.0 - alpha_bar).sqrt() * noise
+        predicted_clean = self.velocity(state, x_t, t, language=language)
+        return F.mse_loss(predicted_clean, target_norm)
+
+    def forward(
+        self,
+        state: torch.Tensor,
+        *,
+        num_inference_steps: int = 16,
+        inference_noise_std: float = 0.0,
+        language: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        steps = max(1, int(num_inference_steps))
+        x_t = torch.zeros(
+            (state.shape[0], self.target_dim),
+            device=state.device,
+            dtype=state.dtype,
+        )
+        if float(inference_noise_std) > 0.0:
+            x_t.normal_().mul_(float(inference_noise_std))
+        x0 = x_t
+        for step in range(steps, 0, -1):
+            t = torch.full(
+                (state.shape[0], 1),
+                float(step) / float(steps),
+                device=state.device,
+                dtype=state.dtype,
+            )
+            previous_t = torch.full_like(t, float(step - 1) / float(steps))
+            alpha_bar = self._alpha_bar(t)
+            previous_alpha_bar = self._alpha_bar(previous_t)
+            x0 = self.velocity(state, x_t, t, language=language).clamp(-20.0, 20.0)
+            predicted_noise = (x_t - alpha_bar.sqrt() * x0) / (
+                1.0 - alpha_bar
+            ).sqrt().clamp_min(1.0e-4)
+            x_t = (
+                previous_alpha_bar.sqrt() * x0
+                + (1.0 - previous_alpha_bar).sqrt() * predicted_noise
+            )
+        return self.denormalize_target(x0)
+
+
+class CausalInterfaceTransformerDeterministicPlanner(
+    CausalInterfaceTransformerFlowPlanner
+):
+    """Single-pass chunk predictor with the same Transformer parameters as flow."""
+
+    planner_type = "causal_interface_transformer_deterministic"
+
+    def forward(
+        self,
+        state: torch.Tensor,
+        *,
+        num_inference_steps: int = 1,
+        inference_noise_std: float = 0.0,
+        language: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        del num_inference_steps, inference_noise_std
+        query = torch.zeros(
+            (state.shape[0], self.target_dim),
+            device=state.device,
+            dtype=state.dtype,
+        )
+        t = torch.zeros((state.shape[0], 1), device=state.device, dtype=state.dtype)
+        prediction = self.velocity(state, query, t, language=language)
+        return self.denormalize_target(prediction)
+
+    def deterministic_loss(
+        self,
+        state: torch.Tensor,
+        target: torch.Tensor,
+        *,
+        language: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        prediction = self(
+            state,
+            num_inference_steps=1,
+            inference_noise_std=0.0,
+            language=language,
+        )
+        prediction_norm = self.normalize_target(prediction)
+        return F.mse_loss(prediction_norm, self.normalize_target(target))
+
+
 def _patch_term_ids(
     *,
     target_dim: int,
@@ -640,12 +971,22 @@ def load_rollout_samples(
     tensor_rows: dict[str, list[torch.Tensor]] = {
         key: [] for key in ROLLOUT_SAMPLE_TENSOR_KEYS
     }
+    has_language: bool | None = None
     steps: list[int] = []
     metadata: dict[str, Any] | None = None
     metadata_signature: str | None = None
     for sample_path in sample_paths:
         sample = torch.load(sample_path, map_location="cpu", weights_only=False)
         sample_metadata = _sample_metadata(sample, sample_path=sample_path)
+        sample_has_language = LANGUAGE_SAMPLE_KEY in sample
+        if has_language is None:
+            has_language = sample_has_language
+            if has_language:
+                tensor_rows[LANGUAGE_SAMPLE_KEY] = []
+        elif sample_has_language != has_language:
+            raise ValueError(
+                "Planner sample files mix language-conditioned and state-only rows."
+            )
         if metadata is None:
             metadata = sample_metadata
             metadata_signature = _metadata_signature(sample_metadata)
@@ -654,8 +995,19 @@ def load_rollout_samples(
                 f"Sample {sample_path} metadata does not match earlier sample metadata."
             )
 
+        target_encoding = sample_metadata.get("target_encoding", {"kind": "continuous"})
+        target_kind = (
+            str(target_encoding.get("kind", "continuous"))
+            if isinstance(target_encoding, dict)
+            else "continuous"
+        )
         sample_tensors = {
-            key: _sample_tensor(sample, key, sample_path=sample_path)
+            key: _sample_tensor(
+                sample,
+                key,
+                sample_path=sample_path,
+                target_kind=target_kind,
+            )
             for key in tensor_rows
         }
         row_count = int(sample_tensors["planner_state"].shape[0])
@@ -675,13 +1027,29 @@ def load_rollout_samples(
     }
     if metadata is None:
         raise RuntimeError(f"No sample metadata loaded from {samples_dir}.")
-    target_spec = InterfaceTargetSpec.from_dict(metadata["target_spec"])
-    target_dim = int(data["target"].shape[-1])
-    if target_dim != target_spec.target_dim:
+    language_metadata = metadata.get("language_conditioning", {})
+    language_enabled = bool(
+        isinstance(language_metadata, dict) and language_metadata.get("enabled", False)
+    )
+    if language_enabled != bool(has_language):
         raise ValueError(
-            f"Sample target width mismatch: target tensor has {target_dim}, "
-            f"metadata target_spec has {target_spec.target_dim}."
+            "Planner language metadata does not match the saved sample tensors."
         )
+    if language_enabled:
+        language_dim = int(language_metadata.get("embedding_dim", -1))
+        if int(data[LANGUAGE_SAMPLE_KEY].shape[-1]) != language_dim:
+            raise ValueError(
+                "Saved language width does not match metadata: "
+                f"{data[LANGUAGE_SAMPLE_KEY].shape[-1]} != {language_dim}."
+            )
+    target_spec = InterfaceTargetSpec.from_dict(metadata["target_spec"])
+    for target_key in ("causal_target", "demonstration_target"):
+        target_dim = int(data[target_key].shape[-1])
+        if target_dim != target_spec.target_dim:
+            raise ValueError(
+                f"Sample {target_key} width mismatch: tensor has {target_dim}, "
+                f"metadata target_spec has {target_spec.target_dim}."
+            )
     if str(metadata["interface"]) != target_spec.interface:
         raise ValueError(
             "Sample metadata interface does not match target_spec interface: "
@@ -745,7 +1113,10 @@ def load_planner_checkpoint(
             ),
             activation=str(config.get("activation", "mish")),
         )
-    elif planner_type == "chunked_transformer_flow":
+    elif planner_type in {
+        "chunked_transformer_flow",
+        "causal_interface_transformer_flow",
+    }:
         planner = ChunkedTransformerFlowPlanner(
             state_dim=int(config["state_dim"]),
             target_dim=int(config["target_dim"]),
@@ -759,8 +1130,16 @@ def load_planner_checkpoint(
             feedforward_dim=int(config.get("feedforward_dim", 2048)),
             patch_dim=int(config.get("patch_dim", 32)),
             num_state_tokens=int(config.get("num_state_tokens", 4)),
+            language_dim=int(config.get("language_dim", 0)),
+            num_language_tokens=int(config.get("num_language_tokens", 1)),
             dropout=float(config.get("dropout", 0.0)),
         )
+    elif planner_type == "causal_interface_transformer_diffusion":
+        planner = CausalInterfaceTransformerDiffusionPlanner.from_config(config)
+    elif planner_type == "causal_interface_transformer_deterministic":
+        planner = CausalInterfaceTransformerDeterministicPlanner.from_config(config)
+    elif planner_type == "causal_interface_transformer_categorical":
+        planner = CausalInterfaceTransformerCategoricalPlanner.from_config(config)
     else:
         raise ValueError(f"Unsupported planner_type={planner_type!r}.")
     planner.load_state_dict(checkpoint["planner_state_dict"])

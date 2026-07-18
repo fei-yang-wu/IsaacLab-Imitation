@@ -286,18 +286,16 @@ class G1ObservationCfg:
         """Policy observations."""
 
         expert_motion = ObsTerm(
-            func=mdp.expert_motion_command,
+            func=mdp.policy_expert_motion_command,
             params=_g1_expert_motion_obs_params(),
         )
         expert_anchor_pos_b = ObsTerm(
-            func=mdp.expert_anchor_pos_b,
+            func=mdp.policy_expert_anchor_pos_b,
             params=_g1_expert_anchor_obs_params(),
-            noise=Unoise(n_min=-0.25, n_max=0.25),
         )
         expert_anchor_ori_b = ObsTerm(
-            func=mdp.expert_anchor_ori_b,
+            func=mdp.policy_expert_anchor_ori_b,
             params=_g1_expert_anchor_obs_params(),
-            noise=Unoise(n_min=-0.05, n_max=0.05),
         )
         base_lin_vel = ObsTerm(
             func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5)
@@ -435,11 +433,22 @@ class G1ObservationCfg:
         def __post_init__(self):
             self.concatenate_terms = False
 
+    @configclass
+    class PolicySupervisionCfg(ObsGroup):
+        """Training-only labels excluded from every actor and planner input."""
+
+        expert_action = ObsTerm(func=mdp.reconstructed_reference_action)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = False
+
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
     expert_state: ExpertStateCfg = ExpertStateCfg()
     expert_window: ExpertWindowCfg = ExpertWindowCfg()
     reward_input: RewardInputCfg = RewardInputCfg()
+    policy_supervision: PolicySupervisionCfg = PolicySupervisionCfg()
 
 
 @configclass
@@ -672,6 +681,12 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     latent_command_dim: int = 64
     latent_patch_past_steps: int = 0
     latent_patch_future_steps: int = 0
+    # Hold command-window observations for N control steps between renewals
+    # (VLA-style chunk consumption): the window is snapshotted every N steps in
+    # the renewal-time anchor frame and consumed as a time-shifted view with
+    # tail padding. 0 keeps the per-step sliding-window behavior. Requires
+    # latent_patch_past_steps == 0 when enabled.
+    command_hold_steps: int = 0
     random_reset_step_min: int = 0
     random_reset_step_max: int = 0
     random_reset_full_trajectory: bool = False
@@ -699,6 +714,9 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     reference_body_names: list[str] = G1_29DOF_DATASET_BODY_NAMES.copy()
     command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
     command_observation_source: str = "reference"
+    # The chunk adapter redirects only the three policy command tensors while
+    # preserving the vanilla actor keys and 67-D command contract.
+    policy_command_mode: str = "reference"
 
     def _sync_expert_window_observation_params(self) -> None:
         past_steps = int(self.latent_patch_past_steps)
@@ -762,6 +780,24 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             raise ValueError("latent_patch_past_steps must be >= 0.")
         if int(self.latent_patch_future_steps) < 0:
             raise ValueError("latent_patch_future_steps must be >= 0.")
+        if int(self.command_hold_steps) < 0:
+            raise ValueError("command_hold_steps must be >= 0.")
+        if int(self.command_hold_steps) > 0 and int(self.latent_patch_past_steps) > 0:
+            raise ValueError(
+                "command_hold_steps requires latent_patch_past_steps == 0; "
+                "held chunk consumption is only defined for future-only windows."
+            )
+        normalized_policy_mode = (
+            str(self.policy_command_mode).strip().lower().replace("-", "_")
+        )
+        if normalized_policy_mode not in {
+            "reference",
+            "full_body_chunk_current_slot",
+        }:
+            raise ValueError(
+                "policy_command_mode must be reference or full_body_chunk_current_slot."
+            )
+        self.policy_command_mode = normalized_policy_mode
         if int(self.random_reset_step_min) < 0:
             raise ValueError("random_reset_step_min must be >= 0.")
         if int(self.random_reset_step_max) < int(self.random_reset_step_min):

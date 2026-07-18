@@ -22,6 +22,7 @@ from interface_planner_common import (  # noqa: E402
     load_planner_checkpoint,
     load_rollout_samples,
     mean_std,
+    paired_target_key,
     rmse_per_row,
     supported_interfaces,
     unflatten_command_target,
@@ -107,6 +108,7 @@ def _sample_indices(
 def _predict_batches(
     planner: torch.nn.Module,
     state: torch.Tensor,
+    language: torch.Tensor | None,
     *,
     batch_size: int,
     flow_num_inference_steps: int,
@@ -120,6 +122,7 @@ def _predict_batches(
                 state[start:stop],
                 num_inference_steps=int(flow_num_inference_steps),
                 inference_noise_std=float(flow_inference_noise_std),
+                language=None if language is None else language[start:stop],
             ).detach()
         )
     return torch.cat(predictions, dim=0)
@@ -238,7 +241,7 @@ def evaluate_planner_checkpoint(
         )
 
     indices = _sample_indices(
-        num_rows=int(data_cpu["target"].shape[0]),
+        num_rows=int(data_cpu["causal_target"].shape[0]),
         max_samples=int(max_samples),
         seed=int(seed),
         planner_metadata=planner_metadata,
@@ -249,10 +252,20 @@ def evaluate_planner_checkpoint(
         .index_select(0, indices)
         .to(device=device_obj, dtype=torch.float32)
     )
+    target_key = paired_target_key(state_key, sample_metadata)
     target = (
-        data_cpu["target"]
+        data_cpu[target_key]
         .index_select(0, indices)
         .to(device=device_obj, dtype=torch.float32)
+    )
+    language_cpu = data_cpu.get("language_embedding")
+    language = (
+        None
+        if language_cpu is None
+        else language_cpu.index_select(0, indices).to(
+            device=device_obj,
+            dtype=torch.float32,
+        )
     )
     if int(planner.state_dim) != int(state.shape[-1]):
         raise ValueError(
@@ -262,6 +275,13 @@ def evaluate_planner_checkpoint(
         raise ValueError(
             f"Planner target_dim={planner.target_dim} does not match samples {target.shape[-1]}."
         )
+    planner_language_dim = int(getattr(planner, "language_dim", 0))
+    sample_language_dim = 0 if language is None else int(language.shape[-1])
+    if planner_language_dim != sample_language_dim:
+        raise ValueError(
+            f"Planner language_dim={planner_language_dim} does not match samples "
+            f"{sample_language_dim}."
+        )
 
     planner = planner.to(device_obj)
     planner.eval()
@@ -269,6 +289,7 @@ def evaluate_planner_checkpoint(
         prediction = _predict_batches(
             planner,
             state,
+            language,
             batch_size=int(batch_size),
             flow_num_inference_steps=int(flow_num_inference_steps),
             flow_inference_noise_std=float(flow_inference_noise_std),
@@ -295,9 +316,10 @@ def evaluate_planner_checkpoint(
         },
         "aggregate": {
             "sample_count": int(indices.numel()),
-            "source_sample_count": int(data_cpu["target"].shape[0]),
+            "source_sample_count": int(data_cpu[target_key].shape[0]),
             "target_dim": int(target.shape[-1]),
             "state_dim": int(state.shape[-1]),
+            "language_dim": sample_language_dim,
         },
         "metrics": metrics,
     }

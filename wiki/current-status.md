@@ -1,242 +1,272 @@
-# Current Status
+# Project Live Status
 
-Last refreshed: 2026-05-12.
+Last verified: 2026-07-16, after the first guarded BONES-SEED three-seed
+preparation attempt finished.
 
-This page is intentionally dated. Update it when a branch lands or when the
-active experiment direction changes.
+This is the living memory for the active research project. Read it first when
+returning to the project or starting a new agent session. It answers **where we
+are now**. The detailed protocol and experiment history remain in the linked
+phase documents.
 
-## Branch Snapshot
+Update this page after a meaningful code decision, qualification result,
+cluster submission, job failure, or paper result. Verify changing external
+state such as Slurm jobs before treating a status below as current. Keep old
+chronology in the phase-specific pages instead of allowing this page to grow
+without bound.
 
-- Current branch: `codex-submodule-lerobot-offline-pretrain`.
-- The in-repo `./RLOpt` submodule is pinned to the offline dataset cache
-  sampler feature commit.
-- The in-repo `./ImitationLearningTools` submodule is pinned to the Unitree
-  LeRobot streaming mapper feature commit.
+## Research Question
 
-## High-Value Repo Context
+We are testing whether a learned latent skill command is a better high-level
+planner interface than the explicit action/state chunks used by current
+humanoid VLA systems.
 
-- `IsaacLab-Imitation` is the orchestration repo for Isaac Lab G1 imitation
-  environments, task registration, RLOpt entrypoints, cluster scripts, data
-  manifests, and experiment scripts.
-- The active research focus is representation learning for IPMD-family inverse
-  RL: learn useful state representations and reward structure from expert state
-  trajectories, then adapt online with environment interaction.
-- `./RLOpt` is the active edit target for algorithm/runtime work and the pinned
-  dependency snapshot used by this repo.
-- `scripts/rlopt/train.py` resolves `--algo` to task-specific
-  `rlopt_<algo>_cfg_entry_point` registry entries.
-- `ImitationRLEnv.sample_expert_batch(...)` is the env-owned expert sampling
-  surface used by imitation algorithms.
-- `ImitationRLEnv.get_offline_dataset_mapper_params()` is the env-owned surface
-  that exports G1 action offsets and action scale for external offline dataset
-  mappers.
+The main questions are:
 
-## Current Task Surfaces
+1. Can a causal high-level planner command a frozen whole-body controller
+   without future expert state leaking into its input?
+2. Does the latent interface make the planner easier to learn or more
+   data-efficient than an explicit full-body chunk?
+3. Does the latent interface require a smaller planner to reach the same
+   closed-loop performance?
+4. Does language-conditioned planning work across diverse BONES-SEED motions?
 
-- `Isaac-Imitation-G1-v0`: vanilla G1 tracking task.
-- `Isaac-Imitation-G1-Latent-v0`: latent-conditioned G1 task.
-- `Isaac-Imitation-G1-Latent-VQVAE-v0`: latent VQ-VAE G1 task.
-- `IPMD_BILINEAR`: routed through the bilinear config entrypoint.
-  Current working assumption: run bilinear experiments on the latent-command
-  task surface for now. The non-latent-command bilinear path is not a trusted
-  surface until it is fixed and revalidated.
+## Frozen Main Comparison
 
-## 2026-05-11 LeRobot Streaming Offline Dataset
+The main paper comparison has exactly two planner rows:
 
-Current approach: use LeRobot as the remote storage and streaming format, then
-convert Unitree WBT episodes into canonical TensorDict transitions before they
-enter a local TorchRL replay cache. Training samples from the local cache only.
+| Interface | High-level output | Publication rate | Frozen low-level consumer |
+| --- | --- | ---: | --- |
+| DiffSR latent | 256-value latent code | 5 Hz | DiffSR latent tracker at 50 Hz |
+| Explicit packet | Ten consecutive vanilla full-body commands, 670 values | 5 Hz | The same qualified vanilla tracker used by the direct ceiling, at 50 Hz |
 
-First dataset:
+The planner input is ten causal robot frames (`10 x 93`) plus an explicit task
+input. Phase 5 adds the same 384-value MiniLM language embedding to both rows.
+Future reference state is allowed only in oracle targets, labels, and metrics.
+It is never a deployed planner input.
+
+The direct vanilla tracker receiving a fresh expert command at 50 Hz is a
+low-level ceiling, not a planner baseline. End-effector chunks and other
+command styles are diagnostics or appendix work; do not start a combinatorial
+command sweep.
+
+The authoritative protocol is
+[Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md).
+
+## What Is Implemented and Verified
+
+### Causal planner path
+
+- Both main rows use the same ordered `10 x 93` achieved-robot history.
+- The planner does not use `current_achieved_macro_transition_batch`, future
+  reference state, reference rank, or reference cursor as deployed input.
+- Language goals are supplied explicitly and checked against the selected
+  named motion.
+- Commands renew independently per environment, including after asynchronous
+  resets.
+- M3 disables tracking-error terminations but keeps `base_too_low`; a fall is
+  defined identically for both interfaces.
+- Evaluators retain success, survival, MPJPE, root, joint, end-effector,
+  smoothness, velocity, acceleration, action-change, termination-cause, and
+  planner-latency metrics.
+
+### Explicit tracker equivalence
+
+- The direct and streamed vanilla paths load the same strict frozen policy
+  state and use the same ordered actor inputs.
+- The streamed packet consumes slots 0 through 9 exactly once.
+- The BONES-SEED certificate passed all packet phases, asynchronous renewal,
+  and policy immutability. Maximum command and action differences were
+  `3.02e-7` and `1.31e-6`.
+
+### Planner families and scaling tools
+
+Three continuous planner families are implemented with matched Transformer
+parameters:
+
+- flow matching;
+- clean-target diffusion;
+- deterministic chunk prediction.
+
+The scaling reports keep demonstration-only and rollout-fine-tuned results
+separate and record actual parameters, output bandwidth, and measured planner
+latency. They answer both performance at the same size and the smallest tested
+size that reaches a fixed performance target.
+
+### Reproducibility gates
+
+- Data, checkpoints, caches, language tables, workflow sources, and stage
+  artifacts are hash-bound.
+- Phase 4 and Phase 5 have guarded launchers, exact seed grids, stage records,
+  strict aggregators, and no-overwrite behavior.
+- Final paper release assembly is intentionally blocked until both complete
+  audited aggregates exist.
+
+## Current Experiment Status
+
+### Phase 3: low-level protocol and causal planner code
+
+**Status: complete as a code and local behavior gate.**
+
+One-motion closed-loop experiments establish that a causal planner can command
+both the latent and explicit interfaces. These runs are diagnostics, not paper
+evidence across motions.
+
+### Phase 4: corrected LAFAN1, no language
+
+**Status: low-level prerequisites active; planner paper grid not submitted.**
+
+Last verified on 2026-07-16:
+
+| Purpose | Slurm job | State at last check |
+| --- | ---: | --- |
+| Corrected-LAFAN vanilla low level | `3500993` | Running |
+| Corrected-LAFAN DiffSR low level | `3503434` | Running |
+| Strict paired qualification | `3503441` | Waiting on both jobs |
+
+The guarded Phase 4 planner grid remains blocked until both controller audits
+and the matching streamed-vanilla certificate pass. The future planner grid is
+fixed to seeds `0, 1, 2`, all 40 corrected motions, and sample budgets
+`1k/10k/50k`.
+
+Detailed chronology:
+[LAFAN1 From-Scratch Interface Comparison](lafan1-from-scratch-comparison.md).
+
+### Phase 5: BONES-SEED language study
+
+**Status: low-level qualification passed; first planner preparation attempt
+failed before training.**
+
+The corrected, provenance-complete 100-motion BONES-SEED tree and separate
+latent/vanilla caches passed their audits. Qualification job `3512041`
+completed successfully:
+
+| Controller | Strict success | Required |
+| --- | ---: | ---: |
+| Direct vanilla | 0.90 | 0.80 |
+| DiffSR latent | 0.84 | 0.80 |
+
+The selected skill checkpoint is tensor-bound to the encoder embedded in the
+qualified latent checkpoint. The persistent qualification root is:
 
 ```text
-unitreerobotics/G1_WBT_Brainco_Pickup_Pillow
+logs/interface_baselines/bones_seed_100_low_level_qualification_seed0_retry_20260716
 ```
 
-Second target after the mapper is validated:
+The first guarded three-seed planner chains were:
 
-```text
-unitreerobotics/G1_WBT_Brainco_Collect_Plates_Into_Dishwasher
-```
+| Seed | Prepare | Rollout | Fine-tune | Final eval | Summarize |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | `3512092` | `3512093` | `3512094` | `3512095` | `3512096` |
+| 1 | `3512097` | `3512098` | `3512099` | `3512100` | `3512101` |
+| 2 | `3512113` | `3512114` | `3512115` | `3512116` | `3512117` |
 
-Implementation split:
+All three prepare jobs failed after about 2 hours 16 minutes. Each had written
+98 explicit demonstration chunks, but no latent chunks or complete prepare
+stage record. The two shared failure signals were:
 
-- `./ImitationLearningTools` adds `UnitreeG1WBT29DofMapper` and
-  `StreamingTensorDictReplayCache`.
-- `./RLOpt` adds `OfflineDatasetConfig`, background LeRobot-to-TorchRL cache
-  construction, and offline sampler selection for IPMD/bilinear pretraining.
-- This repo adds env-owned action mapper constants, the latent G1 bilinear default
-  Unitree WBT dataset config, and replay/preview scripts.
+1. repeated `OSError: [Errno 28] No space left on device` from compute-local
+   job storage; and
+2. the fixed collection limit ended with four motions below the old
+   1,000-row-per-goal target:
+   `ab_bicycle_001_A359`, `crawl_ff_loop_180_R_001_A214`,
+   `jump_sideway_135_001_A021`, and
+   `sitting_legs_bend_arms_front_loop_001_A030`.
 
-The Unitree WBT dataset does not expose qvel, so the first mapper finite
-differences velocities per episode. That is acceptable for the first low
-dimensional pretrain path, but it should be treated as a mapper choice rather
-than a claim about measured robot velocity.
+The dependent rollout arrays show `DependencyNeverSatisfied`, so no incomplete
+preparation data reached planner training or evaluation. These failed chains
+are not paper results and must not be resumed without auditing the partial
+artifacts.
 
-Validation policy:
+Data-budget interpretation is important: one saved row is one 5 Hz planner
+decision containing a ten-frame 50 Hz command chunk. The failed configuration
+requested 100,000 demonstration rows plus 100,000 rollout rows per interface,
+then fine-tuned on 200,000 merged rows. It was not a small dataset.
 
-- Validate schema, widths, action scale, and env action-offset compatibility at
-  mapper/cache/agent construction.
-- Do not add per-iteration schema guards in the optimizer loop.
+The current recommended Phase 5 budget is:
 
-Debugging tools:
+- 15,000 balanced demonstration rows total: 150 per goal;
+- 15,000 planner-rollout rows total: 150 per goal;
+- 30,000 unique rows in the merged fine-tuning dataset.
 
-- `scripts/preview_unitree_lerobot_episode.py` pulls a bounded streaming subset
-  and writes PNG/GIF/NPZ previews without Isaac Sim.
-- `scripts/replay_unitree_lerobot_reference.py` replays
-  `observation.state.robot_q_current` on the Isaac G1 model once RTX rendering
-  works.
+The old 100,000 plus 100,000 configuration should become an optional
+large-data scaling point, not the default paper run. This budget change has
+not yet been encoded into a replacement launcher or submitted. Before doing
+so, verify that the four difficult motions can reach 150 rows and increase the
+collection safety limit without changing the 500-step episode protocol.
 
-RTX rendering status:
+Data preparation and hashes:
+[BONES-SEED Phase-5 Data Preparation](bones-seed-phase5-data-preparation.md).
 
-- Clean Python 3.11 Pixi `isaaclab` env with Torch `2.7.0+cu128` and Isaac Sim
-  `5.1.0.0` still crashes in the RTX/Hydra startup path; the local validation
-  environment is managed by `pixi.toml`.
-- The current host is Ubuntu 25.10 with NVIDIA driver `595.58.03`.
-- PyTorch CUDA sees the RTX A4500, so this is not basic CUDA visibility.
-- Re-image target is Ubuntu 22.04 or 24.04 with NVIDIA driver `580.65.06`.
+## Preliminary Planner Evidence
 
-See [LeRobot Offline Pretraining](lerobot-offline-pretraining.md) for the
-current command surface and re-image verification checklist.
+The corrected one-motion `walk1_subject1` experiments show:
 
-## 2026-05-07 Offline Bilinear Pretrain Recovery
+- causal planners work for both interfaces;
+- at the tiny size, latent is stronger across flow, diffusion, and
+  deterministic objectives in the current diagnostic;
+- the three-seed flow diagnostic first reaches the fixed target at about
+  `0.13M` parameters for latent and `4.19M` for explicit;
+- explicit often catches up or obtains lower MPJPE at larger sizes;
+- rollout fine-tuning frequently hurts tracking in the current one-motion
+  setting, so demonstration-only and fine-tuned results must remain separate.
 
-Goal: recover the bilinear SR warm-start path before broader offline IRL/GAIL
-work. This phase uses env-owned expert batches, reconstructed reference actions,
-and transition-aligned next policy observations.
+The working interpretation is that the latent interface may reduce the planner
+capacity required for useful control, not that it always has a better
+large-model tracking ceiling. None of these one-motion results is a paper claim
+until repeated across motions.
 
-What changed locally:
+Exact diagnostic tables and artifact paths are in
+[LAFAN1 From-Scratch Interface Comparison](lafan1-from-scratch-comparison.md).
 
-- `scripts/rlopt/train.py` now logs unexpected exceptions with traceback and
-  re-raises so local and cluster failures do not disappear behind a printed
-  one-line error.
-- `./RLOpt` now preflights offline bilinear expert batches at
-  construction when `bilinear.offline_pretrain.enabled=True`.
-- Vanilla `IPMD_BILINEAR` no longer requires latent rollout tensors for bilinear
-  SR metric logging; latent `z_*` metrics are only recorded for latent-command
-  runs.
-- G1 bilinear IPMD logs to W&B project `G1-Imitation-RLOpt-Pretrain` by
-  default, keeping the pretrain ablation separate from older `RLOpt` runs.
-- Offline bilinear pretrain now emits start/progress/complete log lines with
-  update count, percent complete, elapsed time, ETA, update rate, and SR history
-  size.
-- G1 bilinear IPMD now disables the raw-state bypass for the pretrain ablation
-  with `bilinear.policy_include_raw_state=False`; the policy MLP receives
-  `F(s)z` only.
-- `experiments/bilinear_pretrain/submit_cluster_ablation.sh` submits the
-  five-way 4096-env comparison: scratch, pretrained+finetune,
-  pretrained+frozen, random+frozen, and pretrained+offline-policy-BC+finetune.
-- `experiments/bilinear_pretrain/submit_pretrain_update_sweep.sh` submits a
-  pretrained+finetune update-count sweep. The default sweep is
-  `OFFLINE_NUM_UPDATES="500 1000 2000 4000"`.
-- `experiments/bilinear_pretrain/summarize_pretrain_wandb.py` summarizes
-  `offline/sr/loss/dynamics_loss`, reconstruction metrics, and SR history size
-  from W&B.
+## Immediate Work Queue
 
-Verified locally:
+1. Change the Phase 5 default paper data budget to 150 demonstration and 150
+   rollout rows per goal, while preserving exact balanced counts.
+2. Fix compute-local storage use and prevent repeated storage errors from
+   creating gigabyte-scale logs.
+3. Add an audited recovery path that either trims and reuses valid partial
+   shards or deliberately starts from a fresh output root. Never silently mix
+   partial seeds.
+4. Run the smallest local collection/schema smoke for the revised budget.
+5. Dry-run all three guarded seed launchers, then submit replacement Skynet
+   chains only after the preflights pass.
+6. Allow Phase 4 low-level jobs and qualification to finish; submit the Phase 4
+   planner grid only after its strict gate passes.
+7. Aggregate Phase 4 and Phase 5 only from complete audited seed sets, then
+   build the final paper release bundle.
+8. Run the bounded planner architecture/size study after the main Phase 5
+   pipeline is healthy; do not multiply architecture, data, and command-style
+   sweeps into one combinatorial grid.
 
-- RLOpt focused test: `pytest tests/test_ipmd_components.py -k bilinear -q`
-  passed with 8 tests.
-- Isaac expert sampler test: `pytest source/isaaclab_imitation/test_reference_patch_env.py -q`
-  passed with 13 tests.
-- Bug smoke passed at `num_envs=128`, `max_iterations=1`,
-  `offline_pretrain.num_updates=2`, `offline_pretrain.batch_size=512`.
-- Functional smoke passed at `num_envs=128`, `max_iterations=2`,
-  `offline_pretrain.num_updates=20`, `sample_eval_interval=10`.
-- Modest performance smoke passed at `num_envs=1024`, `max_iterations=1`,
-  `offline_pretrain.num_updates=2`, `offline_pretrain.batch_size=1024`, with
-  about 7.1K FPS in the first rollout iteration.
+## Execution Policy
 
-Next scale ladder:
+- Use the local workstation for code debugging, inference, metrics, and video.
+- Local low-level runs may reach about 10M frames for routine debugging and at
+  most about 50M for a serious check. Do not run 100M locally.
+- Use Skynet for long low-level convergence, large data collection, final
+  verification, and paper-quality numbers.
+- Preserve the frozen rewards, resets, terminations, random start range, push
+  event, command cadence, and episode length unless the user explicitly
+  changes the research protocol.
 
-- Use `num_envs=128` for bug-finding smoke runs.
-- Use `num_envs=1024-2048` for local performance/debug runs.
-- Submit `num_envs=4096` on cluster only after local 128 and 1024/2048 pass.
-- For cluster runs, capture GPU memory headroom before deciding whether to push
-  beyond 4096 envs.
+## Document Map
 
-The first 4096-env cluster ablation batch was cancelled because the policy still
-had a raw-state bypass:
+- [Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md):
+  authoritative research design and phase contract.
+- [Whole-Body VLA and Latent-Action Literature Review](whole-body-vla-literature-review.md):
+  what current explicit-chunk and latent-action systems actually deploy, how
+  they relate to our comparison, and the boundary between a native baseline
+  and a literature-inspired diagnostic.
+- [LAFAN1 From-Scratch Interface Comparison](lafan1-from-scratch-comparison.md):
+  detailed Phase 3/4 chronology, diagnostics, checkpoints, and job history.
+- [BONES-SEED Phase-5 Data Preparation](bones-seed-phase5-data-preparation.md):
+  corrected data tree, hashes, caches, qualification, and Phase 5 handoff.
+- [Fair Interface Baselines](fair-interface-baselines.md): operational
+  two-interface runner and adapter details.
+- [Context Management](context-management.md): repository ownership and where
+  future context belongs.
 
-- `scratch`: SLURM job `3108283`, cancelled.
-- `pretrained_finetune`: SLURM job `3108290`, cancelled.
-- `pretrained_frozen`: SLURM job `3108297`, cancelled.
-- `random_frozen`: SLURM job `3108305`, cancelled.
-
-Replacement feature-only 4096-env cluster ablation submitted on 2026-05-07 under
-W&B project `G1-Imitation-RLOpt-Pretrain` and group
-`g1_bilinear_sr_pretrain_feature_only_4096`:
-
-- `scratch`: SLURM job `3108533`.
-- `pretrained_finetune`: SLURM job `3108535`.
-- `pretrained_frozen`: SLURM job `3108545`.
-- `random_frozen`: SLURM job `3108563`.
-
-The feature-only 4096-env jobs completed in Slurm. W&B marked the runs as
-`crashed`, so `scripts/rlopt/train.py` now explicitly calls
-`wandb.finish(exit_code=0)` on the success path before Isaac shutdown.
-
-Observed 2000-update offline SR pretrain trace from W&B:
-
-- Dynamics loss fell from about `12.1` at update 100 to `2.68` at update 2000.
-- Reconstruction MSE fell from about `44.0` at update 100 to `4.75` at update
-  2000.
-- Reconstruction L1 fell from about `28.8` at update 100 to `8.63` at update
-  2000.
-- The SR history buffer reached its `10M` transition cap around update 1300.
-
-Interpretation: `2000` updates is sufficient for the first ablation, but the
-offline loss is not obviously saturated. The next targeted experiment is now the
-100M-frame feature-only ablation. The earlier 20M-frame run was too short to
-evaluate meaningful online sample efficiency.
-
-Pretrained+finetune update-count sweep submitted on 2026-05-07 under W&B group
-`g1_bilinear_sr_pretrain_update_sweep_feature_only_4096`:
-
-- `500` offline updates: SLURM job `3108917`, cancelled.
-- `1000` offline updates: SLURM job `3108920`, cancelled.
-- `2000` offline updates: SLURM job `3108924`, cancelled.
-- `4000` offline updates: SLURM job `3108934`, cancelled.
-
-Replacement feature-only 4096-env, 100M-frame ablation submitted on 2026-05-07
-under W&B group `g1_bilinear_sr_pretrain_feature_only_4096_100m`. The budget is
-`max_iterations=1024`, which is `1024 * 4096 * 24 = 100,663,296` online frames:
-
-- `scratch`: SLURM job `3108983`.
-- `pretrained_finetune`: SLURM job `3108987`.
-- `pretrained_frozen`: SLURM job `3108995`.
-- `random_frozen`: SLURM job `3109015`.
-- `pretrained_bc_finetune`: SLURM job `3109020`.
-
-The `pretrained_bc_finetune` variant runs `2000` offline SR updates followed by
-`2000` offline policy-BC updates against reconstructed expert actions. The BC
-phase runs after the SR encoder is copied into the EMA encoder used by the
-feature-only policy path.
-
-Dance102 latent-command feature-only ablation submitted on 2026-05-07 after
-establishing that the current bilinear path should be treated as latent-command
-only. All runs use `Isaac-Imitation-G1-Latent-v0`,
-`ipmd.use_latent_command=True`, `bilinear.policy_include_raw_state=False`,
-the explicit Dance102 manifest, `num_envs=4096`, and `max_iterations=1024`:
-
-- `scratch` / no offline pretrain: SLURM job `3110712`.
-- `pretrained_finetune`: SLURM job `3110776`.
-- `pretrained_frozen`: SLURM job `3110782`.
-- `pretrained_bc_finetune`: SLURM job `3110795`.
-
-Follow-up 500M-frame Dance102 latent-command comparison submitted on 2026-05-08
-with the same setup. The budget is `max_iterations=5087`, which is
-`5087 * 4096 * 24 = 500,072,448` online frames:
-
-- `scratch` / no offline pretrain: SLURM job `3114583`.
-- `pretrained_finetune`: SLURM job `3114586`.
-
-## Context-Management Status
-
-- `AGENTS.md` is the durable coding-agent rule file.
-- `CLAUDE.md` is the Claude Code command and architecture shortcut file.
-- `wiki/context-management.md` is the durable context policy.
-- `wiki/ipmd-representation-learning.md` records the current algorithmic focus.
-- `wiki/experiment-workflow.md` records the local/cluster/tracking workflow.
-- This file holds dated status and should be refreshed or pruned as work
-  changes.
+When this page disagrees with a phase document about a frozen protocol, verify
+the code and update both. When it disagrees only about current execution state,
+this newer dated snapshot should be refreshed from Slurm and treated as the
+status entry point.

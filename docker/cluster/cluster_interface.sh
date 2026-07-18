@@ -257,6 +257,89 @@ sync_tree_to_cluster() {
     "${rsync_cmd[@]}"
 }
 
+sync_workspace_archive_to_cluster() {
+    local src_path="$1"
+    local dst_path="$2"
+    local local_tmp_dir=""
+    local archive_tmp=""
+    local archive_sha=""
+    local archive_size=""
+    local remote_archive_sha=""
+    local remote_archive="$dst_path/workspace.tar.gz"
+    local bootstrap_file=""
+    local bootstrap_name=""
+    local local_specs=""
+    local spec=""
+    local local_path=""
+
+    if [ -n "${CLUSTER_EXTRA_RSYNC_SPECS:-}" ]; then
+        echo "[ERROR] CLUSTER_ARCHIVE_SYNC does not support CLUSTER_EXTRA_RSYNC_SPECS." >&2
+        exit 1
+    fi
+
+    if [ -n "${CLUSTER_EXTRA_SYNC_SPECS:-}" ]; then
+        local_specs="$CLUSTER_EXTRA_SYNC_SPECS"
+    else
+        local_specs="$(build_default_sync_specs "$src_path")"
+    fi
+    SYNC_EXTRA_REPO_SPECS="$local_specs"
+    for spec in $local_specs; do
+        local_path="${spec%%:*}"
+        local_path="$(realpath "$local_path" 2>/dev/null || echo "$local_path")"
+        case "$local_path" in
+            "$src_path"/*) ;;
+            *)
+                echo "[ERROR] Archive sync requires repo overlays to live inside '$src_path': $local_path" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    local_tmp_dir="$(resolve_local_tmp_dir)"
+    archive_tmp="$(mktemp "${local_tmp_dir}/isaaclab_workspace.XXXXXX.tar.gz")"
+    echo "[INFO] Packing self-contained workspace archive locally."
+    tar -C "$src_path" \
+        --exclude='./.git' \
+        --exclude='*/.git' \
+        --exclude='./.pixi' \
+        --exclude='./.codex' \
+        --exclude='./.claude' \
+        --exclude='./data' \
+        --exclude='./.tmp' \
+        --exclude='./logs' \
+        --exclude='./outputs' \
+        --exclude='./output' \
+        --exclude='./runs' \
+        --exclude='./videos' \
+        --exclude='./wandb' \
+        --exclude='*/__pycache__' \
+        --exclude='*/.pytest_cache' \
+        --exclude='*/.ruff_cache' \
+        --exclude='*.npz' \
+        --transform='s#^\./#workspace/#' \
+        -czf "$archive_tmp" .
+    archive_sha="$(sha256sum "$archive_tmp" | awk '{print $1}')"
+    archive_size="$(stat -c '%s' "$archive_tmp")"
+
+    echo "[INFO] Uploading workspace archive: bytes=$archive_size sha256=$archive_sha"
+    ssh "$CLUSTER_LOGIN" "mkdir -p '$dst_path/docker/cluster' && cat > '${remote_archive}.partial' && mv '${remote_archive}.partial' '$remote_archive'" < "$archive_tmp"
+    rm -f "$archive_tmp"
+
+    for bootstrap_file in "$SCRIPT_DIR"/submit_job_slurm*.sh "$SCRIPT_DIR"/submit_job_pbs.sh; do
+        [ -f "$bootstrap_file" ] || continue
+        bootstrap_name="$(basename "$bootstrap_file")"
+        ssh "$CLUSTER_LOGIN" "cat > '$dst_path/docker/cluster/$bootstrap_name' && chmod +x '$dst_path/docker/cluster/$bootstrap_name'" < "$bootstrap_file"
+    done
+
+    remote_archive_sha="$(ssh "$CLUSTER_LOGIN" "sha256sum '$remote_archive'" | awk '{print $1}')"
+    if [ "$remote_archive_sha" != "$archive_sha" ]; then
+        echo "[ERROR] Remote workspace archive hash mismatch: expected=$archive_sha actual=$remote_archive_sha" >&2
+        exit 1
+    fi
+    printf '%s\n' "$archive_sha" | ssh "$CLUSTER_LOGIN" "cat > '$dst_path/workspace.tar.gz.sha256'"
+    echo "[INFO] Workspace archive verified on cluster."
+}
+
 prepare_repo_git_sync_metadata() {
     local repo_path="$1"
     local upstream_ref=""
@@ -678,6 +761,8 @@ capture_cluster_env_overrides() {
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
         CLUSTER_G1_DATA_ROOT \
         CLUSTER_G1_REPO_ID \
+        CLUSTER_G1_REPO_REVISION \
+        CLUSTER_G1_FORCE_DOWNLOAD \
         CLUSTER_G1_MANIFEST_PATH \
         CLUSTER_G1_MANIFEST_REFRESH_POLICY \
         CLUSTER_SKIP_CACHE_COPY \
@@ -722,6 +807,8 @@ restore_cluster_env_overrides() {
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
         CLUSTER_G1_DATA_ROOT \
         CLUSTER_G1_REPO_ID \
+        CLUSTER_G1_REPO_REVISION \
+        CLUSTER_G1_FORCE_DOWNLOAD \
         CLUSTER_G1_MANIFEST_PATH \
         CLUSTER_G1_MANIFEST_REFRESH_POLICY \
         CLUSTER_SKIP_CACHE_COPY \
@@ -765,6 +852,8 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
     add_remote_env_arg_if_set CLUSTER_G1_DATA_ROOT
     add_remote_env_arg_if_set CLUSTER_G1_REPO_ID
+    add_remote_env_arg_if_set CLUSTER_G1_REPO_REVISION
+    add_remote_env_arg_if_set CLUSTER_G1_FORCE_DOWNLOAD
     add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_PATH
     add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_REFRESH_POLICY
     add_remote_env_arg_if_set CLUSTER_SKIP_CACHE_COPY
@@ -858,15 +947,17 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
     add_remote_env_arg_if_set CLUSTER_G1_DATA_ROOT
     add_remote_env_arg_if_set CLUSTER_G1_REPO_ID
+    add_remote_env_arg_if_set CLUSTER_G1_REPO_REVISION
+    add_remote_env_arg_if_set CLUSTER_G1_FORCE_DOWNLOAD
     add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_PATH
     add_remote_env_arg_if_set CLUSTER_G1_MANIFEST_REFRESH_POLICY
     add_remote_env_arg_if_set CLUSTER_SKIP_CACHE_COPY
     add_remote_env_arg_if_set CLUSTER_OVERLAY_SIZE_MB
-    add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
     add_remote_env_arg_if_set CLUSTER_JOB_TMPDIR_ROOT
     add_remote_env_arg_if_set CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB
     add_remote_env_arg_if_set CLUSTER_USE_SHARED_SIF
     add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
+    add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
     add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
     add_remote_env_arg_if_set CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK
     add_remote_env_arg_if_set CLUSTER_PIXI_CACHE_DIR
@@ -1075,12 +1166,19 @@ submit_job() {
         echo "[INFO] Default G1 manifest override disabled via CLUSTER_APPEND_DEFAULT_G1_MANIFEST='${CLUSTER_APPEND_DEFAULT_G1_MANIFEST:-0}'."
     fi
 
+    if is_truthy "${CLUSTER_ARCHIVE_SYNC:-0}"; then
+        case "$job_script_file" in
+            submit_job_slurm.sh|submit_job_slurm_bones_pipeline.sh|submit_job_slurm_phase4.sh) ;;
+            *)
+                echo "[ERROR] CLUSTER_ARCHIVE_SYNC does not support selected submitter '$job_script_file'." >&2
+                exit 1
+                ;;
+        esac
+    fi
+
     echo "[INFO] Using scheduler submit script: $job_script_file"
     build_remote_job_env_args
-
-    build_remote_job_env_args
     printf -v remote_job_cmd '%q ' \
-        env "${REMOTE_JOB_ENV_ARGS[@]}" \
         env "${REMOTE_JOB_ENV_ARGS[@]}" \
         bash -l "$CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file" \
         "$CLUSTER_ISAACLAB_DIR" \
@@ -1314,17 +1412,24 @@ case $command in
         fi
         # make sure target directory exists
         ssh $CLUSTER_LOGIN "mkdir -p $CLUSTER_ISAACLAB_DIR"
-        # Sync Isaac Lab imitation code
+        # Sync Isaac Lab imitation code.
         echo "[INFO] Syncing IsaacLab-Imitation code..."
-        sync_repo_prefer_git_then_rsync "$local_workspace_root" "$CLUSTER_ISAACLAB_DIR" "IsaacLab-Imitation" "."
-        # Sync optional extra repos only when explicitly requested via overrides/specs.
-        sync_extra_repos
-        # Keep IsaacLab available without recopying the large dependency tree on every dirty worktree submission.
-        link_isaaclab_from_previous_sync
+        if is_truthy "${CLUSTER_ARCHIVE_SYNC:-0}"; then
+            echo "[INFO] Archive sync enabled via CLUSTER_ARCHIVE_SYNC='${CLUSTER_ARCHIVE_SYNC}'."
+            sync_workspace_archive_to_cluster "$local_workspace_root" "$CLUSTER_ISAACLAB_DIR"
+        else
+            sync_repo_prefer_git_then_rsync "$local_workspace_root" "$CLUSTER_ISAACLAB_DIR" "IsaacLab-Imitation" "."
+            # Sync optional extra repos only when explicitly requested via overrides/specs.
+            sync_extra_repos
+            # Keep IsaacLab available without recopying the large dependency tree on every dirty worktree submission.
+            link_isaaclab_from_previous_sync
+        fi
         # Record exact repo SHAs and dirty state used in this submission.
         record_repo_sync_manifest
         # Refresh latest snapshot pointer used by incremental sync on future submissions.
-        update_latest_sync_link
+        if ! is_truthy "${CLUSTER_ARCHIVE_SYNC:-0}"; then
+            update_latest_sync_link
+        fi
         # execute job script
         echo "[INFO] Executing job script..."
         # check whether the second argument is a profile or a job argument

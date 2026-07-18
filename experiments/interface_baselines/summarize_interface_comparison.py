@@ -17,8 +17,11 @@ import yaml
 DEFAULT_COLUMNS = [
     "setting",
     "interface",
+    "low_level_command_mode",
     "planner_variant",
     "return_sum_mean",
+    "survival_rate",
+    "fall_rate",
     "survival_steps_mean",
     "done_rate",
     "root_pos_xy_error_m_mean",
@@ -64,7 +67,9 @@ OFFLINE_SETTING_COLUMNS = {
 }
 PRIMARY_METRICS = [
     ("return", "return_sum_mean"),
-    ("survival", "survival_steps_mean"),
+    ("survival", "survival_rate"),
+    ("fall_rate", "fall_rate"),
+    ("rollout_steps", "survival_steps_mean"),
     ("done_rate", "done_rate"),
     ("root_xy_error", "root_pos_xy_error_m_mean"),
     ("joint_rmse", "joint_pos_rmse_rad_mean"),
@@ -100,6 +105,7 @@ PLANNER_METADATA_COLUMNS = (
 )
 PRIMARY_COLUMNS = [
     "interface",
+    "low_level_command_mode",
     "planner_variant",
     "output_dim",
     *PLANNER_METADATA_COLUMNS,
@@ -417,13 +423,20 @@ def _row(path: Path, payload: dict[str, Any], root: Path) -> dict[str, Any]:
     aggregate = dict(payload.get("aggregate", {}))
     metrics = dict(payload.get("metrics", {}))
     planner_metadata = _planner_metadata(metadata)
-    interface = (
-        _interface_from_path(path, root)
-        or metadata.get("interface")
+    path_interface = _interface_from_path(path, root)
+    metadata_interface = (
+        metadata.get("interface")
         or metadata.get("command_space")
         or metadata.get("planner_mode")
-        or "unknown"
     )
+    if (
+        isinstance(path_interface, str)
+        and path_interface.endswith("_streamed_vanilla")
+        and metadata_interface
+    ):
+        interface = metadata_interface
+    else:
+        interface = path_interface or metadata_interface or "unknown"
     setting = _path_or_payload_setting(path, root, metadata)
     planner_pretrain_num_updates = _planner_pretrain_num_updates(
         planner_metadata, str(setting)
@@ -434,6 +447,10 @@ def _row(path: Path, payload: dict[str, Any], root: Path) -> dict[str, Any]:
     row: dict[str, Any] = {
         "setting": setting,
         "interface": interface,
+        "low_level_command_mode": _first_present(
+            metadata.get("low_level_command_mode", ""),
+            _planner_sample_value(planner_metadata, "low_level_command_mode"),
+        ),
         "planner_variant": _variant_from_path(path, root),
         "json_path": str(path.relative_to(root)),
         "label": metadata.get("label", ""),
@@ -576,15 +593,19 @@ def _wide_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
         interface = str(row.get("interface", "unknown"))
+        command_mode = str(row.get("low_level_command_mode", ""))
         variant = str(row.get("planner_variant", ""))
         setting = str(row.get("setting", ""))
         setting_column = PRIMARY_SETTING_COLUMNS.get(setting)
-        group_key = f"{interface}/{variant}" if variant else interface
+        group_key = "/".join(
+            component for component in (interface, command_mode, variant) if component
+        )
         metadata_priority = _planner_metadata_priority(setting)
         wide_row = grouped.setdefault(
             group_key,
             {
                 "interface": interface,
+                "low_level_command_mode": command_mode,
                 "planner_variant": variant,
                 "output_dim": "",
                 "_planner_metadata_priority": -1,
@@ -608,6 +629,10 @@ def _wide_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for metric_column, source_column in PRIMARY_METRICS:
                 wide_row[f"{setting_column}_{metric_column}"] = row.get(
                     source_column, ""
+                )
+            if row.get("tracking_success_rate") not in (None, ""):
+                wide_row[f"{setting_column}_tracking_success_rate"] = row.get(
+                    "tracking_success_rate"
                 )
             continue
         offline_setting_column = OFFLINE_SETTING_COLUMNS.get(setting)
@@ -643,7 +668,10 @@ def _planner_metadata_priority(setting: str) -> int:
 
 def _copy_interface_oracle_context(grouped: dict[str, dict[str, Any]]) -> None:
     interface_oracle_rows = {
-        str(row.get("interface", "")): row
+        (
+            str(row.get("interface", "")),
+            str(row.get("low_level_command_mode", "")),
+        ): row
         for row in grouped.values()
         if str(row.get("planner_variant", "")) == ""
     }
@@ -656,7 +684,12 @@ def _copy_interface_oracle_context(grouped: dict[str, dict[str, Any]]) -> None:
     for row in grouped.values():
         if str(row.get("planner_variant", "")) == "":
             continue
-        oracle_row = interface_oracle_rows.get(str(row.get("interface", "")))
+        oracle_row = interface_oracle_rows.get(
+            (
+                str(row.get("interface", "")),
+                str(row.get("low_level_command_mode", "")),
+            )
+        )
         if oracle_row is None:
             continue
         for column in oracle_columns:
@@ -681,12 +714,20 @@ def _add_oracle_ratios(row: dict[str, Any]) -> None:
 
 def _add_success_rates(row: dict[str, Any]) -> None:
     for setting in PRIMARY_SETTING_COLUMNS.values():
+        tracking_success_key = f"{setting}_tracking_success_rate"
+        tracking_success_rate = _as_float(row.get(tracking_success_key))
         done_rate = _as_float(row.get(f"{setting}_done_rate"))
         success_key = f"{setting}_success_rate"
-        if done_rate is None:
+        if tracking_success_rate is not None:
+            row[success_key] = tracking_success_rate
+        elif done_rate is None:
             row[success_key] = ""
         else:
             row[success_key] = 1.0 - done_rate
+        # This is an intermediate field used to prefer the stricter tracking
+        # result over 1 - done_rate.  The public wide table exposes the merged
+        # ``*_success_rate`` column instead.
+        row.pop(tracking_success_key, None)
 
 
 def _as_float(value: Any) -> float | None:

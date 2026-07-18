@@ -18,12 +18,15 @@ if __package__ is None or __package__ == "":
     sys.path.append(str(Path(__file__).resolve().parent))
 
 from interface_planner_common import (  # noqa: E402
+    CausalInterfaceTransformerDeterministicPlanner,
+    CausalInterfaceTransformerDiffusionPlanner,
     ChunkedTransformerFlowPlanner,
     InterfaceTargetSpec,
     cosine_mean,
     load_planner_checkpoint,
     load_rollout_samples,
     mean_std,
+    paired_target_key,
     parameter_counts,
     rmse_per_row,
     save_planner_checkpoint,
@@ -71,6 +74,12 @@ MODEL_PRESETS: dict[str, dict[str, int | float]] = {
     },
 }
 
+PLANNER_FAMILIES = {
+    "flow": ChunkedTransformerFlowPlanner,
+    "diffusion": CausalInterfaceTransformerDiffusionPlanner,
+    "deterministic": CausalInterfaceTransformerDeterministicPlanner,
+}
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -92,7 +101,13 @@ def _parse_args() -> argparse.Namespace:
         "--checkpoint",
         type=Path,
         default=None,
-        help="Optional chunked Transformer checkpoint used to initialize finetuning.",
+        help="Optional matching planner-family checkpoint used to initialize finetuning.",
+    )
+    parser.add_argument(
+        "--planner_family",
+        choices=("flow", "diffusion", "deterministic"),
+        default="flow",
+        help="Continuous chunk prediction method; the Transformer backbone is shared.",
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=0)
@@ -151,6 +166,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--feedforward_dim", type=int, default=None)
     parser.add_argument("--patch_dim", type=int, default=None)
     parser.add_argument("--num_state_tokens", type=int, default=None)
+    parser.add_argument(
+        "--num_language_tokens",
+        type=int,
+        default=1,
+        help="Transformer tokens used for the optional language embedding.",
+    )
     parser.add_argument("--dropout", type=float, default=None)
     parser.add_argument("--flow_num_inference_steps", type=int, default=16)
     parser.add_argument(
@@ -217,7 +238,7 @@ def _model_kwargs(args: argparse.Namespace) -> dict[str, int | float]:
 def _select_rows(
     data: dict[str, torch.Tensor], *, max_samples: int, seed: int
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor | None]:
-    num_rows = int(data["target"].shape[0])
+    num_rows = int(data["causal_target"].shape[0])
     if int(max_samples) <= 0 or int(max_samples) >= num_rows:
         return data, None
     generator = torch.Generator(device="cpu")
@@ -256,6 +277,7 @@ def _evaluate(
     planner: ChunkedTransformerFlowPlanner,
     state: torch.Tensor,
     target: torch.Tensor,
+    language: torch.Tensor | None,
     *,
     flow_num_inference_steps: int,
     flow_inference_noise_std: float,
@@ -277,6 +299,7 @@ def _evaluate(
                 eval_state[start:stop],
                 num_inference_steps=flow_num_inference_steps,
                 inference_noise_std=flow_inference_noise_std,
+                language=(None if language is None else language[start:stop]),
             )
         )
     prediction = torch.cat(predictions, dim=0)
@@ -319,6 +342,8 @@ def main() -> None:
         raise ValueError("--flow_num_inference_steps must be > 0.")
     if args.endpoint_num_inference_steps < 0:
         raise ValueError("--endpoint_num_inference_steps must be >= 0.")
+    if args.num_language_tokens <= 0:
+        raise ValueError("--num_language_tokens must be > 0.")
 
     random.seed(int(args.seed))
     torch.manual_seed(int(args.seed))
@@ -327,7 +352,8 @@ def main() -> None:
     device = _resolve_device(str(args.device))
 
     data_cpu, sample_metadata = load_rollout_samples(args.samples_dir.expanduser())
-    source_sample_count = int(data_cpu["target"].shape[0])
+    target_key = paired_target_key(args.state_key, sample_metadata)
+    source_sample_count = int(data_cpu[target_key].shape[0])
     data_cpu, selected_indices = _select_rows(
         data_cpu, max_samples=int(args.max_samples), seed=int(args.seed)
     )
@@ -341,7 +367,14 @@ def main() -> None:
     checkpoint_path = run_dir / "checkpoints" / "latest.pt"
 
     state = data_cpu[args.state_key].to(device=device, dtype=torch.float32)
-    target = data_cpu["target"].to(device=device, dtype=torch.float32)
+    target = data_cpu[target_key].to(device=device, dtype=torch.float32)
+    language_cpu = data_cpu.get("language_embedding")
+    language = (
+        None
+        if language_cpu is None
+        else language_cpu.to(device=device, dtype=torch.float32)
+    )
+    language_dim = 0 if language is None else int(language.shape[-1])
     if int(target.shape[-1]) != target_spec.target_dim:
         raise ValueError(
             f"Target width mismatch: sample target has {target.shape[-1]}, "
@@ -349,6 +382,7 @@ def main() -> None:
         )
 
     model_kwargs = _model_kwargs(args)
+    planner_class = PLANNER_FAMILIES[str(args.planner_family)]
     if args.checkpoint is not None:
         loaded_planner, checkpoint_spec, checkpoint_metadata = load_planner_checkpoint(
             args.checkpoint.expanduser(), map_location=device
@@ -358,18 +392,22 @@ def main() -> None:
                 "Checkpoint target spec does not match sample target spec: "
                 f"{checkpoint_spec.to_dict()} vs {target_spec.to_dict()}."
             )
-        if not isinstance(loaded_planner, ChunkedTransformerFlowPlanner):
+        if type(loaded_planner) is not planner_class:
             raise TypeError(
-                "--checkpoint must be a chunked_transformer_flow planner checkpoint."
+                "--checkpoint planner family does not match --planner_family: "
+                f"{loaded_planner.config_dict().get('planner_type')} vs "
+                f"{args.planner_family}."
             )
         planner = loaded_planner.to(device)
         init_checkpoint = str(args.checkpoint.expanduser().resolve())
     else:
         checkpoint_metadata = {}
-        planner = ChunkedTransformerFlowPlanner(
+        planner = planner_class(
             state_dim=int(state.shape[-1]),
             target_dim=target_spec.target_dim,
             term_widths=target_spec.term_widths,
+            language_dim=language_dim,
+            num_language_tokens=int(args.num_language_tokens),
             **model_kwargs,
         ).to(device)
         init_checkpoint = None
@@ -381,6 +419,11 @@ def main() -> None:
     if int(planner.target_dim) != target_spec.target_dim:
         raise ValueError(
             f"Planner target_dim={planner.target_dim} does not match target spec {target_spec.target_dim}."
+        )
+    if int(planner.language_dim) != language_dim:
+        raise ValueError(
+            f"Planner language_dim={planner.language_dim} does not match samples "
+            f"{language_dim}."
         )
     if not args.use_checkpoint_normalization:
         stats = _normalization_stats(
@@ -422,7 +465,8 @@ def main() -> None:
     )
     metadata = {
         "interface": interface,
-        "planner_type": "chunked_transformer_flow",
+        "planner_type": str(planner.config_dict()["planner_type"]),
+        "planner_family": str(args.planner_family),
         "state_key": args.state_key,
         "samples_dir": str(args.samples_dir.expanduser().resolve()),
         "source_sample_count": source_sample_count,
@@ -450,6 +494,8 @@ def main() -> None:
         "selection_fraction": selected_sample_count / max(source_sample_count, 1),
         "state_dim": int(state.shape[-1]),
         "target_dim": int(target.shape[-1]),
+        "language_dim": language_dim,
+        "num_language_tokens": int(planner.num_language_tokens),
         "model_size": str(args.model_size),
         "model_kwargs": model_kwargs,
         "planner_config": planner.config_dict(),
@@ -466,7 +512,7 @@ def main() -> None:
         f"[INFO] Loaded {state.shape[0]} samples from {args.samples_dir}.", flush=True
     )
     print(
-        f"[INFO] Training {interface} chunked Transformer planner "
+        f"[INFO] Training {interface} {args.planner_family} Transformer planner "
         f"with state_key={args.state_key}.",
         flush=True,
     )
@@ -505,22 +551,47 @@ def main() -> None:
             micro_indices = indices[start:stop]
             batch_state = state.index_select(0, micro_indices)
             batch_target = target.index_select(0, micro_indices)
-            flow_loss = planner.flow_matching_loss(batch_state, batch_target)
+            batch_language = (
+                None if language is None else language.index_select(0, micro_indices)
+            )
+            if args.planner_family == "flow":
+                objective_loss = planner.flow_matching_loss(
+                    batch_state,
+                    batch_target,
+                    language=batch_language,
+                )
+            elif args.planner_family == "diffusion":
+                assert isinstance(planner, CausalInterfaceTransformerDiffusionPlanner)
+                objective_loss = planner.diffusion_loss(
+                    batch_state,
+                    batch_target,
+                    language=batch_language,
+                )
+            else:
+                assert isinstance(
+                    planner, CausalInterfaceTransformerDeterministicPlanner
+                )
+                objective_loss = planner.deterministic_loss(
+                    batch_state,
+                    batch_target,
+                    language=batch_language,
+                )
             endpoint_prediction = planner(
                 batch_state,
                 num_inference_steps=endpoint_num_inference_steps,
                 inference_noise_std=float(args.flow_inference_noise_std),
+                language=batch_language,
             )
             endpoint_mse, endpoint_cosine = planner.normalized_endpoint_loss(
                 endpoint_prediction, batch_target
             )
-            micro_loss = float(args.flow_loss_coeff) * flow_loss + float(
+            micro_loss = float(args.flow_loss_coeff) * objective_loss + float(
                 args.endpoint_loss_coeff
             ) * (endpoint_mse + float(args.endpoint_cosine_coeff) * endpoint_cosine)
             scale = float(stop - start) / float(args.batch_size)
             (micro_loss * scale).backward()
             loss_value += float(micro_loss.detach().item()) * scale
-            flow_loss_value += float(flow_loss.detach().item()) * scale
+            flow_loss_value += float(objective_loss.detach().item()) * scale
             endpoint_mse_value += float(endpoint_mse.detach().item()) * scale
             endpoint_cosine_value += float(endpoint_cosine.detach().item()) * scale
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -537,6 +608,7 @@ def main() -> None:
                 planner,
                 state,
                 target,
+                language,
                 flow_num_inference_steps=int(args.flow_num_inference_steps),
                 flow_inference_noise_std=float(args.flow_inference_noise_std),
                 batch_size=int(args.eval_batch_size),
@@ -545,7 +617,10 @@ def main() -> None:
             row = {
                 "update": update,
                 "train/loss": loss_value,
-                "train/flow_loss": flow_loss_value,
+                "train/objective_loss": flow_loss_value,
+                "train/flow_loss": flow_loss_value
+                if args.planner_family == "flow"
+                else None,
                 "train/normalized_endpoint_mse": endpoint_mse_value,
                 "train/normalized_endpoint_cosine_loss": endpoint_cosine_value,
                 "train/grad_norm": float(grad_norm.detach().item()),

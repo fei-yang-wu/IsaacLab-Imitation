@@ -18,6 +18,13 @@ from isaaclab.markers.config import (
     FRAME_MARKER_CFG,
 )
 from isaaclab_imitation.assets.robots import UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES
+from isaaclab_imitation.envs.causal_planner_observation import (
+    CAUSAL_PLANNER_FRAME_DIM,
+    CausalPlannerHistory,
+    build_causal_planner_frame,
+    build_offline_causal_planner_frame,
+    causal_planner_observation_spec,
+)
 from tensordict import TensorDict
 
 logger = logging.getLogger(__name__)
@@ -25,6 +32,8 @@ NestedKey: TypeAlias = str | tuple[str, ...]
 _MDP_COMPILED: Any | None = None
 
 _COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracle"})
+_POLICY_COMMAND_MODES = frozenset({"reference", "full_body_chunk_current_slot"})
+_CAUSAL_PLANNER_HISTORY_STEPS = 9
 
 
 def _get_mdp_compiled_module() -> Any:
@@ -76,6 +85,16 @@ def _normalize_command_observation_source(value: str) -> str:
             f"expected one of {sorted(_COMMAND_OBSERVATION_SOURCES)}."
         )
     return source
+
+
+def _normalize_policy_command_mode(value: str) -> str:
+    mode = str(value).strip().lower().replace("-", "_")
+    if mode not in _POLICY_COMMAND_MODES:
+        raise ValueError(
+            f"Unsupported policy_command_mode={value!r}; "
+            f"expected one of {sorted(_POLICY_COMMAND_MODES)}."
+        )
+    return mode
 
 
 # Import the new manager and utilities
@@ -399,6 +418,23 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._command_observation_source = _normalize_command_observation_source(
             getattr(cfg, "command_observation_source", "reference")
         )
+        self._policy_command_mode = _normalize_policy_command_mode(
+            getattr(cfg, "policy_command_mode", "reference")
+        )
+        self._command_hold_steps = int(getattr(cfg, "command_hold_steps", 0))
+        if self._command_hold_steps < 0:
+            raise ValueError("command_hold_steps must be >= 0.")
+        if self._command_hold_steps > 0 and self._latent_patch_past_steps > 0:
+            raise ValueError(
+                "command_hold_steps requires latent_patch_past_steps == 0; "
+                "held chunk consumption is only defined for future-only windows."
+            )
+        # Anchor pose at each env's last command renewal, per anchor body:
+        # published chunks are expressed in the publish-time anchor frame and
+        # re-expressed into the current frame each step (odometry middleware).
+        self._held_command_anchor_pose: dict[
+            str, tuple[torch.Tensor, torch.Tensor]
+        ] = {}
 
         # Store reference joint mapping
         self.reference_joint_names = reference_joint_names
@@ -467,6 +503,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._finalize_reference_body_names()
         self._initialize_mdp_fast_paths()
         self._setup_reference_velocity_visualizer()
+        self._initialize_causal_planner_history()
 
     def _align_reference_target_joints_to_articulation(self) -> None:
         """Retarget the trajectory manager to the live articulation joint order.
@@ -942,6 +979,28 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             action_term=action_term,
         )
         return raw_reference_action, processed_reference_action
+
+    def current_reconstructed_reference_action(self) -> torch.Tensor:
+        """Return the aligned raw reference action for training-only supervision."""
+        if self.current_expert_frame is None:
+            raise RuntimeError(
+                "Reference action requested before expert data is ready."
+            )
+        reconstructed = self._reconstruct_reference_action_from_reference(
+            self.current_expert_frame
+        )
+        if reconstructed is None:
+            # ObservationManager probes each term once while it is constructing
+            # itself. At that point ActionManager exists, but the reconstruction
+            # cache is intentionally initialized only after the parent env has
+            # finished loading all managers. Return only a shape-correct probe;
+            # a missing reconstruction after construction remains a hard error.
+            if getattr(self, "observation_manager", None) is None:
+                return torch.zeros_like(self.action_manager.action)
+            raise RuntimeError(
+                "Reference action supervision requires reconstructed_reference_action."
+            )
+        return reconstructed[0]
 
     @staticmethod
     def _compute_action_alignment_metrics(
@@ -1744,9 +1803,20 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         env_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         source = self._command_observation_source
+        hold_steps = int(self._command_hold_steps)
         if source == "reference":
-            return self.get_current_expert_window_term(
-                term_name=term_name,
+            if hold_steps <= 0:
+                return self.get_current_expert_window_term(
+                    term_name=term_name,
+                    past_steps=past_steps,
+                    future_steps=future_steps,
+                    joint_ids=joint_ids,
+                    anchor_body_name=anchor_body_name,
+                    reference_body_names=reference_body_names,
+                    env_ids=env_ids,
+                )
+            return self._held_reference_command_window_term(
+                term_name,
                 past_steps=past_steps,
                 future_steps=future_steps,
                 joint_ids=joint_ids,
@@ -1768,13 +1838,319 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 anchor_body_name=anchor_body_name,
                 reference_body_names=reference_body_names,
             )
-            self.set_agent_trajectory_command({term_name: value})
+            if hold_steps <= 0:
+                self.set_agent_trajectory_command({term_name: value})
+            else:
+                renew_ids = torch.nonzero(
+                    self._command_hold_phase() == 0, as_tuple=False
+                ).flatten()
+                if renew_ids.numel() > 0:
+                    self.set_agent_trajectory_command(
+                        {term_name: value.index_select(0, renew_ids)},
+                        env_ids=renew_ids,
+                    )
 
         # Observation tensors must not alias the mutable planner command buffers:
         # resets and subsequent planner publishes update those buffers in-place.
-        return self.get_agent_trajectory_command_term(
-            term_name, env_ids=env_ids
-        ).clone()
+        value = self.get_agent_trajectory_command_term(term_name).clone()
+        if hold_steps > 0:
+            phase = self._command_hold_phase()
+            self._update_held_command_anchor_pose(anchor_body_name, phase)
+            value = self._shift_window_by_phase(
+                value,
+                phase,
+                window_steps=self._agent_trajectory_command_window_steps,
+            )
+            value = self._reexpress_window_in_current_anchor_frame(
+                value,
+                term_name=term_name,
+                anchor_body_name=anchor_body_name,
+                window_steps=self._agent_trajectory_command_window_steps,
+            )
+        if env_ids is None:
+            return value
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        return value.index_select(0, env_ids)
+
+    @property
+    def policy_command_mode(self) -> str:
+        """Return the adapter used for low-level policy command observations."""
+        return self._policy_command_mode
+
+    def current_full_body_tracker_command_term(
+        self,
+        term_name: str,
+        *,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+        env_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Consume the current frame of a held full-body command chunk.
+
+        The existing window path first shifts the held packet by each
+        environments command phase and re-expresses anchor terms in the live
+        robot frame. Selecting slot zero here therefore exposes the exact
+        67-D command contract expected by the vanilla 50 Hz tracker.
+        """
+        if self._policy_command_mode != "full_body_chunk_current_slot":
+            raise RuntimeError(
+                "Full-body chunk adapter requested while policy_command_mode="
+                f"{self._policy_command_mode!r}."
+            )
+        if self._command_observation_source not in {"planner", "planner_oracle"}:
+            raise RuntimeError(
+                "full_body_chunk_current_slot requires command_observation_source "
+                "to be planner or planner_oracle."
+            )
+        if self._latent_patch_past_steps != 0:
+            raise RuntimeError(
+                "full_body_chunk_current_slot requires latent_patch_past_steps=0."
+            )
+        if self._command_hold_steps <= 0:
+            raise RuntimeError(
+                "full_body_chunk_current_slot requires command_hold_steps>0."
+            )
+
+        future_steps = int(self._latent_patch_future_steps)
+        window_steps = future_steps + 1
+        if window_steps < self._command_hold_steps:
+            raise RuntimeError(
+                "full_body_chunk_current_slot requires at least one command "
+                "frame per held control step: "
+                f"window_steps={window_steps}, hold_steps={self._command_hold_steps}."
+            )
+        value = self.get_current_command_window_term(
+            term_name=term_name,
+            past_steps=0,
+            future_steps=future_steps,
+            joint_ids=joint_ids,
+            anchor_body_name=anchor_body_name,
+            env_ids=env_ids,
+        )
+        if value.ndim != 2 or int(value.shape[1]) % window_steps != 0:
+            raise RuntimeError(
+                f"Invalid streamed command term {term_name!r} shape "
+                f"{tuple(value.shape)} for window_steps={window_steps}."
+            )
+        frame_width = int(value.shape[1]) // window_steps
+        if term_name == "expert_motion":
+            expected_frame_width = 2 * int(
+                self._get_joint_ids_tensor_fast(joint_ids).numel()
+            )
+        elif term_name == "expert_anchor_pos_b":
+            expected_frame_width = 3
+        elif term_name == "expert_anchor_ori_b":
+            expected_frame_width = 6
+        else:
+            raise KeyError(f"Unsupported full-body tracker command term {term_name!r}.")
+        if frame_width != expected_frame_width:
+            raise RuntimeError(
+                f"Streamed command term {term_name!r} has per-frame width "
+                f"{frame_width}, expected {expected_frame_width}."
+            )
+        return value.reshape(value.shape[0], window_steps, frame_width)[:, 0, :]
+
+    def _command_hold_phase(self) -> torch.Tensor:
+        """Per-env step offset within the current command hold window."""
+        hold_steps = int(self._command_hold_steps)
+        return self.episode_length_buf.to(dtype=torch.long) % hold_steps
+
+    @staticmethod
+    def _shift_window_by_phase(
+        flat: torch.Tensor,
+        phase: torch.Tensor,
+        *,
+        window_steps: int,
+    ) -> torch.Tensor:
+        """Time-align a held command chunk to the current control step.
+
+        Shifts the frame-major flattened window ``[N, W * D]`` forward by each
+        env's hold phase so the leading slot stays time-aligned with the
+        current control step, repeating the final frame past the chunk end.
+        """
+        num_envs, width = flat.shape
+        window_steps = int(window_steps)
+        if window_steps <= 0 or width % window_steps != 0:
+            raise ValueError(
+                "Held command window width must be divisible by window steps, "
+                f"got width={width}, window_steps={window_steps}."
+            )
+        per_step_dim = width // window_steps
+        view = flat.reshape(num_envs, window_steps, per_step_dim)
+        offsets = torch.arange(window_steps, device=flat.device, dtype=torch.long)
+        indices = (
+            offsets[None, :] + phase.to(device=flat.device, dtype=torch.long)[:, None]
+        ).clamp_(max=window_steps - 1)
+        shifted = view.gather(
+            1, indices[:, :, None].expand(num_envs, window_steps, per_step_dim)
+        )
+        return shifted.reshape(num_envs, width)
+
+    @staticmethod
+    def _clamp_window_to_hold_boundary(
+        flat: torch.Tensor,
+        phase: torch.Tensor,
+        *,
+        window_steps: int,
+    ) -> torch.Tensor:
+        """Limit a fresh command window to the current hold's information.
+
+        The fresh window at phase ``k`` covers frames ``[t, t + W - 1]`` while
+        the chunk published at the last renewal only knew frames up to the
+        hold boundary at slot ``W - 1 - k``. Slots past the boundary repeat
+        the boundary frame (tail padding), so no post-renewal information
+        leaks into the command observation.
+        """
+        num_envs, width = flat.shape
+        window_steps = int(window_steps)
+        if window_steps <= 0 or width % window_steps != 0:
+            raise ValueError(
+                "Held command window width must be divisible by window steps, "
+                f"got width={width}, window_steps={window_steps}."
+            )
+        per_step_dim = width // window_steps
+        view = flat.reshape(num_envs, window_steps, per_step_dim)
+        offsets = torch.arange(window_steps, device=flat.device, dtype=torch.long)
+        boundary = (
+            window_steps - 1 - phase.to(device=flat.device, dtype=torch.long)
+        ).clamp_(min=0)
+        indices = torch.minimum(offsets[None, :], boundary[:, None])
+        clamped = view.gather(
+            1, indices[:, :, None].expand(num_envs, window_steps, per_step_dim)
+        )
+        return clamped.reshape(num_envs, width)
+
+    def _update_held_command_anchor_pose(
+        self, anchor_body_name: str, phase: torch.Tensor
+    ) -> None:
+        """Track the anchor pose at each env's last command renewal.
+
+        Published chunks are expressed in the anchor frame at publish time;
+        re-expressing them each step needs that reference pose.
+        """
+        anchor_pos_w, anchor_quat_w = self._get_robot_anchor_state_w_fast(
+            anchor_body_name
+        )
+        anchor_pos_w = anchor_pos_w.reshape(-1, 3)
+        anchor_quat_w = anchor_quat_w.reshape(-1, 4)
+        stored = self._held_command_anchor_pose.get(anchor_body_name)
+        if (
+            stored is None
+            or stored[0].shape != anchor_pos_w.shape
+            or stored[0].device != anchor_pos_w.device
+        ):
+            self._held_command_anchor_pose[anchor_body_name] = (
+                anchor_pos_w.clone(),
+                anchor_quat_w.clone(),
+            )
+            return
+        renew_mask = phase == 0
+        if bool(renew_mask.any()):
+            stored[0][renew_mask] = anchor_pos_w[renew_mask]
+            stored[1][renew_mask] = anchor_quat_w[renew_mask]
+
+    def _reexpress_window_in_current_anchor_frame(
+        self,
+        flat: torch.Tensor,
+        *,
+        term_name: str,
+        anchor_body_name: str,
+        window_steps: int,
+    ) -> torch.Tensor:
+        """Re-express a held chunk from its publish-time anchor frame.
+
+        Standard VLA-WBC middleware refreshes command coordinates with
+        odometry each control step; only the chunk *content* is held at the
+        planner rate. Position (``*_pos_b``) and rot6d (``*_ori_b``) terms are
+        rigidly transformed from the renewal-time anchor frame into the
+        current one; joint-space terms are frame-invariant.
+        """
+        is_position = term_name.endswith("_pos_b")
+        is_orientation = term_name.endswith("_ori_b")
+        if not is_position and not is_orientation:
+            return flat
+        stored = self._held_command_anchor_pose.get(anchor_body_name)
+        if stored is None:
+            return flat
+        renewal_pos_w, renewal_quat_w = stored
+        current_pos_w, current_quat_w = self._get_robot_anchor_state_w_fast(
+            anchor_body_name
+        )
+        current_pos_w = current_pos_w.reshape(-1, 3)
+        current_quat_w = current_quat_w.reshape(-1, 4)
+        # Relative transform from renewal anchor frame to current anchor frame.
+        delta_quat = math_utils.quat_mul(
+            math_utils.quat_inv(current_quat_w), renewal_quat_w
+        )
+        delta_pos = math_utils.quat_apply_inverse(
+            current_quat_w, renewal_pos_w - current_pos_w
+        )
+        num_envs, width = flat.shape
+        if is_position:
+            if width % 3 != 0:
+                raise ValueError(
+                    f"Position command term {term_name!r} width {width} is not "
+                    "divisible by 3."
+                )
+            vectors = flat.reshape(num_envs, -1, 3)
+            num_vectors = vectors.shape[1]
+            delta_quat_exp = (
+                delta_quat[:, None, :].expand(-1, num_vectors, -1).reshape(-1, 4)
+            )
+            rotated = math_utils.quat_apply(
+                delta_quat_exp, vectors.reshape(-1, 3)
+            ).reshape(num_envs, num_vectors, 3)
+            return (rotated + delta_pos[:, None, :]).reshape(num_envs, width)
+        if width % 6 != 0:
+            raise ValueError(
+                f"Orientation command term {term_name!r} width {width} is not "
+                "divisible by 6."
+            )
+        delta_mat = math_utils.matrix_from_quat(delta_quat)
+        columns = flat.reshape(num_envs, -1, 3, 2)
+        rotated = torch.matmul(delta_mat[:, None, :, :], columns)
+        return rotated.reshape(num_envs, width)
+
+    def _held_reference_command_window_term(
+        self,
+        term_name: str,
+        *,
+        past_steps: int,
+        future_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+        reference_body_names: Sequence[str] = (),
+        env_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Reference command windows under the held-chunk contract.
+
+        Matches what standard VLA-WBC middleware would provide from a chunk
+        planner running once per ``command_hold_steps``: command *content* is
+        limited to the frames known at the last renewal (fresh lookahead
+        shrinks toward the hold boundary, tail-padded with the boundary
+        frame), while coordinates are re-expressed in the robot's current
+        anchor frame every control step, exactly like odometry-based target
+        re-expression on a real stack.
+        """
+        if int(past_steps) != 0:
+            raise ValueError(
+                "command_hold_steps requires past_steps == 0 command windows."
+            )
+        fresh = self.get_current_expert_window_term(
+            term_name=term_name,
+            past_steps=0,
+            future_steps=int(future_steps),
+            joint_ids=joint_ids,
+            anchor_body_name=anchor_body_name,
+            reference_body_names=reference_body_names,
+        )
+        value = self._clamp_window_to_hold_boundary(
+            fresh, self._command_hold_phase(), window_steps=int(future_steps) + 1
+        )
+        if env_ids is None:
+            return value
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        return value.index_select(0, env_ids)
 
     def get_agent_latent_command(
         self, env_ids: torch.Tensor | None = None
@@ -2128,6 +2504,267 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         ).to(dtype=torch.long)
         return reset_steps
 
+    def _current_causal_planner_frame(
+        self, env_ids: torch.Tensor | Sequence[int] | None = None
+    ) -> torch.Tensor:
+        """Build one planner frame exclusively from the live robot and action state."""
+        if env_ids is None:
+            env_ids_t = torch.arange(
+                self.num_envs, device=self.device, dtype=torch.long
+            )
+        else:
+            env_ids_t = torch.as_tensor(
+                env_ids, device=self.device, dtype=torch.long
+            ).reshape(-1)
+        action = self.action_manager.action.index_select(0, env_ids_t)
+        return build_causal_planner_frame(
+            {
+                "joint_pos_rel": self.robot.data.joint_pos.index_select(0, env_ids_t)
+                - self.robot.data.default_joint_pos.index_select(0, env_ids_t),
+                "joint_vel_rel": self.robot.data.joint_vel.index_select(0, env_ids_t)
+                - self.robot.data.default_joint_vel.index_select(0, env_ids_t),
+                "base_ang_vel": self.robot.data.root_ang_vel_b.index_select(
+                    0, env_ids_t
+                ),
+                "projected_gravity": self.robot.data.projected_gravity_b.index_select(
+                    0, env_ids_t
+                ),
+                "last_action": action,
+            }
+        )
+
+    def _initialize_causal_planner_history(self) -> None:
+        """Initialize ten 50 Hz frames using repeat-first reset padding."""
+        frame = self._current_causal_planner_frame()
+        if tuple(frame.shape) != (self.num_envs, CAUSAL_PLANNER_FRAME_DIM):
+            raise ValueError(
+                "Unexpected causal planner frame shape during initialization: "
+                f"{tuple(frame.shape)}."
+            )
+        self._causal_planner_history = CausalPlannerHistory(
+            frame, history_steps=_CAUSAL_PLANNER_HISTORY_STEPS
+        )
+
+    def _reset_causal_planner_history(self, env_ids: torch.Tensor) -> None:
+        history = getattr(self, "_causal_planner_history", None)
+        if history is None:
+            return
+        env_ids_t = torch.as_tensor(
+            env_ids, device=self.device, dtype=torch.long
+        ).reshape(-1)
+        if int(env_ids_t.numel()) == 0:
+            return
+        frame = self._current_causal_planner_frame(env_ids_t)
+        history.reset(env_ids_t, frame)
+
+    def _append_causal_planner_history(self) -> None:
+        history = getattr(self, "_causal_planner_history", None)
+        if history is None:
+            return
+        history.append(self._current_causal_planner_frame())
+
+    def causal_planner_observation_spec(
+        self, history_steps: int = _CAUSAL_PLANNER_HISTORY_STEPS
+    ) -> dict[str, Any]:
+        """Return the exact feature and history contract used by the planner."""
+        history_steps = int(history_steps)
+        if history_steps > _CAUSAL_PLANNER_HISTORY_STEPS:
+            raise ValueError(
+                "history_steps exceeds the live causal history capacity: "
+                f"{history_steps} > {_CAUSAL_PLANNER_HISTORY_STEPS}."
+            )
+        return causal_planner_observation_spec(history_steps=history_steps)
+
+    def current_causal_planner_observation(
+        self,
+        env_ids: torch.Tensor | Sequence[int] | None = None,
+        history_steps: int = _CAUSAL_PLANNER_HISTORY_STEPS,
+    ) -> TensorDict:
+        """Return robot-only planner state without reading any expert reference."""
+        history_steps = int(history_steps)
+        spec = self.causal_planner_observation_spec(history_steps)
+        if env_ids is None:
+            env_ids_t = torch.arange(
+                self.num_envs, device=self.device, dtype=torch.long
+            )
+        else:
+            env_ids_t = torch.as_tensor(
+                env_ids, device=self.device, dtype=torch.long
+            ).reshape(-1)
+        if int(env_ids_t.numel()) == 0:
+            raise ValueError("env_ids must select at least one environment.")
+        history = self._causal_planner_history.select(
+            env_ids_t, history_steps=history_steps
+        )
+        expected_history = (
+            int(env_ids_t.numel()),
+            int(spec["history_frames"]),
+            int(spec["frame_dim"]),
+        )
+        if tuple(history.shape) != expected_history:
+            raise RuntimeError(
+                "Causal planner history shape mismatch: expected "
+                f"{expected_history}, got {tuple(history.shape)}."
+            )
+        planner = TensorDict(
+            {"state": history[:, -1], "state_history": history},
+            batch_size=[int(env_ids_t.numel())],
+            device=self.device,
+        )
+        return TensorDict(
+            {"planner": planner},
+            batch_size=[int(env_ids_t.numel())],
+            device=self.device,
+        )
+
+    def causal_planner_observation_from_expert_frame(
+        self, expert_frame: TensorDict
+    ) -> torch.Tensor:
+        """Build sensor-equivalent planner features from offline demonstration data."""
+        joint_pos = expert_frame.get("joint_pos")
+        joint_vel = expert_frame.get("joint_vel")
+        root_quat = expert_frame.get("root_quat")
+        root_ang_vel = expert_frame.get("root_ang_vel")
+        last_action = expert_frame.get("last_action")
+        missing = [
+            name
+            for name, value in (
+                ("joint_pos", joint_pos),
+                ("joint_vel", joint_vel),
+                ("root_quat", root_quat),
+                ("root_ang_vel", root_ang_vel),
+            )
+            if value is None
+        ]
+        if missing:
+            raise KeyError(
+                f"Offline causal planner frame is missing demonstration fields: {missing}."
+            )
+        assert joint_pos is not None
+        assert joint_vel is not None
+        assert root_quat is not None
+        assert root_ang_vel is not None
+        leading_dims = joint_pos.shape[:-1]
+        default_joint_pos = self._expert_default_joint_pos[0].reshape(
+            *((1,) * len(leading_dims)), -1
+        )
+        default_joint_vel = self._expert_default_joint_vel[0].reshape(
+            *((1,) * len(leading_dims)), -1
+        )
+        return build_offline_causal_planner_frame(
+            joint_pos=joint_pos,
+            joint_vel=joint_vel,
+            root_quat_wxyz=root_quat,
+            root_ang_vel_w=root_ang_vel,
+            last_action=last_action,
+            default_joint_pos=default_joint_pos,
+            default_joint_vel=default_joint_vel,
+        )
+
+    def current_offline_demo_planner_observation(
+        self,
+        env_ids: torch.Tensor | Sequence[int] | None = None,
+        history_steps: int = _CAUSAL_PLANNER_HISTORY_STEPS,
+    ) -> TensorDict:
+        """Return training-only sensor-equivalent history from the current demo cursor."""
+        history_steps = int(history_steps)
+        spec = self.causal_planner_observation_spec(history_steps)
+        if env_ids is None:
+            env_ids_t = torch.arange(
+                self.num_envs, device=self.device, dtype=torch.long
+            )
+        else:
+            env_ids_t = torch.as_tensor(
+                env_ids, device=self.device, dtype=torch.long
+            ).reshape(-1)
+        if int(env_ids_t.numel()) == 0:
+            raise ValueError("env_ids must select at least one environment.")
+        local_steps = self._current_local_steps(env_ids_t)
+        tm = self.trajectory_manager
+        traj_ranks = tm.env_traj_rank.index_select(
+            0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
+        ).to(self.device)
+        expert_window = self._sample_expert_window_slice(
+            env_ids_t,
+            local_steps,
+            past_steps=history_steps,
+            future_steps=0,
+        )
+        global_indices, trajectory_starts = self._offline_window_global_indices(
+            traj_ranks,
+            local_steps,
+            past_steps=history_steps,
+            future_steps=0,
+        )
+        expert_window = self._attach_offline_previous_action(
+            expert_window,
+            global_indices=global_indices,
+            trajectory_starts=trajectory_starts,
+        )
+        history = self.causal_planner_observation_from_expert_frame(expert_window)
+        expected_history = (
+            int(env_ids_t.numel()),
+            int(spec["history_frames"]),
+            int(spec["frame_dim"]),
+        )
+        if tuple(history.shape) != expected_history:
+            raise RuntimeError(
+                "Offline demo planner history shape mismatch: expected "
+                f"{expected_history}, got {tuple(history.shape)}."
+            )
+        planner = TensorDict(
+            {"state": history[:, -1], "state_history": history},
+            batch_size=[int(env_ids_t.numel())],
+            device=self.device,
+        )
+        return TensorDict(
+            {"planner": planner},
+            batch_size=[int(env_ids_t.numel())],
+            device=self.device,
+        )
+
+    def current_offline_demo_command_terms(
+        self,
+        *,
+        past_steps: int,
+        future_steps: int,
+        env_ids: torch.Tensor | Sequence[int] | None = None,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+        reference_body_names: Sequence[str] = (),
+    ) -> dict[str, torch.Tensor]:
+        """Return an expert window expressed in its own current-anchor frame."""
+        past_steps = int(past_steps)
+        future_steps = int(future_steps)
+        if past_steps < 0 or future_steps < 0:
+            raise ValueError("Offline demonstration window steps must be >= 0.")
+        if env_ids is None:
+            env_ids_t = torch.arange(
+                self.num_envs, device=self.device, dtype=torch.long
+            )
+        else:
+            env_ids_t = torch.as_tensor(
+                env_ids, device=self.device, dtype=torch.long
+            ).reshape(-1)
+        if int(env_ids_t.numel()) == 0:
+            raise ValueError("env_ids must select at least one environment.")
+        local_steps = self._current_local_steps(env_ids_t)
+        expert_window = self._sample_expert_window_slice(
+            env_ids_t,
+            local_steps,
+            past_steps=past_steps,
+            future_steps=future_steps,
+        )
+        return self._build_expert_window_terms(
+            expert_window,
+            env_ids_t,
+            context="expert",
+            past_steps=past_steps,
+            joint_ids=joint_ids,
+            anchor_body_name=anchor_body_name,
+            reference_body_names=reference_body_names,
+        )
+
     def _reset_idx(self, env_ids: torch.Tensor):
         """Reset the specified environments.
 
@@ -2180,6 +2817,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
             self._last_tracked_root_pos_valid.index_fill_(0, env_ids, True)
 
+        self._reset_causal_planner_history(env_ids)
+
         return result
 
     def step(self, action: torch.Tensor) -> VecEnvStepReturn:
@@ -2202,6 +2841,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             # The pre-step sample already advanced the trajectory cursor, so this
             # refresh must not advance again.
             self._refresh_current_expert_frame(advance=False)
+            self._append_causal_planner_history()
             self.obs_buf = self.observation_manager.compute(update_history=True)
             return (
                 self.obs_buf,
@@ -2292,6 +2932,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Expose post-step reference (frame t+1) for observations/outputs, matching
         # ManagerBasedRLEnv command timing after command_manager.compute().
         self._refresh_current_expert_frame(advance=False)
+        self._append_causal_planner_history()
         # -- compute observations
         # note: done after reset to get the correct observations for reset envs
         self.obs_buf = self.observation_manager.compute(update_history=True)
@@ -2391,6 +3032,66 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             env_ids_tm.to(self.device),
             global_indices.to(self.device),
         )
+
+    def _offline_window_global_indices(
+        self,
+        traj_ranks: torch.Tensor,
+        local_steps: torch.Tensor,
+        *,
+        past_steps: int,
+        future_steps: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return clamped replay indices and trajectory starts for an expert window."""
+        tm = self.trajectory_manager
+        traj_ranks_tm = traj_ranks.to(device=tm._state_device, dtype=torch.long)
+        local_steps_tm = local_steps.to(device=tm._state_device, dtype=torch.long)
+        offsets = torch.arange(
+            -int(past_steps),
+            int(future_steps) + 1,
+            device=tm._state_device,
+            dtype=torch.long,
+        )
+        lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
+        steps = local_steps_tm.unsqueeze(1) + offsets.unsqueeze(0)
+        steps = steps.clamp(min=0)
+        steps = torch.minimum(steps, (lengths - 1).unsqueeze(1))
+        starts = tm._start.index_select(0, traj_ranks_tm).unsqueeze(1)
+        return (starts + steps).to(self.device), starts.to(self.device)
+
+    def _attach_offline_previous_action(
+        self,
+        expert_window: TensorDict,
+        *,
+        global_indices: torch.Tensor,
+        trajectory_starts: torch.Tensor,
+    ) -> TensorDict:
+        """Attach aligned previous actions, preferring recorded labels."""
+        if expert_window.get("last_action") is not None:
+            return expert_window
+        previous_indices = torch.maximum(global_indices - 1, trajectory_starts)
+        tm = self.trajectory_manager
+        previous = tm.rb[previous_indices.to(device=tm._storage_device)]
+        recorded_action = previous.get("action")
+        if recorded_action is not None:
+            last_action = recorded_action.to(self.device, dtype=torch.float32)
+        else:
+            flat_indices = previous_indices.reshape(-1)
+            reconstructed = self._sample_reconstructed_reference_actions(
+                global_indices=flat_indices,
+                env_ids=torch.zeros_like(flat_indices, device=self.device),
+            )
+            if reconstructed is None:
+                raise ValueError(
+                    "Offline causal planner observations require recorded action "
+                    "labels or reconstructed reference actions."
+                )
+            last_action = reconstructed.reshape(*previous_indices.shape, -1)
+        at_start = global_indices == trajectory_starts
+        last_action = torch.where(
+            at_start.unsqueeze(-1), torch.zeros_like(last_action), last_action
+        )
+        expert_window.set("last_action", last_action)
+        return expert_window
 
     @staticmethod
     def _normalize_expert_macro_split(split: str | None) -> str:
@@ -3647,6 +4348,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             "future_window": future_window,
             "target": target,
             "traj_rank": traj_rank,
+            "local_step": local_steps,
         }
         if state_history is not None:
             expected_history = (batch_size, state_history_steps + 1, state_dim)
@@ -3662,6 +4364,70 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             device=self.device,
         )
         return TensorDict({"hl": hl}, batch_size=[batch_size], device=self.device)
+
+    def sample_causal_planner_training_batch(
+        self,
+        batch_size: int,
+        horizon_steps: int,
+        split: str | None = None,
+        eval_fraction: float = 0.1,
+        split_seed: int = 0,
+        trajectory_ranks: Sequence[int] | torch.Tensor | None = None,
+        history_steps: int = _CAUSAL_PLANNER_HISTORY_STEPS,
+    ) -> TensorDict:
+        """Pair offline robot-equivalent planner history with expert future labels."""
+        history_steps = int(history_steps)
+        batch = self.sample_expert_macro_transition_batch(
+            batch_size=batch_size,
+            horizon_steps=horizon_steps,
+            split=split,
+            eval_fraction=eval_fraction,
+            split_seed=split_seed,
+            trajectory_ranks=trajectory_ranks,
+            state_history_steps=0,
+        )
+        traj_rank = batch.get(("hl", "traj_rank"))
+        local_step = batch.get(("hl", "local_step"))
+        if traj_rank is None or local_step is None:
+            raise RuntimeError(
+                "Expert macro sampler did not return trajectory rank and local step."
+            )
+        expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
+            traj_rank,
+            local_step,
+            past_steps=history_steps,
+            future_steps=0,
+        )
+        global_indices, trajectory_starts = self._offline_window_global_indices(
+            traj_rank,
+            local_step,
+            past_steps=history_steps,
+            future_steps=0,
+        )
+        expert_window = self._attach_offline_previous_action(
+            expert_window,
+            global_indices=global_indices,
+            trajectory_starts=trajectory_starts,
+        )
+        history = self.causal_planner_observation_from_expert_frame(expert_window)
+        spec = self.causal_planner_observation_spec(history_steps)
+        expected = (
+            int(batch_size),
+            int(spec["history_frames"]),
+            int(spec["frame_dim"]),
+        )
+        if tuple(history.shape) != expected:
+            raise RuntimeError(
+                "Sampled offline planner history shape mismatch: expected "
+                f"{expected}, got {tuple(history.shape)}."
+            )
+        planner = TensorDict(
+            {"state": history[:, -1], "state_history": history},
+            batch_size=[int(batch_size)],
+            device=self.device,
+        )
+        batch.set("planner", planner)
+        return batch
 
     def current_expert_macro_transition_batch(
         self,
@@ -3752,6 +4518,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             "future_window": future_window,
             "target": target,
             "traj_rank": traj_rank,
+            "local_step": local_steps,
         }
         if state_history is not None:
             expected_history = (batch_size, state_history_steps + 1, state_dim)
@@ -3763,6 +4530,68 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             hl_payload["state_history"] = state_history
         hl = TensorDict(
             hl_payload,
+            batch_size=[batch_size],
+            device=self.device,
+        )
+        return TensorDict({"hl": hl}, batch_size=[batch_size], device=self.device)
+
+    def current_offline_demo_macro_transition_batch(
+        self,
+        horizon_steps: int,
+        env_ids: torch.Tensor | Sequence[int] | None = None,
+    ) -> TensorDict:
+        """Return an offline expert macro window paired to the demo cursor.
+
+        Unlike the rollout macro batch, all anchor terms are expressed relative
+        to the offline expert anchor at the current frame. The current anchor is
+        therefore zero position and identity orientation.
+        """
+        horizon_steps = int(horizon_steps)
+        if horizon_steps <= 0:
+            raise ValueError("horizon_steps must be > 0.")
+        if env_ids is None:
+            env_ids_t = torch.arange(
+                self.num_envs, device=self.device, dtype=torch.long
+            )
+        else:
+            env_ids_t = torch.as_tensor(
+                env_ids, device=self.device, dtype=torch.long
+            ).reshape(-1)
+        batch_size = int(env_ids_t.numel())
+        if batch_size <= 0:
+            raise ValueError("env_ids must select at least one environment.")
+
+        terms = self.current_offline_demo_command_terms(
+            past_steps=0,
+            future_steps=horizon_steps,
+            env_ids=env_ids_t,
+        )
+        window_steps = horizon_steps + 1
+        sequence = self._expert_macro_state_sequence_from_terms(
+            terms,
+            batch_size=batch_size,
+            window_steps=window_steps,
+        )
+        self._expert_macro_feature_slices = (
+            self._expert_macro_state_feature_slices_from_terms(
+                terms,
+                batch_size=batch_size,
+                window_steps=window_steps,
+            )
+        )
+        local_steps = self._current_local_steps(env_ids_t)
+        tm = self.trajectory_manager
+        traj_rank = tm.env_traj_rank.index_select(
+            0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
+        ).to(device=self.device, dtype=torch.long)
+        hl = TensorDict(
+            {
+                "state": sequence[:, 0, :].contiguous(),
+                "future_window": sequence[:, 1:, :].contiguous(),
+                "target": sequence[:, -1, :].contiguous(),
+                "traj_rank": traj_rank,
+                "local_step": local_steps,
+            },
             batch_size=[batch_size],
             device=self.device,
         )

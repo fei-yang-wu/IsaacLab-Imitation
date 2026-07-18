@@ -65,7 +65,7 @@ parser.add_argument(
     "--state_history_steps",
     type=int,
     default=None,
-    help="Past expert macro states to flatten with the current state for planner input.",
+    help="Past causal robot frames to flatten with the current frame for planner input.",
 )
 parser.add_argument(
     "--checkpoint",

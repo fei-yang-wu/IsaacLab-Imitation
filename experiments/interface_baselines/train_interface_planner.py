@@ -24,6 +24,7 @@ from interface_planner_common import (  # noqa: E402
     load_planner_checkpoint,
     load_rollout_samples,
     mean_std,
+    paired_target_key,
     parameter_counts,
     rmse_per_row,
     save_planner_checkpoint,
@@ -151,10 +152,17 @@ def main() -> None:
     device = _resolve_device(str(args.device))
 
     data_cpu, sample_metadata = load_rollout_samples(args.samples_dir.expanduser())
-    source_sample_count = int(data_cpu["target"].shape[0])
+    target_key = paired_target_key(args.state_key, sample_metadata)
+    source_sample_count = int(data_cpu[target_key].shape[0])
     if args.state_key not in data_cpu:
         raise KeyError(f"Sample data does not contain state key {args.state_key!r}.")
     target_spec = _target_spec_from_metadata(sample_metadata, args.interface)
+    planner_observation_spec = sample_metadata.get("planner_observation_spec")
+    if not isinstance(planner_observation_spec, dict):
+        raise ValueError(
+            "Rollout samples have no causal planner_observation_spec. "
+            "Recollect them with robot-only planner observations."
+        )
     interface = target_spec.interface
     run_dir = _run_dir(args.output_dir, interface=interface, state_key=args.state_key)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -162,11 +170,16 @@ def main() -> None:
     checkpoint_path = run_dir / "checkpoints" / "latest.pt"
 
     state = data_cpu[args.state_key].to(device=device, dtype=torch.float32)
-    target = data_cpu["target"].to(device=device, dtype=torch.float32)
+    target = data_cpu[target_key].to(device=device, dtype=torch.float32)
     if int(target.shape[-1]) != target_spec.target_dim:
         raise ValueError(
             f"Target width mismatch: sample target has {target.shape[-1]}, "
             f"metadata target_spec has {target_spec.target_dim}."
+        )
+    if int(state.shape[-1]) != int(planner_observation_spec.get("flat_dim", -1)):
+        raise ValueError(
+            f"Sample state width {state.shape[-1]} does not match causal planner "
+            f"spec {planner_observation_spec.get('flat_dim')}."
         )
 
     if args.checkpoint is not None:
@@ -177,6 +190,20 @@ def main() -> None:
             raise ValueError(
                 "Checkpoint target spec does not match sample target spec: "
                 f"{checkpoint_spec.to_dict()} vs {target_spec.to_dict()}."
+            )
+        checkpoint_observation_spec = checkpoint_metadata.get(
+            "planner_observation_spec"
+        )
+        if checkpoint_observation_spec is None:
+            checkpoint_sample_metadata = checkpoint_metadata.get("sample_metadata", {})
+            if isinstance(checkpoint_sample_metadata, dict):
+                checkpoint_observation_spec = checkpoint_sample_metadata.get(
+                    "planner_observation_spec"
+                )
+        if checkpoint_observation_spec != planner_observation_spec:
+            raise ValueError(
+                "Checkpoint and sample planner observation specifications differ: "
+                f"{checkpoint_observation_spec} != {planner_observation_spec}."
             )
         planner = planner.to(device)
         init_checkpoint = str(args.checkpoint.expanduser().resolve())
@@ -231,6 +258,7 @@ def main() -> None:
         "state_dim": int(state.shape[-1]),
         "target_dim": int(target.shape[-1]),
         "planner_config": planner.config_dict(),
+        "planner_observation_spec": planner_observation_spec,
         **parameter_counts(planner),
         "init_checkpoint": init_checkpoint,
         "checkpoint_metadata": checkpoint_metadata,

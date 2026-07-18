@@ -62,6 +62,18 @@ def expert_motion_command(
     return env._get_expert_motion_command_fast(asset_cfg.joint_ids)
 
 
+def policy_expert_motion_command(
+    env: ImitationRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Full-body command for the actor, optionally streamed from a chunk."""
+    if env.policy_command_mode == "reference":
+        return expert_motion_command(env, asset_cfg)
+    return env.current_full_body_tracker_command_term(
+        "expert_motion",
+        joint_ids=asset_cfg.joint_ids,
+    )
+
+
 def robot_motion(
     env: ImitationRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -76,6 +88,15 @@ def agent_latent_command(
 ) -> torch.Tensor:
     del asset_cfg
     return env.get_agent_latent_command()
+
+
+def reconstructed_reference_action(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Aligned raw action label for training; never include it in actor inputs."""
+    del asset_cfg
+    return env.current_reconstructed_reference_action()
 
 
 def expert_anchor_pos_b(
@@ -118,6 +139,34 @@ def expert_anchor_ori_b(
         ref_anchor_quat_w,
     )
     return quat_to_rot6d_flat(anchor_ori_b[:, 0, :])
+
+
+def policy_expert_anchor_pos_b(
+    env: ImitationRLEnv,
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor anchor-position command, direct or streamed from a chunk."""
+    if env.policy_command_mode == "reference":
+        return expert_anchor_pos_b(env, anchor_body_name, asset_cfg)
+    return env.current_full_body_tracker_command_term(
+        "expert_anchor_pos_b",
+        anchor_body_name=anchor_body_name,
+    )
+
+
+def policy_expert_anchor_ori_b(
+    env: ImitationRLEnv,
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor anchor-orientation command, direct or streamed from a chunk."""
+    if env.policy_command_mode == "reference":
+        return expert_anchor_ori_b(env, anchor_body_name, asset_cfg)
+    return env.current_full_body_tracker_command_term(
+        "expert_anchor_ori_b",
+        anchor_body_name=anchor_body_name,
+    )
 
 
 def expert_window_motion(

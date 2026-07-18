@@ -504,6 +504,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         joint_pos[:, robot_joint_indexes] = motion_dof_pos
         joint_vel[:, robot_joint_indexes] = motion_dof_vel
         robot.write_joint_state_to_sim(joint_pos, joint_vel)
+        # Ensure link transforms correspond to the state written above. A render
+        # call does not reliably run articulation forward kinematics.
+        sim.forward()
         pos_lookat = root_states[0, :3].cpu().numpy()
         sim.set_camera_view(pos_lookat + np.array([2.0, 2.0, 0.5]), pos_lookat)
         sim.render()  # We don't want physic (sim.step())

@@ -86,3 +86,5 @@ data/unitree/*_hl_diffsr/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+ipmd/
