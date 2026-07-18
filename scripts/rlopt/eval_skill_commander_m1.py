@@ -14,6 +14,7 @@ import argparse
 import json
 import random
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -222,12 +223,16 @@ def _run_dir() -> Path:
 
 def _trainer_config_from_checkpoint(checkpoint: dict[str, Any]) -> SkillCommanderConfig:
     values = dict(checkpoint.get("config", {}))
-    values.setdefault("skill_checkpoint_path", checkpoint.get("skill_checkpoint_path", ""))
+    values.setdefault(
+        "skill_checkpoint_path", checkpoint.get("skill_checkpoint_path", "")
+    )
     values.setdefault(
         "language_embeddings_path", checkpoint.get("language_embeddings_path", "")
     )
     if args_cli.skill_checkpoint is not None:
-        values["skill_checkpoint_path"] = str(Path(args_cli.skill_checkpoint).expanduser())
+        values["skill_checkpoint_path"] = str(
+            Path(args_cli.skill_checkpoint).expanduser()
+        )
     if args_cli.language_embeddings is not None:
         values["language_embeddings_path"] = str(
             Path(args_cli.language_embeddings).expanduser()
@@ -265,6 +270,75 @@ def _phrase_map(table: dict[str, Any]) -> dict[str, str]:
     return {str(name): str(phrase) for name, phrase in zip(names, phrases)}
 
 
+class _LegacyExpertStateM1Adapter:
+    """Expose the pre-causal expert macro state as the planner input for M1.
+
+    Commander checkpoints created before the causal planner observation contract
+    used ``hl/state`` (67 values for G1) directly. This adapter is deliberately
+    limited to offline M1 evaluation; it must never be used for rollout.
+    """
+
+    def __init__(self, env: IsaacLabWrapper, *, horizon_steps: int) -> None:
+        self._env = env
+        self._horizon_steps = int(horizon_steps)
+
+    def __getattr__(self, name: str):
+        return getattr(self._env, name)
+
+    def sample_causal_planner_training_batch(
+        self,
+        batch_size: int,
+        horizon_steps: int,
+        split: str | None = None,
+        eval_fraction: float = 0.1,
+        split_seed: int = 0,
+        trajectory_ranks=None,
+        history_steps: int = 0,
+    ):
+        batch = self._env.sample_expert_macro_transition_batch(
+            batch_size=batch_size,
+            horizon_steps=horizon_steps,
+            split=split,
+            eval_fraction=eval_fraction,
+            split_seed=split_seed,
+            trajectory_ranks=trajectory_ranks,
+            state_history_steps=history_steps,
+        )
+        state = batch.get(("hl", "state"))
+        if state is None:
+            raise RuntimeError("Legacy M1 macro batch is missing hl/state.")
+        history = batch.get(("hl", "state_history"))
+        if history is None:
+            history = state.unsqueeze(1)
+        batch.set(
+            "planner",
+            type(batch)(
+                {"state": state, "state_history": history},
+                batch_size=[int(batch_size)],
+                device=state.device,
+            ),
+        )
+        return batch
+
+    def causal_planner_observation_spec(self, history_steps: int = 0):
+        slices = self._env.expert_macro_feature_slices(
+            horizon_steps=self._horizon_steps
+        )
+        feature_names = list(slices)
+        feature_widths = [int(end - start) for start, end in slices.values()]
+        frame_dim = sum(feature_widths)
+        history_frames = int(history_steps) + 1
+        return {
+            "contract": "legacy_expert_macro_m1_only",
+            "feature_names": feature_names,
+            "feature_widths": feature_widths,
+            "frame_dim": frame_dim,
+            "history_steps": int(history_steps),
+            "history_frames": history_frames,
+            "flat_dim": frame_dim * history_frames,
+        }
+
+
 @torch.no_grad()
 def _evaluate_batches(
     trainer: SkillCommanderTrainer,
@@ -282,8 +356,8 @@ def _evaluate_batches(
     num_ranks = int(trainer.rank_embeddings.shape[0])
     for _ in range(num_batches):
         batch = sampler(batch_size)
-        state, planner_state, future_window, _, traj_rank = trainer._validate_macro_batch(
-            batch, batch_size=batch_size
+        state, planner_state, future_window, _, traj_rank = (
+            trainer._validate_macro_batch(batch, batch_size=batch_size)
         )
         z_target = trainer._target_z(state, future_window)
         lang = trainer._lang_for_ranks(traj_rank)
@@ -333,7 +407,9 @@ def _flatten_prefixed(metrics: dict[str, float], prefix: str) -> dict[str, float
     }
 
 
-def _different_language_ranks(traj_rank: torch.Tensor, rank_embeddings: torch.Tensor) -> torch.Tensor:
+def _different_language_ranks(
+    traj_rank: torch.Tensor, rank_embeddings: torch.Tensor
+) -> torch.Tensor:
     num_ranks = int(rank_embeddings.shape[0])
     if num_ranks <= 1:
         return traj_rank.clone()
@@ -404,7 +480,23 @@ def main(
         raise NotImplementedError("DirectMARLEnv is not supported by this script.")
 
     wrapped_env = IsaacLabWrapper(env)
-    trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
+    legacy_expert_state_input = not isinstance(
+        checkpoint.get("planner_observation_spec"), Mapping
+    )
+    evaluation_env = (
+        _LegacyExpertStateM1Adapter(
+            wrapped_env,
+            horizon_steps=int(checkpoint.get("horizon_steps", 1)),
+        )
+        if legacy_expert_state_input
+        else wrapped_env
+    )
+    if legacy_expert_state_input:
+        print(
+            "[WARN] Checkpoint predates causal planner observations; evaluating "
+            "the legacy expert macro-state input for offline M1 only."
+        )
+    trainer = SkillCommanderTrainer(config=trainer_config, env=evaluation_env)
     try:
         trainer.generator.load_state_dict(checkpoint["generator_state_dict"])
         trainer.update = int(checkpoint.get("update", 0))
@@ -431,6 +523,11 @@ def main(
             "state_dim": int(trainer.state_dim),
             "z_dim": int(trainer.z_dim),
             "horizon_steps": int(trainer.horizon_steps),
+            "planner_input_contract": (
+                "legacy_expert_macro_m1_only"
+                if legacy_expert_state_input
+                else "causal_planner_observation"
+            ),
             "num_trajectories": len(names),
             "aggregate": {},
             "per_trajectory": [],
@@ -462,12 +559,12 @@ def main(
                 prefix = f"m1_expert_state/rank_{rank:04d}"
 
                 def _sampler(batch_size: int, *, rank: int = rank):
-                    return wrapped_env.sample_expert_macro_transition_batch(
+                    return evaluation_env.sample_causal_planner_training_batch(
                         batch_size=batch_size,
                         horizon_steps=trainer.horizon_steps,
                         split="all",
                         trajectory_ranks=[rank],
-                        state_history_steps=trainer.config.state_history_steps,
+                        history_steps=trainer.config.state_history_steps,
                     )
 
                 metrics = _evaluate_batches(
