@@ -194,6 +194,7 @@ def _enable_bird_video_visualizer(
     *,
     width: int | None,
     height: int | None,
+    num_envs: int | None = None,
 ) -> None:
     """Attach a headless Newton visualizer for cheap bird-view video capture.
 
@@ -208,7 +209,12 @@ def _enable_bird_video_visualizer(
 
     from isaaclab_visualizers.newton import NewtonVisualizerCfg
 
-    num_envs = int(getattr(env_cfg.scene, "num_envs", 16) or 16)
+    # The CLI env count must win: this helper runs before train() applies
+    # --num_envs to the scene config, and a block computed for the config
+    # default lands off-center (and off-camera) in a differently sized grid.
+    if num_envs is None:
+        num_envs = int(getattr(env_cfg.scene, "num_envs", 16) or 16)
+    num_envs = int(num_envs)
     grid_cols = max(int(math.ceil(math.sqrt(num_envs))), 1)
     center = (grid_cols // 2) * grid_cols + grid_cols // 2
     block: list[int] = []
@@ -288,7 +294,10 @@ def run(argv: list[str] | None = None, *, require_running_kit: bool = False) -> 
     env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
     if args_cli.video and config_contains_type_name(env_cfg, "NewtonCfg"):
         _enable_bird_video_visualizer(
-            env_cfg, width=args_cli.video_width, height=args_cli.video_height
+            env_cfg,
+            width=args_cli.video_width,
+            height=args_cli.video_height,
+            num_envs=args_cli.num_envs,
         )
     if args_cli.match_sonic_release_overrides:
         _apply_sonic_release_overrides(env_cfg, agent_cfg, task_name=args_cli.task)
