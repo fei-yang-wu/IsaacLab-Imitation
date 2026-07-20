@@ -756,6 +756,10 @@ capture_cluster_env_overrides() {
         CLUSTER_WANDB_API_KEY_FILE \
         CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_SIM_BACKEND \
+        CLUSTER_USE_OVERLAY \
+        CLUSTER_CU130_RUNTIME_ROOT \
+        CLUSTER_G1_USD_PATH \
         CLUSTER_APPEND_DEFAULT_G1_MANIFEST \
         CLUSTER_AUTO_SETUP_G1_DATA \
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
@@ -788,6 +792,9 @@ capture_cluster_env_overrides() {
         REMOVE_OVERLAY_AFTER_JOB; do
         capture_requested_env_var "$var_name"
     done
+    while IFS= read -r var_name; do
+        capture_requested_env_var "$var_name"
+    done < <(compgen -A variable CLUSTER_SLURM_)
 }
 
 restore_cluster_env_overrides() {
@@ -802,6 +809,10 @@ restore_cluster_env_overrides() {
         CLUSTER_WANDB_API_KEY_FILE \
         CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_SIM_BACKEND \
+        CLUSTER_USE_OVERLAY \
+        CLUSTER_CU130_RUNTIME_ROOT \
+        CLUSTER_G1_USD_PATH \
         CLUSTER_APPEND_DEFAULT_G1_MANIFEST \
         CLUSTER_AUTO_SETUP_G1_DATA \
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
@@ -834,6 +845,9 @@ restore_cluster_env_overrides() {
         REMOVE_OVERLAY_AFTER_JOB; do
         restore_requested_env_var "$var_name"
     done
+    while IFS= read -r var_name; do
+        restore_requested_env_var "$var_name"
+    done < <(compgen -A variable CLUSTER_SLURM_)
 }
 
 build_remote_job_env_args() {
@@ -848,6 +862,10 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_WANDB_API_KEY_FILE
     add_remote_env_arg_if_set CLUSTER_CONTAINER_HOME
     add_remote_env_arg_if_set CLUSTER_PYTHON_EXECUTABLE
+    add_remote_env_arg_if_set CLUSTER_SIM_BACKEND
+    add_remote_env_arg_if_set CLUSTER_USE_OVERLAY
+    add_remote_env_arg_if_set CLUSTER_CU130_RUNTIME_ROOT
+    add_remote_env_arg_if_set CLUSTER_G1_USD_PATH
     add_remote_env_arg_if_set CLUSTER_AUTO_SETUP_G1_DATA
     add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
     add_remote_env_arg_if_set CLUSTER_G1_DATA_ROOT
@@ -863,6 +881,7 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_USE_SHARED_SIF
     add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
     add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
+    add_remote_env_arg_if_set CLUSTER_USE_XVFB
     add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
     add_remote_env_arg_if_set REMOVE_CODE_COPY_AFTER_JOB
     add_remote_env_arg_if_set REMOVE_OVERLAY_AFTER_JOB
@@ -943,6 +962,10 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_WANDB_API_KEY_FILE
     add_remote_env_arg_if_set CLUSTER_CONTAINER_HOME
     add_remote_env_arg_if_set CLUSTER_PYTHON_EXECUTABLE
+    add_remote_env_arg_if_set CLUSTER_SIM_BACKEND
+    add_remote_env_arg_if_set CLUSTER_USE_OVERLAY
+    add_remote_env_arg_if_set CLUSTER_CU130_RUNTIME_ROOT
+    add_remote_env_arg_if_set CLUSTER_G1_USD_PATH
     add_remote_env_arg_if_set CLUSTER_AUTO_SETUP_G1_DATA
     add_remote_env_arg_if_set CLUSTER_G1_EXPECTED_MOTION_COUNT
     add_remote_env_arg_if_set CLUSTER_G1_DATA_ROOT
@@ -958,6 +981,7 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_USE_SHARED_SIF
     add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
     add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
+    add_remote_env_arg_if_set CLUSTER_USE_XVFB
     add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
     add_remote_env_arg_if_set CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK
     add_remote_env_arg_if_set CLUSTER_PIXI_CACHE_DIR
@@ -1136,6 +1160,7 @@ record_repo_sync_manifest() {
 
 submit_job() {
     local -a job_args=("$@")
+    local -a remote_shell=(bash -l)
     local default_manifest_path=""
     local remote_job_cmd=""
 
@@ -1168,7 +1193,7 @@ submit_job() {
 
     if is_truthy "${CLUSTER_ARCHIVE_SYNC:-0}"; then
         case "$job_script_file" in
-            submit_job_slurm.sh|submit_job_slurm_bones_pipeline.sh|submit_job_slurm_phase4.sh) ;;
+            submit_job_slurm.sh|submit_job_slurm_bones_pipeline.sh|submit_job_slurm_phase4.sh|submit_job_slurm_skynet.sh|submit_job_slurm_pace.sh) ;;
             *)
                 echo "[ERROR] CLUSTER_ARCHIVE_SYNC does not support selected submitter '$job_script_file'." >&2
                 exit 1
@@ -1178,9 +1203,12 @@ submit_job() {
 
     echo "[INFO] Using scheduler submit script: $job_script_file"
     build_remote_job_env_args
+    if ! is_truthy "${CLUSTER_REMOTE_LOGIN_SHELL:-1}"; then
+        remote_shell=(bash)
+    fi
     printf -v remote_job_cmd '%q ' \
         env "${REMOTE_JOB_ENV_ARGS[@]}" \
-        bash -l "$CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file" \
+        "${remote_shell[@]}" "$CLUSTER_ISAACLAB_DIR/docker/cluster/$job_script_file" \
         "$CLUSTER_ISAACLAB_DIR" \
         "isaac-lab-$profile" \
         "${job_args[@]}"

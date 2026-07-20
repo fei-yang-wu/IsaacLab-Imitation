@@ -10,5 +10,9 @@ Python module serving as a project/extension template.
 # Register Gym environments.
 from .tasks import *
 
-# Register UI extensions.
-from .ui_extension_example import *
+# UI extensions require a running Omniverse Kit process. The package must stay
+# importable for strict kit-less Newton training.
+import sys as _sys
+
+if "omni.kit.app" in _sys.modules:
+    from .ui_extension_example import *
