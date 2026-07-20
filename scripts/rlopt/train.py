@@ -189,6 +189,56 @@ def _validate_newton_robot_asset(env_cfg: object) -> None:
         )
 
 
+def _enable_bird_video_visualizer(
+    env_cfg: object,
+    *,
+    width: int | None,
+    height: int | None,
+) -> None:
+    """Attach a headless Newton visualizer for cheap bird-view video capture.
+
+    The video recorder prefers a live Newton visualizer as its capture
+    backend and follows that visualizer's camera. Capping the visualizer to a
+    small block of environments near the grid center keeps the GL viewer's
+    per-frame instance submission cheap at any training scale (the full-scene
+    viewer costs ~18 s/frame at 8192 environments), while still showing
+    several robots plus the ground for motion-quality checks.
+    """
+    import math
+
+    from isaaclab_visualizers.newton import NewtonVisualizerCfg
+
+    num_envs = int(getattr(env_cfg.scene, "num_envs", 16) or 16)
+    grid_cols = max(int(math.ceil(math.sqrt(num_envs))), 1)
+    center = (grid_cols // 2) * grid_cols + grid_cols // 2
+    block: list[int] = []
+    for row in range(4):
+        for col in range(4):
+            idx = center + row * grid_cols + col
+            if 0 <= idx < num_envs:
+                block.append(idx)
+    if not block:
+        block = list(range(min(16, num_envs)))
+
+    visualizer = NewtonVisualizerCfg(
+        headless=True,
+        window_width=int(width or 1280),
+        window_height=int(height or 720),
+        eye=(11.0, 11.0, 7.0),
+        lookat=(0.0, 0.0, 0.8),
+        visible_env_indices=block,
+        # Keep shadows enabled: newton's RendererGL only initializes its
+        # light-space matrix when shadows are on, and _render_scene
+        # references it unconditionally (AttributeError otherwise).
+    )
+    existing = list(getattr(env_cfg.sim, "visualizer_cfgs", None) or [])
+    env_cfg.sim.visualizer_cfgs = existing + [visualizer]
+    print(
+        "[INFO] Headless Newton bird-view visualizer enabled "
+        f"(envs {block[0]}..{block[-1]} of {num_envs})."
+    )
+
+
 def _apply_sonic_release_overrides(
     env_cfg: object, agent_cfg: object, *, task_name: str
 ) -> None:
@@ -236,6 +286,10 @@ def run(argv: list[str] | None = None, *, require_running_kit: bool = False) -> 
         args_cli.task, args_cli.agent, args_cli.algorithm
     )
     env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
+    if args_cli.video and config_contains_type_name(env_cfg, "NewtonCfg"):
+        _enable_bird_video_visualizer(
+            env_cfg, width=args_cli.video_width, height=args_cli.video_height
+        )
     if args_cli.match_sonic_release_overrides:
         _apply_sonic_release_overrides(env_cfg, agent_cfg, task_name=args_cli.task)
     needs_kit, _, _ = compute_kit_requirements(env_cfg, args_cli)
