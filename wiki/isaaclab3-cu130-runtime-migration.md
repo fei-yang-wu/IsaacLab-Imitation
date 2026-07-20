@@ -517,7 +517,8 @@ the new Warp bird-view video (300 frames every 25k steps) as
 l0=5522924, l1=5522926, l3=5522927, l4=5522928 (wandb `g1-lafan1-strict`,
 groups `ice2-*`).
 
-Cluster video path (final, 2026-07-20): `--video` on the Newton backend now
+Cluster Newton-GL video path (historical, superseded 2026-07-20): `--video`
+on the Newton backend
 attaches a **headless Newton visualizer** (`NewtonVisualizerCfg` with
 `headless=True`, bird-view `eye`/`lookat`, and `visible_env_indices` set to
 a 4x4 block at the env-grid center) via `_enable_bird_video_visualizer` in
@@ -532,7 +533,42 @@ kept for the record: `enable_shadows=False` crashes newton's `RendererGL`
 `TiledCamera` was tried first but renders only its own env's bodies with no
 ground (single floating robot) and `TiledCameraCfg.OffsetCfg.rot` is
 scalar-last (x, y, z, w) — that approach was reverted in favor of the
-visualizer.
+visualizer. This proved that the rendering path can produce a correct image,
+but it is not suitable for large-environment cluster training.
+
+**Current cluster rendering policy (2026-07-20).** Do not pass `--video`,
+`--video_length`, or `--video_interval` to cluster training jobs, and keep
+`agent.logger.video=false`. The only exception is a job that explicitly uses
+the Isaac RTX/OVRTX rendering backend on an RT-capable allocation; merely
+running Newton GL on an RTX-class GPU is not that exception. Strict kit-less
+Newton training on ICE H100 is metrics-and-checkpoints only.
+
+Use local inference to quality-check motion. Sync or download an early,
+middle, and final checkpoint, then render a short deterministic playback with
+the matching task, skill encoder, manifest, and dataset configuration. Prefer
+the local PhysX + RTX path for the video so rendering is isolated from the
+cluster training process. For example:
+
+```bash
+pixi run -e isaaclab python scripts/rlopt/play.py \
+    --task <matching-task-id> \
+    --algo IPMD \
+    --checkpoint /absolute/path/to/checkpoint.pt \
+    --num_envs 16 \
+    --headless \
+    --video \
+    --video_length 500 \
+    physics=physx \
+    agent.ipmd.hl_skill_checkpoint_path=/absolute/path/to/skill_encoder.pt \
+    env.lafan1_manifest_path=$PWD/data/lafan1/manifests/g1_lafan1_manifest.json \
+    env.refresh_zarr_dataset=false
+```
+
+The playback must use the training arm's task/configuration; for example, L0
+uses `Isaac-Imitation-G1-Latent-Legacy-v0`, while L1/L3/L4 use
+`Isaac-Imitation-G1-Latent-Strict-v0` with their corresponding threshold
+overrides. The video is a qualitative diagnostic, not a replacement for
+checkpoint metrics.
 
 **Resolution (2026-07-20): the official Unitree USD wins outright.** The
 failing "preconverted" cache turned out to be a *modified derivative* of
@@ -553,11 +589,11 @@ locally or on clusters. The modified derivative in
 `~/.cache/isaaclab_imitation/unitree_usd` and on cluster `/data/unitree/usd`
 is retired and should not be referenced by new runs; the bundled test asset
 remains only as the `--shared-g1-usd` diagnostic and last-resort fallback.
-The checkpoint-playback video sidecar is no longer needed for new runs
-(in-training GL video renders real meshes on the official asset), though it
-remains useful for rendering old bundled-asset checkpoints.
+Local checkpoint playback is now the standard visual-quality check for
+cluster runs. It also remains useful for rendering old bundled-asset
+checkpoints.
 
-Submission-wave history (all resolved):
+Submission-wave history (current):
 
 1. Wave 1 (5522340-48) failed in ~80 s with `CUDA error: device(s) busy or
    unavailable` at the first tensor-to-device copy — every failure on H100
@@ -578,10 +614,15 @@ Submission-wave history (all resolved):
    submission at ~250k body instances, which scales with env count and hits
    any renderer. Locally the same path costs ~0.6 s/frame at 4096 envs
    (tolerable); at cluster scale it is prohibitive. Standing rule: keep
-   `--video` off for large-env cluster runs and render checkpoints locally
-   (checkpoints sync back automatically); local runs keep native in-training
-   video.
-3. Wave 3 (current, table above) drops video; wandb metrics only.
+   `--video` off for cluster training unless the job explicitly uses the RTX
+   rendering backend, and render checkpoints locally instead.
+3. A later 8192-environment video retry submitted L0/L1/L3/L4 as
+   5522953/5522954/5522955/5522956. L0, L1, and L4 hit NVIDIA Xid 109 while
+   the Newton GL viewer was copying rendered state from CUDA; they were
+   cancelled. L3 avoided the driver fault, completed its initial capture, and
+   remains running, but that one success does not make the path reliable.
+4. Wave 3 drops video and W&B video syncing. The no-video replacements are
+   L0=5523400, L1=5523402, and L4=5523407; L3 remains 5522955.
 
 Threshold pinning is done through the curriculum terms
 (`env.curriculum.<term>.params.{start,end}_value`), so all SONIC arms share
