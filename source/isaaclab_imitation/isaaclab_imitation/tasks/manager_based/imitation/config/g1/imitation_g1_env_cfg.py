@@ -993,12 +993,13 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
 
     _debug_rewards: bool = False
 
-    # Offscreen-video follow camera: the kit-less Newton GL recorder only has
-    # a static world-frame camera, so training videos film empty ground once
-    # full-trajectory reference starts move robots away from their origins.
-    # When enabled, ImitationRLEnv re-aims the recorder at this env's robot
-    # root every rendered frame (offsets are world-axis-aligned, in meters).
-    video_follow_robot: bool = True
+    # Offscreen-video camera. Default: a static elevated bird view over the
+    # env grid near the origin (set below via cfg.viewer), which shows a
+    # couple dozen robots for generic motion-quality checks. The follow
+    # camera remains available (video_follow_robot=True) for close-ups of a
+    # single environment, e.g. with full-trajectory random starts where
+    # robots wander far from their origins.
+    video_follow_robot: bool = False
     video_follow_env_index: int = 0
     video_follow_eye_offset: tuple[float, float, float] = (3.5, 3.5, 2.0)
     video_follow_lookat_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)

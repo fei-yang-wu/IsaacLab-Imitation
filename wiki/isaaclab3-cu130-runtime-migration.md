@@ -508,10 +508,31 @@ recipes; compressed 10M->40M anneal for the curriculum arm):
 Strict-from-scratch beats the curriculum on the official asset, so the
 curriculum is no longer necessary at this scale (kept as a config option).
 In-training Newton GL video now works natively on the training asset (L1 ran
-with `--video`; real meshes + follow camera confirmed). The 1B ICE
-re-run of the same four arms was submitted as jobs l0=5522854, l1=5522855,
-l3=5522856, l4=5522857 (wandb project `g1-lafan1-strict`, groups `ice2-*`,
-official asset shipped in the workspace archive via git-lfs).
+with `--video`; real meshes + follow camera confirmed). The first 1B ICE
+re-run (4096 envs: l0=5522875/5522854, l1=5522855, l3=5522856, l4=5522857;
+5522854 died on a failed GPU on `atl1-1-03-010-15-0`) was superseded at
+~50%: per user direction the four arms were cancelled and resubmitted with
+the production-scale config (8192 envs x 12 steps, mini-batch 12288) and
+the new Warp bird-view video (300 frames every 25k steps) as
+l0=5522924, l1=5522926, l3=5522927, l4=5522928 (wandb `g1-lafan1-strict`,
+groups `ice2-*`).
+
+Cluster video path (final, 2026-07-20): `--video` on the Newton backend now
+attaches a **headless Newton visualizer** (`NewtonVisualizerCfg` with
+`headless=True`, bird-view `eye`/`lookat`, and `visible_env_indices` set to
+a 4x4 block at the env-grid center) via `_enable_bird_video_visualizer` in
+`scripts/rlopt/train.py`. The video recorder prefers a live Newton
+visualizer as its capture backend and follows its camera, so this uses only
+official machinery. Measured at 4096 envs: ~74k fps outside capture
+windows, ~11k fps inside them (~7 ms/frame; ~1% amortized at 300 frames per
+25k steps), and the captured video shows the full robot grid with ground —
+the intended whole-population bird view. Gotchas discovered on the way and
+kept for the record: `enable_shadows=False` crashes newton's `RendererGL`
+(`_light_space_matrix` only initialized with shadows on); a Warp-raycast
+`TiledCamera` was tried first but renders only its own env's bodies with no
+ground (single floating robot) and `TiledCameraCfg.OffsetCfg.rot` is
+scalar-last (x, y, z, w) — that approach was reverted in favor of the
+visualizer.
 
 **Resolution (2026-07-20): the official Unitree USD wins outright.** The
 failing "preconverted" cache turned out to be a *modified derivative* of
@@ -546,10 +567,20 @@ Submission-wave history (all resolved):
 2. Wave 2 (5522404-09, a1 resubmitted as 5522448 after losing a shared
    TorchInductor-cache rename race when four arms cold-started on one node)
    trained but at ~2k fps: every arm was stuck in its first 500-step
-   `--video` capture window. The kit-less Newton GL recorder software-renders
-   on display-less H100 compute nodes (~9 s/frame at 4096 envs); the 16-env
-   ICE video qualification masked this. Rule: do NOT pass `--video` for
-   cluster training; render videos locally from checkpoints instead.
+   `--video` capture window. Initial diagnosis blamed CPU software
+   rasterization; that was WRONG — a 2026-07-20 in-container check on an ICE
+   H100 node confirmed `apptainer --nv` injects `libEGL_nvidia.so.0`
+   correctly and pyglet/ViewerGL obtains a hardware H100 EGL context
+   natively (RHEL 9.6 hosts carry the full driver GL stack in /usr/lib64;
+   the SIF ships the glvnd ICD). The measured cost (job 5522902, 8192 envs,
+   hardware context): ~18 s per captured frame, ~450 fps during capture
+   windows — the bottleneck is the Newton GL viewer's per-frame scene
+   submission at ~250k body instances, which scales with env count and hits
+   any renderer. Locally the same path costs ~0.6 s/frame at 4096 envs
+   (tolerable); at cluster scale it is prohibitive. Standing rule: keep
+   `--video` off for large-env cluster runs and render checkpoints locally
+   (checkpoints sync back automatically); local runs keep native in-training
+   video.
 3. Wave 3 (current, table above) drops video; wandb metrics only.
 
 Threshold pinning is done through the curriculum terms

@@ -2872,7 +2872,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             logger.warning("Video follow-camera update failed.", exc_info=True)
 
     def render(self, recompute: bool = False):
-        """Render with the recorder camera following the tracked robot."""
+        """Render with the recorder camera optionally following a robot."""
         self._update_video_follow_camera()
         return super().render(recompute)
 
