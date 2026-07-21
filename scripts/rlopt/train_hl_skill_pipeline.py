@@ -276,6 +276,8 @@ def _train_cmd(
     )
     if args.train_max_iterations is not None:
         cmd.extend(["--max_iterations", str(args.train_max_iterations)])
+    if args.train_checkpoint:
+        cmd.extend(["--checkpoint", str(_repo_path(args.train_checkpoint))])
     if args.train_log_interval is not None:
         cmd.extend(["--log_interval", str(args.train_log_interval)])
 
@@ -451,6 +453,16 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--train-max-iterations", type=int, default=None)
+    parser.add_argument(
+        "--train-checkpoint",
+        default=None,
+        help=(
+            "Low-level PPO/IPMD checkpoint to resume from (weights + optimizer "
+            "state only; frame/iteration count is not restored, so "
+            "--train-max-iterations should be reduced by the caller to account "
+            "for frames already trained)."
+        ),
+    )
     parser.add_argument("--train-log-interval", type=int, default=None)
     parser.add_argument(
         "--train-video",
