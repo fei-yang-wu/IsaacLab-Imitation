@@ -8,13 +8,19 @@ set -euo pipefail
 # paper run: corrected-LAFAN1 fresh h25/z256 skill encoder + SONIC oracle
 # low-level policy, one arm per Slurm job.
 #
-# njmax/nconmax below are a proportional extrapolation from the only
-# validated LAFAN1 point (njmax=95/nconmax=18 at 8192 envs, zero overflow;
-# see wiki/isaaclab3-cu130-runtime-migration.md and
-# wiki/current-status.md "Non-paper BONES-SEED SONIC latent training" for
-# the BONES-SEED-specific 288/32 finding at 8192 envs). They are NOT
-# separately validated at 12288/16384 envs; treat overflow/NaN in an arm's
-# metrics as an ablation result, not a script bug.
+# njmax/nconmax REVISED (2026-07-21) after the first round: v1 (njmax=95 @
+# 8192 envs) hit 7.4M contact-solver overflow events over ~9.5h and v2
+# (njmax=143 @ 12288 envs) hit 59k; peak requested njmax was ~230-245 in
+# BOTH arms despite the different env counts, and the one arm run at
+# njmax=288 (the BONES-SEED job) saw zero overflow. njmax/nconmax are a
+# per-step contact-complexity budget driven by the SONIC env's domain
+# randomization/push events and early strict-from-scratch falling, NOT
+# something that scales with num_envs — the original proportional-scaling
+# assumption was wrong. All arms now use a fixed, inflated-for-headroom
+# njmax=320/nconmax=40 (vs. the 288/32 that already measured zero overflow)
+# regardless of env count. v3 (16384 envs) failed with a genuine CUDA OOM
+# last round, unrelated to njmax; it is expected to OOM again since a higher
+# njmax slightly increases memory further, but is retained here to confirm.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -32,10 +38,10 @@ REMOTE_PROJECT_ROOT="${REMOTE_PROJECT_ROOT:-/home/hice1/fwu91/scratch/Research/I
 
 # ARM_NAME:NUM_ENVS:ROLLOUT_STEPS:NJMAX:NCONMAX
 ARMS=(
-    "v1_e8192_r12:8192:12:95:18"
-    "v2_e12288_r12:12288:12:143:27"
-    "v3_e16384_r12:16384:12:190:36"
-    "v4_e12288_r24:12288:24:143:27"
+    "v1_e8192_r12:8192:12:320:40"
+    "v2_e12288_r12:12288:12:320:40"
+    "v3_e16384_r12:16384:12:320:40"
+    "v4_e12288_r24:12288:24:320:40"
 )
 
 case "${DRY_RUN}" in
