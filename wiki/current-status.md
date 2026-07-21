@@ -1,6 +1,11 @@
 # Project Live Status
 
-Last verified: 2026-07-21, after reverting the 2026-07-20 "make SONIC the
+Last verified: 2026-07-21, after cancelling every running ICE Newton job
+(`5524182`, `5524183`, `5524338`, `5524342`, `5524390`) once a joint-order bug
+fix surfaced on the unmerged `sim2sim-verification-transfer-547ca5` /
+`origin/fix/migration` branch (see the new section below) -- all of today's
+Newton-backend training used the pre-fix, permuted expert-command ordering.
+Before that: reverting the 2026-07-20 "make SONIC the
 default" decision: `Isaac-Imitation-G1-Latent-v0` resolves to the
 Strict/legacy-optimizer surface again (SONIC is opt-in only via
 `Isaac-Imitation-G1-Latent-Sonic-v0`), following the njmax fix in the VRAM
@@ -107,6 +112,54 @@ size that reaches a fixed performance target.
   audited aggregates exist.
 
 ## Current Experiment Status
+
+### Newton joint-order bug found on an unmerged branch (2026-07-21)
+
+**Status: all today's Newton jobs cancelled; fix not yet reviewed/merged.**
+
+A parallel, unmerged branch (`sim2sim-verification-transfer-547ca5`, mirrored
+to `origin/fix/migration`, last commit 2026-07-21 13:56 EDT) found that G1's
+expert-command observation terms (`expert_motion` in `policy`, `critic`,
+`expert_state`, `expert_goal`, `expert_window`, `reward_input`, plus
+`expert_state.joint_pos`/`joint_vel`) and the action-offset default in
+`randomize_joint_default_pos` were built from the *live* per-backend joint
+enumeration instead of the pinned canonical `G1_29DOF_ISAACLAB_JOINT_NAMES`
+order. This is a no-op under PhysX (which the canonical list already matches)
+but active under Newton, where 27 of 29 joint slots differ from PhysX's
+ordering. Every job submitted today used `physics=newton_mjwarp`.
+
+Their own behavioral confirmation (`L1_strict/model_step_992870400.pt`,
+Newton-trained, ~993M frames, `walk1_subject1`, seed 0): evaluating with a
+mismatched joint/command order collapses survival and roughly doubles joint
+tracking error (0.517/0.431 rad, 67/500 and 111/500 survived) versus a matched
+order (0.240/0.110 rad, 323/500 and 500/500 survived) in both transfer
+directions. Because `reward_input.expert_motion` carries the same leak, they
+flag training itself as suspect beyond cross-backend deployment, not only a
+deployment-transfer issue — though the same checkpoint evaluated Newton-native
+(matched to how it trained) still survived 500/500, suggesting the permutation
+is at minimum a consistent, learnable relabeling within one backend rather
+than pure noise.
+
+All 5 jobs running at the time this was discovered were cancelled rather than
+left to keep training on the pre-fix ordering:
+`5524182`/`5524183`/`5524338` (SONIC VRAM ablation v1/v2/v5),
+`5524342` (BONES-SEED-91 5B resumable, segment 1, at 1.29B/5B frames),
+`5524390` (LAFAN1 hardcoded-default sanity, at 900M/1B frames — 90% done).
+`5524387` (the LAFAN1 *scaled* sanity check, exactly reproducing bn931wny's
+config) had already completed before cancellation, reaching `ep_len=288.68` /
+`r_ep=15.76` — beating bn931wny's `244.18`/`13.11` — but this result is
+likewise pre-fix and should be treated as provisional. Between the two
+completed/near-complete sanity arms, 8192 envs x 12 rollout steps reached
+comparable quality to 4096 x 24 while finishing faster (~4.5h at ~65k fps vs.
+~5.5h+ at ~46k fps for the same 1B frames) — a reasonable default scale
+choice to carry forward once re-validated post-fix.
+
+Full detail, the audit tool
+(`scripts/dump_backend_index_contract.py`), and the fix commits are on the
+unmerged branch; see `wiki/sim2sim-backend-verification.md` there. Not yet
+reviewed for merge into `main`, and not yet reconciled against the
+Strict/legacy-default reversal above (both branches diverged from a shared
+ancestor and have not been compared for conflicts).
 
 ### Phase 3: low-level protocol and causal planner code
 
