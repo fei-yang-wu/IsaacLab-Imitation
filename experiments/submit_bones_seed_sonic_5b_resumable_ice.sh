@@ -6,31 +6,44 @@ set -euo pipefail
 # coc-gpu, coe-gpu, pace-gpu) hard-caps walltime at 16-18h (scontrol/sinfo
 # confirmed 2026-07-21; not a QoS-configurable limit).
 #
-# TASK REVERTED (2026-07-21) to Isaac-Imitation-G1-Latent-Strict-v0, NOT the
-# SONIC default (Isaac-Imitation-G1-Latent-v0). W&B run bn931wny
+# TASK is Isaac-Imitation-G1-Latent-v0, which since the 2026-07-21 revert
+# resolves to the strict/legacy-optimizer surface (the SONIC release surface
+# is opt-in only via Isaac-Imitation-G1-Latent-Sonic-v0; the old
+# Latent-Strict-v0 alias was removed on 2026-07-21 -- Latent-v0 always
+# denotes the latest preferred surface). W&B run bn931wny
 # (g1-lafan1-strict/ice3-l1-novideo) is the actual "L1" submission this run
-# is meant to match: Latent-Strict-v0 + the legacy/local optimizer contract
-# (512/256/128 ELU MLPs, lr 1e-3) at 8192 envs x 12 steps x minibatch 12288,
-# which reached episode/length=244 and episode/return=13.1 -- far better
-# than what the new SONIC release-optimizer contract has produced so far in
-# the concurrent VRAM ablation. Latent-Strict-v0's kwargs already route to
-# the legacy-style G1ImitationLatentRLOptIPMDConfig (not the Sonic one), so
-# selecting this task is sufficient; no separate policy-contract flag needed.
+# is meant to match: this surface + the legacy/local optimizer contract
+# (512/256/128 ELU MLPs, lr 1e-3), which reached episode/length=244 and
+# episode/return=13.1 -- far better than what the new SONIC release-optimizer
+# contract has produced so far in the concurrent VRAM ablation. Latent-v0's
+# kwargs route to the legacy-style G1ImitationLatentRLOptIPMDConfig (not the
+# Sonic one), so selecting this task is sufficient; no separate
+# policy-contract flag needed.
 #
 # Each invocation of this script submits exactly ONE segment: it inspects the
-# remote log tree for the latest low-level checkpoint under this run's fixed,
-# RUN_TAG-scoped log_dir, and if one exists, resumes from it
-# (--train-checkpoint) with
+# central log tree (logs/rlopt/ipmd/<TASK>/<timestamp>/models/ -- the same
+# location every other job on this task uses; no agent.logger.log_dir
+# override) for the latest low-level checkpoint, and if one exists, resumes
+# from it (--train-checkpoint) with
 # --max_iterations reduced by the frames already trained (RLOpt's
 # save_model/load_model restores weights + optimizer state but NOT the
 # frame/iteration counter, so the remaining-iteration math must happen here).
 # Re-invoke this script after each segment ends (success, crash, or walltime
 # cutoff) until it reports FRAME_CAP reached and refuses to submit further.
 #
-# Uses the 91/100-motion SONIC-exclusion-filtered manifest and
-# njmax=288/nconmax=32 (already validated at zero contact-solver overflow
-# over 9.5+h in ICE job 5523773) at the actual L1 scale (8192 envs x 12
-# steps, minibatch 12288).
+# Uses the 91/100-motion SONIC-exclusion-filtered manifest at the scaled
+# config validated by the VRAM ablation (2026-07-21): 12288 envs x 12 rollout
+# steps (v2, the largest arm that fits one H100; 16384 envs and 12288x24 both
+# OOM), minibatch = frames_per_batch / 8 = 18432, and njmax=320/nconmax=40
+# (fixed per-step contact budget with headroom above the 288/32 that measured
+# zero overflow on BONES-SEED; njmax does NOT scale with env count).
+#
+# RUN_TAG rotated on 2026-07-21 after the Newton joint-order fix
+# (fix/migration, merged as PR #24 / 900c66c): every checkpoint trained
+# before the fix encodes a Newton-specific joint permutation and is invalid,
+# so the old nj288_nc32 tag's tree (segment 1 = cancelled job 5524342) must
+# never be resumed. The fresh tag also retrains the skill encoder under the
+# pinned causal planner frame.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -39,15 +52,25 @@ cd "${REPO_ROOT}"
 SEED="${SEED:-0}"
 DRY_RUN="${DRY_RUN:-1}"
 FRAME_CAP=5000000000
-TRAIN_NUM_ENVS=8192
+TRAIN_NUM_ENVS=12288
 ROLLOUT_STEPS=12
-MINIBATCH_SIZE=12288
+MINIBATCH_SIZE=18432
+NJMAX=320
+NCONMAX=40
 FRAMES_PER_BATCH=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
-RUN_TAG="${RUN_TAG:-bones_seed_91_strict_h25_z256_5b_seed${SEED}_20260721_nj288_nc32}"
+RUN_TAG="${RUN_TAG:-bones_seed_91_strict_h25_z256_5b_seed${SEED}_20260721_jointfix_e12288_r12_nj320_nc40}"
 MANIFEST_PATH="${MANIFEST_PATH:-/data/bones_seed_100/manifests/g1_bones_seed_100_sonic_filtered_manifest.json}"
 DATASET_PATH="${DATASET_PATH:-/data/bones_seed_100/g1_hl_diffsr_sonic_filtered}"
+TASK_NAME="Isaac-Imitation-G1-Latent-v0"
 PRETRAIN_OUTPUT_DIR="logs/bones_seed_sonic/${RUN_TAG}/skill_encoder_h25_z256"
-TRAIN_LOG_DIR="logs/bones_seed_sonic/${RUN_TAG}/rlopt_train"
+# Central log location every job on this task shares (no per-run log_dir
+# override): logs/rlopt/ipmd/<TASK>/<timestamp>/models/. Resume detection
+# below picks the newest checkpoint by mtime, which only correctly identifies
+# "our" latest segment if no unrelated job trains this exact task
+# concurrently -- unlike the old RUN_TAG-scoped log_dir, this does not
+# self-isolate. Keep that in mind if another Latent-v0 job is ever run in
+# parallel with this one.
+CENTRAL_LOG_DIR="logs/rlopt/ipmd/${TASK_NAME}"
 EXPECTED_MANIFEST_SHA256="${EXPECTED_MANIFEST_SHA256:-8d48750177efb3e9118c5d0ca14b69d62abedff16eb8c00585920a34bd87ee8d}"
 EXPECTED_NPZ_COUNT="${EXPECTED_NPZ_COUNT:-100}"
 REMOTE_PROJECT_ROOT="${REMOTE_PROJECT_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab}"
@@ -93,12 +116,12 @@ fi
 #      directory (not a global max across segments), added to the running
 #      cumulative total.
 #   3. remaining = FRAME_CAP - cumulative; if <= 0, the job is done.
-STATE_FILE="${REMOTE_PROJECT_ROOT}/${TRAIN_LOG_DIR}/resume_state.tsv"
+STATE_FILE="${REMOTE_PROJECT_ROOT}/logs/bones_seed_sonic/${RUN_TAG}/resume_state.tsv"
 cumulative_frames=0
 latest_checkpoint=""
 if [[ "${is_dry_run}" == "0" ]]; then
     resume_state="$(ssh -o BatchMode=yes -o ConnectTimeout=10 ice bash -s -- \
-        "${REMOTE_PROJECT_ROOT}/${TRAIN_LOG_DIR}" "${STATE_FILE}" <<'REMOTE_EOF'
+        "${REMOTE_PROJECT_ROOT}/${CENTRAL_LOG_DIR}" "${STATE_FILE}" <<'REMOTE_EOF'
 set -uo pipefail
 train_log_dir="$1"
 state_file="$2"
@@ -144,10 +167,9 @@ if [[ -n "${latest_checkpoint}" ]]; then
         --pretrained-checkpoint "${skill_checkpoint}"
         --train-checkpoint "${latest_checkpoint}"
         --train-override "physics=newton_mjwarp"
-        --train-override "env.sim.physics.solver_cfg.njmax=288"
-        --train-override "env.sim.physics.solver_cfg.nconmax=32"
+        --train-override "env.sim.physics.solver_cfg.njmax=${NJMAX}"
+        --train-override "env.sim.physics.solver_cfg.nconmax=${NCONMAX}"
         --train-override "env.refresh_zarr_dataset=false"
-        --train-override "agent.logger.log_dir=${TRAIN_LOG_DIR}"
     )
 else
     max_iterations=$(( (FRAME_CAP + FRAMES_PER_BATCH - 1) / FRAMES_PER_BATCH ))
@@ -165,15 +187,14 @@ else
         --pretrain-override physics=newton_mjwarp
         --pretrain-override env.refresh_zarr_dataset=true
         --train-override physics=newton_mjwarp
-        --train-override env.sim.physics.solver_cfg.njmax=288
-        --train-override env.sim.physics.solver_cfg.nconmax=32
+        --train-override "env.sim.physics.solver_cfg.njmax=${NJMAX}"
+        --train-override "env.sim.physics.solver_cfg.nconmax=${NCONMAX}"
         --train-override env.refresh_zarr_dataset=false
-        --train-override "agent.logger.log_dir=${TRAIN_LOG_DIR}"
     )
 fi
 printf -v extra_args_string '%q ' "${extra_args[@]}"
 
-export TASK=Isaac-Imitation-G1-Latent-Strict-v0
+export TASK="${TASK_NAME}"
 export FRAME_CAP
 export TRAIN_NUM_ENVS
 export ROLLOUT_STEPS
@@ -188,7 +209,7 @@ export SAVE_INTERVAL=100000000
 export MANIFEST_PATH
 export DATASET_PATH
 export WANDB_PROJECT="${WANDB_PROJECT:-g1-bones-seed-100-sonic-latent-ice}"
-export WANDB_GROUP="${WANDB_GROUP:-strict-l1-scale-5b-resumable}"
+export WANDB_GROUP="${WANDB_GROUP:-strict-e12288-5b-resumable-jointfix}"
 export EXP_NAME="${EXP_NAME:-${RUN_TAG}_oracle_low_level}"
 export CLUSTER_CONFIG=ice_runtime
 export CLUSTER_SLURM_TIME_LIMIT=15:59:00
