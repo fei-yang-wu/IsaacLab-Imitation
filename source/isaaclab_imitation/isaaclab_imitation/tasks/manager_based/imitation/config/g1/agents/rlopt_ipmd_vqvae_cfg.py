@@ -1,6 +1,6 @@
 """IPMD + VQ-VAE skill-codebook configuration for G1 imitation."""
 
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_imitation.envs.rlopt import IPMDRLOptConfig
 

@@ -6,7 +6,7 @@ import torch
 
 from isaaclab.assets import Articulation
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import quat_apply_inverse
+from isaaclab.utils.math import quat_apply, quat_apply_inverse
 from isaaclab_imitation.envs import ImitationRLEnv
 
 from ._compiled import (
@@ -308,3 +308,77 @@ def reference_global_body_angular_velocity_error_exp(
     actual_ang_vel_w = env._get_robot_body_velocity_w_fast(asset_cfg.body_ids)[0]
     squared_error = torch.sum((ref_ang_vel_w - actual_ang_vel_w) ** 2, dim=-1).mean(-1)
     return tracking_exp_from_squared_error(squared_error, std)
+
+
+def reference_local_reward_point_position_error_exp(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg,
+    reference_body_names: Sequence[str],
+    body_offsets: Sequence[Sequence[float]],
+    anchor_body_name: str = "pelvis",
+    std: float = 0.1,
+) -> torch.Tensor:
+    """Track offset body points in each anchor's local frame, as SONIC does."""
+    actual_pos_w, actual_quat_w = env._get_robot_body_pose_w_fast(asset_cfg.body_ids)
+    ref_pos_w, ref_quat_w = env._get_reference_body_pose_w_fast(reference_body_names)
+    offsets = torch.as_tensor(
+        body_offsets, device=actual_pos_w.device, dtype=actual_pos_w.dtype
+    ).unsqueeze(0)
+    offsets = offsets.expand(actual_pos_w.shape[0], -1, -1)
+    actual_points_w = actual_pos_w + quat_apply(actual_quat_w, offsets)
+    ref_points_w = ref_pos_w + quat_apply(ref_quat_w, offsets)
+
+    actual_anchor_pos_w, actual_anchor_quat_w = env._get_robot_anchor_state_w_fast(
+        anchor_body_name
+    )
+    ref_anchor_pos_w, ref_anchor_quat_w = env._get_reference_body_pose_w_fast(
+        (anchor_body_name,)
+    )
+    actual_anchor_quat_w = actual_anchor_quat_w[:, None, :].expand_as(actual_quat_w)
+    ref_anchor_quat_w = ref_anchor_quat_w.expand_as(ref_quat_w)
+    actual_points_b = quat_apply_inverse(
+        actual_anchor_quat_w, actual_points_w - actual_anchor_pos_w[:, None, :]
+    )
+    ref_points_b = quat_apply_inverse(
+        ref_anchor_quat_w, ref_points_w - ref_anchor_pos_w
+    )
+    squared_error = torch.sum((actual_points_b - ref_points_b) ** 2, dim=-1).mean(
+        dim=-1
+    )
+    return tracking_exp_from_squared_error(squared_error, std)
+
+
+def mpjpe_relative_body_pos_m(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg | None = None,
+    reference_body_names: Sequence[str] = (),
+) -> torch.Tensor:
+    """Root-relative mean per-joint position error (MPJPE), in meters.
+
+    Metric only, not a tracking kernel: register with ``weight=0.0`` so the
+    reward manager logs ``Episode_Reward/<name>`` (averaged over envs) without
+    contributing to the return. Mirrors the ``tracking_mpjpe_m`` computation
+    used by the closed-loop eval scripts.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    body_ids = env._get_body_ids_tensor_fast(asset_cfg.body_ids)
+    actual_pos = _select_body_dim(asset.data.body_link_pos_w.torch, body_ids)
+    root_pos_actual = asset.data.root_state_w.torch[:, :3]
+    ref_pos_w = env._get_reference_body_pose_w_fast(reference_body_names)[0]
+    root_pos_reference_w = env._get_reference_root_state_w_fast()[0]
+    actual_rel_pos = actual_pos - root_pos_actual[:, None, :]
+    ref_rel_pos = ref_pos_w - root_pos_reference_w[:, None, :]
+    return torch.linalg.vector_norm(actual_rel_pos - ref_rel_pos, dim=-1).mean(dim=-1)
+
+
+def body_angular_velocity_excess_l2(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg,
+    threshold: float = 1.5,
+) -> torch.Tensor:
+    """Penalize squared body angular speed above a deadzone."""
+    angular_velocity_w = env._get_robot_body_velocity_w_fast(asset_cfg.body_ids)[0]
+    excess = torch.relu(
+        torch.linalg.vector_norm(angular_velocity_w, dim=-1) - threshold
+    )
+    return torch.mean(excess.square(), dim=-1)

@@ -11,7 +11,7 @@ pipeline (latent_command obs term, observation groups, terminations,
 events) is inherited unchanged.
 """
 
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from .imitation_g1_env_cfg import _g1_lafan_track_env_cfg_from_dict
 from .imitation_g1_latent_env_cfg import ImitationG1LatentEnvCfg

@@ -25,6 +25,9 @@ from isaaclab_imitation.envs.causal_planner_observation import (
     build_offline_causal_planner_frame,
     causal_planner_observation_spec,
 )
+from isaaclab_imitation.envs.sonic_adaptive_sampling import (
+    SonicAdaptiveResetSampler,
+)
 from tensordict import TensorDict
 
 logger = logging.getLogger(__name__)
@@ -313,6 +316,11 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._latent_patch_future_steps = int(
             getattr(cfg, "latent_patch_future_steps", 0)
         )
+        self._expert_anchor_body_name = str(
+            getattr(cfg, "expert_anchor_body_name", "torso_link")
+        ).strip()
+        if not self._expert_anchor_body_name:
+            raise ValueError("expert_anchor_body_name must be non-empty.")
         if self._latent_patch_past_steps < 0 or self._latent_patch_future_steps < 0:
             raise ValueError("latent patch window steps must be >= 0.")
         self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
@@ -326,17 +334,31 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._adaptive_failure_reset_uniform_ratio = float(
             getattr(cfg, "adaptive_failure_reset_uniform_ratio", 0.1)
         )
-        self._adaptive_failure_reset_alpha = float(
-            getattr(cfg, "adaptive_failure_reset_alpha", 0.001)
+        self._adaptive_failure_reset_bin_size = int(
+            getattr(cfg, "adaptive_failure_reset_bin_size", 50)
+        )
+        self._adaptive_failure_reset_sequence_length_agnostic = bool(
+            getattr(cfg, "adaptive_failure_reset_sequence_length_agnostic", True)
+        )
+        self._adaptive_failure_reset_init_num_failures = float(
+            getattr(cfg, "adaptive_failure_reset_init_num_failures", 1.0)
+        )
+        self._adaptive_failure_reset_pre_failure_window = int(
+            getattr(cfg, "adaptive_failure_reset_pre_failure_window", 200)
+        )
+        self._adaptive_failure_reset_failure_rate_max_over_mean = float(
+            getattr(
+                cfg,
+                "adaptive_failure_reset_failure_rate_max_over_mean",
+                50.0,
+            )
         )
         if self._random_reset_step_min < 0:
             raise ValueError("random_reset_step_min must be >= 0.")
         if self._random_reset_step_max < self._random_reset_step_min:
             raise ValueError("random_reset_step_max must be >= random_reset_step_min.")
-        if self._adaptive_failure_reset_uniform_ratio < 0.0:
-            raise ValueError("adaptive_failure_reset_uniform_ratio must be >= 0.")
-        if not 0.0 <= self._adaptive_failure_reset_alpha <= 1.0:
-            raise ValueError("adaptive_failure_reset_alpha must be in [0, 1].")
+        if not 0.0 <= self._adaptive_failure_reset_uniform_ratio <= 1.0:
+            raise ValueError("adaptive_failure_reset_uniform_ratio must be in [0, 1].")
         reference_joint_names = list(getattr(cfg, "reference_joint_names", []))
         target_joint_names = list(getattr(cfg, "target_joint_names", []))
         dataset_joint_names = self._read_reference_joint_names_from_zarr(zarr_path)
@@ -2408,20 +2430,22 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         return self._current_reference_local_step >= final_steps
 
     def _setup_adaptive_failure_reset_sampler(self, cfg: Any) -> None:
-        step_dt = float(getattr(cfg, "decimation", 1)) * float(cfg.sim.dt)
-        if step_dt <= 0.0:
-            raise ValueError("decimation * sim.dt must be > 0.")
-        steps_per_bin = max(int(round(1.0 / step_dt)), 1)
-        max_length = int(self.trajectory_manager._length.max().item())
-        bin_count = max(max_length // steps_per_bin + 1, 1)
-        self._adaptive_failure_reset_bin_count = bin_count
-        self._adaptive_failure_reset_bin_failed_count = torch.zeros(
-            bin_count,
-            device=self.trajectory_manager._state_device,
-            dtype=torch.float32,
-        )
-        self._adaptive_failure_reset_current_bin_failed = torch.zeros_like(
-            self._adaptive_failure_reset_bin_failed_count
+        del cfg
+        self._adaptive_failure_reset_sampler: SonicAdaptiveResetSampler | None = None
+        if not self._random_reset_full_trajectory:
+            return
+        self._adaptive_failure_reset_sampler = SonicAdaptiveResetSampler(
+            self.trajectory_manager._length,
+            bin_size=self._adaptive_failure_reset_bin_size,
+            sequence_length_agnostic=(
+                self._adaptive_failure_reset_sequence_length_agnostic
+            ),
+            init_num_failures=self._adaptive_failure_reset_init_num_failures,
+            uniform_sampling_rate=self._adaptive_failure_reset_uniform_ratio,
+            pre_failure_sample_window=(self._adaptive_failure_reset_pre_failure_window),
+            failure_rate_max_over_mean=(
+                self._adaptive_failure_reset_failure_rate_max_over_mean
+            ),
         )
 
     def _reset_tracking_failure_mask(self) -> torch.Tensor:
@@ -2433,76 +2457,43 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             failure_mask |= self.termination_manager.get_term(term_name)
         return failure_mask
 
+    def _record_adaptive_failure_reset_visits(self) -> None:
+        sampler = self._adaptive_failure_reset_sampler
+        if sampler is None:
+            return
+        tm = self.trajectory_manager
+        sampler.record_visits(
+            tm.env_traj_rank,
+            self._current_reference_local_step,
+        )
+
     def _record_adaptive_failure_reset_bins(self, env_ids: torch.Tensor) -> None:
+        sampler = self._adaptive_failure_reset_sampler
+        if sampler is None:
+            return
         tm = self.trajectory_manager
         env_ids_device = env_ids.to(device=self.device, dtype=torch.long)
         env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
         failed_mask = self._reset_tracking_failure_mask().index_select(
             0, env_ids_device
         )
+        if not torch.any(failed_mask):
+            return
         failed_mask_tm = failed_mask.to(device=tm._state_device)
-
-        self._adaptive_failure_reset_current_bin_failed.zero_()
-        if torch.any(failed_mask):
-            failed_steps = self._current_reference_local_step.index_select(
-                0, env_ids_device
-            )[failed_mask].to(device=tm._state_device, dtype=torch.long)
-            failed_ranks = tm.env_traj_rank.index_select(0, env_ids_tm)[failed_mask_tm]
-            failed_denominator = (tm._length.index_select(0, failed_ranks) - 1).clamp(
-                min=1
-            )
-            failed_bins = torch.clamp(
-                torch.div(
-                    failed_steps * self._adaptive_failure_reset_bin_count,
-                    failed_denominator,
-                    rounding_mode="floor",
-                ),
-                0,
-                self._adaptive_failure_reset_bin_count - 1,
-            )
-            self._adaptive_failure_reset_current_bin_failed.copy_(
-                torch.bincount(
-                    failed_bins,
-                    minlength=self._adaptive_failure_reset_bin_count,
-                ).to(dtype=torch.float32)
-            )
-
-        self._adaptive_failure_reset_bin_failed_count.mul_(
-            1.0 - self._adaptive_failure_reset_alpha
-        ).add_(
-            self._adaptive_failure_reset_current_bin_failed,
-            alpha=self._adaptive_failure_reset_alpha,
+        sampler.record_failures(
+            tm.env_traj_rank.index_select(0, env_ids_tm)[failed_mask_tm],
+            self._current_reference_local_step.index_select(0, env_ids_device)[
+                failed_mask
+            ],
         )
 
-    def _sample_adaptive_failure_reset_steps(
-        self, env_ids: torch.Tensor
-    ) -> torch.Tensor:
-        tm = self.trajectory_manager
-        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
-        bin_count = self._adaptive_failure_reset_bin_count
-        sampling_probabilities = (
-            self._adaptive_failure_reset_bin_failed_count
-            + self._adaptive_failure_reset_uniform_ratio / float(bin_count)
-        )
-        sampling_probabilities = sampling_probabilities / sampling_probabilities.sum()
-        sampled_bins = torch.multinomial(
-            sampling_probabilities,
-            int(env_ids_tm.shape[0]),
-            replacement=True,
-        )
-        traj_ranks = tm.env_traj_rank.index_select(0, env_ids_tm)
-        max_exclusive = (tm._length.index_select(0, traj_ranks) - 1).clamp(min=1)
-        bin_offsets = torch.rand(
-            int(env_ids_tm.shape[0]),
-            device=tm._state_device,
-            dtype=torch.float32,
-        )
-        reset_steps = torch.floor(
-            (sampled_bins.to(dtype=torch.float32) + bin_offsets)
-            / float(bin_count)
-            * max_exclusive.to(dtype=torch.float32)
-        ).to(dtype=torch.long)
-        return reset_steps
+    def _sample_adaptive_failure_resets(
+        self, count: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        sampler = self._adaptive_failure_reset_sampler
+        if sampler is None:
+            raise RuntimeError("Adaptive failure reset sampler is not enabled.")
+        return sampler.sample(count)
 
     def _current_causal_planner_frame(
         self, env_ids: torch.Tensor | Sequence[int] | None = None
@@ -2792,12 +2783,19 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 device=self.trajectory_manager._state_device,
                 dtype=torch.long,
             )
-        self.trajectory_manager.reset_envs(env_ids.clone(), steps=reset_steps)
         if self._random_reset_full_trajectory:
             tm = self.trajectory_manager
             env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
-            reset_steps = self._sample_adaptive_failure_reset_steps(env_ids_tm)
-            tm._set_env_steps(env_ids_tm, reset_steps)
+            reset_ranks, reset_steps = self._sample_adaptive_failure_resets(
+                int(env_ids_tm.numel())
+            )
+            tm.reset_envs(
+                env_ids_tm,
+                ranks=reset_ranks,
+                steps=reset_steps,
+            )
+        else:
+            self.trajectory_manager.reset_envs(env_ids.clone(), steps=reset_steps)
         self.reset_agent_latent_command(env_ids)
         self.reset_agent_trajectory_command(env_ids)
 
@@ -2821,12 +2819,70 @@ class ImitationRLEnv(ManagerBasedRLEnv):
 
         return result
 
+    def _update_video_follow_camera(self) -> None:
+        """Point the offscreen recorder camera at one robot before capturing.
+
+        The kit-less Newton GL recorder only supports a static world-frame
+        camera, which films empty ground once reference trajectories carry the
+        robots away from their env origins (full-trajectory random starts).
+        This hook re-aims the recorder at the tracked env's robot root each
+        rendered frame; it is a no-op for the interactive/human path and
+        whenever the recorder backend does not expose ``update_camera``.
+        """
+        if self.render_mode != "rgb_array":
+            return
+        if not bool(getattr(self.cfg, "video_follow_robot", False)):
+            return
+        capture = getattr(getattr(self, "video_recorder", None), "_capture", None)
+        update_camera = getattr(capture, "update_camera", None)
+        if update_camera is None:
+            return
+        try:
+            robot = self.scene["robot"]
+            env_index = int(getattr(self.cfg, "video_follow_env_index", 0))
+            env_index %= self.num_envs
+            root_pos = (
+                robot.data.root_state_w.torch[env_index, :3]
+                .detach()
+                .to("cpu", non_blocking=False)
+                .tolist()
+            )
+            eye_offset = tuple(
+                float(v)
+                for v in getattr(self.cfg, "video_follow_eye_offset", (3.5, 3.5, 2.0))
+            )
+            lookat_offset = tuple(
+                float(v)
+                for v in getattr(
+                    self.cfg, "video_follow_lookat_offset", (0.0, 0.0, 0.0)
+                )
+            )
+            eye = tuple(root_pos[i] + eye_offset[i] for i in range(3))
+            lookat = tuple(root_pos[i] + lookat_offset[i] for i in range(3))
+            update_camera(eye, lookat)
+            if not getattr(self, "_video_follow_announced", False):
+                self._video_follow_announced = True
+                logger.info(
+                    "Video follow camera active: env=%d eye=%s lookat=%s",
+                    env_index,
+                    tuple(round(v, 2) for v in eye),
+                    tuple(round(v, 2) for v in lookat),
+                )
+        except Exception:  # never let video framing break training
+            logger.warning("Video follow-camera update failed.", exc_info=True)
+
+    def render(self, recompute: bool = False):
+        """Render with the recorder camera optionally following a robot."""
+        self._update_video_follow_camera()
+        return super().render(recompute)
+
     def step(self, action: torch.Tensor) -> VecEnvStepReturn:
         """Step the environment and update reference data."""
         # Standard RL stepping path.
         if not self.replay_only:
             # Get next reference data point (advance=True to move to next step)
             self._refresh_current_expert_frame(advance=True)
+            self._record_adaptive_failure_reset_visits()
             rollout_action_log = self._compute_rollout_reference_action_log(
                 action.to(self.device)
             )
@@ -2863,6 +2919,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self.trajectory_manager.sample(env_ids=None, advance=True)
         )
         self.current_expert_frame = reference_for_step
+        self._record_adaptive_failure_reset_visits()
         self._invalidate_mdp_cache()
         self._replay_reference(reference=reference_for_step)
         self.scene.update(dt=0.0)
@@ -3932,7 +3989,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 cache_key = (
                     int(past_steps),
                     int(future_steps),
-                    "torso_link",
+                    self._expert_anchor_body_name,
                     ("all",),
                     reference_body_names,
                 )
@@ -3949,7 +4006,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         context=context,
                         past_steps=int(past_steps),
                         joint_ids=slice(None),
-                        anchor_body_name="torso_link",
+                        anchor_body_name=self._expert_anchor_body_name,
                         reference_body_names=reference_body_names,
                     )
                 value = window_terms_cache[cache_key].get(term_name)
@@ -3966,7 +4023,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 cache_key = (
                     goal_steps,
                     0,
-                    "torso_link",
+                    self._expert_anchor_body_name,
                     ("all",),
                 )
                 if cache_key not in window_terms_cache:
@@ -3982,7 +4039,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         context=context,
                         past_steps=0,
                         joint_ids=slice(None),
-                        anchor_body_name="torso_link",
+                        anchor_body_name=self._expert_anchor_body_name,
                     )
                 value = window_terms_cache[cache_key].get(term_name)
             elif group_name in {"expert_state", "", "policy", "critic"}:
@@ -3991,15 +4048,15 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     "expert_anchor_pos_b",
                     "expert_anchor_ori_b",
                 }:
-                    anchor_terms = anchor_terms_cache.get("torso_link")
+                    anchor_terms = anchor_terms_cache.get(self._expert_anchor_body_name)
                     if anchor_terms is None:
                         anchor_terms = self._expert_anchor_terms(
                             expert_frame,
                             env_ids,
                             context=context,
-                            anchor_body_name="torso_link",
+                            anchor_body_name=self._expert_anchor_body_name,
                         )
-                        anchor_terms_cache["torso_link"] = anchor_terms
+                        anchor_terms_cache[self._expert_anchor_body_name] = anchor_terms
                     value = anchor_terms.get(term_name)
             else:
                 value = None
@@ -4301,7 +4358,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             context="expert",
             past_steps=state_history_steps,
             joint_ids=slice(None),
-            anchor_body_name="torso_link",
+            anchor_body_name=self._expert_anchor_body_name,
         )
         window_steps = state_history_steps + horizon_steps + 1
         current_index = state_history_steps
@@ -4471,7 +4528,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             context="rollout",
             past_steps=state_history_steps,
             joint_ids=slice(None),
-            anchor_body_name="torso_link",
+            anchor_body_name=self._expert_anchor_body_name,
         )
         window_steps = state_history_steps + horizon_steps + 1
         current_index = state_history_steps

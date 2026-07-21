@@ -290,7 +290,9 @@ def _update_role_markers(
     *,
     reference_root_pos_w: torch.Tensor | None = None,
 ) -> None:
-    root_pos = base_env.robot.data.root_pos_w.torch[[REFERENCE_ENV_ID, POLICY_ENV_ID]].clone()
+    root_pos = base_env.robot.data.root_pos_w.torch[
+        [REFERENCE_ENV_ID, POLICY_ENV_ID]
+    ].clone()
     if reference_root_pos_w is not None:
         root_pos[0] = reference_root_pos_w.to(device=base_env.device).reshape(3)
     root_pos[:, 2] += MARKER_HEIGHT_OFFSET
@@ -367,9 +369,7 @@ def _update_reference_body_markers(
     visible_positions = positions_w[finite_mask].contiguous()
     reference_body_markers.set_visibility(True)
     reference_body_markers.visualize(translations=visible_positions)
-    root_pos_w = (
-        positions_w[0] if bool(finite_mask[0].item()) else visible_positions[0]
-    )
+    root_pos_w = positions_w[0] if bool(finite_mask[0].item()) else visible_positions[0]
     return root_pos_w, pos_key, num_rendered, num_total
 
 
@@ -408,6 +408,18 @@ def _disable_termination_terms(env_cfg) -> None:
         setattr(terminations_cfg, name, None)
         disabled_terms.append(name)
 
+    # Termination curricula mutate their target termination configurations on
+    # reset. They cannot remain active after the corresponding terms above
+    # have been removed for a full-horizon diagnostic playback.
+    curriculum_cfg = getattr(env_cfg, "curriculum", None)
+    disabled_curricula: list[str] = []
+    if curriculum_cfg is not None:
+        for name in getattr(curriculum_cfg, "__dataclass_fields__", {}):
+            if getattr(curriculum_cfg, name, None) is None:
+                continue
+            setattr(curriculum_cfg, name, None)
+            disabled_curricula.append(name)
+
     if hasattr(env_cfg, "episode_length_s"):
         env_cfg.episode_length_s = 1.0e9
 
@@ -415,6 +427,11 @@ def _disable_termination_terms(env_cfg) -> None:
         print(
             "[INFO] Disabled comparison termination terms: "
             + ", ".join(sorted(disabled_terms))
+        )
+    if len(disabled_curricula) > 0:
+        print(
+            "[INFO] Disabled comparison termination curricula: "
+            + ", ".join(sorted(disabled_curricula))
         )
 
 
@@ -776,9 +793,7 @@ def main(
             "[INFO] Starting comparison loop. env 0 replays reference qpos robot; "
             "env 1 runs policy."
         )
-    print(
-        "[INFO] Visual markers: blue = REFERENCE body state/role, red = POLICY role."
-    )
+    print("[INFO] Visual markers: blue = REFERENCE body state/role, red = POLICY role.")
     dataset, motion, trajectory = base_env.trajectory_manager.get_env_traj_info(
         POLICY_ENV_ID
     )

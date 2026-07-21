@@ -792,9 +792,6 @@ capture_cluster_env_overrides() {
         REMOVE_OVERLAY_AFTER_JOB; do
         capture_requested_env_var "$var_name"
     done
-    while IFS= read -r var_name; do
-        capture_requested_env_var "$var_name"
-    done < <(compgen -A variable CLUSTER_SLURM_)
 }
 
 restore_cluster_env_overrides() {
@@ -845,9 +842,6 @@ restore_cluster_env_overrides() {
         REMOVE_OVERLAY_AFTER_JOB; do
         restore_requested_env_var "$var_name"
     done
-    while IFS= read -r var_name; do
-        restore_requested_env_var "$var_name"
-    done < <(compgen -A variable CLUSTER_SLURM_)
 }
 
 build_remote_job_env_args() {
@@ -881,7 +875,6 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_USE_SHARED_SIF
     add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
     add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
-    add_remote_env_arg_if_set CLUSTER_USE_XVFB
     add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
     add_remote_env_arg_if_set REMOVE_CODE_COPY_AFTER_JOB
     add_remote_env_arg_if_set REMOVE_OVERLAY_AFTER_JOB
@@ -981,7 +974,6 @@ build_remote_job_env_args() {
     add_remote_env_arg_if_set CLUSTER_USE_SHARED_SIF
     add_remote_env_arg_if_set CLUSTER_SHARED_SIF_PATH
     add_remote_env_arg_if_set CLUSTER_ALLOW_TORCH_COMPILE_DEBUG
-    add_remote_env_arg_if_set CLUSTER_USE_XVFB
     add_remote_env_arg_if_set CLUSTER_EXTRA_PYTHONPATH_REL
     add_remote_env_arg_if_set CLUSTER_SKIP_SINGULARITY_IMAGE_CHECK
     add_remote_env_arg_if_set CLUSTER_PIXI_CACHE_DIR

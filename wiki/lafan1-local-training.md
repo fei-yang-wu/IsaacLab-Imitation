@@ -98,6 +98,15 @@ skill code. If they are close, the encoder collapsed — do not proceed to Stage
 
 ## Stage 2 — Low-level oracle IPMD
 
+> **2026-07-19:** `Isaac-Imitation-G1-Latent-v0` now resolves to the SONIC
+> surface (pelvis anchor, strict adaptive terminations, full-trajectory
+> adaptive resets, SONIC actuators/rewards, 10-step histories). The commands
+> below still run, but the expected-curve table further down was measured on
+> the pre-migration surface, which is now
+> `Isaac-Imitation-G1-Latent-Legacy-v0`. See
+> `wiki/isaaclab3-cu130-runtime-migration.md`, "Training-gate resolution", for
+> the SONIC-surface expectations (ep_len ~4 -> ~15 over a 50M-frame block).
+
 The low-level agent is **IPMD** on `Isaac-Imitation-G1-Latent-v0`. All hl_skill/latent
 hyperparameters are baked config defaults in `G1ImitationLatentRLOptIPMDConfig`
 (`_default_use_latent_command=True`): `command_source="hl_skill"`, `latent_dim=258`

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 from datetime import datetime
@@ -10,7 +11,19 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from isaaclab.app import AppLauncher
+
+from runtime_bootstrap import (
+    assert_kit_not_loaded,
+    config_contains_type_name,
+    install_kit_import_guard,
+)
+
+
+strict_kitless = "--assert-kitless" in sys.argv
+if strict_kitless:
+    install_kit_import_guard()
+
+from isaaclab_tasks.utils import add_launcher_args
 
 parser = argparse.ArgumentParser(
     description="Train an offline high-level skill encoder with DiffSR."
@@ -284,12 +297,15 @@ parser.add_argument(
     choices=("online", "offline", "disabled"),
     help="W&B mode passed to wandb.init when --logger_backend=wandb.",
 )
-AppLauncher.add_app_launcher_args(parser)
+parser.add_argument(
+    "--assert-kitless",
+    action="store_true",
+    help="Require a Newton configuration that never imports or starts Kit.",
+)
+add_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
 sys.argv = [sys.argv[0]] + hydra_args
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
 
 import gymnasium as gym
 import isaaclab_imitation.tasks  # noqa: F401
@@ -303,6 +319,7 @@ from isaaclab.envs import (
 )
 from isaaclab.utils.io import dump_yaml
 from isaaclab_imitation.envs.rlopt import IsaacLabWrapper
+from isaaclab_tasks.utils import compute_kit_requirements, launch_simulation
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import HighLevelSkillDiffSRConfig, HighLevelSkillDiffSRTrainer
 
@@ -407,8 +424,7 @@ def _run_dir() -> Path:
     return Path("logs", "hl_skill_diffsr", timestamp).resolve()
 
 
-@hydra_task_config(args_cli.task, AGENT_ENTRY_POINT)
-def main(
+def _run_training(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     _agent_cfg: object,
 ) -> None:
@@ -539,8 +555,27 @@ def main(
         wrapped_env.close()
 
 
+@hydra_task_config(args_cli.task, AGENT_ENTRY_POINT)
+def main(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+    agent_cfg: object,
+) -> None:
+    needs_kit, _, _ = compute_kit_requirements(env_cfg, args_cli)
+    if args_cli.assert_kitless:
+        if needs_kit or not config_contains_type_name(env_cfg, "NewtonCfg"):
+            raise RuntimeError(
+                "--assert-kitless requires a resolved NewtonCfg with no Kit cameras or Kit visualizer."
+            )
+        assert_kit_not_loaded()
+        print("[INFO] Strict kit-less Newton pretraining runtime validated.")
+    if os.environ.get("ISAACLAB_SPLIT_RUNTIME") == "1" and needs_kit:
+        raise RuntimeError(
+            "The split runtime cannot start Kit from the offline skill-pretraining entrypoint. "
+            "Use Newton with --assert-kitless on compute-only GPUs."
+        )
+    with launch_simulation(env_cfg, args_cli):
+        _run_training(env_cfg, agent_cfg)
+
+
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        simulation_app.close()
+    main()

@@ -93,7 +93,7 @@ def run_worker(args: argparse.Namespace) -> None:
     from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
     from isaaclab.sensors import TiledCameraCfg
     from isaaclab.sim import SimulationContext
-    from isaaclab.utils import configclass
+    from isaaclab.utils.configclass import configclass
 
     from isaaclab_imitation.assets.robots.unitree import UNITREE_G1_29DOF_MIMIC_CFG
 

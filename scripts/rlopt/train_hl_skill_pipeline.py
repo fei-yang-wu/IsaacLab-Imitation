@@ -127,6 +127,8 @@ def _build_env(args: argparse.Namespace) -> dict[str, str]:
 def _add_common_app_args(cmd: list[str], args: argparse.Namespace) -> None:
     if args.headless:
         cmd.append("--headless")
+    if args.assert_kitless:
+        cmd.append("--assert-kitless")
     if args.device:
         cmd.extend(["--device", args.device])
     for app_arg in args.app_arg:
@@ -239,10 +241,22 @@ def _train_cmd(
         phase_mode=args.phase_mode,
     )
 
-    cmd = [
-        sys.executable,
-        "scripts/rlopt/train.py",
-    ]
+    train_entrypoint = args.train_entrypoint
+    if train_entrypoint == "auto":
+        train_entrypoint = (
+            "standard"
+            if args.assert_kitless
+            else (
+                "physx"
+                if os.environ.get("ISAACLAB_SPLIT_RUNTIME") == "1"
+                else "standard"
+            )
+        )
+    entrypoint_path = {
+        "standard": "scripts/rlopt/train.py",
+        "physx": "scripts/rlopt/train_physx.py",
+    }[train_entrypoint]
+    cmd = [sys.executable, entrypoint_path]
     _add_common_app_args(cmd, args)
     if args.train_video:
         cmd.append("--video")
@@ -334,6 +348,11 @@ def _parse_args() -> argparse.Namespace:
         help="Forward headless mode to both Isaac entrypoints.",
     )
     parser.add_argument(
+        "--assert-kitless",
+        action="store_true",
+        help="Require strict kit-less Newton execution in both stages.",
+    )
+    parser.add_argument(
         "--app-arg",
         action="append",
         default=[],
@@ -421,6 +440,16 @@ def _parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--train-num-envs", type=int, default=4096)
+    parser.add_argument(
+        "--train-entrypoint",
+        choices=("auto", "standard", "physx"),
+        default="auto",
+        help=(
+            "Low-level training bootstrap. 'auto' uses the Kit-first PhysX "
+            "bootstrap inside the split cluster runtime and the standard "
+            "entrypoint in a local Pixi environment."
+        ),
+    )
     parser.add_argument("--train-max-iterations", type=int, default=None)
     parser.add_argument("--train-log-interval", type=int, default=None)
     parser.add_argument(
