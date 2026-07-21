@@ -243,10 +243,19 @@ def _g1_tracked_body_obs_params() -> dict[str, object]:
 
 
 def _g1_expert_motion_obs_params() -> dict[str, object]:
+    """Return the expert joint command in the same pinned order as proprioception.
+
+    The expert frame is stored in the live articulation order, which differs
+    per physics backend. Without ``preserve_order=True`` the resolved indices
+    are ascending in that live order, so the command would be delivered in a
+    backend-specific permutation while ``joint_pos_rel`` and the action term
+    stay pinned. Pinning here is what keeps the two pairable.
+    """
     return {
         "asset_cfg": SceneEntityCfg(
             "robot",
-            joint_names=G1_29DOF_JOINT_NAMES,
+            joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+            preserve_order=True,
         )
     }
 
@@ -259,10 +268,12 @@ def _g1_expert_anchor_obs_params() -> dict[str, object]:
 
 
 def _g1_expert_window_motion_obs_params() -> dict[str, object]:
+    """Window form of :func:`_g1_expert_motion_obs_params`; same pinning rule."""
     return {
         "asset_cfg": SceneEntityCfg(
             "robot",
-            joint_names=G1_29DOF_JOINT_NAMES,
+            joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+            preserve_order=True,
         ),
         "past_steps": 0,
         "future_steps": 0,

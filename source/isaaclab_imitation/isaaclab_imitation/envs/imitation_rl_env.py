@@ -2495,6 +2495,27 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             raise RuntimeError("Adaptive failure reset sampler is not enabled.")
         return sampler.sample(count)
 
+    def _pinned_joint_ids(self) -> torch.Tensor:
+        """Live articulation indices in the action term's pinned joint order.
+
+        Physics backends enumerate the articulation differently, so any joint
+        vector that a policy or a recorded dataset consumes must be expressed in
+        a fixed order. The action term already pins one via
+        ``preserve_order=True``; reusing its mapping keeps joint state, the
+        action, and the expert command mutually pairable on every backend.
+        """
+        cached = getattr(self, "_pinned_joint_ids_cache", None)
+        if cached is not None:
+            return cached
+        term_joint_ids = self.action_manager.get_term("joint_pos")._joint_ids
+        if isinstance(term_joint_ids, slice):
+            term_joint_ids = range(self.robot.num_joints)[term_joint_ids]
+        pinned = torch.as_tensor(
+            list(term_joint_ids), dtype=torch.long, device=self.device
+        )
+        self._pinned_joint_ids_cache = pinned
+        return pinned
+
     def _current_causal_planner_frame(
         self, env_ids: torch.Tensor | Sequence[int] | None = None
     ) -> torch.Tensor:
@@ -2508,12 +2529,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 env_ids, device=self.device, dtype=torch.long
             ).reshape(-1)
         action = self.action_manager.action.index_select(0, env_ids_t)
+        joint_ids = self._pinned_joint_ids()
         return build_causal_planner_frame(
             {
-                "joint_pos_rel": self.robot.data.joint_pos.index_select(0, env_ids_t)
-                - self.robot.data.default_joint_pos.index_select(0, env_ids_t),
-                "joint_vel_rel": self.robot.data.joint_vel.index_select(0, env_ids_t)
-                - self.robot.data.default_joint_vel.index_select(0, env_ids_t),
+                "joint_pos_rel": (
+                    self.robot.data.joint_pos.index_select(0, env_ids_t)
+                    - self.robot.data.default_joint_pos.index_select(0, env_ids_t)
+                ).index_select(1, joint_ids),
+                "joint_vel_rel": (
+                    self.robot.data.joint_vel.index_select(0, env_ids_t)
+                    - self.robot.data.default_joint_vel.index_select(0, env_ids_t)
+                ).index_select(1, joint_ids),
                 "base_ang_vel": self.robot.data.root_ang_vel_b.index_select(
                     0, env_ids_t
                 ),
@@ -2635,12 +2661,23 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         assert joint_vel is not None
         assert root_quat is not None
         assert root_ang_vel is not None
+        # The expert frame and the cached defaults are both stored in the live
+        # articulation order. Reorder both into the pinned order so this offline
+        # frame stays numerically identical to the live sensor frame built by
+        # ``_current_causal_planner_frame`` on any physics backend.
+        joint_ids = self._pinned_joint_ids()
+        joint_pos = joint_pos.index_select(-1, joint_ids)
+        joint_vel = joint_vel.index_select(-1, joint_ids)
         leading_dims = joint_pos.shape[:-1]
-        default_joint_pos = self._expert_default_joint_pos[0].reshape(
-            *((1,) * len(leading_dims)), -1
+        default_joint_pos = (
+            self._expert_default_joint_pos[0]
+            .index_select(-1, joint_ids)
+            .reshape(*((1,) * len(leading_dims)), -1)
         )
-        default_joint_vel = self._expert_default_joint_vel[0].reshape(
-            *((1,) * len(leading_dims)), -1
+        default_joint_vel = (
+            self._expert_default_joint_vel[0]
+            .index_select(-1, joint_ids)
+            .reshape(*((1,) * len(leading_dims)), -1)
         )
         return build_offline_causal_planner_frame(
             joint_pos=joint_pos,
