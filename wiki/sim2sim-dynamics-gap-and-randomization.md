@@ -273,6 +273,60 @@ should be most informative.
 - **Report both** nominal-Newton and zero-shot-PhysX for every run. The gap
   between them is the number this work is trying to reduce.
 
+## MPJPE is measured under perturbation
+
+`eval_skill_commander_closed_loop.py` never touched randomization -- it only
+disabled terminations -- so every MPJPE reported to date was measured with the
+full training perturbation live: reset pose +/-0.1/0.1/0.2 rad rpy plus
++/-0.1 rad joint noise, interval pushes every 1-3 s, and mass, friction,
+restitution and COM randomization.
+
+Root-relative MPJPE subtracts root *position* but not root *orientation*, so a
+perturbed root rigidly rotates every body inside the root-relative frame and
+each body picks up roughly its distance from the root times the rotation.
+Measured at reset on the G1's 14-body set, before any physics step:
+
+| Config | MPJPE at reset |
+| --- | ---: |
+| Shipped evaluation config | 45.22 mm |
+| Joint noise removed | 38.79 mm |
+| All reset randomization removed | 0.00 mm |
+
+The rigid-rotation signature is unambiguous: the pelvis, being the root body,
+reads exactly 0.00 mm, and the correlation between a body's radius from the
+root and its error is 0.974. Translation cancels by construction, so
+essentially all of the 38.79 mm is the orientation perturbation.
+
+The exact zero is a useful negative result in its own right: there is no
+systematic reference-versus-URDF body-frame offset sitting underneath every
+MPJPE this project reports.
+
+### Which protocol to use
+
+Two different numbers, do not conflate them:
+
+- **Paired interface comparison.** Keep the perturbations. Both rows see the
+  same ones, and `AGENTS.md` requires the push event be identical across
+  interfaces and not altered solely for evaluation. Absolute values are
+  inflated; the comparison is unaffected.
+- **Absolute tracking claims, and any external comparison.** Use
+  `--deterministic_tracking`, which starts exactly on the reference and removes
+  pushes and randomization. Our perturbed numbers are **not** comparable to
+  SONIC's, which reports root-relative MPJPE in mm with domain randomization
+  listed under training only.
+
+The flag is additive, not a replacement for either existing pass, matching the
+precedent that `AGENTS.md` already sets by requiring an extra full-horizon
+diagnostic pass. It records what it changed in the result file, and prefixes
+its metrics with `deterministic_tracking/` so the paper aggregators -- which
+look up bare names such as `tracking_mpjpe_mm` -- fail loudly rather than
+silently pooling two protocols.
+
+One definitional caveat for any external comparison: SONIC's paper does not
+state whether it aligns root orientation before computing MPJPE. Ours does not.
+If theirs does, the two metrics differ in sensitivity even under identical
+randomization.
+
 ## Interaction with the frozen paper protocol
 
 **Decision (2026-07-21, user): randomization applies to every experiment.**
