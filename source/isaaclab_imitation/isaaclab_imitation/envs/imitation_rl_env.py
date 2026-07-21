@@ -1202,6 +1202,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
 
         Kept in metres to match those two, matching ``tracking_mpjpe_m``; the
         conversion to millimetres happens once at the logging boundary.
+
+        Note that only root *position* is subtracted, not root *orientation*, so
+        a rotated root rigidly rotates every body within the root-relative frame
+        and contributes an error of roughly (distance from root) x (rotation) per
+        body. That is why this is non-zero on the first frame of an episode: the
+        ``reset_reference_state`` event perturbs the initial root orientation by
+        up to 0.1/0.1/0.2 rad, which alone measures about 39 mm on the G1's
+        14-body set, with a further 6 mm from the +/-0.1 rad joint noise.
+        Measured with all reset randomization disabled the value is exactly
+        0.00 mm, so there is no systematic reference-versus-URDF body-frame
+        offset underneath it.
         """
         if self._mpjpe_metric_body_ids is None:
             return None
