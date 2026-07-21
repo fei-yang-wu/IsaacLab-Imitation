@@ -1228,18 +1228,62 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             robot_relative - reference_relative, dim=-1
         ).mean(dim=-1)
 
-    def _accumulate_mpjpe_metric(self) -> dict[str, float]:
+    def _accumulate_mpjpe_metric(
+        self, exclude_env_ids: torch.Tensor | None = None
+    ) -> dict[str, float]:
         """Accumulate the episode sum and return the instantaneous log entry.
 
         Reported in millimetres, the unit the closed-loop evaluators and every
         paper aggregator use for ``tracking_mpjpe_mm``.
+
+        Args:
+            exclude_env_ids: Environments to skip in the *episode* accumulator
+                this call (their instantaneous value is still included in the
+                returned/logged mean). This is for envs that were reset earlier
+                in the same ``step()`` call: by this point their state is the
+                fresh post-reset pose, not something the policy produced, and
+                their terminal-frame contribution to the episode that just
+                ended was already folded in by :meth:`_reset_idx` before the
+                reset write. Accumulating here too would double-count the
+                terminal frame into the wrong (new) episode.
         """
         mpjpe = self._compute_mpjpe_metric()
         if mpjpe is None:
             return {}
-        self._mpjpe_metric_sum += mpjpe
-        self._mpjpe_metric_count += 1.0
+        assert self._mpjpe_metric_sum is not None
+        assert self._mpjpe_metric_count is not None
+        if exclude_env_ids is not None and exclude_env_ids.numel() > 0:
+            active = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+            active.index_fill_(0, exclude_env_ids, False)
+            self._mpjpe_metric_sum[active] += mpjpe[active]
+            self._mpjpe_metric_count[active] += 1.0
+        else:
+            self._mpjpe_metric_sum += mpjpe
+            self._mpjpe_metric_count += 1.0
         return {"Metrics/mpjpe_mm": float(mpjpe.mean().item()) * _METRES_TO_MM}
+
+    def _accumulate_terminal_mpjpe_metric(self, env_ids: torch.Tensor) -> None:
+        """Fold the pre-reset terminal frame into the ending episode's sum.
+
+        Must run before any trajectory reassignment or reset write for
+        ``env_ids`` (i.e. at the very top of :meth:`_reset_idx`): the robot's
+        physical state is still the terminal one from the step that just
+        triggered the reset, and the tracked reference is still the one that
+        terminating episode was scored against. Without this, the terminal
+        transition's error is never counted in any episode -- by the time
+        :meth:`_emit_mpjpe_episode_metric` runs, the accumulator holds every
+        frame except the last one.
+        """
+        if self._mpjpe_metric_sum is None or env_ids.numel() == 0:
+            return
+        mpjpe = self._compute_mpjpe_metric()
+        if mpjpe is None:
+            return
+        assert self._mpjpe_metric_count is not None
+        self._mpjpe_metric_sum.index_add_(0, env_ids, mpjpe.index_select(0, env_ids))
+        self._mpjpe_metric_count.index_add_(
+            0, env_ids, torch.ones(env_ids.numel(), device=self.device)
+        )
 
     def _emit_mpjpe_episode_metric(self, env_ids: torch.Tensor) -> None:
         """Log the completed episodes' mean MPJPE, then clear their accumulators.
@@ -2916,6 +2960,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Isaac Lab 3.0 hands out int32 env indices; normalize once here.
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
 
+        # Fold the terminal (pre-reset) frame into the ending episode's MPJPE
+        # sum before anything below reassigns the tracked trajectory or writes
+        # the reset state. This is the last point at which the robot's physical
+        # state and the reference it was scored against both still belong to
+        # the episode that is ending.
+        self._accumulate_terminal_mpjpe_metric(env_ids)
+
         # Reset trajectory tracking (reassigns trajectories and resets steps).
         reset_steps = None
         if self._random_reset_full_trajectory:
@@ -3038,9 +3089,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
             super().step(action)
             rollout_state_log = self._compute_rollout_reference_state_log()
-            # Accumulated after the physics step and after any reset inside it,
-            # so the sample reflects the state the policy actually produced.
-            mpjpe_log = self._accumulate_mpjpe_metric()
+            # Accumulated after the physics step and after any reset inside it.
+            # Envs that reset this step already had their terminal frame folded
+            # into the ending episode by _reset_idx (via
+            # _accumulate_terminal_mpjpe_metric, called before the reset write);
+            # the state visible here for those envs is the fresh post-reset
+            # pose, not something the policy produced, so it must not also be
+            # accumulated into the new episode's sum.
+            just_reset = (self.reset_terminated | self.reset_time_outs).nonzero(
+                as_tuple=True
+            )[0]
+            mpjpe_log = self._accumulate_mpjpe_metric(exclude_env_ids=just_reset)
             if rollout_action_log or rollout_state_log or mpjpe_log:
                 self.extras.setdefault("log", {}).update(rollout_action_log)
                 self.extras.setdefault("log", {}).update(rollout_state_log)
