@@ -680,6 +680,21 @@ class G1RewardsCfg:
         },
     )
 
+    # -- metrics (weight=0.0: logged to Episode_Reward/mpjpe_m each episode,
+    # averaged across envs, but does not affect the return)
+    mpjpe_m = RewTerm(
+        func=mdp.mpjpe_relative_body_pos_m,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=G1_TRACKED_BODY_NAMES,
+                preserve_order=True,
+            ),
+            "reference_body_names": G1_TRACKED_BODY_NAMES,
+        },
+    )
+
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-0.1,

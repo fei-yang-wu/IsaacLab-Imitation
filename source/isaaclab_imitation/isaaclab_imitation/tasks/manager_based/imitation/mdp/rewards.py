@@ -348,6 +348,29 @@ def reference_local_reward_point_position_error_exp(
     return tracking_exp_from_squared_error(squared_error, std)
 
 
+def mpjpe_relative_body_pos_m(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg | None = None,
+    reference_body_names: Sequence[str] = (),
+) -> torch.Tensor:
+    """Root-relative mean per-joint position error (MPJPE), in meters.
+
+    Metric only, not a tracking kernel: register with ``weight=0.0`` so the
+    reward manager logs ``Episode_Reward/<name>`` (averaged over envs) without
+    contributing to the return. Mirrors the ``tracking_mpjpe_m`` computation
+    used by the closed-loop eval scripts.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    body_ids = env._get_body_ids_tensor_fast(asset_cfg.body_ids)
+    actual_pos = _select_body_dim(asset.data.body_link_pos_w.torch, body_ids)
+    root_pos_actual = asset.data.root_state_w.torch[:, :3]
+    ref_pos_w = env._get_reference_body_pose_w_fast(reference_body_names)[0]
+    root_pos_reference_w = env._get_reference_root_state_w_fast()[0]
+    actual_rel_pos = actual_pos - root_pos_actual[:, None, :]
+    ref_rel_pos = ref_pos_w - root_pos_reference_w[:, None, :]
+    return torch.linalg.vector_norm(actual_rel_pos - ref_rel_pos, dim=-1).mean(dim=-1)
+
+
 def body_angular_velocity_excess_l2(
     env: ImitationRLEnv,
     asset_cfg: SceneEntityCfg,

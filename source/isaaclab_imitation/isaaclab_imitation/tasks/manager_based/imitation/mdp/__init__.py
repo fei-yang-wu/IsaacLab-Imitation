@@ -36,6 +36,7 @@ from .observations import (
 )
 from .rewards import (
     body_angular_velocity_excess_l2,
+    mpjpe_relative_body_pos_m,
     reference_global_anchor_orientation_error_exp,
     reference_global_anchor_position_error_exp,
     reference_global_body_angular_velocity_error_exp,
@@ -90,6 +91,7 @@ __all__ = [
     "reference_global_body_linear_velocity_error_exp",
     "reference_global_body_angular_velocity_error_exp",
     "reference_local_reward_point_position_error_exp",
+    "mpjpe_relative_body_pos_m",
     "body_angular_velocity_excess_l2",
     "randomize_joint_default_pos",
     "reset_joints_to_reference",
