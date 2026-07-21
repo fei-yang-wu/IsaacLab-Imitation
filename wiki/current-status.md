@@ -143,9 +143,27 @@ Submitted 2026-07-20: the VRAM/throughput ablation
 190/36), and `5523772` (v4, 12288x24 — 143/27); and the BONES-SEED
 SONIC-latent job (`experiments/submit_bones_seed_100_sonic_latent_ice.sh`,
 91/100-motion SONIC-exclusion-filtered manifest, L1 scale 8192x12, 3B-frame
-cap, njmax 288/nconmax 32) as ICE job `5523773`. None have reported results
-yet; the njmax/nconmax values for v2-v4 are the unvalidated proportional
-extrapolation noted in the ablation script, not independently qualified.
+cap, njmax 288/nconmax 32) as ICE job `5523773`.
+
+**VRAM ablation result (2026-07-20): v3 and v4 failed within 10 minutes,
+closed as-is (no resubmission).**
+
+- v3 (16384 envs, `5523771`): genuine CUDA OOM, not a solver issue — 79.18 GB
+  capacity, 76.82 GB already in use, failed allocating another 3 GB. The
+  SONIC release network (6-layer [2048,2048,1024,1024,512,512] with running
+  input normalization) plus rollout buffer at 16384 envs exceeds one H100's
+  80 GB.
+- v4 (12288 envs, rollout=24, `5523772`): contact-solver overflow, not VRAM —
+  the proportional njmax/nconmax extrapolation (143/27) was too low for the
+  longer 24-step rollout; the log shows repeated `nefc overflow` requests up
+  to 196, and the run hard-crashed rather than NaN'ing. Confirms the
+  extrapolation caveat noted in the ablation script: njmax/nconmax scaling by
+  env count alone does not hold when rollout length also changes.
+- v1 (8192 envs) and v2 (12288 envs) ran cleanly for 8.5+ h with no
+  overflow/OOM. Per user direction, this is treated as sufficient signal for
+  this ablation round: **12288 envs x 12 rollout steps fits one H100 and is
+  the largest validated point; 16384 envs does not fit at this policy size.**
+  No further arms were resubmitted.
 
 ### Non-paper BONES-SEED SONIC latent training
 
