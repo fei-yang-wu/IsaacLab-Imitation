@@ -4,7 +4,7 @@ set -euo pipefail
 # Train a fresh BONES-SEED-100 DiffSR skill encoder, then the confirmed-
 # default SONIC latent oracle (Isaac-Imitation-G1-Latent-v0, release policy
 # contract) at the L1 scale config (8192 envs x 12 steps, minibatch 12288),
-# capped at 2B frames. Uses the SONIC-release-exclusion-filtered manifest
+# capped at 3B frames. Uses the SONIC-release-exclusion-filtered manifest
 # (91/100 motions; 9 dropped by scripts/filter_bones_seed_sonic_exclusions.py
 # using the exact keyword list from the public SONIC release's
 # filter_and_copy_bones_data.py). This is not a Phase-5 planner run.
@@ -15,7 +15,7 @@ cd "${REPO_ROOT}"
 
 SEED="${SEED:-0}"
 DRY_RUN="${DRY_RUN:-1}"
-RUN_TAG="${RUN_TAG:-bones_seed_91_sonic_h25_z256_2b_seed${SEED}_20260720_nj288_nc32}"
+RUN_TAG="${RUN_TAG:-bones_seed_91_sonic_h25_z256_3b_seed${SEED}_20260720_nj288_nc32}"
 MANIFEST_PATH="${MANIFEST_PATH:-/data/bones_seed_100/manifests/g1_bones_seed_100_sonic_filtered_manifest.json}"
 DATASET_PATH="${DATASET_PATH:-/data/bones_seed_100/g1_hl_diffsr_sonic_filtered}"
 PRETRAIN_OUTPUT_DIR="${PRETRAIN_OUTPUT_DIR:-logs/bones_seed_sonic/${RUN_TAG}/skill_encoder_h25_z256}"
@@ -76,7 +76,7 @@ fi
 printf -v extra_args_string '%q ' "${extra_args[@]}"
 
 export TASK=Isaac-Imitation-G1-Latent-v0
-export FRAME_CAP=2000000000
+export FRAME_CAP=3000000000
 export TRAIN_NUM_ENVS=8192
 export ROLLOUT_STEPS=12
 export MINIBATCH_SIZE=12288
@@ -89,7 +89,7 @@ export SAVE_INTERVAL=100000000
 export MANIFEST_PATH
 export DATASET_PATH
 export WANDB_PROJECT="${WANDB_PROJECT:-g1-bones-seed-100-sonic-latent-ice}"
-export WANDB_GROUP="${WANDB_GROUP:-sonic-default-l1-scale-2b}"
+export WANDB_GROUP="${WANDB_GROUP:-sonic-default-l1-scale-3b}"
 export EXP_NAME="${EXP_NAME:-${RUN_TAG}_oracle_low_level}"
 export CLUSTER_CONFIG=ice_runtime
 export CLUSTER_SLURM_TIME_LIMIT=15:59:00
