@@ -19,6 +19,64 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Open Blocker: Newton joint-order leak (2026-07-21)
+
+Cross-backend verification found that the expert command observations and the
+action offset are resolved from the *live* articulation order instead of the
+pinned canonical list. PhysX and Newton differ in 27 of 29 joint slots, and the
+pinned list is the PhysX order, so both leaks are no-ops under PhysX and active
+under Newton. Every Newton-trained checkpoint therefore encodes a
+Newton-specific joint permutation, including the `reward_input` term that feeds
+the IPMD reward and discriminator.
+
+Confirmed in both directions on `L1_strict/model_step_992870400.pt`: removing
+the mismatch on PhysX raises survival from 67/500 to 323/500 steps; injecting it
+on Newton drops survival from 500/500 to 111/500. Joint tracking error is
+~0.43-0.52 rad whenever mismatched and ~0.11-0.24 rad when matched.
+
+**Fixed on 2026-07-21.** The command terms and the action offset are pinned,
+the causal planner frame is pinned, and a latent double-scatter in
+`batch_csv_to_npz.py` (live since 2026-07-16, no data affected) was removed.
+The index contract now reports no leaks on either backend and the regression
+test covers every command term.
+
+**Existing Newton checkpoints are invalidated** and now fail on Newton too
+(113/500 steps). `compare_policy_reference.py --emulate_joint_order_from` is a
+diagnostic-only shim that restores them exactly; retraining the low-level
+controllers is the real remedy.
+
+Source reference NPZ/Zarr data is name-bound and **safe**. Policy-produced
+artifacts are not: rollout NPZ state arrays, planner sample rows, and the
+skill-encoder latent space are all Newton-permuted with no ordering metadata.
+
+Two further bugs were found and fixed on 2026-07-21 while chasing the residual
+gap:
+
+- **Stale derived state after reset (both backends).** Both reset events called
+  `asset.update(dt=0.0)`, which does not advance `_sim_timestamp`, so Isaac
+  Lab's lazily cached body-frame buffers were never recomputed. `base_lin_vel`
+  and `base_ang_vel` are policy observations, so the first observation after
+  every reset came from the pre-reset state — stale under PhysX, zeros under
+  Newton — throughout all training to date.
+- **PhysX solver iterations.** The USD spawn copied the URDF importer's
+  `articulation_props` and overrode the asset's requested 32/1 with a generic
+  8/4. The override is removed; the asset now governs, verified on the live
+  stage.
+
+Neither closed the transfer gap, which is the point: with ordering matched,
+Newton survives fully at 0.126 rad joint error while PhysX falls at 5.36 s with
+0.242 rad. The gap is a genuine dynamics difference.
+
+**Decision: if we randomize, we randomize for every experiment**, so the
+protocol is re-frozen on the randomized event config rather than randomizing a
+subset. This invalidates existing qualification artifacts, so sequence it with
+the retraining already forced by the joint-order fix.
+
+See [Sim2Sim Backend Verification](sim2sim-backend-verification.md) for the
+audit tooling, evidence tables, and recorded-data status, and
+[Sim2Sim Dynamics Gap and Randomization](sim2sim-dynamics-gap-and-randomization.md)
+for the gap analysis and the randomization tiers.
+
 ## Research Question
 
 We are testing whether a learned latent skill command is a better high-level
