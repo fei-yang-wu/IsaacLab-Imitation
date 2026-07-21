@@ -77,10 +77,24 @@ def randomize_joint_default_pos(
     selected_pos = randomized_pos[env_ids_for_slice, joint_ids]
     asset.data.default_joint_pos.torch[env_ids_for_slice, joint_ids] = selected_pos
 
+    # ``default_joint_pos`` is indexed in the live articulation order, but the
+    # action term's offset is indexed in the term's own pinned joint order.
+    # Those two orders differ per physics backend, so the offset must be
+    # gathered through the term's live-index mapping rather than copied
+    # slot-for-slot. Writing it positionally scatters each joint's rest pose
+    # onto a different joint on any backend whose enumeration is not the one
+    # the pinned list was authored for.
     joint_pos_action_term = env.action_manager.get_term("joint_pos")
     offset = getattr(joint_pos_action_term, "_offset", None)
     if isinstance(offset, torch.Tensor):
-        offset[env_ids_for_slice, joint_ids] = selected_pos
+        term_joint_ids = getattr(joint_pos_action_term, "_joint_ids", slice(None))
+        if isinstance(term_joint_ids, slice):
+            offset[env_ids] = randomized_pos[env_ids][:, term_joint_ids]
+        else:
+            term_joint_ids = torch.as_tensor(
+                term_joint_ids, dtype=torch.long, device=asset.device
+            )
+            offset[env_ids] = randomized_pos[env_ids][:, term_joint_ids]
 
 
 def reset_joints_to_reference(
