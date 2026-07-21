@@ -1,7 +1,9 @@
 # Project Live Status
 
-Last verified: 2026-07-16, after the first guarded BONES-SEED three-seed
-preparation attempt finished.
+Last verified: 2026-07-20, after making the SONIC surface + release policy
+contract the confirmed default (H100/H200 single-GPU access removes the
+compute-scale objection) and preparing the first ICE H100 VRAM ablation and
+BONES-SEED SONIC-latent submissions at the new ~10B / 2B-cap scales.
 
 This is the living memory for the active research project. Read it first when
 returning to the project or starting a new agent session. It answers **where we
@@ -110,6 +112,67 @@ size that reaches a fixed performance target.
 One-motion closed-loop experiments establish that a causal planner can command
 both the latent and explicit interfaces. These runs are diagnostics, not paper
 evidence across motions.
+
+### SONIC default and policy-contract decision (2026-07-20)
+
+**Status: code default, not yet re-validated at the new scale.**
+
+With ICE H100 (and now H200) single-GPU access, the compute-scale objection
+that paused the full SONIC surface on 2026-07-20 no longer applies at the
+intended budget: 100k PPO iterations at 8192 envs x 12 rollout steps is
+~9.83B (~10B) frames, matching the release's own convergence criterion
+("after 100K iterations") on a single GPU instead of 64+. Decision:
+
+- `Isaac-Imitation-G1-Latent-v0` (the SONIC surface) is the confirmed
+  default latent task, not a paused/candidate one.
+- `Isaac-Imitation-G1-Latent-Strict-v0` (legacy scaffolding + pelvis anchor +
+  annealed strict terminations), briefly floated as the 2026-07-20 candidate
+  default, is now DEPRECATED — kept only to reproduce runs already started
+  on it.
+- The default policy contract for the SONIC task is now the exact public
+  release optimizer (`sonic_release_optimizer=True`: actor lr 2e-5, joint
+  grad clip 0.1, init std 0.05, 6-layer SiLU MLPs, running input
+  normalization), not the locally-validated small-scale contract — the
+  release contract needs release-scale iteration counts to leave the flat
+  regime, and 100k iterations now supplies that on one GPU.
+
+Not yet run: no training job has exercised this default+contract
+combination end-to-end. The next ICE submissions (VRAM/throughput ablation
+and the BONES-SEED SONIC-latent job below) are the first validation of it.
+
+### Non-paper BONES-SEED SONIC latent training
+
+**Status: debugged locally; no active ICE job.**
+
+Jobs `5523561`, `5523570`, `5523578`, and `5523588` are stopped or failed and
+are not training results. The h25/z256 encoder checkpoint was retained, but the
+Newton low-level run at the official flat-locomotion value `njmax=95` produced
+NaN returns. A first-rollout finite-value trace ruled out MPJPE, the skill
+encoder, and the actor: the latent and initial policy outputs were finite, then
+Newton state and six independent reward terms became non-finite after contact
+constraint overflow. The failing sample was `ab_bicycle_001_A359` near frame
+20. In its first 200 frames, 25 of 32 body origins are below 5 cm; corrected
+LAFAN1 has at most 3. An 8,192-environment LAFAN1 control had zero overflows,
+while BONES-SEED at `njmax=95` had 951 in one rollout and requested up to 236
+constraint rows.
+
+A reduced debug manifest containing only `ab_bicycle_001_A359` and
+`crawl_ff_loop_180_R_001_A214` isolated the interacting Newton capacities
+without altering either motion. At 2,048 environments, `njmax=264` and
+`nconmax=31` still overflowed (268 constraint rows requested), whereas
+`272/32` and `288/32` each passed 30 rollouts across seeds 0, 1, and 2 with no
+constraint/contact overflow or NaN. The retained setting is `288/32` to keep
+20 rows of headroom above the observed request. Relative to the borderline
+`264/31` setting, it reduced steady throughput by 0.87%; at 2,048 environments
+GPU memory increased by 96 MiB (2.3%) compared with `95/18`.
+
+The full 100-motion Newton run at `288/32` then completed 20,054,016 local
+frames in 186.4 seconds with no overflow or NaN. Steady throughput was about
+108--110 thousand frames/s, observed GPU use was 34,916 MiB, and the final
+metrics included mean episode length 19.97 and mean episode reward 0.5444.
+This qualifies the capacity change for local testing; it is not a training
+result or a paper qualification. A separate PhysX local run was also finite
+through 20,054,016 frames. No replacement was submitted at the user's request.
 
 ### Phase 4: corrected LAFAN1, no language
 

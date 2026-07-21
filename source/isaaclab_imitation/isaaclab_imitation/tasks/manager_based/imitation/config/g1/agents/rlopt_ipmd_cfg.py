@@ -377,18 +377,21 @@ class G1ImitationLatentSonicRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
     terminations, adaptive failure sampling, domain randomization, actuators)
     always follows the public SONIC release. The optimizer contract is split:
 
-    - Default (``sonic_release_optimizer=False``): the locally-validated RLOpt
-      contract. The release optimizer is tuned for 64+ GPUs x 100k iterations;
-      at single-GPU 50M-frame scale it stays pinned at ~6-step episodes, while
-      this contract climbs steadily (see the CU130 migration wiki page).
-    - ``sonic_release_optimizer=True``: the exact public-release contract
-      (actor lr 2e-5 adaptive in [1e-5, 2e-4], joint grad clip 0.1, init std
-      0.05 clamped to [0.001, 0.5], global per-rollout advantage
-      normalization, 6-layer SiLU MLPs with running input normalization) for
-      cluster-scale reproductions.
+    - Default (``sonic_release_optimizer=True``): the exact public-release
+      contract (actor lr 2e-5 adaptive in [1e-5, 2e-4], joint grad clip 0.1,
+      init std 0.05 clamped to [0.001, 0.5], global per-rollout advantage
+      normalization, 6-layer SiLU MLPs with running input normalization).
+      Confirmed default (2026-07-20): single-GPU ICE H100 runs now target the
+      release's own ~10B-frame / 100k-iteration convergence budget, so this
+      contract is in scale rather than the flat regime seen at 50M-100M local
+      scale.
+    - ``sonic_release_optimizer=False``: the locally-validated RLOpt contract
+      used for cheap local qualification/smoke runs, where the release
+      optimizer stayed pinned at ~6-step episodes (see the CU130 migration
+      wiki page, "Training-gate resolution (2026-07-19)").
     """
 
-    sonic_release_optimizer: bool = False
+    sonic_release_optimizer: bool = True
 
     def sync_input_keys(self) -> None:
         super().sync_input_keys()
@@ -455,8 +458,11 @@ class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
 ):
     """Exact public-SONIC-release optimizer contract for cluster-scale runs.
 
-    Select with ``--agent rlopt_ipmd_sonic_release_cfg_entry_point``. Not the
-    default because it needs release-scale compute to leave the flat regime.
+    Select with ``--agent rlopt_ipmd_sonic_release_cfg_entry_point``.
+    Identical to the default ``G1ImitationLatentSonicRLOptIPMDConfig`` as of
+    2026-07-20 (both pin ``sonic_release_optimizer=True``); kept as an
+    explicit, override-proof alias for cluster submission scripts that name
+    the release contract directly.
     """
 
     sonic_release_optimizer: bool = True

@@ -619,10 +619,12 @@ Submission-wave history (current):
 3. A later 8192-environment video retry submitted L0/L1/L3/L4 as
    5522953/5522954/5522955/5522956. L0, L1, and L4 hit NVIDIA Xid 109 while
    the Newton GL viewer was copying rendered state from CUDA; they were
-   cancelled. L3 avoided the driver fault, completed its initial capture, and
-   remains running, but that one success does not make the path reliable.
+   cancelled. L3 completed its initial capture and trained to about 206M
+   frames, but a later OpenGL capture also became unusable and the run was
+   interrupted. Slurm recorded `COMPLETED` because the trainer handled
+   `Ctrl+C` and returned zero; it did not reach the 1B-frame target.
 4. Wave 3 drops video and W&B video syncing. The no-video replacements are
-   L0=5523400, L1=5523402, and L4=5523407; L3 remains 5522955.
+   L0=5523400, L1=5523402, L3=5523449, and L4=5523407.
 
 Threshold pinning is done through the curriculum terms
 (`env.curriculum.<term>.params.{start,end}_value`), so all SONIC arms share
@@ -714,6 +716,53 @@ is a dynamics/training decision, not an ICE, Apptainer, CUDA-toolkit, or
 renderer failure.
 
 No Slurm submission is implicit in this migration note.
+
+### BONES-SEED SONIC latent training (2026-07-20)
+
+`experiments/submit_bones_seed_100_sonic_latent_ice.sh` submits one
+non-Phase-5 sequential job: rebuild the 100-motion cache, train a fresh
+h25/z256 DiffSR skill encoder for 5,000 updates, then train the frozen-encoder
+SONIC oracle low-level policy for 999,948,288 frames. The low-level block uses
+8,192 environments by 12 rollout steps, mini-batches of 12,288, the official
+repo asset, strict-from-scratch terminations, the locally validated optimizer,
+and no video.
+
+No BONES-SEED job from this wave remains active. Attempts `5523556` and
+`5523559` failed during startup; `5523561` reached low-level training but
+returned NaN; later Newton diagnostics were stopped or failed before producing
+a candidate checkpoint. Local finite-value tracing found that the official G1
+flat-locomotion `njmax=95` is sufficient for corrected LAFAN1 but not for the
+valid many-body ground contacts in BONES-SEED. One BONES rollout emitted 951
+constraint overflows and requested up to 236 rows; the first invalid simulator
+state was associated with `ab_bicycle_001_A359` near frame 20. MPJPE, the
+encoder latent, and initial actor outputs were finite before the solver state
+failed. A two-motion sweep kept the model and source data fixed and exposed an
+interaction between `njmax` and `nconmax`: `264/31` still requested 268 rows,
+while both `272/32` and `288/32` passed 30 rollouts across three seeds. The
+launcher retains `env.sim.physics.solver_cfg.njmax=288` and
+`env.sim.physics.solver_cfg.nconmax=32` for headroom. This cost 0.87% steady
+throughput relative to the borderline `264/31` setting and 96 MiB (2.3%) at
+2,048 environments relative to `95/18`. The final full-manifest local run
+completed 20,054,016 frames with no overflow or NaN at roughly 108--110
+thousand steady frames/s. No replacement job was submitted.
+
+### SONIC default and policy-contract decision (2026-07-20)
+
+ICE H100 (and now H200) single-GPU access removes the compute-scale
+objection that paused the full SONIC surface earlier the same day: 8192
+envs x 12 rollout steps x 100k PPO iterations is ~9.83B (~10B) frames,
+matching the release's own "after 100K iterations" convergence budget on one
+GPU instead of 64+. `Isaac-Imitation-G1-Latent-v0` (the SONIC surface) is now
+the confirmed default latent task rather than paused/candidate;
+`Isaac-Imitation-G1-Latent-Strict-v0` is DEPRECATED and kept only to
+reproduce runs already started on it. `G1ImitationLatentSonicRLOptIPMDConfig`
+now defaults `sonic_release_optimizer=True` (the exact public-release
+optimizer contract: actor lr 2e-5, joint grad clip 0.1, init std 0.05,
+6-layer SiLU MLPs, running input normalization) instead of the
+locally-validated small-scale contract, since 100k iterations is the scale
+the release contract needs to leave the flat regime. Nothing has trained
+end-to-end under this default+contract combination yet; the VRAM/throughput
+ablation and BONES-SEED SONIC-latent submissions below are its first test.
 
 ## Migration sequence
 
