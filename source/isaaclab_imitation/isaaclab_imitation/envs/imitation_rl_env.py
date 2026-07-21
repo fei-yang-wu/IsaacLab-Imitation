@@ -37,6 +37,9 @@ _MDP_COMPILED: Any | None = None
 _COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracle"})
 _POLICY_COMMAND_MODES = frozenset({"reference", "full_body_chunk_current_slot"})
 _CAUSAL_PLANNER_HISTORY_STEPS = 9
+# Tracking maths stays in metres; MPJPE is reported in millimetres because that
+# is the unit the closed-loop evaluators and the paper aggregators use.
+_METRES_TO_MM = 1000.0
 
 
 def _get_mdp_compiled_module() -> Any:
@@ -1196,6 +1199,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         Mirrors ``mdp.mpjpe_relative_body_pos_m`` and the closed-loop
         evaluators: both sides are expressed relative to their own root, so the
         value measures pose error rather than global drift.
+
+        Kept in metres to match those two, matching ``tracking_mpjpe_m``; the
+        conversion to millimetres happens once at the logging boundary.
         """
         if self._mpjpe_metric_body_ids is None:
             return None
@@ -1212,13 +1218,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         ).mean(dim=-1)
 
     def _accumulate_mpjpe_metric(self) -> dict[str, float]:
-        """Accumulate the episode sum and return the instantaneous log entry."""
+        """Accumulate the episode sum and return the instantaneous log entry.
+
+        Reported in millimetres, the unit the closed-loop evaluators and every
+        paper aggregator use for ``tracking_mpjpe_mm``.
+        """
         mpjpe = self._compute_mpjpe_metric()
         if mpjpe is None:
             return {}
         self._mpjpe_metric_sum += mpjpe
         self._mpjpe_metric_count += 1.0
-        return {"Metrics/mpjpe_m": float(mpjpe.mean().item())}
+        return {"Metrics/mpjpe_mm": float(mpjpe.mean().item()) * _METRES_TO_MM}
 
     def _emit_mpjpe_episode_metric(self, env_ids: torch.Tensor) -> None:
         """Log the completed episodes' mean MPJPE, then clear their accumulators.
@@ -1235,8 +1245,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if bool(valid.any()):
             sums = self._mpjpe_metric_sum.index_select(0, env_ids)
             episode_mean = (sums[valid] / counts[valid]).mean()
-            self.extras.setdefault("log", {})["Metrics/mpjpe_m_per_episode"] = float(
-                episode_mean.item()
+            self.extras.setdefault("log", {})["Metrics/mpjpe_mm_per_episode"] = (
+                float(episode_mean.item()) * _METRES_TO_MM
             )
         self._mpjpe_metric_sum.index_fill_(0, env_ids, 0.0)
         self._mpjpe_metric_count.index_fill_(0, env_ids, 0.0)

@@ -694,8 +694,8 @@ class G1RewardsCfg:
     # -- metrics
     # NOTE: this term is inert. RewardManager.compute() skips zero-weight terms
     # without calling them, so it never runs and Episode_Reward/mpjpe_m is a
-    # constant zero. The live metric is logged by the env as Metrics/mpjpe_m
-    # and Metrics/mpjpe_m_per_episode, driven by cfg.mpjpe_metric_body_names.
+    # constant zero. The live metric is logged by the env as Metrics/mpjpe_mm
+    # and Metrics/mpjpe_mm_per_episode, driven by cfg.mpjpe_metric_body_names.
     # Kept only so the term name stays reserved and the reward table matches
     # historical runs; give it a non-zero weight only to make it a real reward.
     mpjpe_m = RewTerm(

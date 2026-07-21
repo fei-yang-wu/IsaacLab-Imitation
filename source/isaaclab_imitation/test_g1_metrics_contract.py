@@ -50,6 +50,33 @@ def test_mpjpe_metric_matches_the_evaluated_body_set() -> None:
     assert list(cfg.mpjpe_metric_body_names) == list(G1_TRACKED_BODY_NAMES)
 
 
+def test_mpjpe_metric_is_reported_in_millimetres() -> None:
+    """The training metric must use the same unit as the paper aggregators.
+
+    The evaluators emit ``tracking_mpjpe_mm`` and every aggregator consumes it,
+    so a training curve in metres would differ from the reported number by
+    1000x and invite a silent misreading.
+    """
+    from isaaclab_imitation.envs.imitation_rl_env import (
+        _METRES_TO_MM,
+        ImitationRLEnv,
+    )
+
+    assert _METRES_TO_MM == 1000.0
+    for method in (
+        ImitationRLEnv._accumulate_mpjpe_metric,
+        ImitationRLEnv._emit_mpjpe_episode_metric,
+    ):
+        names = method.__code__.co_consts
+        keys = [c for c in names if isinstance(c, str) and c.startswith("Metrics/")]
+        assert keys, f"{method.__name__} emits no Metrics/ key"
+        for key in keys:
+            assert key.startswith("Metrics/mpjpe_mm"), (
+                f"{method.__name__} emits {key!r}; MPJPE must be logged in "
+                "millimetres to match tracking_mpjpe_mm"
+            )
+
+
 def test_mpjpe_metric_bodies_exist_in_the_reference() -> None:
     """The metric compares robot and reference bodies of the same name."""
     cfg = ImitationG1EnvCfg()
