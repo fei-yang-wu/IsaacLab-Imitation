@@ -37,6 +37,9 @@ _MDP_COMPILED: Any | None = None
 _COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracle"})
 _POLICY_COMMAND_MODES = frozenset({"reference", "full_body_chunk_current_slot"})
 _CAUSAL_PLANNER_HISTORY_STEPS = 9
+# Tracking maths stays in metres; MPJPE is reported in millimetres because that
+# is the unit the closed-loop evaluators and the paper aggregators use.
+_METRES_TO_MM = 1000.0
 
 
 def _get_mdp_compiled_module() -> Any:
@@ -526,6 +529,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._initialize_mdp_fast_paths()
         self._setup_reference_velocity_visualizer()
         self._initialize_causal_planner_history()
+        self._initialize_mpjpe_metric()
 
     def _align_reference_target_joints_to_articulation(self) -> None:
         """Retarget the trajectory manager to the live articulation joint order.
@@ -1150,6 +1154,157 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             ),
             f"{prefix}_reference_nan_frac": reference_nan_frac,
         }
+
+    def _initialize_mpjpe_metric(self) -> None:
+        """Resolve the bodies used for the root-relative MPJPE training metric.
+
+        This exists because a metric cannot be expressed as a ``RewTerm`` with
+        ``weight=0.0``: :meth:`RewardManager.compute` skips zero-weight terms
+        without calling them, so such a term logs a constant zero.
+        """
+        body_names = list(getattr(self.cfg, "mpjpe_metric_body_names", []) or [])
+        self._mpjpe_metric_body_names: list[str] = []
+        self._mpjpe_metric_body_ids: torch.Tensor | None = None
+        self._mpjpe_metric_sum: torch.Tensor | None = None
+        self._mpjpe_metric_count: torch.Tensor | None = None
+        if not body_names:
+            return
+
+        missing = [
+            name for name in body_names if name not in set(self.reference_body_names)
+        ]
+        if missing:
+            raise ValueError(
+                "mpjpe_metric_body_names contains bodies absent from the "
+                f"reference: {missing}. The metric compares robot bodies against "
+                "reference bodies of the same name, so every entry must exist in "
+                "both."
+            )
+        body_ids, resolved = self.robot.find_bodies(body_names, preserve_order=True)
+        if list(resolved) != body_names:
+            raise RuntimeError(
+                "Could not resolve the MPJPE metric bodies in order: "
+                f"expected={body_names}, got={list(resolved)}."
+            )
+        self._mpjpe_metric_body_names = body_names
+        self._mpjpe_metric_body_ids = torch.as_tensor(
+            body_ids, dtype=torch.long, device=self.device
+        )
+        self._mpjpe_metric_sum = torch.zeros(self.num_envs, device=self.device)
+        self._mpjpe_metric_count = torch.zeros(self.num_envs, device=self.device)
+
+    def _compute_mpjpe_metric(self) -> torch.Tensor | None:
+        """Per-environment root-relative MPJPE in metres.
+
+        Mirrors ``mdp.mpjpe_relative_body_pos_m`` and the closed-loop
+        evaluators: both sides are expressed relative to their own root, so the
+        value measures pose error rather than global drift.
+
+        Kept in metres to match those two, matching ``tracking_mpjpe_m``; the
+        conversion to millimetres happens once at the logging boundary.
+
+        Note that only root *position* is subtracted, not root *orientation*, so
+        a rotated root rigidly rotates every body within the root-relative frame
+        and contributes an error of roughly (distance from root) x (rotation) per
+        body. That is why this is non-zero on the first frame of an episode: the
+        ``reset_reference_state`` event perturbs the initial root orientation by
+        up to 0.1/0.1/0.2 rad, which alone measures about 39 mm on the G1's
+        14-body set, with a further 6 mm from the +/-0.1 rad joint noise.
+        Measured with all reset randomization disabled the value is exactly
+        0.00 mm, so there is no systematic reference-versus-URDF body-frame
+        offset underneath it.
+        """
+        if self._mpjpe_metric_body_ids is None:
+            return None
+        robot_pos_w = self._get_robot_body_pose_w_fast(self._mpjpe_metric_body_ids)[0]
+        reference_pos_w = self._get_reference_body_pose_w_fast(
+            self._mpjpe_metric_body_names
+        )[0]
+        robot_root_w = self.robot.data.root_state_w.torch[:, :3]
+        reference_root_w = self._get_reference_root_state_w_fast()[0]
+        robot_relative = robot_pos_w - robot_root_w[:, None, :]
+        reference_relative = reference_pos_w - reference_root_w[:, None, :]
+        return torch.linalg.vector_norm(
+            robot_relative - reference_relative, dim=-1
+        ).mean(dim=-1)
+
+    def _accumulate_mpjpe_metric(
+        self, exclude_env_ids: torch.Tensor | None = None
+    ) -> dict[str, float]:
+        """Accumulate the episode sum and return the instantaneous log entry.
+
+        Reported in millimetres, the unit the closed-loop evaluators and every
+        paper aggregator use for ``tracking_mpjpe_mm``.
+
+        Args:
+            exclude_env_ids: Environments to skip in the *episode* accumulator
+                this call (their instantaneous value is still included in the
+                returned/logged mean). This is for envs that were reset earlier
+                in the same ``step()`` call: by this point their state is the
+                fresh post-reset pose, not something the policy produced, and
+                their terminal-frame contribution to the episode that just
+                ended was already folded in by :meth:`_reset_idx` before the
+                reset write. Accumulating here too would double-count the
+                terminal frame into the wrong (new) episode.
+        """
+        mpjpe = self._compute_mpjpe_metric()
+        if mpjpe is None:
+            return {}
+        assert self._mpjpe_metric_sum is not None
+        assert self._mpjpe_metric_count is not None
+        if exclude_env_ids is not None and exclude_env_ids.numel() > 0:
+            active = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
+            active.index_fill_(0, exclude_env_ids, False)
+            self._mpjpe_metric_sum[active] += mpjpe[active]
+            self._mpjpe_metric_count[active] += 1.0
+        else:
+            self._mpjpe_metric_sum += mpjpe
+            self._mpjpe_metric_count += 1.0
+        return {"Metrics/mpjpe_mm": float(mpjpe.mean().item()) * _METRES_TO_MM}
+
+    def _accumulate_terminal_mpjpe_metric(self, env_ids: torch.Tensor) -> None:
+        """Fold the pre-reset terminal frame into the ending episode's sum.
+
+        Must run before any trajectory reassignment or reset write for
+        ``env_ids`` (i.e. at the very top of :meth:`_reset_idx`): the robot's
+        physical state is still the terminal one from the step that just
+        triggered the reset, and the tracked reference is still the one that
+        terminating episode was scored against. Without this, the terminal
+        transition's error is never counted in any episode -- by the time
+        :meth:`_emit_mpjpe_episode_metric` runs, the accumulator holds every
+        frame except the last one.
+        """
+        if self._mpjpe_metric_sum is None or env_ids.numel() == 0:
+            return
+        mpjpe = self._compute_mpjpe_metric()
+        if mpjpe is None:
+            return
+        assert self._mpjpe_metric_count is not None
+        self._mpjpe_metric_sum.index_add_(0, env_ids, mpjpe.index_select(0, env_ids))
+        self._mpjpe_metric_count.index_add_(
+            0, env_ids, torch.ones(env_ids.numel(), device=self.device)
+        )
+
+    def _emit_mpjpe_episode_metric(self, env_ids: torch.Tensor) -> None:
+        """Log the completed episodes' mean MPJPE, then clear their accumulators.
+
+        Emitted per episode rather than per step so the value is comparable
+        with the evaluators, which average over a whole rollout. The
+        instantaneous key is logged every step as well, so the curve never has
+        gaps on steps where nothing reset.
+        """
+        if self._mpjpe_metric_sum is None or env_ids.numel() == 0:
+            return
+        counts = self._mpjpe_metric_count.index_select(0, env_ids)
+        valid = counts > 0
+        if bool(valid.any()):
+            sums = self._mpjpe_metric_sum.index_select(0, env_ids)
+            episode_mean = (sums[valid] / counts[valid]).mean()
+            self.extras.setdefault("log", {})["Metrics/mpjpe_mm_per_episode"] = (
+                float(episode_mean.item()) * _METRES_TO_MM
+            )
+        self._mpjpe_metric_sum.index_fill_(0, env_ids, 0.0)
+        self._mpjpe_metric_count.index_fill_(0, env_ids, 0.0)
 
     def _compute_rollout_reference_state_log(self) -> dict[str, float]:
         """Compare the post-step robot state against the aligned reference next state."""
@@ -2495,6 +2650,27 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             raise RuntimeError("Adaptive failure reset sampler is not enabled.")
         return sampler.sample(count)
 
+    def _pinned_joint_ids(self) -> torch.Tensor:
+        """Live articulation indices in the action term's pinned joint order.
+
+        Physics backends enumerate the articulation differently, so any joint
+        vector that a policy or a recorded dataset consumes must be expressed in
+        a fixed order. The action term already pins one via
+        ``preserve_order=True``; reusing its mapping keeps joint state, the
+        action, and the expert command mutually pairable on every backend.
+        """
+        cached = getattr(self, "_pinned_joint_ids_cache", None)
+        if cached is not None:
+            return cached
+        term_joint_ids = self.action_manager.get_term("joint_pos")._joint_ids
+        if isinstance(term_joint_ids, slice):
+            term_joint_ids = range(self.robot.num_joints)[term_joint_ids]
+        pinned = torch.as_tensor(
+            list(term_joint_ids), dtype=torch.long, device=self.device
+        )
+        self._pinned_joint_ids_cache = pinned
+        return pinned
+
     def _current_causal_planner_frame(
         self, env_ids: torch.Tensor | Sequence[int] | None = None
     ) -> torch.Tensor:
@@ -2508,12 +2684,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 env_ids, device=self.device, dtype=torch.long
             ).reshape(-1)
         action = self.action_manager.action.index_select(0, env_ids_t)
+        joint_ids = self._pinned_joint_ids()
         return build_causal_planner_frame(
             {
-                "joint_pos_rel": self.robot.data.joint_pos.index_select(0, env_ids_t)
-                - self.robot.data.default_joint_pos.index_select(0, env_ids_t),
-                "joint_vel_rel": self.robot.data.joint_vel.index_select(0, env_ids_t)
-                - self.robot.data.default_joint_vel.index_select(0, env_ids_t),
+                "joint_pos_rel": (
+                    self.robot.data.joint_pos.index_select(0, env_ids_t)
+                    - self.robot.data.default_joint_pos.index_select(0, env_ids_t)
+                ).index_select(1, joint_ids),
+                "joint_vel_rel": (
+                    self.robot.data.joint_vel.index_select(0, env_ids_t)
+                    - self.robot.data.default_joint_vel.index_select(0, env_ids_t)
+                ).index_select(1, joint_ids),
                 "base_ang_vel": self.robot.data.root_ang_vel_b.index_select(
                     0, env_ids_t
                 ),
@@ -2635,12 +2816,23 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         assert joint_vel is not None
         assert root_quat is not None
         assert root_ang_vel is not None
+        # The expert frame and the cached defaults are both stored in the live
+        # articulation order. Reorder both into the pinned order so this offline
+        # frame stays numerically identical to the live sensor frame built by
+        # ``_current_causal_planner_frame`` on any physics backend.
+        joint_ids = self._pinned_joint_ids()
+        joint_pos = joint_pos.index_select(-1, joint_ids)
+        joint_vel = joint_vel.index_select(-1, joint_ids)
         leading_dims = joint_pos.shape[:-1]
-        default_joint_pos = self._expert_default_joint_pos[0].reshape(
-            *((1,) * len(leading_dims)), -1
+        default_joint_pos = (
+            self._expert_default_joint_pos[0]
+            .index_select(-1, joint_ids)
+            .reshape(*((1,) * len(leading_dims)), -1)
         )
-        default_joint_vel = self._expert_default_joint_vel[0].reshape(
-            *((1,) * len(leading_dims)), -1
+        default_joint_vel = (
+            self._expert_default_joint_vel[0]
+            .index_select(-1, joint_ids)
+            .reshape(*((1,) * len(leading_dims)), -1)
         )
         return build_offline_causal_planner_frame(
             joint_pos=joint_pos,
@@ -2768,6 +2960,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Isaac Lab 3.0 hands out int32 env indices; normalize once here.
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
 
+        # Fold the terminal (pre-reset) frame into the ending episode's MPJPE
+        # sum before anything below reassigns the tracked trajectory or writes
+        # the reset state. This is the last point at which the robot's physical
+        # state and the reference it was scored against both still belong to
+        # the episode that is ending.
+        self._accumulate_terminal_mpjpe_metric(env_ids)
+
         # Reset trajectory tracking (reassigns trajectories and resets steps).
         reset_steps = None
         if self._random_reset_full_trajectory:
@@ -2816,6 +3015,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self._last_tracked_root_pos_valid.index_fill_(0, env_ids, True)
 
         self._reset_causal_planner_history(env_ids)
+        # After super(), which recreates ``extras["log"]`` from scratch.
+        self._emit_mpjpe_episode_metric(env_ids)
 
         return result
 
@@ -2888,9 +3089,21 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
             super().step(action)
             rollout_state_log = self._compute_rollout_reference_state_log()
-            if len(rollout_action_log) > 0 or len(rollout_state_log) > 0:
+            # Accumulated after the physics step and after any reset inside it.
+            # Envs that reset this step already had their terminal frame folded
+            # into the ending episode by _reset_idx (via
+            # _accumulate_terminal_mpjpe_metric, called before the reset write);
+            # the state visible here for those envs is the fresh post-reset
+            # pose, not something the policy produced, so it must not also be
+            # accumulated into the new episode's sum.
+            just_reset = (self.reset_terminated | self.reset_time_outs).nonzero(
+                as_tuple=True
+            )[0]
+            mpjpe_log = self._accumulate_mpjpe_metric(exclude_env_ids=just_reset)
+            if rollout_action_log or rollout_state_log or mpjpe_log:
                 self.extras.setdefault("log", {}).update(rollout_action_log)
                 self.extras.setdefault("log", {}).update(rollout_state_log)
+                self.extras.setdefault("log", {}).update(mpjpe_log)
             self._apply_reference_replay_targets()
             # Match IsaacLab command timing: reward/logging use the pre-step
             # reference frame, while returned observations expose the next frame.

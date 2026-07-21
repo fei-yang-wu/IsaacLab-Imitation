@@ -243,10 +243,19 @@ def _g1_tracked_body_obs_params() -> dict[str, object]:
 
 
 def _g1_expert_motion_obs_params() -> dict[str, object]:
+    """Return the expert joint command in the same pinned order as proprioception.
+
+    The expert frame is stored in the live articulation order, which differs
+    per physics backend. Without ``preserve_order=True`` the resolved indices
+    are ascending in that live order, so the command would be delivered in a
+    backend-specific permutation while ``joint_pos_rel`` and the action term
+    stay pinned. Pinning here is what keeps the two pairable.
+    """
     return {
         "asset_cfg": SceneEntityCfg(
             "robot",
-            joint_names=G1_29DOF_JOINT_NAMES,
+            joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+            preserve_order=True,
         )
     }
 
@@ -259,10 +268,12 @@ def _g1_expert_anchor_obs_params() -> dict[str, object]:
 
 
 def _g1_expert_window_motion_obs_params() -> dict[str, object]:
+    """Window form of :func:`_g1_expert_motion_obs_params`; same pinning rule."""
     return {
         "asset_cfg": SceneEntityCfg(
             "robot",
-            joint_names=G1_29DOF_JOINT_NAMES,
+            joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+            preserve_order=True,
         ),
         "past_steps": 0,
         "future_steps": 0,
@@ -680,8 +691,13 @@ class G1RewardsCfg:
         },
     )
 
-    # -- metrics (weight=0.0: logged to Episode_Reward/mpjpe_m each episode,
-    # averaged across envs, but does not affect the return)
+    # -- metrics
+    # NOTE: this term is inert. RewardManager.compute() skips zero-weight terms
+    # without calling them, so it never runs and Episode_Reward/mpjpe_m is a
+    # constant zero. The live metric is logged by the env as Metrics/mpjpe_mm
+    # and Metrics/mpjpe_mm_per_episode, driven by cfg.mpjpe_metric_body_names.
+    # Kept only so the term name stays reserved and the reward table matches
+    # historical runs; give it a non-zero weight only to make it a real reward.
     mpjpe_m = RewTerm(
         func=mdp.mpjpe_relative_body_pos_m,
         weight=0.0,
@@ -1036,6 +1052,9 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # Body order of the recorded NPZ body arrays (PhysX enumeration). Used by
     # the env instead of the live robot's body order, which is backend-specific.
     reference_body_names: list[str] = G1_29DOF_DATASET_BODY_NAMES.copy()
+    # Same body set the closed-loop evaluators use, so the training curve and
+    # the reported evaluation MPJPE are the same quantity.
+    mpjpe_metric_body_names: list[str] = G1_TRACKED_BODY_NAMES.copy()
     command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
     command_observation_source: str = "reference"
     # The chunk adapter redirects only the three policy command tensors while

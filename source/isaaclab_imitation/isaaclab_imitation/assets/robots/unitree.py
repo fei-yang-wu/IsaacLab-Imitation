@@ -68,13 +68,26 @@ def resolve_unitree_g1_29dof_usd_path() -> str:
 def unitree_g1_29dof_usd_articulation_cfg(
     cfg: UnitreeArticulationCfg,
 ) -> UnitreeArticulationCfg:
-    """Clone a G1 articulation spawning the packaged official USD."""
+    """Clone a G1 articulation spawning the packaged official USD.
+
+    ``articulation_props`` is deliberately left unset so the USD's own authored
+    articulation-root schema governs the solver. The packaged official asset
+    asks for ``solverPositionIterationCount = 32`` / ``velocity = 1`` and
+    ``enabledSelfCollisions = 1``, tuned by Unitree for this robot. The URDF
+    import defaults that used to be copied here overrode that with 8 / 4, which
+    nobody chose for the G1 -- it is the generic Unitree URDF converter setting.
+    Newton/MJWarp does not consume the PhysX solver schema at all, so this only
+    affects the PhysX backend, where it makes the asset behave as shipped.
+
+    ``rigid_props`` is still applied because the USD authors only mass, inertia,
+    and centre of mass on the links; the damping and depenetration limits are
+    ours and do not conflict with anything the asset declares.
+    """
     urdf_spawn = cfg.spawn
     return cfg.replace(
         spawn=UsdFileCfg(
             usd_path=resolve_unitree_g1_29dof_usd_path(),
             activate_contact_sensors=urdf_spawn.activate_contact_sensors,
-            articulation_props=urdf_spawn.articulation_props,
             rigid_props=urdf_spawn.rigid_props,
         )
     )
