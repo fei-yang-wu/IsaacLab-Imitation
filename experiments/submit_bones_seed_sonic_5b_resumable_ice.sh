@@ -1,23 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resumable BONES-SEED-91 SONIC-latent job at a 5B-frame cap, chained across
-# multiple Slurm segments because every ICE GPU partition (ice-gpu, ice-bw-gpu,
+# Resumable BONES-SEED-91 job at a 5B-frame cap, chained across multiple
+# Slurm segments because every ICE GPU partition (ice-gpu, ice-bw-gpu,
 # coc-gpu, coe-gpu, pace-gpu) hard-caps walltime at 16-18h (scontrol/sinfo
-# confirmed 2026-07-21; not a QoS-configurable limit). Each invocation of this
-# script submits exactly ONE segment: it inspects the remote log tree for the
-# latest low-level checkpoint under this run's fixed, RUN_TAG-scoped log_dir,
-# and if one exists, resumes from it (--train-checkpoint) with
+# confirmed 2026-07-21; not a QoS-configurable limit).
+#
+# TASK REVERTED (2026-07-21) to Isaac-Imitation-G1-Latent-Strict-v0, NOT the
+# SONIC default (Isaac-Imitation-G1-Latent-v0). W&B run bn931wny
+# (g1-lafan1-strict/ice3-l1-novideo) is the actual "L1" submission this run
+# is meant to match: Latent-Strict-v0 + the legacy/local optimizer contract
+# (512/256/128 ELU MLPs, lr 1e-3) at 8192 envs x 12 steps x minibatch 12288,
+# which reached episode/length=244 and episode/return=13.1 -- far better
+# than what the new SONIC release-optimizer contract has produced so far in
+# the concurrent VRAM ablation. Latent-Strict-v0's kwargs already route to
+# the legacy-style G1ImitationLatentRLOptIPMDConfig (not the Sonic one), so
+# selecting this task is sufficient; no separate policy-contract flag needed.
+#
+# Each invocation of this script submits exactly ONE segment: it inspects the
+# remote log tree for the latest low-level checkpoint under this run's fixed,
+# RUN_TAG-scoped log_dir, and if one exists, resumes from it
+# (--train-checkpoint) with
 # --max_iterations reduced by the frames already trained (RLOpt's
 # save_model/load_model restores weights + optimizer state but NOT the
 # frame/iteration counter, so the remaining-iteration math must happen here).
 # Re-invoke this script after each segment ends (success, crash, or walltime
 # cutoff) until it reports FRAME_CAP reached and refuses to submit further.
 #
-# Uses the same SONIC-default settings as submit_bones_seed_100_sonic_latent_ice.sh
-# (91/100-motion SONIC-exclusion-filtered manifest, njmax=288/nconmax=32,
-# already validated at zero contact-solver overflow over 9.5+h in ICE job
-# 5523773) at L1 scale (8192 envs x 12 steps, minibatch 12288).
+# Uses the 91/100-motion SONIC-exclusion-filtered manifest and
+# njmax=288/nconmax=32 (already validated at zero contact-solver overflow
+# over 9.5+h in ICE job 5523773) at the actual L1 scale (8192 envs x 12
+# steps, minibatch 12288).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -30,7 +43,7 @@ TRAIN_NUM_ENVS=8192
 ROLLOUT_STEPS=12
 MINIBATCH_SIZE=12288
 FRAMES_PER_BATCH=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
-RUN_TAG="${RUN_TAG:-bones_seed_91_sonic_h25_z256_5b_seed${SEED}_20260721_nj288_nc32}"
+RUN_TAG="${RUN_TAG:-bones_seed_91_strict_h25_z256_5b_seed${SEED}_20260721_nj288_nc32}"
 MANIFEST_PATH="${MANIFEST_PATH:-/data/bones_seed_100/manifests/g1_bones_seed_100_sonic_filtered_manifest.json}"
 DATASET_PATH="${DATASET_PATH:-/data/bones_seed_100/g1_hl_diffsr_sonic_filtered}"
 PRETRAIN_OUTPUT_DIR="logs/bones_seed_sonic/${RUN_TAG}/skill_encoder_h25_z256"
@@ -160,7 +173,7 @@ else
 fi
 printf -v extra_args_string '%q ' "${extra_args[@]}"
 
-export TASK=Isaac-Imitation-G1-Latent-v0
+export TASK=Isaac-Imitation-G1-Latent-Strict-v0
 export FRAME_CAP
 export TRAIN_NUM_ENVS
 export ROLLOUT_STEPS
@@ -175,7 +188,7 @@ export SAVE_INTERVAL=100000000
 export MANIFEST_PATH
 export DATASET_PATH
 export WANDB_PROJECT="${WANDB_PROJECT:-g1-bones-seed-100-sonic-latent-ice}"
-export WANDB_GROUP="${WANDB_GROUP:-sonic-default-l1-scale-5b-resumable}"
+export WANDB_GROUP="${WANDB_GROUP:-strict-l1-scale-5b-resumable}"
 export EXP_NAME="${EXP_NAME:-${RUN_TAG}_oracle_low_level}"
 export CLUSTER_CONFIG=ice_runtime
 export CLUSTER_SLURM_TIME_LIMIT=15:59:00

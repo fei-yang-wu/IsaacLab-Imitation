@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Train a fresh BONES-SEED-100 DiffSR skill encoder, then the confirmed-
-# default SONIC latent oracle (Isaac-Imitation-G1-Latent-v0, release policy
-# contract) at the L1 scale config (8192 envs x 12 steps, minibatch 12288),
-# capped at 3B frames. Uses the SONIC-release-exclusion-filtered manifest
-# (91/100 motions; 9 dropped by scripts/filter_bones_seed_sonic_exclusions.py
-# using the exact keyword list from the public SONIC release's
-# filter_and_copy_bones_data.py). This is not a Phase-5 planner run.
+# SUPERSEDED (2026-07-21) by experiments/submit_bones_seed_sonic_5b_resumable_ice.sh,
+# which also reverted TASK back to Isaac-Imitation-G1-Latent-Strict-v0 (the
+# actual "L1" config, W&B run bn931wny) after the SONIC release-optimizer
+# contract underperformed it. Kept only for reference; do not submit this
+# 3B one-shot version for new work.
+#
+# Train a fresh BONES-SEED-100 DiffSR skill encoder, then the L1 config
+# (Latent-Strict-v0, legacy/local optimizer contract) at 8192 envs x 12
+# steps, minibatch 12288, capped at 3B frames. Uses the SONIC-exclusion-
+# filtered manifest (91/100 motions; 9 dropped by
+# scripts/filter_bones_seed_sonic_exclusions.py using the exact keyword list
+# from the public SONIC release's filter_and_copy_bones_data.py). This is
+# not a Phase-5 planner run.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -75,7 +81,7 @@ if [[ -n "${PRETRAINED_CHECKPOINT}" ]]; then
 fi
 printf -v extra_args_string '%q ' "${extra_args[@]}"
 
-export TASK=Isaac-Imitation-G1-Latent-v0
+export TASK=Isaac-Imitation-G1-Latent-Strict-v0
 export FRAME_CAP=3000000000
 export TRAIN_NUM_ENVS=8192
 export ROLLOUT_STEPS=12
