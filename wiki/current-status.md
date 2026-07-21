@@ -1,9 +1,12 @@
 # Project Live Status
 
-Last verified: 2026-07-21, after fixing an njmax under-provisioning bug in
-the SONIC-default VRAM ablation (resubmitted with fixed 320/40), confirming
-all ICE GPU partitions hard-cap walltime at 16-18h, and building a resumable
-multi-segment BONES-SEED-91 SONIC-latent launcher for a 5B-frame cap.
+Last verified: 2026-07-21, after reverting the 2026-07-20 "make SONIC the
+default" decision: `Isaac-Imitation-G1-Latent-v0` resolves to the
+Strict/legacy-optimizer surface again (SONIC is opt-in only via
+`Isaac-Imitation-G1-Latent-Sonic-v0`), following the njmax fix in the VRAM
+ablation, confirmation that all ICE GPU partitions hard-cap walltime at
+16-18h, and building a resumable multi-segment BONES-SEED-91 launcher for a
+5B-frame cap.
 
 This is the living memory for the active research project. Read it first when
 returning to the project or starting a new agent session. It answers **where we
@@ -227,14 +230,22 @@ at all: `env_name=Isaac-Imitation-G1-Latent-Strict-v0`, `num_envs=8192`,
 `activation_fn=elu` and `normalize_input=False` — the legacy/local optimizer
 contract, not the release SiLU/[2048...512] one. It reached
 `episode/length=244.18` and `episode/return=13.1`, well above anything the
-new SONIC release-optimizer contract has produced so far. **This means the
-2026-07-20 "make SONIC the default" decision is empirically unconfirmed at
-best** — the actual well-performing recipe was Latent-Strict-v0 + the local
-optimizer contract, not the full SONIC surface. The code-level default
-(`Isaac-Imitation-G1-Latent-v0` = SONIC, `sonic_release_optimizer=True`) has
-NOT been reverted, since the user only asked to fix the BONES-SEED
-submission specifically; revisit this before relying on the SONIC default
-for any further paper-facing work.
+new SONIC release-optimizer contract has produced so far.
+
+**Reverted (2026-07-21): the 2026-07-20 "make SONIC the default" decision is
+undone.** `Isaac-Imitation-G1-Latent-v0` resolves to the Strict/legacy
+surface again (`_LATENT_STRICT_TASK_KWARGS`); `Isaac-Imitation-G1-Latent-Strict-v0`
+is its back-compat alias. `Isaac-Imitation-G1-Latent-Sonic-v0` is opt-in
+only and no longer aliased as `v0`.
+`G1ImitationLatentSonicRLOptIPMDConfig.sonic_release_optimizer` reverts to
+`False`. Every downstream script/pixi task that references the
+`Isaac-Imitation-G1-Latent-v0` alias (interface_baselines scripts,
+`smoke-ipmd`, etc.) automatically now gets the Strict/legacy surface again
+by design — that is the whole point of using the floating alias rather than
+a hardcoded surface name. The one exception fixed explicitly:
+`experiments/submit_sonic_latent_vram_ablation_ice.sh` now targets
+`Isaac-Imitation-G1-Latent-Sonic-v0` directly, since it specifically studies
+the SONIC surface regardless of which surface is "default".
 
 Both running BONES-SEED jobs (`5523773` 3B and `5524188` 5B segment 1) were
 cancelled and resubmitted with `TASK=Isaac-Imitation-G1-Latent-Strict-v0`
