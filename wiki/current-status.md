@@ -1,9 +1,9 @@
 # Project Live Status
 
-Last verified: 2026-07-20, after making the SONIC surface + release policy
-contract the confirmed default (H100/H200 single-GPU access removes the
-compute-scale objection) and preparing the first ICE H100 VRAM ablation and
-BONES-SEED SONIC-latent submissions at the new ~10B / 2B-cap scales.
+Last verified: 2026-07-21, after fixing an njmax under-provisioning bug in
+the SONIC-default VRAM ablation (resubmitted with fixed 320/40), confirming
+all ICE GPU partitions hard-cap walltime at 16-18h, and building a resumable
+multi-segment BONES-SEED-91 SONIC-latent launcher for a 5B-frame cap.
 
 This is the living memory for the active research project. Read it first when
 returning to the project or starting a new agent session. It answers **where we
@@ -164,6 +164,51 @@ closed as-is (no resubmission).**
   this ablation round: **12288 envs x 12 rollout steps fits one H100 and is
   the largest validated point; 16384 envs does not fit at this policy size.**
   No further arms were resubmitted.
+
+**Correction (2026-07-21): v1/v2 "success" was contaminated by njmax
+under-provisioning, not a clean result.** Log audit found `nefc overflow`
+warnings throughout both "successful" arms: v1 (njmax=95) logged **7.4
+million** overflow events over ~9.5h; v2 (njmax=143) logged 59,027. Peak
+requested njmax was ~230-245 in BOTH arms regardless of env count (245 at
+8192 envs, 232 at 12288), while the BONES-SEED job running concurrently at
+njmax=288 logged zero overflow. This means njmax/nconmax is a per-step
+contact-complexity budget driven by the SONIC env's domain
+randomization/push events and early strict-from-scratch falling — NOT
+something that scales with `num_envs`, contradicting the original
+proportional-scaling assumption. All four VRAM-ablation arms were cancelled
+and resubmitted with a fixed njmax=320/nconmax=40 (headroom above the
+288/32 that measured zero overflow) as ICE jobs `5524182` (v1),
+`5524183` (v2), `5524184` (v3), `5524185` (v4) — v3 (16384 envs) is expected
+to OOM again since that failure was VRAM-related, not njmax-related.
+
+**ICE partition walltime caps (2026-07-21): confirmed hardcoded, not a QoS
+setting.** `scontrol show partition ice-gpu` shows `MaxTime=16:00:00`; `sinfo`
+confirms every GPU-bearing PACE partition is capped the same way:
+`ice-gpu`/`coc-gpu`/`coe-gpu`/`pace-gpu` at 16h, `ice-bw-gpu` at 18h. None of
+the attached QoS (`coe-ice`, `coc-ice`, `pace-ice`) define a `MaxWall`
+override, so the partition cap governs regardless of QoS choice — there is
+no "long" GPU QoS on this cluster (unlike Skynet). Incidental find: H200s
+are already in `ice-gpu` (`gres/gpu:h200=48`), so H200 access needs no
+separate partition/QoS, just `--gres=gpu:h200:1`.
+
+**Resumable BONES-SEED-91 SONIC-latent job (2026-07-21), 5B-frame cap.**
+Since RLOpt's `save_model`/`load_model` restores weights + optimizer state
+but not the frame/iteration counter (`frames_processed` resets to 0 on every
+fresh `agent.train()` call), a walltime-capped job needing >16h of training
+must be split into segments, and per-segment checkpoint filenames
+(`model_step_<N>.pt`) are local to that segment rather than a global total.
+`experiments/submit_bones_seed_sonic_5b_resumable_ice.sh` tracks true
+cumulative frames itself in a remote state file keyed by the last-counted
+checkpoint (crediting each segment's own contribution exactly once), and
+computes the next segment's `--max_iterations` from the remaining budget;
+`train_hl_skill_pipeline.py` gained `--train-checkpoint` to pass a low-level
+checkpoint through to `train.py --checkpoint` for the resume case.
+Re-invoking the script drives the chain forward; it refuses to resubmit once
+5B frames are reached. Segment 1 submitted as ICE job `5524188` (pending on
+GPU availability as of this writing). Uses the same settings as the 3B
+BONES-SEED job above (91/100-motion SONIC-filtered manifest, L1 scale
+8192x12, njmax=288/nconmax=32 — already validated at zero overflow, no
+change needed there).
 
 ### Non-paper BONES-SEED SONIC latent training
 
