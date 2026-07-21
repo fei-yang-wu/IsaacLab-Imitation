@@ -37,12 +37,26 @@ REMOTE_DATA_ROOT="${REMOTE_DATA_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLa
 REMOTE_PROJECT_ROOT="${REMOTE_PROJECT_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab}"
 
 # ARM_NAME:NUM_ENVS:ROLLOUT_STEPS:NJMAX:NCONMAX
+# v3/v4 both hit genuine CUDA OOM on the 2026-07-21 rerun even at fixed
+# njmax=320/nconmax=40 (v3: 16384 envs too many; v4: 12288 envs x 24 rollout
+# doubles the collector buffer vs. v2's 12288x12, which also overflows 80GB)
+# -- both are real VRAM-ceiling results, not a solver misconfiguration.
+# v5 is the code's own hardcoded baked-in default shape (scene.num_envs=4096,
+# agent.collector.frames_per_batch=24 in rlopt_ipmd_cfg.py) run explicitly
+# under the new SONIC-default + release-optimizer contract, per user
+# hypothesis that this exact shape is a "magic number" worth re-confirming
+# now that njmax is fixed at a validated-safe value instead of the
+# under-provisioned defaults used the first time this shape was tried.
 ARMS=(
     "v1_e8192_r12:8192:12:320:40"
     "v2_e12288_r12:12288:12:320:40"
     "v3_e16384_r12:16384:12:320:40"
     "v4_e12288_r24:12288:24:320:40"
+    "v5_e4096_r24:4096:24:320:40"
 )
+# Restrict to a subset by setting ARM_FILTER to a space-separated list of arm
+# names, e.g. ARM_FILTER="v5_e4096_r24" to submit only the new arm.
+ARM_FILTER="${ARM_FILTER:-}"
 
 case "${DRY_RUN}" in
     1|true|TRUE|yes|YES|on|ON) ;;
@@ -62,6 +76,12 @@ esac
 
 for arm in "${ARMS[@]}"; do
     IFS=':' read -r arm_name num_envs rollout_steps njmax nconmax <<< "${arm}"
+    if [[ -n "${ARM_FILTER}" ]]; then
+        case " ${ARM_FILTER} " in
+            *" ${arm_name} "*) ;;
+            *) continue ;;
+        esac
+    fi
     run_tag="sonic_latent_vram_ablation_${arm_name}_2b_seed${SEED}_20260720"
     pretrain_output_dir="logs/sonic_vram_ablation/${run_tag}/skill_encoder_h25_z256"
 
@@ -74,7 +94,15 @@ for arm in "${ARMS[@]}"; do
     fi
 
     frames_per_batch=$((num_envs * rollout_steps))
-    minibatch_size=$((frames_per_batch / 8))
+    if [[ "${arm_name}" == "v5_e4096_r24" ]]; then
+        # Match the code's own hardcoded default exactly (rlopt_ipmd_cfg.py:
+        # self.loss.mini_batch_size = 4096 * 24 // 4 = 24576), not the other
+        # arms' uniform frames_per_batch/8 heuristic, since this arm exists
+        # specifically to re-test that exact baked-in default shape.
+        minibatch_size=24576
+    else
+        minibatch_size=$((frames_per_batch / 8))
+    fi
 
     extra_args=(
         --assert-kitless
