@@ -389,6 +389,14 @@ class ImitationLearningEnvCfg(ManagerBasedRLEnvCfg):
         "right_elbow_roll_joint",
     ]
 
+    # Bodies used for the root-relative MPJPE training metric; empty disables
+    # it. This cannot be expressed as a ``RewTerm`` with ``weight=0.0`` because
+    # the reward manager skips zero-weight terms without calling them, so the
+    # env logs it on a dedicated ``Metrics/`` channel instead. Set this to the
+    # same body set the closed-loop evaluators use so the training curve and
+    # the evaluation number mean the same thing.
+    mpjpe_metric_body_names: list[str] = []
+
     def __post_init__(self):
         """Post initialization."""
         # general settings
