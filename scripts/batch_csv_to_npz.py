@@ -933,8 +933,10 @@ def run_simulator(
                 # origin, so remove it before saving to keep body_pos_w and root_pos
                 # in the same coordinate frame.
                 body_pos_np = (
-                    robot.data.body_pos_w - scene.env_origins[:, None, :]
-                ).torch.cpu().numpy()
+                    (robot.data.body_pos_w - scene.env_origins[:, None, :])
+                    .torch.cpu()
+                    .numpy()
+                )
                 body_quat_np = robot.data.body_quat_w.torch.cpu().numpy()
                 body_lin_vel_np = robot.data.body_lin_vel_w.torch.cpu().numpy()
                 body_ang_vel_np = robot.data.body_ang_vel_w.torch.cpu().numpy()
@@ -963,23 +965,21 @@ def run_simulator(
 
         # The source motion is in Unitree SDK order, while Isaac stores joint
         # state in articulation order. Save the same articulation-order vector
-        # that was written to the robot so joint states and body FK agree.
+        # that was written to the robot so joint states and body FK agree, and
+        # so the saved `joint_names` (robot.joint_names) honestly describe it.
+        #
+        # Apply this scatter exactly ONCE. It is a permutation, not an
+        # involution: scattering twice moves 27 of 29 joints to the wrong slot
+        # while `joint_names` still claims the correct order. 4f054db added the
+        # conversion and e3ebd2b re-added an identical copy, so a double scatter
+        # was live from 2026-07-16 until it was removed here. Every data tree on
+        # disk predates that and is unaffected.
         dof_pos_articulation = torch.zeros_like(batched.dof_pos)
         dof_vel_articulation = torch.zeros_like(batched.dof_vel)
         dof_pos_articulation[..., robot_joint_indexes] = batched.dof_pos
         dof_vel_articulation[..., robot_joint_indexes] = batched.dof_vel
         batched.dof_pos = dof_pos_articulation
         batched.dof_vel = dof_vel_articulation
-        # Revert of dd1db87: convert the SDK/source-order dofs into the robot's
-        # articulation (USD) joint order before saving, mirroring the in-loop
-        # scatter used to drive the robot. Saved `joint_names` then honestly
-        # describe this order (robot.joint_names).
-        _dof_pos_art = torch.zeros_like(batched.dof_pos)
-        _dof_vel_art = torch.zeros_like(batched.dof_vel)
-        _dof_pos_art[..., robot_joint_indexes] = batched.dof_pos
-        _dof_vel_art[..., robot_joint_indexes] = batched.dof_vel
-        batched.dof_pos = _dof_pos_art
-        batched.dof_vel = _dof_vel_art
         _save_outputs(
             jobs=jobs,
             lengths=batched.lengths.cpu().numpy(),
