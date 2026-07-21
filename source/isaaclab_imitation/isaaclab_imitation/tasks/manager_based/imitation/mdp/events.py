@@ -12,6 +12,40 @@ from isaaclab_imitation.envs import ImitationRLEnv
 from ._compiled import apply_reset_randomization, replace_nan_with_default
 
 
+def _force_refresh_derived_state(asset: Articulation) -> None:
+    """Invalidate every lazily cached derived buffer after a teleporting write.
+
+    Isaac Lab caches derived quantities such as ``root_lin_vel_b`` and
+    ``root_ang_vel_b`` in ``TimestampedBuffer``s guarded by
+    ``timestamp < _sim_timestamp``, and ``update(dt)`` only advances that
+    timestamp by ``dt``. A reset writes new state without any time elapsing, so
+    calling ``update(dt=0.0)`` leaves the timestamp unchanged and every derived
+    buffer is still considered fresh. The world-frame values come straight from
+    the simulation view and are correct, but the body-frame ones are then served
+    from the *pre-reset* state: PhysX returns a stale vector, Newton returns
+    zeros because its buffer is lazily allocated and never filled.
+
+    ``base_lin_vel`` and ``base_ang_vel`` are policy observations, so this
+    corrupts the first observation after every reset on both backends.
+
+    Advancing ``_sim_timestamp`` instead would also drive the ``joint_acc``
+    finite difference, inventing an acceleration from the reset discontinuity.
+    Setting the buffer timestamps to ``-1.0`` is the same idiom Isaac Lab uses
+    internally in its own ``write_*_to_sim`` paths, and forces a recompute from
+    the new state without pretending that time passed.
+    """
+    data = getattr(asset, "_data", None) or asset.data
+    for value in vars(data).values():
+        if value is not None and hasattr(value, "timestamp"):
+            try:
+                value.timestamp = -1.0
+            except (AttributeError, TypeError):  # not a writable buffer
+                continue
+    # Newton gates forward kinematics on its own timestamp.
+    if hasattr(data, "_fk_timestamp"):
+        data._fk_timestamp = -1.0
+
+
 def _initialize_reset_bounds(
     env: ImitationRLEnv,
     pose_range: dict[str, tuple[float, float]] | None,
@@ -77,10 +111,24 @@ def randomize_joint_default_pos(
     selected_pos = randomized_pos[env_ids_for_slice, joint_ids]
     asset.data.default_joint_pos.torch[env_ids_for_slice, joint_ids] = selected_pos
 
+    # ``default_joint_pos`` is indexed in the live articulation order, but the
+    # action term's offset is indexed in the term's own pinned joint order.
+    # Those two orders differ per physics backend, so the offset must be
+    # gathered through the term's live-index mapping rather than copied
+    # slot-for-slot. Writing it positionally scatters each joint's rest pose
+    # onto a different joint on any backend whose enumeration is not the one
+    # the pinned list was authored for.
     joint_pos_action_term = env.action_manager.get_term("joint_pos")
     offset = getattr(joint_pos_action_term, "_offset", None)
     if isinstance(offset, torch.Tensor):
-        offset[env_ids_for_slice, joint_ids] = selected_pos
+        term_joint_ids = getattr(joint_pos_action_term, "_joint_ids", slice(None))
+        if isinstance(term_joint_ids, slice):
+            offset[env_ids] = randomized_pos[env_ids][:, term_joint_ids]
+        else:
+            term_joint_ids = torch.as_tensor(
+                term_joint_ids, dtype=torch.long, device=asset.device
+            )
+            offset[env_ids] = randomized_pos[env_ids][:, term_joint_ids]
 
 
 def reset_joints_to_reference(
@@ -102,6 +150,7 @@ def reset_joints_to_reference(
     asset.write_data_to_sim()
     env.scene.update(dt=0.0)
     asset.update(dt=0.0)
+    _force_refresh_derived_state(asset)
     env._invalidate_mdp_cache()
 
 
@@ -210,4 +259,5 @@ def reset_root_and_joints_to_reference_with_randomization(
     asset.write_data_to_sim()
     env.scene.update(dt=0.0)
     asset.update(dt=0.0)
+    _force_refresh_derived_state(asset)
     env._invalidate_mdp_cache()

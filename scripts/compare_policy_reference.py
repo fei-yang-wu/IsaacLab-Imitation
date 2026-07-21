@@ -146,6 +146,35 @@ parser.add_argument(
         "state tensors used by training; robot uses the qpos articulation replay."
     ),
 )
+parser.add_argument(
+    "--metrics_json",
+    type=str,
+    default=None,
+    help=(
+        "Write per-step policy tracking metrics (root height, joint MAE, "
+        "end-effector error) plus a summary to this JSON path. Makes two "
+        "playback runs quantitatively comparable instead of visually."
+    ),
+)
+parser.add_argument(
+    "--fall_height",
+    type=float,
+    default=0.4,
+    help="Pelvis height (m) below which the policy env counts as fallen.",
+)
+parser.add_argument(
+    "--emulate_joint_order_from",
+    type=str,
+    default=None,
+    help=(
+        "DIAGNOSTIC ONLY. Path to a scripts/dump_backend_index_contract.py JSON "
+        "whose articulation joint order should be emulated. Permutes the "
+        "backend-order-dependent expert command terms and the action offset so a "
+        "checkpoint trained under that backend sees the joint ordering it was "
+        "actually trained on. Use only to attribute a cross-backend failure; "
+        "never for a paper number."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -174,6 +203,9 @@ from isaaclab.envs import (
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.dict import print_dict
 from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
+    G1_EE_BODY_NAMES,
+)
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
@@ -557,6 +589,167 @@ def _force_policy_trajectory_on_reset(
     )
 
 
+class _PolicyTrackingMetrics:
+    """Record per-step tracking quality for the policy environment.
+
+    All quantities are read from the env's own live-order buffers, so they stay
+    comparable across backends and are unaffected by any observation-side
+    joint-order emulation.
+    """
+
+    def __init__(self, base_env, env_id: int, fall_height: float):
+        self._env = base_env
+        self._env_id = int(env_id)
+        self._fall_height = float(fall_height)
+        self._robot = base_env.scene["robot"]
+        ee_ids, ee_names = self._robot.find_bodies(
+            G1_EE_BODY_NAMES, preserve_order=True
+        )
+        if list(ee_names) != list(G1_EE_BODY_NAMES):
+            raise RuntimeError(
+                f"Could not resolve ordered G1 end effectors: got {ee_names}."
+            )
+        self._ee_ids = torch.tensor(
+            ee_ids, dtype=torch.long, device=torch.device(str(base_env.device))
+        )
+        self.root_height: list[float] = []
+        self.joint_pos_mae: list[float] = []
+        self.ee_xyz_error: list[float] = []
+
+    def record(self) -> None:
+        env_id = self._env_id
+        self.root_height.append(
+            float(self._robot.data.root_pos_w.torch[env_id, 2].item())
+        )
+        expert_joint_pos = self._env.current_expert_frame["joint_pos"][env_id]
+        live_joint_pos = self._robot.data.joint_pos.torch[env_id]
+        self.joint_pos_mae.append(
+            float((live_joint_pos - expert_joint_pos).abs().mean().item())
+        )
+        reference_ee = self._env._get_reference_body_pose_w_fast(G1_EE_BODY_NAMES)[0]
+        robot_ee = self._env._get_robot_body_pose_w_fast(self._ee_ids)[0]
+        delta = (robot_ee - reference_ee)[env_id]
+        self.ee_xyz_error.append(
+            float(torch.linalg.vector_norm(delta, dim=-1).mean().item())
+        )
+
+    def summary(self, step_dt: float | None) -> dict:
+        fallen_at = next(
+            (i for i, h in enumerate(self.root_height) if h < self._fall_height),
+            None,
+        )
+        steps = len(self.root_height)
+
+        def _mean_upto(values: list[float]) -> float | None:
+            window = values[:fallen_at] if fallen_at is not None else values
+            return sum(window) / len(window) if window else None
+
+        return {
+            "steps": steps,
+            "fall_height_threshold_m": self._fall_height,
+            "fell": fallen_at is not None,
+            "fall_step": fallen_at,
+            "fall_time_s": (
+                None if fallen_at is None or step_dt is None else fallen_at * step_dt
+            ),
+            "survived_steps": steps if fallen_at is None else fallen_at,
+            "survived_fraction": (steps if fallen_at is None else fallen_at)
+            / max(steps, 1),
+            "min_root_height_m": min(self.root_height) if self.root_height else None,
+            "final_root_height_m": self.root_height[-1] if self.root_height else None,
+            # Averaged before the fall, so a collapsed robot cannot flatter or
+            # inflate the tracking numbers.
+            "joint_pos_mae_rad_prefall": _mean_upto(self.joint_pos_mae),
+            "ee_xyz_error_m_prefall": _mean_upto(self.ee_xyz_error),
+        }
+
+
+class _JointOrderEmulator:
+    """Replay a legacy checkpoint's joint ordering.
+
+    Checkpoints trained before the joint-order fix encode the *live*
+    articulation order of the backend they were trained on, because the expert
+    command terms and the action offset were resolved from the live enumeration
+    rather than the pinned canonical list. Isaac Lab backends enumerate the G1
+    differently (PhysX breadth-first, Newton depth-first), so such a checkpoint
+    is only self-consistent on its original backend.
+
+    The env now emits these terms in the pinned canonical order on every
+    backend, so this shim permutes pinned -> foreign to make a legacy
+    checkpoint runnable again, on either backend. It is a diagnostic and
+    salvage aid, not a correctness fix: retraining is the real remedy.
+
+    Only the genuinely order-dependent quantities are touched: the
+    ``expert_motion`` blocks (29 positions followed by 29 velocities) and the
+    action term's offset. Proprioception, body observations, and the action
+    targets were always pinned and are left alone.
+    """
+
+    # Groups whose expert command reaches the actor or the latent posterior.
+    _PERMUTED_GROUPS = ("policy", "critic")
+    _JOINT_COUNT = 29
+
+    def __init__(self, contract_path: str, base_env, action_term, device):
+        import json
+
+        contract = json.loads(Path(contract_path).expanduser().read_text("utf-8"))
+        foreign_order = list(contract["robot_joint_names"])
+        robot = base_env.scene["robot"]
+        # Post-fix the expert command terms are pinned to the action term's
+        # joint order on every backend, so that is the source ordering here.
+        source_order = list(action_term._joint_names)
+        if sorted(foreign_order) != sorted(source_order):
+            raise ValueError(
+                "The contract's joint names are a different set from the action "
+                "term's joints; contracts must come from the same robot."
+            )
+        self.is_noop = foreign_order == source_order
+        self.foreign_backend = contract.get("physics_cfg", "<unknown>")
+
+        # expert_motion arrives in pinned order; deliver it in foreign order.
+        self._perm = torch.tensor(
+            [source_order.index(name) for name in foreign_order],
+            dtype=torch.long,
+            device=device,
+        )
+
+        # Reproduce the offset the foreign backend would have written: pinned
+        # slot j receives the rest pose of foreign_order[j]. Built by name, so
+        # it does not depend on the live enumeration.
+        default_joint_pos = robot.data.default_joint_pos.torch
+        default_by_name = {
+            name: default_joint_pos[:, index]
+            for index, name in enumerate(robot.joint_names)
+        }
+        self._action_term = action_term
+        self._foreign_offset = torch.stack(
+            [default_by_name[name] for name in foreign_order], dim=1
+        )
+
+    def apply_action_offset(self) -> None:
+        """Restore the foreign-order offset (the reset event rewrites it)."""
+        self._action_term._offset.copy_(self._foreign_offset)
+
+    def permute_observations(self, td) -> None:
+        """Reorder every ``expert_motion`` block in place."""
+        for group in self._PERMUTED_GROUPS:
+            key = (group, "expert_motion")
+            try:
+                tensor = td.get(key)
+            except KeyError:
+                continue
+            if tensor is None:
+                continue
+            blocks = tensor.shape[-1] // self._JOINT_COUNT
+            if blocks * self._JOINT_COUNT != tensor.shape[-1]:
+                raise ValueError(
+                    f"{key} width {tensor.shape[-1]} is not a multiple of "
+                    f"{self._JOINT_COUNT}; cannot reorder it by joint."
+                )
+            reshaped = tensor.reshape(*tensor.shape[:-1], blocks, self._JOINT_COUNT)
+            td.set(key, reshaped.index_select(-1, self._perm).reshape(tensor.shape))
+
+
 def _skill_commander_embeddings_path(agent_cfg) -> str | None:
     ipmd_cfg = getattr(agent_cfg, "ipmd", None)
     if ipmd_cfg is None:
@@ -763,6 +956,32 @@ def main(
 
     dt = getattr(base_env, "step_dt", None)
 
+    joint_order_emulator = None
+    if args_cli.emulate_joint_order_from is not None:
+        joint_order_emulator = _JointOrderEmulator(
+            args_cli.emulate_joint_order_from,
+            base_env,
+            base_env.action_manager.get_term("joint_pos"),
+            torch.device(str(base_env.device)),
+        )
+        if joint_order_emulator.is_noop:
+            raise ValueError(
+                "--emulate_joint_order_from names a contract whose joint order "
+                "already matches this backend; the emulation would do nothing. "
+                "Pass the contract from the OTHER backend."
+            )
+        print(
+            "[WARN] DIAGNOSTIC joint-order emulation is ACTIVE: expert_motion "
+            f"and the action offset are permuted into {joint_order_emulator.foreign_backend} "
+            "order. This run is not a valid performance measurement."
+        )
+
+    tracking_metrics = None
+    if args_cli.metrics_json is not None:
+        tracking_metrics = _PolicyTrackingMetrics(
+            base_env, POLICY_ENV_ID, args_cli.fall_height
+        )
+
     td = env.reset()
     base_env.apply_reference_replay_targets()
 
@@ -842,6 +1061,10 @@ def main(
             torch.inference_mode(),
             set_exploration_type(InteractionType.DETERMINISTIC),
         ):
+            if joint_order_emulator is not None:
+                # The reset event rewrites the offset, so reassert it every step.
+                joint_order_emulator.apply_action_offset()
+                joint_order_emulator.permute_observations(td)
             td = collector_policy(td)
             action = td.get("action")
             if action is None:
@@ -850,6 +1073,8 @@ def main(
                 )
             action[REFERENCE_ENV_ID].zero_()
             td = env.step(td)
+            if tracking_metrics is not None:
+                tracking_metrics.record()
             reference_root_pos_w = None
             if reference_body_markers is not None:
                 reference_root_pos_w, _, _, _ = _update_reference_body_markers(
@@ -879,6 +1104,30 @@ def main(
             sleep_time = dt - (time.time() - start_time)
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+    if tracking_metrics is not None:
+        import json
+
+        summary = tracking_metrics.summary(dt)
+        payload = {
+            "checkpoint": checkpoint_path,
+            "task": args_cli.task,
+            "physics_cfg": type(env_cfg.sim.physics).__name__,
+            "emulated_joint_order_from": args_cli.emulate_joint_order_from,
+            "motion": motion,
+            "seed": args_cli.seed,
+            "summary": summary,
+            "per_step": {
+                "root_height_m": tracking_metrics.root_height,
+                "joint_pos_mae_rad": tracking_metrics.joint_pos_mae,
+                "ee_xyz_error_m": tracking_metrics.ee_xyz_error,
+            },
+        }
+        metrics_path = Path(args_cli.metrics_json).expanduser().resolve()
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print("POLICY_TRACKING_SUMMARY " + json.dumps(summary, sort_keys=True))
+        print(f"[INFO] Policy tracking metrics written to {metrics_path}")
 
     env.close()
 
