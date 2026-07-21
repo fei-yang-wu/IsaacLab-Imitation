@@ -1,4 +1,4 @@
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_imitation.envs.rlopt import IPMDRLOptConfig
 
@@ -77,6 +77,15 @@ LATENT_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "last_action"),
 ]
 
+SONIC_LATENT_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
+    ("policy", "latent_command"),
+    ("policy", "projected_gravity"),
+    ("policy", "base_ang_vel"),
+    ("policy", "joint_pos_rel"),
+    ("policy", "joint_vel_rel"),
+    ("policy", "last_action"),
+]
+
 LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_motion"),
     ("policy", "expert_anchor_pos_b"),
@@ -100,6 +109,19 @@ FUTURE_CVAE_PRIOR_INPUT_KEYS: list[tuple[str, str]] = [
 LATENT_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
     ("critic", "latent_command"),
     ("critic", "expert_motion"),
+    ("critic", "expert_anchor_pos_b"),
+    ("critic", "expert_anchor_ori_b"),
+    ("critic", "body_pos"),
+    ("critic", "body_ori"),
+    ("critic", "base_lin_vel"),
+    ("critic", "base_ang_vel"),
+    ("critic", "joint_pos_rel"),
+    ("critic", "joint_vel_rel"),
+    ("critic", "last_action"),
+]
+
+SONIC_LATENT_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
+    ("critic", "latent_command"),
     ("critic", "expert_anchor_pos_b"),
     ("critic", "expert_anchor_ori_b"),
     ("critic", "body_pos"),
@@ -179,6 +201,17 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
         self.ipmd.latent_learning.prior_input_keys = list(LATENT_PRIOR_INPUT_KEYS)
         self.ipmd.latent_key = ("policy", "latent_command")
         self.ipmd.use_latent_command = use_latent_command
+        # If running input normalization is enabled on either network, the
+        # pretrained latent command (skill code z + sin/cos phase) must pass
+        # through untouched: its scale and geometry are part of the
+        # encoder/policy contract.
+        self.policy.normalize_input_exclude_keys = (
+            [("policy", "latent_command")] if use_latent_command else []
+        )
+        if self.value_function is not None:
+            self.value_function.normalize_input_exclude_keys = (
+                [("critic", "latent_command")] if use_latent_command else []
+            )
 
     def __post_init__(self):
         super().__post_init__()
@@ -223,7 +256,10 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
             self.value_function.num_cells = [768, 512, 256]
 
         self.collector.total_frames = 5_000_000_000
-        self.save_interval = 100  # rollout iterations
+        # RLOpt interprets this field in collected samples, not rollout
+        # iterations. At the default 4096 envs x 24 steps this is 100 rollouts
+        # (about 9.83M frames) instead of writing a checkpoint every rollout.
+        self.save_interval = 4096 * 24 * 100
 
         # Base ("posterior") latent width: the single-step reference payload
         # mirrored directly -- expert_motion (58) + anchor_ori (6) = 64. This is
@@ -323,9 +359,113 @@ class G1ImitationRLOptIPMDConfig(_G1ImitationRLOptIPMDBaseConfig):
 
 @configclass
 class G1ImitationLatentRLOptIPMDConfig(_G1ImitationRLOptIPMDBaseConfig):
-    """Latent-conditioned RLOpt IPMD configuration for G1 imitation."""
+    """Latent-conditioned RLOpt IPMD configuration for G1 imitation.
+
+    DEPRECATED as a task default (2026-07-19): this is the pre-migration
+    surface, now reachable only via ``Isaac-Imitation-G1-Latent-Legacy-v0``.
+    It remains the shared parent of the SONIC config and the latent variants.
+    """
 
     _default_use_latent_command: bool = True
+
+
+@configclass
+class G1ImitationLatentSonicRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
+    """Latent IPMD policy with SONIC's proprioception contract.
+
+    The environment side (pelvis anchor, rewards, strict adaptive
+    terminations, adaptive failure sampling, domain randomization, actuators)
+    always follows the public SONIC release. The optimizer contract is split:
+
+    - Default (``sonic_release_optimizer=True``): the exact public-release
+      contract (actor lr 2e-5 adaptive in [1e-5, 2e-4], joint grad clip 0.1,
+      init std 0.05 clamped to [0.001, 0.5], global per-rollout advantage
+      normalization, 6-layer SiLU MLPs with running input normalization).
+      Confirmed default (2026-07-20): single-GPU ICE H100 runs now target the
+      release's own ~10B-frame / 100k-iteration convergence budget, so this
+      contract is in scale rather than the flat regime seen at 50M-100M local
+      scale.
+    - ``sonic_release_optimizer=False``: the locally-validated RLOpt contract
+      used for cheap local qualification/smoke runs, where the release
+      optimizer stayed pinned at ~6-step episodes (see the CU130 migration
+      wiki page, "Training-gate resolution (2026-07-19)").
+    """
+
+    sonic_release_optimizer: bool = True
+
+    def sync_input_keys(self) -> None:
+        super().sync_input_keys()
+        self.policy.input_keys = list(SONIC_LATENT_POLICY_INPUT_KEYS)
+        if self.value_function is not None:
+            self.value_function.input_keys = list(SONIC_LATENT_CRITIC_INPUT_KEYS)
+
+    def _apply_release_optimizer_contract(self) -> None:
+        assert self.value_function is not None
+        self.policy.num_cells = [2048, 2048, 1024, 1024, 512, 512]
+        self.policy.activation_fn = "silu"
+        self.policy.normalize_input = True
+        self.value_function.num_cells = [2048, 2048, 1024, 1024, 512, 512]
+        self.value_function.activation_fn = "silu"
+        self.value_function.normalize_input = True
+        self.ipmd.actor_learning_rate = 2.0e-5
+        self.ipmd.critic_learning_rate = 1.0e-3
+        self.optim.min_lr = 1.0e-5
+        self.optim.max_lr = 2.0e-4
+        self.optim.max_grad_norm = 0.1
+        self.ppo.entropy_coeff = 0.01
+        self.ppo.normalize_advantage_global = True
+        self.ppo.clip_log_std = True
+        self.ppo.log_std_init = -2.995732273553991  # log(0.05)
+        self.ppo.log_std_min = -6.907755278982137  # log(0.001)
+        self.ppo.log_std_max = -0.6931471805599453  # log(0.5)
+
+    def _apply_local_optimizer_contract(self) -> None:
+        assert self.value_function is not None
+        self.policy.num_cells = [512, 256, 128]
+        self.policy.activation_fn = "elu"
+        self.policy.normalize_input = False
+        self.value_function.num_cells = [768, 512, 256]
+        self.value_function.activation_fn = "elu"
+        self.value_function.normalize_input = False
+        self.ipmd.actor_learning_rate = 1.0e-3
+        self.ipmd.critic_learning_rate = 1.0e-3
+        self.optim.min_lr = 1.0e-5
+        self.optim.max_lr = 1.0e-3
+        self.optim.max_grad_norm = 1.0
+        self.ppo.entropy_coeff = 0.005
+        self.ppo.normalize_advantage_global = False
+        self.ppo.clip_log_std = False
+        self.ppo.log_std_init = 0.0
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.sonic_release_optimizer:
+            self._apply_release_optimizer_contract()
+        else:
+            self._apply_local_optimizer_contract()
+        # SONIC's g1_recon auxiliary reconstructs the future motion command
+        # through its token autoencoder; it is not action behavior cloning.
+        # DiffSR pretraining owns that reconstruction objective in this path.
+        # Keep rollout action supervision available only as an explicit
+        # diagnostic override rather than silently changing the PPO recipe.
+        self.ipmd.rollout_bc_coef = 0.0
+        self.sync_input_keys()
+
+
+@configclass
+class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
+    G1ImitationLatentSonicRLOptIPMDConfig
+):
+    """Exact public-SONIC-release optimizer contract for cluster-scale runs.
+
+    Select with ``--agent rlopt_ipmd_sonic_release_cfg_entry_point``.
+    Identical to the default ``G1ImitationLatentSonicRLOptIPMDConfig`` as of
+    2026-07-20 (both pin ``sonic_release_optimizer=True``); kept as an
+    explicit, override-proof alias for cluster submission scripts that name
+    the release contract directly.
+    """
+
+    sonic_release_optimizer: bool = True
 
 
 @configclass
@@ -361,9 +501,7 @@ class G1ImitationLatentFutureCVAERLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfi
 
 
 @configclass
-class G1ImitationLatentPerStepVQRLOptIPMDConfig(
-    G1ImitationLatentRLOptIPMDConfig
-):
+class G1ImitationLatentPerStepVQRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
     """G1 latent policy consuming one token from a ten-token packet per step."""
 
     def sync_input_keys(self) -> None:

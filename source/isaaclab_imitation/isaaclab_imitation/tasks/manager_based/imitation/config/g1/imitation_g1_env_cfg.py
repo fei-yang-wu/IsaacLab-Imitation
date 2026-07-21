@@ -7,13 +7,14 @@ import copy
 from collections.abc import Mapping
 from pathlib import Path
 
+from isaaclab.managers import CurriculumTermCfg as CurrTerm
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
 from isaaclab_newton.sensors import ContactSensorCfg as NewtonContactSensorCfg
@@ -25,6 +26,9 @@ from isaaclab_imitation.assets.robots.unitree import (
     UNITREE_G1_29DOF_SDK_JOINT_NAMES,
     UNITREE_G1_29DOF_MIMIC_ACTION_SCALE,
     UNITREE_G1_29DOF_MIMIC_CFG,
+    UNITREE_G1_29DOF_SONIC_ACTION_SCALE,
+    UNITREE_G1_29DOF_SONIC_CFG,
+    unitree_g1_29dof_usd_articulation_cfg,
 )
 
 from ... import mdp
@@ -170,10 +174,29 @@ class G1ImitationPhysicsCfg(PresetCfg):
             cone="pyramidal",
             impratio=1,
             integrator="implicitfast",
+            use_mujoco_contacts=False,
         ),
         num_substeps=1,
         debug_mode=False,
     )
+
+
+@configclass
+class G1ImitationRobotCfg(PresetCfg):
+    """One preconverted G1 USD contract shared by both physics backends."""
+
+    default = unitree_g1_29dof_usd_articulation_cfg(UNITREE_G1_29DOF_MIMIC_CFG)
+    physx = unitree_g1_29dof_usd_articulation_cfg(UNITREE_G1_29DOF_MIMIC_CFG)
+    newton_mjwarp = unitree_g1_29dof_usd_articulation_cfg(UNITREE_G1_29DOF_MIMIC_CFG)
+
+
+@configclass
+class G1SonicRobotCfg(PresetCfg):
+    """SONIC actuators on one preconverted G1 USD for both backends."""
+
+    default = unitree_g1_29dof_usd_articulation_cfg(UNITREE_G1_29DOF_SONIC_CFG)
+    physx = unitree_g1_29dof_usd_articulation_cfg(UNITREE_G1_29DOF_SONIC_CFG)
+    newton_mjwarp = unitree_g1_29dof_usd_articulation_cfg(UNITREE_G1_29DOF_SONIC_CFG)
 
 
 @configclass
@@ -265,14 +288,39 @@ def _g1_expert_window_ee_obs_params() -> dict[str, object]:
     }
 
 
+def _g1_canonical_joint_obs_params() -> dict[str, object]:
+    """Return the backend-independent policy joint ordering."""
+    return {
+        "asset_cfg": SceneEntityCfg(
+            "robot",
+            joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+            preserve_order=True,
+        )
+    }
+
+
 @configclass
 class G1ActionsCfg:
     """Action settings for 29-DoF mimic G1."""
 
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
-        joint_names=[".*"],
+        joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+        preserve_order=True,
         scale=UNITREE_G1_29DOF_MIMIC_ACTION_SCALE,
+        use_default_offset=True,
+    )
+
+
+@configclass
+class G1SonicActionsCfg(G1ActionsCfg):
+    """Action scale induced by SONIC's released actuator configuration."""
+
+    joint_pos = mdp.JointPositionActionCfg(
+        asset_name="robot",
+        joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+        preserve_order=True,
+        scale=UNITREE_G1_29DOF_SONIC_ACTION_SCALE,
         use_default_offset=True,
     )
 
@@ -304,10 +352,14 @@ class G1ObservationCfg:
             func=mdp.base_ang_vel, noise=Unoise(n_min=-0.2, n_max=0.2)
         )
         joint_pos_rel = ObsTerm(
-            func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01)
+            func=mdp.joint_pos_rel,
+            params=_g1_canonical_joint_obs_params(),
+            noise=Unoise(n_min=-0.01, n_max=0.01),
         )
         joint_vel_rel = ObsTerm(
-            func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.5, n_max=0.5)
+            func=mdp.joint_vel_rel,
+            params=_g1_canonical_joint_obs_params(),
+            noise=Unoise(n_min=-0.5, n_max=0.5),
         )
         last_action = ObsTerm(func=mdp.last_action)
 
@@ -341,8 +393,12 @@ class G1ObservationCfg:
         )
         base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
+        joint_pos_rel = ObsTerm(
+            func=mdp.joint_pos_rel, params=_g1_canonical_joint_obs_params()
+        )
+        joint_vel_rel = ObsTerm(
+            func=mdp.joint_vel_rel, params=_g1_canonical_joint_obs_params()
+        )
         last_action = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
@@ -517,6 +573,29 @@ class G1EventCfg:
 
 
 @configclass
+class G1SonicEventCfg(G1EventCfg):
+    """Domain randomization used by the public SONIC release recipe."""
+
+    randomize_rigid_body_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=r".*wrist_yaw.*|torso_link"
+            ),
+            "mass_distribution_params": (0.8, 2.5),
+            "operation": "scale",
+        },
+    )
+    push_robot = EventTerm(
+        func=mdp.push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(4.0, 6.0),
+        params={"velocity_range": VELOCITY_RANGE},
+    )
+
+
+@configclass
 class G1RewardsCfg:
     """Reward terms aligned to the 29-DoF tracking environment."""
 
@@ -601,6 +680,21 @@ class G1RewardsCfg:
         },
     )
 
+    # -- metrics (weight=0.0: logged to Episode_Reward/mpjpe_m each episode,
+    # averaged across envs, but does not affect the return)
+    mpjpe_m = RewTerm(
+        func=mdp.mpjpe_relative_body_pos_m,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=G1_TRACKED_BODY_NAMES,
+                preserve_order=True,
+            ),
+            "reference_body_names": G1_TRACKED_BODY_NAMES,
+        },
+    )
+
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-0.1,
@@ -615,6 +709,119 @@ class G1RewardsCfg:
                 ],
             ),
             "threshold": 1.0,
+        },
+    )
+
+
+@configclass
+class G1SonicRewardsCfg(G1RewardsCfg):
+    """Additional reward terms and contact exclusions from SONIC release."""
+
+    motion_global_anchor_pos = RewTerm(
+        func=mdp.reference_global_anchor_position_error_exp,
+        weight=0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "anchor_body_name": "pelvis",
+            "std": 0.3,
+        },
+    )
+    motion_global_anchor_ori = RewTerm(
+        func=mdp.reference_global_anchor_orientation_error_exp,
+        weight=0.5,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "anchor_body_name": "pelvis",
+            "std": 0.4,
+        },
+    )
+    motion_body_pos = RewTerm(
+        func=mdp.reference_relative_body_position_error_exp,
+        weight=1.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_TRACKED_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_TRACKED_BODY_NAMES,
+            "anchor_body_name": "pelvis",
+            "std": 0.3,
+        },
+    )
+    motion_body_ori = RewTerm(
+        func=mdp.reference_relative_body_orientation_error_exp,
+        weight=1.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_TRACKED_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_TRACKED_BODY_NAMES,
+            "anchor_body_name": "pelvis",
+            "std": 0.4,
+        },
+    )
+    undesired_contacts = RewTerm(
+        func=mdp.undesired_contacts,
+        weight=-0.1,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_forces",
+                body_names=[
+                    (
+                        r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)"
+                        r"(?!left_wrist_yaw_link$)(?!right_wrist_yaw_link$)"
+                        r"(?!left_elbow_link$)(?!right_elbow_link$).+$"
+                    )
+                ],
+            ),
+            "threshold": 1.0,
+        },
+    )
+    tracking_reward_points = RewTerm(
+        func=mdp.reference_local_reward_point_position_error_exp,
+        weight=2.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=[
+                    "torso_link",
+                    "left_wrist_yaw_link",
+                    "right_wrist_yaw_link",
+                ],
+                preserve_order=True,
+            ),
+            "reference_body_names": [
+                "torso_link",
+                "left_wrist_yaw_link",
+                "right_wrist_yaw_link",
+            ],
+            "body_offsets": ((0.0, 0.0, 0.5), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+            "anchor_body_name": "pelvis",
+            "std": 0.1,
+        },
+    )
+    anti_shake_ang_vel = RewTerm(
+        func=mdp.body_angular_velocity_excess_l2,
+        weight=-5.0e-3,
+        params={
+            # The bundled 29-DoF asset has no separate head rigid body; its
+            # fixed torso is the corresponding angular-velocity proxy.
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=[
+                    "left_wrist_yaw_link",
+                    "right_wrist_yaw_link",
+                    "torso_link",
+                ],
+                preserve_order=True,
+            ),
+            "threshold": 1.5,
+        },
+    )
+    feet_acc = RewTerm(
+        func=mdp.joint_acc_l2,
+        weight=-2.5e-6,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[r".*ankle.*"]),
         },
     )
 
@@ -664,6 +871,104 @@ class G1TerminationsCfg:
 
 
 @configclass
+class G1SonicTerminationsCfg(G1TerminationsCfg):
+    """Strict adaptive release termination protocol from SONIC."""
+
+    anchor_pos = DoneTerm(
+        func=mdp.bad_anchor_pos_z_adaptive,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "anchor_body_name": "pelvis",
+            "threshold": 0.15,
+            "down_threshold": 0.75,
+            "root_height_threshold": 0.5,
+        },
+    )
+    anchor_ori = DoneTerm(
+        func=mdp.bad_anchor_ori_full,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "anchor_body_name": "pelvis",
+            "threshold": 0.2,
+        },
+    )
+    ee_body_pos = DoneTerm(
+        func=mdp.bad_reference_body_pos_z_adaptive,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_EE_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_EE_BODY_NAMES,
+            "threshold": 0.15,
+            "down_threshold": 0.75,
+            "root_height_threshold": 0.5,
+        },
+    )
+    foot_pos_xyz = DoneTerm(
+        func=mdp.bad_reference_body_pos_relative,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot",
+                body_names=["left_ankle_roll_link", "right_ankle_roll_link"],
+                preserve_order=True,
+            ),
+            "reference_body_names": [
+                "left_ankle_roll_link",
+                "right_ankle_roll_link",
+            ],
+            "anchor_body_name": "pelvis",
+            "threshold": 0.2,
+        },
+    )
+    base_too_low = None
+
+
+def _sonic_threshold_anneal_params(
+    term_name: str,
+    start_value: float,
+    end_value: float,
+) -> dict[str, object]:
+    return {
+        "term_name": term_name,
+        "start_value": start_value,
+        "end_value": end_value,
+        "start_frames": 50_000_000,
+        "end_frames": 500_000_000,
+    }
+
+
+@configclass
+class G1SonicTerminationCurriculumCfg:
+    """Anneal termination thresholds from SONIC base/eval values to strict.
+
+    The release trains strict-from-scratch at 64+ GPU scale; locally that
+    spends most of the early budget on ~5-step episodes. Starting at the
+    release's own base/eval thresholds and reaching the strict release values
+    by 500M frames recovers fast early learning while keeping every frame
+    after the anneal - and the final policy's protocol - strictly SONIC.
+    Override the shared window via
+    ``env.curriculum.<term>.params.{start_frames,end_frames}``.
+    """
+
+    anchor_pos_threshold = CurrTerm(
+        func=mdp.anneal_termination_threshold_by_frames,
+        params=_sonic_threshold_anneal_params("anchor_pos", 0.25, 0.15),
+    )
+    anchor_ori_threshold = CurrTerm(
+        func=mdp.anneal_termination_threshold_by_frames,
+        params=_sonic_threshold_anneal_params("anchor_ori", 1.0, 0.2),
+    )
+    ee_body_pos_threshold = CurrTerm(
+        func=mdp.anneal_termination_threshold_by_frames,
+        params=_sonic_threshold_anneal_params("ee_body_pos", 0.25, 0.15),
+    )
+    foot_pos_xyz_threshold = CurrTerm(
+        func=mdp.anneal_termination_threshold_by_frames,
+        params=_sonic_threshold_anneal_params("foot_pos_xyz", 0.3, 0.2),
+    )
+
+
+@configclass
 class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     """Shared 29-DoF G1 tracking config aligned with Unitree mimic tracking settings."""
 
@@ -681,6 +986,10 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     latent_command_dim: int = 64
     latent_patch_past_steps: int = 0
     latent_patch_future_steps: int = 0
+    # Anchor used when constructing expert batches and high-level macro states.
+    # Keep the historical torso convention by default; SONIC overrides this to
+    # pelvis so offline skill pretraining and live policy commands agree.
+    expert_anchor_body_name: str = "torso_link"
     # Hold command-window observations for N control steps between renewals
     # (VLA-style chunk consumption): the window is snapshotted every N steps in
     # the renewal-time anchor frame and consumed as a time-shifted view with
@@ -690,10 +999,25 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     random_reset_step_min: int = 0
     random_reset_step_max: int = 0
     random_reset_full_trajectory: bool = False
+    adaptive_failure_reset_bin_size: int = 50
+    adaptive_failure_reset_sequence_length_agnostic: bool = True
+    adaptive_failure_reset_init_num_failures: float = 1.0
     adaptive_failure_reset_uniform_ratio: float = 0.1
-    adaptive_failure_reset_alpha: float = 0.001
+    adaptive_failure_reset_pre_failure_window: int = 200
+    adaptive_failure_reset_failure_rate_max_over_mean: float = 50.0
 
     _debug_rewards: bool = False
+
+    # Offscreen-video camera. Default: a static elevated bird view over the
+    # env grid near the origin (set below via cfg.viewer), which shows a
+    # couple dozen robots for generic motion-quality checks. The follow
+    # camera remains available (video_follow_robot=True) for close-ups of a
+    # single environment, e.g. with full-trajectory random starts where
+    # robots wander far from their origins.
+    video_follow_robot: bool = False
+    video_follow_env_index: int = 0
+    video_follow_eye_offset: tuple[float, float, float] = (3.5, 3.5, 2.0)
+    video_follow_lookat_offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     # Master switch for all expensive visualizers/marker debug rendering.
     # Keep disabled by default for training/runtime performance.
@@ -739,9 +1063,14 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     def __post_init__(self) -> None:
         super().__post_init__()  # type: ignore
 
-        self.scene.robot = UNITREE_G1_29DOF_MIMIC_CFG.replace(  # type: ignore
-            prim_path="{ENV_REGEX_NS}/Robot"
-        )
+        robot_preset = G1ImitationRobotCfg()
+        for variant in (
+            robot_preset.default,
+            robot_preset.physx,
+            robot_preset.newton_mjwarp,
+        ):
+            variant.prim_path = "{ENV_REGEX_NS}/Robot"
+        self.scene.robot = robot_preset  # type: ignore
         self.scene.terrain.terrain_type = "plane"
         self.scene.terrain.terrain_generator = None
 
@@ -802,10 +1131,20 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             raise ValueError("random_reset_step_min must be >= 0.")
         if int(self.random_reset_step_max) < int(self.random_reset_step_min):
             raise ValueError("random_reset_step_max must be >= random_reset_step_min.")
-        if float(self.adaptive_failure_reset_uniform_ratio) < 0.0:
-            raise ValueError("adaptive_failure_reset_uniform_ratio must be >= 0.")
-        if not 0.0 <= float(self.adaptive_failure_reset_alpha) <= 1.0:
-            raise ValueError("adaptive_failure_reset_alpha must be in [0, 1].")
+        if int(self.adaptive_failure_reset_bin_size) <= 0:
+            raise ValueError("adaptive_failure_reset_bin_size must be positive.")
+        if float(self.adaptive_failure_reset_init_num_failures) <= 0.0:
+            raise ValueError(
+                "adaptive_failure_reset_init_num_failures must be positive."
+            )
+        if not 0.0 <= float(self.adaptive_failure_reset_uniform_ratio) <= 1.0:
+            raise ValueError("adaptive_failure_reset_uniform_ratio must be in [0, 1].")
+        if int(self.adaptive_failure_reset_pre_failure_window) < 0:
+            raise ValueError("adaptive_failure_reset_pre_failure_window must be >= 0.")
+        if float(self.adaptive_failure_reset_failure_rate_max_over_mean) <= 0.0:
+            raise ValueError(
+                "adaptive_failure_reset_failure_rate_max_over_mean must be positive."
+            )
 
         self._sync_expert_window_observation_params()
 

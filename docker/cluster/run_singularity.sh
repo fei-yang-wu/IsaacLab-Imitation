@@ -50,6 +50,51 @@ prefix_home_if_relative() {
     esac
 }
 
+resolve_rlopt_backend() {
+    local explicit_backend="${CLUSTER_SIM_BACKEND:-auto}"
+    local token=""
+    local token_backend=""
+
+    case "$explicit_backend" in
+        auto|physx|newton) ;;
+        *)
+            echo "[ERROR] CLUSTER_SIM_BACKEND must be auto, physx, or newton; got '$explicit_backend'." >&2
+            return 1
+            ;;
+    esac
+
+    for token in "$@"; do
+        case "$token" in
+            physics=physx)
+                [ -z "$token_backend" ] || [ "$token_backend" = "physx" ] || {
+                    echo "[ERROR] Conflicting physics backend arguments." >&2
+                    return 1
+                }
+                token_backend="physx"
+                ;;
+            physics=newton*|presets=*newton*|--assert-kitless)
+                [ -z "$token_backend" ] || [ "$token_backend" = "newton" ] || {
+                    echo "[ERROR] Conflicting physics backend arguments." >&2
+                    return 1
+                }
+                token_backend="newton"
+                ;;
+        esac
+    done
+
+    if [ "$explicit_backend" != "auto" ]; then
+        if [ -n "$token_backend" ] && [ "$token_backend" != "$explicit_backend" ]; then
+            echo "[ERROR] CLUSTER_SIM_BACKEND=$explicit_backend conflicts with CLI backend $token_backend." >&2
+            return 1
+        fi
+        echo "$explicit_backend"
+    elif [ -n "$token_backend" ]; then
+        echo "$token_backend"
+    else
+        echo "physx"
+    fi
+}
+
 setup_directories() {
     # Check and create directories
     for dir in \
@@ -283,6 +328,10 @@ capture_cluster_env_overrides() {
         CLUSTER_WANDB_API_KEY_FILE \
         CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_SIM_BACKEND \
+        CLUSTER_USE_OVERLAY \
+        CLUSTER_CU130_RUNTIME_ROOT \
+        CLUSTER_G1_USD_PATH \
         CLUSTER_AUTO_SETUP_G1_DATA \
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
         CLUSTER_G1_DATA_ROOT \
@@ -296,6 +345,7 @@ capture_cluster_env_overrides() {
         CLUSTER_USE_SHARED_SIF \
         CLUSTER_SHARED_SIF_PATH \
         CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_USE_XVFB \
         CLUSTER_EXTRA_PYTHONPATH_REL \
         REMOVE_CODE_COPY_AFTER_JOB \
         REMOVE_OVERLAY_AFTER_JOB; do
@@ -315,6 +365,10 @@ restore_cluster_env_overrides() {
         CLUSTER_WANDB_API_KEY_FILE \
         CLUSTER_CONTAINER_HOME \
         CLUSTER_PYTHON_EXECUTABLE \
+        CLUSTER_SIM_BACKEND \
+        CLUSTER_USE_OVERLAY \
+        CLUSTER_CU130_RUNTIME_ROOT \
+        CLUSTER_G1_USD_PATH \
         CLUSTER_AUTO_SETUP_G1_DATA \
         CLUSTER_G1_EXPECTED_MOTION_COUNT \
         CLUSTER_G1_DATA_ROOT \
@@ -328,6 +382,7 @@ restore_cluster_env_overrides() {
         CLUSTER_USE_SHARED_SIF \
         CLUSTER_SHARED_SIF_PATH \
         CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
+        CLUSTER_USE_XVFB \
         CLUSTER_EXTRA_PYTHONPATH_REL \
         REMOVE_CODE_COPY_AFTER_JOB \
         REMOVE_OVERLAY_AFTER_JOB; do
@@ -355,9 +410,14 @@ base_tmpdir="$(prefix_home_if_relative "$HOME" "$base_tmpdir")"
 mkdir -p "$base_tmpdir"
 job_tmpdir="${base_tmpdir%/}/isaaclab-${SLURM_JOB_ID:-$$}"
 mkdir -p "$job_tmpdir"
+xvfb_pid=""
 cleanup_job_tmpdir() {
     local status=$?
     set +e
+    if [ -n "${xvfb_pid:-}" ]; then
+        kill "$xvfb_pid" 2>/dev/null || true
+        wait "$xvfb_pid" 2>/dev/null || true
+    fi
     sync_project_logs_back
     if [ "${CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB:-1}" = "1" ] && [ -n "${job_tmpdir:-}" ]; then
         rm -rf "$job_tmpdir" || true
@@ -514,22 +574,95 @@ else
     tar -xf "$CLUSTER_SIF_PATH/$2.tar" -C "$TMPDIR"
 fi
 
-# create a persistant overlay using apptainer with fakeroot
-overlay_size_mb="${CLUSTER_OVERLAY_SIZE_MB:-20240}"
-echo "[INFO] Creating Apptainer overlay: size=${overlay_size_mb}MB"
-apptainer overlay create --size "$overlay_size_mb" $CLUSTER_ISAACLAB_DIR/$dir_name.img
+# The CU130 runtime is immutable. Normal jobs bind writable caches, data, logs,
+# home, /tmp, and the submitted source tree without mutating the SIF root.
+container_overlay_args=()
+overlay_path="${CLUSTER_ISAACLAB_DIR}/${dir_name}.img"
+if [ "${CLUSTER_USE_OVERLAY:-0}" = "1" ]; then
+    overlay_size_mb="${CLUSTER_OVERLAY_SIZE_MB:-20240}"
+    echo "[INFO] Creating optional Apptainer overlay: size=${overlay_size_mb}MB"
+    apptainer overlay create --size "$overlay_size_mb" "$overlay_path"
+    container_overlay_args=(--overlay "$overlay_path")
+else
+    echo "[INFO] Running the SIF read-only without an overlay."
+fi
 
 # execute command in singularity container
 # NOTE: ISAACLAB_PATH is normally set in `isaaclab.sh` but we directly call the isaac-sim python because we sync the entire
 # Isaac Lab directory to the compute node and remote the symbolic link to isaac-sim
 container_tmpdir="$TMPDIR/container-tmp"
 mkdir -p "$container_tmpdir"
+container_display_args=()
+case "${CLUSTER_USE_XVFB:-0}" in
+    1)
+        if ! command -v Xvfb >/dev/null 2>&1; then
+            echo "[ERROR] CLUSTER_USE_XVFB=1 but Xvfb is unavailable on the compute node." >&2
+            exit 1
+        fi
+        mkdir -p "$container_tmpdir/.X11-unix"
+        display_seed="${SLURM_JOB_ID:-$$}"
+        display_num=$((100 + display_seed % 800))
+        while [ -e "/tmp/.X11-unix/X${display_num}" ]; do
+            display_num=$((display_num + 1))
+        done
+        Xvfb ":${display_num}" -screen 0 1280x720x24 -nolisten tcp -ac > "$job_tmpdir/xvfb.log" 2>&1 &
+        xvfb_pid=$!
+        for _ in $(seq 1 50); do
+            [ -S "/tmp/.X11-unix/X${display_num}" ] && break
+            sleep 0.1
+        done
+        if [ ! -S "/tmp/.X11-unix/X${display_num}" ]; then
+            echo "[ERROR] Xvfb did not create display :${display_num}." >&2
+            exit 1
+        fi
+        export APPTAINERENV_DISPLAY=":${display_num}"
+        export SINGULARITYENV_DISPLAY=":${display_num}"
+        container_display_args=(-B "/tmp/.X11-unix:/tmp/.X11-unix:rw")
+        echo "[INFO] Xvfb display ready: DISPLAY=:${display_num}"
+        ;;
+    0) ;;
+    *)
+        echo "[ERROR] CLUSTER_USE_XVFB must be 0 or 1." >&2
+        exit 1
+        ;;
+esac
 preflight_cmd=""
 if [ "${auto_setup_g1_data}" = "1" ]; then
     preflight_cmd="$(build_g1_preflight_cmd "${cluster_g1_data_root}" "${cluster_g1_manifest_path}" "${cluster_g1_expected_motion_count}" "${cluster_g1_repo_id}" "${cluster_g1_repo_revision}" "${cluster_g1_force_download}" "${cluster_g1_manifest_refresh_policy}")"
 fi
-printf -v workload_cmd '%q ' /isaac-sim/python.sh "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
-container_entry_cmd="export ACCEPT_EULA=${ACCEPT_EULA:-Y} && export PRIVACY_CONSENT=${PRIVACY_CONSENT:-Y} && export OMNI_KIT_ACCEPT_EULA=YES && export HOME=${container_home} && export XDG_CACHE_HOME=${container_home}/.cache && export XDG_DATA_HOME=${container_home}/.local/share && export ISAACLAB_WORKSPACE_PATH=/workspace/isaaclab/project && export ISAACLAB_PATH=/workspace/isaaclab/project/IsaacLab && export ISAACSIM_PATH=/workspace/isaaclab/project/IsaacLab/_isaac_sim && export ISAACLAB_DATA_DIR=/data && export CLUSTER_DATA_DIR=${CLUSTER_DATA_DIR} && export PYTHONPATH=${container_pythonpath} && export TRITON_CACHE_DIR=${container_triton_cache_dir} && export TORCHINDUCTOR_CACHE_DIR=${container_torchinductor_cache_dir} && export RL_WARNINGS=${RL_WARNINGS:-False} && if [ \"${allow_torch_compile_debug}\" != \"1\" ]; then unset TORCH_LOGS; export TORCHDYNAMO_VERBOSE=0; export TORCH_COMPILE_DEBUG=0; fi && cd /workspace/isaaclab/project"
+runtime_root="${CLUSTER_CU130_RUNTIME_ROOT:-/opt/isaaclab-imitation-runtime}"
+# Default: no USD override; the job uses the repo-packaged official Unitree
+# USD (assets/unitree/g1_description, git-lfs), which
+# resolve_unitree_g1_29dof_usd_path() picks up as the packaged default. Set
+# CLUSTER_G1_USD_PATH to an absolute path only for explicit asset experiments.
+g1_usd_path="${CLUSTER_G1_USD_PATH:-repo}"
+g1_usd_env_exports="export ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT=$(dirname "${g1_usd_path}") && export ISAACLAB_IMITATION_UNITREE_USD_PATH=${g1_usd_path} && "
+if [ "${g1_usd_path}" = "repo" ] || [ "${g1_usd_path}" = "none" ]; then
+    g1_usd_env_exports=""
+fi
+rlopt_backend=""
+rlopt_pipeline=0
+if [ "${CLUSTER_PYTHON_EXECUTABLE}" = "scripts/rlopt/train_hl_skill_pipeline.py" ]; then
+    rlopt_pipeline=1
+fi
+if [ "${CLUSTER_PYTHON_EXECUTABLE}" = "scripts/rlopt/train.py" ] || [ "$rlopt_pipeline" = "1" ]; then
+    rlopt_backend="$(resolve_rlopt_backend "${@:3}")"
+fi
+
+if [ "$rlopt_backend" = "newton" ]; then
+    printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}" --assert-kitless
+    workload_cmd='runtime_python=""; for candidate in "${ISAACLAB_CU130_RUNTIME_ROOT}/bin/python" /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime/bin/python; do if [ -x "$candidate" ]; then runtime_python="$candidate"; break; fi; done; if [ -z "$runtime_python" ]; then echo "[ERROR] CU130 runtime Python not found." >&2; exit 1; fi; exec "$runtime_python" '"${workload_args}"
+elif [ "$rlopt_backend" = "physx" ]; then
+    if [ "$rlopt_pipeline" = "1" ]; then
+        printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
+    else
+        printf -v workload_args '%q ' scripts/rlopt/train_physx.py "${@:3}"
+    fi
+    workload_cmd='runtime_site=""; for candidate in "${ISAACLAB_CU130_RUNTIME_ROOT}"/lib/python*/site-packages /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime/lib/python*/site-packages; do if [ -d "$candidate/torch" ]; then runtime_site="$candidate"; break; fi; done; if [ -z "$runtime_site" ]; then echo "[ERROR] CU130 runtime site-packages not found." >&2; exit 1; fi; export ISAACLAB_CU130_SITE_PACKAGES="$runtime_site"; runtime_nvidia_libs="$(find "$runtime_site/nvidia" -mindepth 2 -maxdepth 3 -type d -name lib -print 2>/dev/null | paste -sd: -)"; if [ -n "$runtime_nvidia_libs" ]; then export LD_LIBRARY_PATH="$runtime_nvidia_libs:${LD_LIBRARY_PATH:-}"; fi; runtime_nccl="$runtime_site/nvidia/nccl/lib/libnccl.so.2"; if [ ! -f "$runtime_nccl" ]; then echo "[ERROR] CU130 runtime NCCL not found: $runtime_nccl" >&2; exit 1; fi; export LD_PRELOAD="$runtime_nccl${LD_PRELOAD:+:$LD_PRELOAD}"; success_marker="${TMPDIR}/rlopt-physx-success"; rm -f "$success_marker"; export ISAACLAB_WORKLOAD_SUCCESS_MARKER="$success_marker"; /isaac-sim/python.sh '"${workload_args}"'; python_status=$?; if [ "$python_status" -ne 0 ]; then exit "$python_status"; fi; if [ ! -f "$success_marker" ]; then echo "[ERROR] PhysX process returned without its workload success marker." >&2; exit 1; fi'
+else
+    printf -v workload_cmd '%q ' /isaac-sim/python.sh "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
+fi
+container_entry_cmd="export ACCEPT_EULA=${ACCEPT_EULA:-Y} && export PRIVACY_CONSENT=${PRIVACY_CONSENT:-Y} && export OMNI_KIT_ACCEPT_EULA=YES && export HOME=${container_home} && export TMPDIR=/tmp && export XDG_CACHE_HOME=${container_home}/.cache && export XDG_DATA_HOME=${container_home}/.local/share && export ISAACLAB_WORKSPACE_PATH=/workspace/isaaclab/project && export ISAACLAB_PATH=/workspace/isaaclab/project/IsaacLab && export ISAACSIM_PATH=/isaac-sim && export ISAACLAB_DATA_DIR=/data && export CLUSTER_DATA_DIR=${CLUSTER_DATA_DIR} && export PYTHONPATH=${container_pythonpath} && export ISAACLAB_SPLIT_RUNTIME=1 && export ISAACLAB_REQUIRE_CU130_RUNTIME=1 && export ISAACLAB_REQUIRE_GPU_IDENTIFICATION=1 && export ISAACLAB_CU130_RUNTIME_ROOT=${runtime_root} && ${g1_usd_env_exports}export TRITON_CACHE_DIR=${container_triton_cache_dir} && export TORCHINDUCTOR_CACHE_DIR=${container_torchinductor_cache_dir} && export RL_WARNINGS=${RL_WARNINGS:-False} && if [ \"${allow_torch_compile_debug}\" != \"1\" ]; then unset TORCH_LOGS; export TORCHDYNAMO_VERBOSE=0; export TORCH_COMPILE_DEBUG=0; fi && cd /workspace/isaaclab/project"
 if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
     printf -v quoted_slurm_array_task_id '%q' "${SLURM_ARRAY_TASK_ID}"
     container_entry_cmd="export SLURM_ARRAY_TASK_ID=${quoted_slurm_array_task_id} && ${container_entry_cmd}"
@@ -538,25 +671,34 @@ if [ -n "${preflight_cmd}" ]; then
     container_entry_cmd="${container_entry_cmd} && ${preflight_cmd}"
 fi
 container_entry_cmd="${container_entry_cmd} && ${workload_cmd}"
+if command -v apptainer >/dev/null 2>&1; then
+    container_runtime=apptainer
+elif command -v singularity >/dev/null 2>&1; then
+    container_runtime=singularity
+else
+    echo "[ERROR] Neither apptainer nor singularity is available on the compute node." >&2
+    exit 1
+fi
+echo "[INFO] Container runtime: $container_runtime"
 set +e
-singularity exec \
-    -B $container_tmpdir:/tmp:rw \
-    -B $TMPDIR/docker-isaac-sim/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
-    -B $TMPDIR/docker-isaac-sim/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
-    -B $TMPDIR/docker-isaac-sim/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
-    -B $TMPDIR/docker-isaac-sim/cache/glcache:${DOCKER_USER_HOME}/.cache/nvidia/GLCache:rw \
-    -B $TMPDIR/docker-isaac-sim/cache/computecache:${DOCKER_USER_HOME}/.nv/ComputeCache:rw \
+"$container_runtime" exec \
+    -B "$container_tmpdir:/tmp:rw" \
+    "${container_display_args[@]}" \
+    -B "$tmp_isaac_sim_cache_dir/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw" \
+    -B "$tmp_isaac_sim_cache_dir/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw" \
+    -B "$tmp_isaac_sim_cache_dir/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw" \
+    -B "$tmp_isaac_sim_cache_dir/cache/glcache:${DOCKER_USER_HOME}/.cache/nvidia/GLCache:rw" \
+    -B "$tmp_isaac_sim_cache_dir/cache/computecache:${DOCKER_USER_HOME}/.nv/ComputeCache:rw" \
     -B ${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/triton:${container_triton_cache_dir}:rw \
     -B ${CLUSTER_ISAAC_SIM_CACHE_DIR}/cache/torchinductor:${container_torchinductor_cache_dir}:rw \
-    -B $TMPDIR/docker-isaac-sim/logs:${DOCKER_USER_HOME}/.nvidia-omniverse/logs:rw \
-    -B $TMPDIR/docker-isaac-sim/data:${DOCKER_USER_HOME}/.local/share/ov/data:rw \
-    -B $TMPDIR/docker-isaac-sim/documents:${DOCKER_USER_HOME}/Documents:rw \
-    -B $TMPDIR/docker-isaac-sim/home:${container_home}:rw \
-    -B $TMPDIR/$dir_name:/workspace/isaaclab/project:rw \
-    -B $CLUSTER_ISAACLAB_DIR/logs:/workspace/isaaclab/project/logs:rw \
-    -B ${CLUSTER_DATA_DIR}:/data:rw \
-    -B ${CLUSTER_DATA_DIR}:${CLUSTER_DATA_DIR}:rw \
-    --overlay $CLUSTER_ISAACLAB_DIR/$dir_name.img \
+    -B "$tmp_isaac_sim_cache_dir/logs:${DOCKER_USER_HOME}/.nvidia-omniverse/logs:rw" \
+    -B "$tmp_isaac_sim_cache_dir/data:${DOCKER_USER_HOME}/.local/share/ov/data:rw" \
+    -B "$tmp_isaac_sim_cache_dir/documents:${DOCKER_USER_HOME}/Documents:rw" \
+    -B "$tmp_isaac_sim_cache_dir/home:${container_home}:rw" \
+    -B "$TMPDIR/$dir_name:/workspace/isaaclab/project:rw" \
+    -B "${CLUSTER_DATA_DIR}:/data:rw" \
+    -B "${CLUSTER_DATA_DIR}:${CLUSTER_DATA_DIR}:rw" \
+    "${container_overlay_args[@]}" \
     --nv --containall "$container_image" \
     bash -c "$container_entry_cmd"
 workload_status=$?
@@ -568,7 +710,7 @@ sync_project_logs_back || true
 if [ "${CLUSTER_SKIP_CACHE_COPY:-0}" = "1" ]; then
     echo "[INFO] Skipping Isaac Sim cache rsync back via CLUSTER_SKIP_CACHE_COPY=1"
 else
-    rsync -azPv $TMPDIR/docker-isaac-sim $CLUSTER_ISAAC_SIM_CACHE_DIR/..
+    rsync -azPv "$tmp_isaac_sim_cache_dir/" "$CLUSTER_ISAAC_SIM_CACHE_DIR/"
 fi
 
 # if defined, remove the temporary isaaclab directory pushed when the job was submitted
@@ -577,8 +719,8 @@ if $REMOVE_CODE_COPY_AFTER_JOB; then
 fi
 
 # remove the temporary image file
-if $REMOVE_OVERLAY_AFTER_JOB; then
-    rm -f $CLUSTER_ISAACLAB_DIR/$dir_name.img
+if $REMOVE_OVERLAY_AFTER_JOB && [ "${CLUSTER_USE_OVERLAY:-0}" = "1" ]; then
+    rm -f "$overlay_path"
 fi
 
 echo "(run_singularity.py): Return"

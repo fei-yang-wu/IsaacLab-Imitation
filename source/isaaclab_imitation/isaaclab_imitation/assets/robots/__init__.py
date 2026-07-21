@@ -4,6 +4,8 @@ from .unitree import (  # noqa: F401
     UNITREE_G1_29DOF_CFG,
     UNITREE_G1_29DOF_MIMIC_ACTION_SCALE,
     UNITREE_G1_29DOF_MIMIC_CFG,
+    UNITREE_G1_29DOF_SONIC_ACTION_SCALE,
+    UNITREE_G1_29DOF_SONIC_CFG,
     UnitreeArticulationCfg,
 )
 from .unitree_joint_order import (  # noqa: F401

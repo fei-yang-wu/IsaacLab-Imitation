@@ -35,10 +35,13 @@ from .observations import (
     reconstructed_reference_action,
 )
 from .rewards import (
+    body_angular_velocity_excess_l2,
+    mpjpe_relative_body_pos_m,
     reference_global_anchor_orientation_error_exp,
     reference_global_anchor_position_error_exp,
     reference_global_body_angular_velocity_error_exp,
     reference_global_body_linear_velocity_error_exp,
+    reference_local_reward_point_position_error_exp,
     reference_relative_body_orientation_error_exp,
     reference_relative_body_position_error_exp,
     track_joint_pos,
@@ -52,9 +55,16 @@ from .rewards import (
     track_root_pos,
     track_root_quat,
 )
+from .curriculums import (
+    anneal_termination_threshold_by_frames,
+)
 from .terminations import (
     bad_anchor_ori,
+    bad_anchor_ori_full,
     bad_anchor_pos_z_only,
+    bad_anchor_pos_z_adaptive,
+    bad_reference_body_pos_relative,
+    bad_reference_body_pos_z_adaptive,
     bad_reference_body_pos_z_only,
     reference_joint_pos_deviation_too_much,
     reference_root_position_xy_deviation_too_much,
@@ -80,6 +90,9 @@ __all__ = [
     "reference_relative_body_orientation_error_exp",
     "reference_global_body_linear_velocity_error_exp",
     "reference_global_body_angular_velocity_error_exp",
+    "reference_local_reward_point_position_error_exp",
+    "mpjpe_relative_body_pos_m",
+    "body_angular_velocity_excess_l2",
     "randomize_joint_default_pos",
     "reset_joints_to_reference",
     "reset_root_and_joints_to_reference_with_randomization",
@@ -109,7 +122,12 @@ __all__ = [
     "expert_root_ang_vel",
     "expert_root_quat",
     "bad_anchor_pos_z_only",
+    "anneal_termination_threshold_by_frames",
+    "bad_anchor_pos_z_adaptive",
     "bad_anchor_ori",
+    "bad_anchor_ori_full",
+    "bad_reference_body_pos_z_adaptive",
+    "bad_reference_body_pos_relative",
     "bad_reference_body_pos_z_only",
     "reference_joint_pos_deviation_too_much",
     "reference_root_position_xy_deviation_too_much",

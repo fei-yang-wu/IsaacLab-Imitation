@@ -3,6 +3,7 @@ set -euo pipefail
 
 run_singularity_path="$1/docker/cluster/run_singularity.sh"
 workspace_root="$1"
+workspace_archive="$workspace_root/workspace.tar.gz"
 container_profile="$2"
 shift 2
 
@@ -46,6 +47,31 @@ printf -v quoted_workspace_root '%q' "$workspace_root"
 printf -v quoted_container_profile '%q' "$container_profile"
 printf -v quoted_job_args '%q ' "$@"
 
+if [ -f "$workspace_archive" ]; then
+    printf -v quoted_workspace_archive '%q' "$workspace_archive"
+    read -r -d '' job_run_block <<EOT || true
+bootstrap_root="\${CLUSTER_JOB_TMPDIR_ROOT:-\${TMPDIR:-/tmp}}/isaaclab-bootstrap-\${SLURM_JOB_ID:-\$\$}"
+rm -rf "\$bootstrap_root"
+mkdir -p "\$bootstrap_root"
+echo "[INFO] Extracting submitted workspace archive into compute-local storage."
+tar -xzf $quoted_workspace_archive -C "\$bootstrap_root"
+extracted_workspace="\$bootstrap_root/isaaclab-submission-\${SLURM_JOB_ID:-\$\$}"
+mv "\$bootstrap_root/workspace" "\$extracted_workspace"
+set +e
+${run_prefix} bash "\$extracted_workspace/docker/cluster/run_singularity.sh" "\$extracted_workspace" $quoted_container_profile $quoted_job_args
+job_status=\$?
+set -e
+rm -rf "\$bootstrap_root"
+EOT
+else
+    read -r -d '' job_run_block <<EOT || true
+set +e
+${run_prefix} bash ${quoted_run_singularity_path} ${quoted_workspace_root} ${quoted_container_profile} ${quoted_job_args}
+job_status=\$?
+set -e
+EOT
+fi
+
 cat <<EOT > job.sh
 #!/bin/bash
 
@@ -72,10 +98,7 @@ echo "[INFO] Partition/QOS/GRES: ${partition}/${qos}/${gpu_gres}"
 echo "[INFO] GPU status before job"
 nvidia-smi || true
 
-set +e
-${run_prefix} bash ${quoted_run_singularity_path} ${quoted_workspace_root} ${quoted_container_profile} ${quoted_job_args}
-job_status=\$?
-set -e
+${job_run_block}
 
 echo "[INFO] GPU status after job"
 nvidia-smi || true
@@ -87,8 +110,11 @@ if [ "$print_job_script" = "1" ]; then
     sed 's/^/[SBATCH] /' job.sh
 fi
 
-sbatch < job.sh
-
-if [ "$keep_job_script" != "1" ]; then
-    rm job.sh
+if [ "${CLUSTER_SLURM_DRY_RUN:-0}" = "1" ]; then
+    echo "[INFO] CLUSTER_SLURM_DRY_RUN=1: not submitting. Job script above (job.sh) left in place."
+else
+    sbatch < job.sh
+    if [ "$keep_job_script" != "1" ]; then
+        rm job.sh
+    fi
 fi
