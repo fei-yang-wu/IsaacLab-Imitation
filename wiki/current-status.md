@@ -204,11 +204,47 @@ computes the next segment's `--max_iterations` from the remaining budget;
 `train_hl_skill_pipeline.py` gained `--train-checkpoint` to pass a low-level
 checkpoint through to `train.py --checkpoint` for the resume case.
 Re-invoking the script drives the chain forward; it refuses to resubmit once
-5B frames are reached. Segment 1 submitted as ICE job `5524188` (pending on
-GPU availability as of this writing). Uses the same settings as the 3B
-BONES-SEED job above (91/100-motion SONIC-filtered manifest, L1 scale
-8192x12, njmax=288/nconmax=32 — already validated at zero overflow, no
-change needed there).
+5B frames are reached.
+
+**v5 arm added, then the whole SONIC-default premise questioned (2026-07-21).**
+v5 (`5524338`) re-tests the code's own hardcoded default shape (4096 envs x
+24 rollout, mini_batch_size 24576 to match `rlopt_ipmd_cfg.py`'s literal
+`4096 * 24 // 4`) under the SONIC release-optimizer contract at the
+validated-safe njmax=320/nconmax=40, per the hypothesis that this exact
+shape explains why earlier runs performed well. v3 and v4 were also
+resubmitted at njmax=320/40 but both hit genuine CUDA OOM again (`5524184`,
+`5524185`) — 12288 envs x 24 rollout doubles the collector buffer versus
+v2's 12288x12 (which fits), so both are real VRAM-ceiling results, not a
+solver misconfiguration; v1 (`5524182`) and v2 (`5524183`) are running
+cleanly.
+
+Pulling the actual W&B config for the run the user was comparing against
+(`bn931wny`, project `g1-lafan1-strict`, group `ice3-l1-novideo`) revealed
+the "L1" baseline never used the SONIC surface or release-optimizer contract
+at all: `env_name=Isaac-Imitation-G1-Latent-Strict-v0`, `num_envs=8192`,
+`collector.frames_per_batch=98304` (12 rollout steps),
+`loss.mini_batch_size=12288`, `policy.num_cells=[512,256,128]` with
+`activation_fn=elu` and `normalize_input=False` — the legacy/local optimizer
+contract, not the release SiLU/[2048...512] one. It reached
+`episode/length=244.18` and `episode/return=13.1`, well above anything the
+new SONIC release-optimizer contract has produced so far. **This means the
+2026-07-20 "make SONIC the default" decision is empirically unconfirmed at
+best** — the actual well-performing recipe was Latent-Strict-v0 + the local
+optimizer contract, not the full SONIC surface. The code-level default
+(`Isaac-Imitation-G1-Latent-v0` = SONIC, `sonic_release_optimizer=True`) has
+NOT been reverted, since the user only asked to fix the BONES-SEED
+submission specifically; revisit this before relying on the SONIC default
+for any further paper-facing work.
+
+Both running BONES-SEED jobs (`5523773` 3B and `5524188` 5B segment 1) were
+cancelled and resubmitted with `TASK=Isaac-Imitation-G1-Latent-Strict-v0`
+(matching the actual L1 config above) instead of the SONIC default; the
+policy contract follows automatically since `Latent-Strict-v0`'s task kwargs
+already route to the legacy-style `G1ImitationLatentRLOptIPMDConfig`, not
+the Sonic one. `experiments/submit_bones_seed_100_sonic_latent_ice.sh` (the
+3B one-shot) is now marked superseded/reference-only.
+`experiments/submit_bones_seed_sonic_5b_resumable_ice.sh` is the live
+launcher; its first segment under the corrected task is ICE job `5524342`.
 
 ### Non-paper BONES-SEED SONIC latent training
 
