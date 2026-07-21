@@ -31,8 +31,9 @@ _VANILLA_TASK_KWARGS = {
 # DEPRECATED (2026-07-19): the pre-migration beyondmimic-style latent surface
 # (torso anchor, loose terminations, no proprio history, [0, 200] reset
 # starts). Kept only for pre-migration checkpoints and frozen paper-protocol
-# reproductions under `Isaac-Imitation-G1-Latent-Legacy-v0`. New work uses the
-# SONIC surface, which is the `Isaac-Imitation-G1-Latent-v0` default below.
+# reproductions under `Isaac-Imitation-G1-Latent-Legacy-v0`. The pelvis-
+# anchored strict-terminations surface built on this base
+# (`_LATENT_STRICT_TASK_KWARGS` below) is the current default instead.
 _LATENT_LEGACY_TASK_KWARGS = {
     "env_cfg_entry_point": f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentEnvCfg",
     "rlopt_cfg_entry_point": f"{agents.__name__}.rlopt_ase_cfg:G1ImitationRLOptASEConfig",
@@ -42,16 +43,21 @@ _LATENT_LEGACY_TASK_KWARGS = {
     "rlopt_ase_cfg_entry_point": f"{agents.__name__}.rlopt_ase_cfg:G1ImitationRLOptASEConfig",
 }
 
-# Default latent task surface: the SONIC release environment (pelvis anchor,
-# strict adaptive terminations, adaptive failure sampling, SONIC actuators,
-# rewards, and 10-step histories) with the SONIC release optimizer contract
-# (actor lr 2e-5, joint grad clip 0.1, init std 0.05, 6-layer SiLU MLPs with
-# running input normalization). Confirmed default (2026-07-20): single-GPU
-# ICE H100 runs now target the release's own 100k-iteration convergence
-# budget (~10B frames at 8192 envs x 12 steps), so the release contract is
-# in scale rather than the flat regime seen at 50M-100M local scale. See
+# DEPRECATED as the task default (2026-07-21): the SONIC release environment
+# (pelvis anchor, strict adaptive terminations, adaptive failure sampling,
+# SONIC actuators, rewards, and 10-step histories) with the SONIC release
+# optimizer contract (actor lr 2e-5, joint grad clip 0.1, init std 0.05,
+# 6-layer SiLU MLPs with running input normalization). Briefly made the
+# default on 2026-07-20 on the theory that single-GPU ICE H100's ~10B-frame
+# budget (8192 envs x 12 steps x 100k iterations) matches the release's own
+# convergence criterion; reverted the same week once W&B run bn931wny
+# (Latent-Strict-v0 + the legacy/local optimizer contract, same 8192x12x12288
+# scale) was found to reach episode/length=244 / episode/return=13.1 --
+# far above anything the SONIC release-optimizer contract produced at matched
+# scale in the concurrent VRAM ablation. Reachable only via the explicit
+# `Isaac-Imitation-G1-Latent-Sonic-v0` id now; see
 # wiki/isaaclab3-cu130-runtime-migration.md, "Training-gate resolution
-# (2026-07-19)" and the 2026-07-20 follow-up.
+# (2026-07-19)" and the 2026-07-21 reversal.
 _LATENT_SONIC_TASK_KWARGS = {
     "env_cfg_entry_point": (
         f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentSonicEnvCfg"
@@ -69,6 +75,21 @@ _LATENT_SONIC_TASK_KWARGS = {
     "rlopt_ipmd_bilinear_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_bilinear_cfg:"
         "G1ImitationLatentRLOptIPMDBilinearConfig"
+    ),
+}
+
+# Default latent task surface (2026-07-21): pelvis-anchored legacy scaffolding
+# with annealed strict terminations, using the legacy/local optimizer contract
+# (`G1ImitationLatentRLOptIPMDConfig`: 512/256/128 ELU MLPs, actor lr 1e-3).
+# This is the config behind W&B run bn931wny (episode/length=244,
+# episode/return=13.1 at 8192 envs x 12 steps x minibatch 12288) -- the best
+# validated result to date, ahead of the SONIC release-optimizer contract at
+# matched scale. See `_LATENT_SONIC_TASK_KWARGS` above for the deprecation
+# history.
+_LATENT_STRICT_TASK_KWARGS = {
+    **_LATENT_LEGACY_TASK_KWARGS,
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentStrictEnvCfg"
     ),
 }
 
@@ -139,21 +160,21 @@ gym.register(
     kwargs=_VANILLA_TASK_KWARGS,
 )
 
-# Default latent task: the SONIC surface.
+# Default latent task (2026-07-21): the strict/legacy-optimizer surface; see
+# _LATENT_STRICT_TASK_KWARGS above.
 gym.register(
     id="Isaac-Imitation-G1-Latent-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
-    kwargs=_LATENT_SONIC_TASK_KWARGS,
+    kwargs=_LATENT_STRICT_TASK_KWARGS,
 )
 
-# Back-compat alias for commands written while SONIC was opt-in; same kwargs
-# as Isaac-Imitation-G1-Latent-v0.
+# Back-compat alias; same kwargs as Isaac-Imitation-G1-Latent-v0.
 gym.register(
-    id="Isaac-Imitation-G1-Latent-Sonic-v0",
+    id="Isaac-Imitation-G1-Latent-Strict-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
-    kwargs=_LATENT_SONIC_TASK_KWARGS,
+    kwargs=_LATENT_STRICT_TASK_KWARGS,
 )
 
 # DEPRECATED: pre-migration latent surface; see _LATENT_LEGACY_TASK_KWARGS.
@@ -164,25 +185,13 @@ gym.register(
     kwargs=_LATENT_LEGACY_TASK_KWARGS,
 )
 
-# DEPRECATED (2026-07-20): pelvis-anchored legacy surface with annealed
-# strict terminations. Was briefly floated as a candidate default while the
-# full SONIC surface looked flat at local (50M-100M frame) scale; superseded
-# once single-GPU ICE H100 runs adopted the release's own ~10B-frame /
-# 100k-iteration budget, where the SONIC surface (`Isaac-Imitation-G1-Latent-v0`)
-# is the confirmed default instead. Kept only for reproducing runs already
-# started on this surface.
-_LATENT_STRICT_TASK_KWARGS = {
-    **_LATENT_LEGACY_TASK_KWARGS,
-    "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentStrictEnvCfg"
-    ),
-}
-
+# Opt-in only (2026-07-21, no longer aliased as Isaac-Imitation-G1-Latent-v0):
+# the SONIC release surface; see _LATENT_SONIC_TASK_KWARGS above.
 gym.register(
-    id="Isaac-Imitation-G1-Latent-Strict-v0",
+    id="Isaac-Imitation-G1-Latent-Sonic-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
-    kwargs=_LATENT_STRICT_TASK_KWARGS,
+    kwargs=_LATENT_SONIC_TASK_KWARGS,
 )
 
 gym.register(

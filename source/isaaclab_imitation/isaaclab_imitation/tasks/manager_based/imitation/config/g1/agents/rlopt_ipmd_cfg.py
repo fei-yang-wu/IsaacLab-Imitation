@@ -377,21 +377,24 @@ class G1ImitationLatentSonicRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
     terminations, adaptive failure sampling, domain randomization, actuators)
     always follows the public SONIC release. The optimizer contract is split:
 
-    - Default (``sonic_release_optimizer=True``): the exact public-release
-      contract (actor lr 2e-5 adaptive in [1e-5, 2e-4], joint grad clip 0.1,
-      init std 0.05 clamped to [0.001, 0.5], global per-rollout advantage
-      normalization, 6-layer SiLU MLPs with running input normalization).
-      Confirmed default (2026-07-20): single-GPU ICE H100 runs now target the
-      release's own ~10B-frame / 100k-iteration convergence budget, so this
-      contract is in scale rather than the flat regime seen at 50M-100M local
-      scale.
-    - ``sonic_release_optimizer=False``: the locally-validated RLOpt contract
-      used for cheap local qualification/smoke runs, where the release
-      optimizer stayed pinned at ~6-step episodes (see the CU130 migration
-      wiki page, "Training-gate resolution (2026-07-19)").
+    - Default (``sonic_release_optimizer=False``): the locally-validated
+      RLOpt contract (512/256/128 ELU MLPs, actor lr 1e-3). Reverted back to
+      the default on 2026-07-21: briefly flipped to the release contract on
+      2026-07-20 on the theory that single-GPU ICE H100's ~10B-frame /
+      100k-iteration budget would be in-scale for it, but W&B run bn931wny
+      (Latent-Strict-v0 + this local contract, same 8192x12x12288 scale)
+      reached episode/length=244 / episode/return=13.1 -- far above anything
+      the release contract produced at matched scale in the concurrent VRAM
+      ablation. See the CU130 migration wiki page, "Training-gate resolution
+      (2026-07-19)" and the 2026-07-21 reversal.
+    - ``sonic_release_optimizer=True``: the exact public-release contract
+      (actor lr 2e-5 adaptive in [1e-5, 2e-4], joint grad clip 0.1, init std
+      0.05 clamped to [0.001, 0.5], global per-rollout advantage
+      normalization, 6-layer SiLU MLPs with running input normalization),
+      unconfirmed at any tested scale so far.
     """
 
-    sonic_release_optimizer: bool = True
+    sonic_release_optimizer: bool = False
 
     def sync_input_keys(self) -> None:
         super().sync_input_keys()
@@ -458,11 +461,13 @@ class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
 ):
     """Exact public-SONIC-release optimizer contract for cluster-scale runs.
 
-    Select with ``--agent rlopt_ipmd_sonic_release_cfg_entry_point``.
-    Identical to the default ``G1ImitationLatentSonicRLOptIPMDConfig`` as of
-    2026-07-20 (both pin ``sonic_release_optimizer=True``); kept as an
-    explicit, override-proof alias for cluster submission scripts that name
-    the release contract directly.
+    Select with ``--agent rlopt_ipmd_sonic_release_cfg_entry_point``. Not the
+    default as of 2026-07-21 -- the base
+    ``G1ImitationLatentSonicRLOptIPMDConfig`` reverted to
+    ``sonic_release_optimizer=False`` after underperforming the
+    Latent-Strict-v0 + local-optimizer combination at matched scale (see that
+    class's docstring). Kept as an explicit, override-proof alias for cluster
+    submission scripts that need the release contract specifically.
     """
 
     sonic_release_optimizer: bool = True

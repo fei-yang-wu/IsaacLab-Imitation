@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# H100 VRAM/throughput ablation for the confirmed-default SONIC latent
-# surface (Isaac-Imitation-G1-Latent-v0, release policy contract). Sweeps
+# H100 VRAM/throughput ablation for the SONIC surface, explicitly targeted
+# at Isaac-Imitation-G1-Latent-Sonic-v0 (NOT the Isaac-Imitation-G1-Latent-v0
+# default, which reverted to the Strict/legacy-optimizer surface on
+# 2026-07-21 after the SONIC release-optimizer contract underperformed it at
+# matched scale -- see config/g1/__init__.py and rlopt_ipmd_cfg.py). Sweeps
 # TRAIN_NUM_ENVS/ROLLOUT_STEPS to find the setting that best uses one H100's
 # 80 GB VRAM without contact-solver overflow, each capped at 2B frames. Not a
 # paper run: corrected-LAFAN1 fresh h25/z256 skill encoder + SONIC oracle
@@ -118,7 +121,7 @@ for arm in "${ARMS[@]}"; do
 
     echo "[INFO] Submitting arm ${arm_name}: envs=${num_envs} rollout=${rollout_steps} minibatch=${minibatch_size} njmax=${njmax} nconmax=${nconmax}"
 
-    TASK=Isaac-Imitation-G1-Latent-v0 \
+    TASK=Isaac-Imitation-G1-Latent-Sonic-v0 \
     SEED="${SEED}" \
     FRAME_CAP="${FRAME_CAP}" \
     TRAIN_NUM_ENVS="${num_envs}" \
