@@ -297,6 +297,20 @@ parser.add_argument(
     default=None,
     help="Override diffusion-policy inference noise std for metric-side scoring.",
 )
+parser.add_argument(
+    "--deterministic_tracking",
+    action="store_true",
+    default=False,
+    help=(
+        "Measure tracking fidelity without perturbation: start exactly on the "
+        "reference and disable interval pushes and domain randomization. Use "
+        "for an absolute MPJPE claim or a comparison against externally "
+        "published numbers, which are measured on unperturbed rollouts. This "
+        "is NOT the paired interface comparison protocol, which keeps "
+        "perturbations on and identical across rows; metric keys are prefixed "
+        "so the two can never be pooled by accident."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -354,7 +368,16 @@ if str(INTERFACE_BASELINE_DIR) not in sys.path:
     sys.path.append(str(INTERFACE_BASELINE_DIR))
 from balanced_motion_rows import BalancedMotionRowSelector  # noqa: E402
 from interface_planner_common import load_planner_checkpoint  # noqa: E402
-from paper_protocol_metadata import interval_event_metadata  # noqa: E402
+from paper_protocol_metadata import (  # noqa: E402
+    disable_domain_randomization,
+    interval_event_metadata,
+)
+
+# Prefix applied to every metric produced by a --deterministic_tracking run, so
+# an unperturbed number can never be pooled with a perturbed one: the paper
+# aggregators look up bare names such as "tracking_mpjpe_mm" and will fail
+# loudly rather than silently mix protocols.
+DETERMINISTIC_METRIC_PREFIX = "deterministic_tracking/"
 from planner_latency import PlannerForwardTimer  # noqa: E402
 from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 from planner_sample_schema import (  # noqa: E402
@@ -1154,6 +1177,9 @@ def main(
     if not args_cli.keep_time_out:
         if terminations is not None and hasattr(terminations, "time_out"):
             terminations.time_out = None
+    deterministic_tracking_record: dict[str, Any] = {"enabled": False}
+    if args_cli.deterministic_tracking:
+        deterministic_tracking_record = disable_domain_randomization(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
     if args_cli.disable_tracking_terminations:
         if terminations is None:
@@ -1530,6 +1556,7 @@ def main(
             "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
             "reward_clipping_enabled": not bool(args_cli.disable_reward_clipping),
             "push_perturbation": interval_event_metadata(env_cfg, "push_robot"),
+            "deterministic_tracking": deterministic_tracking_record,
             "language_conditioning": language_metadata,
             "provenance": {
                 "low_level_checkpoint": str(checkpoint_path),
@@ -1912,6 +1939,14 @@ def main(
             "std": 0.0,
             "count": int(len(rows)),
         }
+    if args_cli.deterministic_tracking:
+        # Rename before anything consumes these. The paper aggregators look up
+        # bare names such as "tracking_mpjpe_mm", so an unperturbed result file
+        # makes them fail loudly instead of silently pooling two protocols.
+        rollout_metrics = {
+            f"{DETERMINISTIC_METRIC_PREFIX}{name}": value
+            for name, value in rollout_metrics.items()
+        }
     planner_metadata = _skill_commander_planner_metadata(
         planner_checkpoint,
         generator=trainer.generator,
@@ -1969,6 +2004,7 @@ def main(
             "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
             "reward_clipping_enabled": not bool(args_cli.disable_reward_clipping),
             "push_perturbation": interval_event_metadata(env_cfg, "push_robot"),
+            "deterministic_tracking": deterministic_tracking_record,
             "language_conditioning": language_metadata,
         },
         "aggregate": aggregate,
