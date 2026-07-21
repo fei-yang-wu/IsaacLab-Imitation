@@ -247,6 +247,16 @@ a hardcoded surface name. The one exception fixed explicitly:
 `Isaac-Imitation-G1-Latent-Sonic-v0` directly, since it specifically studies
 the SONIC surface regardless of which surface is "default".
 
+**Default-reversal sanity check submitted (2026-07-21).**
+`experiments/submit_lafan1_strict_default_sanity_ice.sh` runs two arms on
+`Isaac-Imitation-G1-Latent-v0` (corrected LAFAN1, ~1B frames,
+njmax=320/nconmax=40): `scaled_e8192_r12` (ICE job `5524387`) exactly
+reproduces bn931wny's config (8192 envs x 12 steps x minibatch 12288) as the
+actual correctness check; `hardcoded_default_e4096_r24` (ICE job `5524390`)
+tests the code's literal default shape (4096 envs x 24 steps, minibatch
+24576) as a second, unvalidated data point on whether scale matters. Neither
+has reported results yet.
+
 Both running BONES-SEED jobs (`5523773` 3B and `5524188` 5B segment 1) were
 cancelled and resubmitted with `TASK=Isaac-Imitation-G1-Latent-Strict-v0`
 (matching the actual L1 config above) instead of the SONIC default; the
