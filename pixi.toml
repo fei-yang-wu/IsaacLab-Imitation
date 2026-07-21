@@ -68,7 +68,7 @@ tinyobjloader = "==2.0.0rc13"
 isaaclab_imitation = { path = "./source/isaaclab_imitation", editable = true }
 
 [feature.isaaclab.tasks]
-test-isaaclab = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES pytest source/isaaclab_imitation/test_causal_planner_observation.py source/isaaclab_imitation/test_policy_supervision_contract.py"
+test-isaaclab = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES pytest source/isaaclab_imitation/test_causal_planner_observation.py source/isaaclab_imitation/test_policy_supervision_contract.py source/isaaclab_imitation/test_g1_backend_joint_contract.py source/isaaclab_imitation/test_g1_metrics_contract.py"
 zero-agent = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES python scripts/zero_agent.py --task Isaac-Imitation-G1-LafanTrack-v0"
 smoke-ipmd = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --num_envs 16 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"
 smoke-future-cvae = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-Latent-FutureCVAE-v0 --algo IPMD --num_envs 4 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"

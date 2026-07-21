@@ -691,8 +691,13 @@ class G1RewardsCfg:
         },
     )
 
-    # -- metrics (weight=0.0: logged to Episode_Reward/mpjpe_m each episode,
-    # averaged across envs, but does not affect the return)
+    # -- metrics
+    # NOTE: this term is inert. RewardManager.compute() skips zero-weight terms
+    # without calling them, so it never runs and Episode_Reward/mpjpe_m is a
+    # constant zero. The live metric is logged by the env as Metrics/mpjpe_m
+    # and Metrics/mpjpe_m_per_episode, driven by cfg.mpjpe_metric_body_names.
+    # Kept only so the term name stays reserved and the reward table matches
+    # historical runs; give it a non-zero weight only to make it a real reward.
     mpjpe_m = RewTerm(
         func=mdp.mpjpe_relative_body_pos_m,
         weight=0.0,
@@ -1047,6 +1052,9 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # Body order of the recorded NPZ body arrays (PhysX enumeration). Used by
     # the env instead of the live robot's body order, which is backend-specific.
     reference_body_names: list[str] = G1_29DOF_DATASET_BODY_NAMES.copy()
+    # Same body set the closed-loop evaluators use, so the training curve and
+    # the reported evaluation MPJPE are the same quantity.
+    mpjpe_metric_body_names: list[str] = G1_TRACKED_BODY_NAMES.copy()
     command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
     command_observation_source: str = "reference"
     # The chunk adapter redirects only the three policy command tensors while

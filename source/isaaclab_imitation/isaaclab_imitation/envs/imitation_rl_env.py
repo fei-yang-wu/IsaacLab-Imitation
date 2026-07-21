@@ -526,6 +526,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._initialize_mdp_fast_paths()
         self._setup_reference_velocity_visualizer()
         self._initialize_causal_planner_history()
+        self._initialize_mpjpe_metric()
 
     def _align_reference_target_joints_to_articulation(self) -> None:
         """Retarget the trajectory manager to the live articulation joint order.
@@ -1150,6 +1151,95 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             ),
             f"{prefix}_reference_nan_frac": reference_nan_frac,
         }
+
+    def _initialize_mpjpe_metric(self) -> None:
+        """Resolve the bodies used for the root-relative MPJPE training metric.
+
+        This exists because a metric cannot be expressed as a ``RewTerm`` with
+        ``weight=0.0``: :meth:`RewardManager.compute` skips zero-weight terms
+        without calling them, so such a term logs a constant zero.
+        """
+        body_names = list(getattr(self.cfg, "mpjpe_metric_body_names", []) or [])
+        self._mpjpe_metric_body_names: list[str] = []
+        self._mpjpe_metric_body_ids: torch.Tensor | None = None
+        self._mpjpe_metric_sum: torch.Tensor | None = None
+        self._mpjpe_metric_count: torch.Tensor | None = None
+        if not body_names:
+            return
+
+        missing = [
+            name for name in body_names if name not in set(self.reference_body_names)
+        ]
+        if missing:
+            raise ValueError(
+                "mpjpe_metric_body_names contains bodies absent from the "
+                f"reference: {missing}. The metric compares robot bodies against "
+                "reference bodies of the same name, so every entry must exist in "
+                "both."
+            )
+        body_ids, resolved = self.robot.find_bodies(body_names, preserve_order=True)
+        if list(resolved) != body_names:
+            raise RuntimeError(
+                "Could not resolve the MPJPE metric bodies in order: "
+                f"expected={body_names}, got={list(resolved)}."
+            )
+        self._mpjpe_metric_body_names = body_names
+        self._mpjpe_metric_body_ids = torch.as_tensor(
+            body_ids, dtype=torch.long, device=self.device
+        )
+        self._mpjpe_metric_sum = torch.zeros(self.num_envs, device=self.device)
+        self._mpjpe_metric_count = torch.zeros(self.num_envs, device=self.device)
+
+    def _compute_mpjpe_metric(self) -> torch.Tensor | None:
+        """Per-environment root-relative MPJPE in metres.
+
+        Mirrors ``mdp.mpjpe_relative_body_pos_m`` and the closed-loop
+        evaluators: both sides are expressed relative to their own root, so the
+        value measures pose error rather than global drift.
+        """
+        if self._mpjpe_metric_body_ids is None:
+            return None
+        robot_pos_w = self._get_robot_body_pose_w_fast(self._mpjpe_metric_body_ids)[0]
+        reference_pos_w = self._get_reference_body_pose_w_fast(
+            self._mpjpe_metric_body_names
+        )[0]
+        robot_root_w = self.robot.data.root_state_w.torch[:, :3]
+        reference_root_w = self._get_reference_root_state_w_fast()[0]
+        robot_relative = robot_pos_w - robot_root_w[:, None, :]
+        reference_relative = reference_pos_w - reference_root_w[:, None, :]
+        return torch.linalg.vector_norm(
+            robot_relative - reference_relative, dim=-1
+        ).mean(dim=-1)
+
+    def _accumulate_mpjpe_metric(self) -> dict[str, float]:
+        """Accumulate the episode sum and return the instantaneous log entry."""
+        mpjpe = self._compute_mpjpe_metric()
+        if mpjpe is None:
+            return {}
+        self._mpjpe_metric_sum += mpjpe
+        self._mpjpe_metric_count += 1.0
+        return {"Metrics/mpjpe_m": float(mpjpe.mean().item())}
+
+    def _emit_mpjpe_episode_metric(self, env_ids: torch.Tensor) -> None:
+        """Log the completed episodes' mean MPJPE, then clear their accumulators.
+
+        Emitted per episode rather than per step so the value is comparable
+        with the evaluators, which average over a whole rollout. The
+        instantaneous key is logged every step as well, so the curve never has
+        gaps on steps where nothing reset.
+        """
+        if self._mpjpe_metric_sum is None or env_ids.numel() == 0:
+            return
+        counts = self._mpjpe_metric_count.index_select(0, env_ids)
+        valid = counts > 0
+        if bool(valid.any()):
+            sums = self._mpjpe_metric_sum.index_select(0, env_ids)
+            episode_mean = (sums[valid] / counts[valid]).mean()
+            self.extras.setdefault("log", {})["Metrics/mpjpe_m_per_episode"] = float(
+                episode_mean.item()
+            )
+        self._mpjpe_metric_sum.index_fill_(0, env_ids, 0.0)
+        self._mpjpe_metric_count.index_fill_(0, env_ids, 0.0)
 
     def _compute_rollout_reference_state_log(self) -> dict[str, float]:
         """Compare the post-step robot state against the aligned reference next state."""
@@ -2853,6 +2943,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self._last_tracked_root_pos_valid.index_fill_(0, env_ids, True)
 
         self._reset_causal_planner_history(env_ids)
+        # After super(), which recreates ``extras["log"]`` from scratch.
+        self._emit_mpjpe_episode_metric(env_ids)
 
         return result
 
@@ -2925,9 +3017,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
             super().step(action)
             rollout_state_log = self._compute_rollout_reference_state_log()
-            if len(rollout_action_log) > 0 or len(rollout_state_log) > 0:
+            # Accumulated after the physics step and after any reset inside it,
+            # so the sample reflects the state the policy actually produced.
+            mpjpe_log = self._accumulate_mpjpe_metric()
+            if rollout_action_log or rollout_state_log or mpjpe_log:
                 self.extras.setdefault("log", {}).update(rollout_action_log)
                 self.extras.setdefault("log", {}).update(rollout_state_log)
+                self.extras.setdefault("log", {}).update(mpjpe_log)
             self._apply_reference_replay_targets()
             # Match IsaacLab command timing: reward/logging use the pre-step
             # reference frame, while returned observations expose the next frame.
