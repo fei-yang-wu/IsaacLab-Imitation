@@ -86,3 +86,55 @@ def test_mpjpe_metric_bodies_exist_in_the_reference() -> None:
         if name not in set(cfg.reference_body_names)
     ]
     assert not missing, f"MPJPE metric bodies absent from the reference: {missing}"
+
+
+def test_terminal_mpjpe_is_folded_in_before_trajectory_reassignment() -> None:
+    """The terminal (pre-reset) frame must count toward the ending episode.
+
+    ``_reset_idx`` reassigns the tracked trajectory (and later overwrites the
+    physical state) for every env it resets. Once that happens, neither the
+    robot's terminal pose nor the reference it was being scored against are
+    recoverable, so ``_accumulate_terminal_mpjpe_metric`` must run first --
+    otherwise the last transition of every episode is silently dropped from
+    its MPJPE average, and instead misattributed to the *next* episode once
+    ``_accumulate_mpjpe_metric`` runs again in ``step()``.
+    """
+    import inspect
+
+    from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+
+    source = inspect.getsource(ImitationRLEnv._reset_idx)
+    terminal_call = source.find("_accumulate_terminal_mpjpe_metric")
+    assert terminal_call != -1, (
+        "_reset_idx no longer folds the terminal frame into the MPJPE episode "
+        "sum; the last transition of every episode will be dropped."
+    )
+    reassignment_call = source.find("trajectory_manager.reset_envs")
+    assert reassignment_call != -1, "trajectory reassignment call not found"
+    assert terminal_call < reassignment_call, (
+        "_accumulate_terminal_mpjpe_metric must run before the trajectory is "
+        "reassigned, while the robot's terminal state and the reference it "
+        "was scored against still belong to the ending episode."
+    )
+
+
+def test_step_excludes_just_reset_envs_from_the_new_episode_sum() -> None:
+    """The post-step accumulation must not double-count into a fresh episode.
+
+    By the time ``step()`` calls ``_accumulate_mpjpe_metric`` after
+    ``super().step()``, any env that reset this step already had its
+    terminal frame folded into the ending episode by ``_reset_idx``. The
+    state visible at this point for those envs is the fresh post-reset pose,
+    not something the policy produced, so it must be excluded here or it
+    would be misattributed as the new episode's first sample.
+    """
+    import inspect
+
+    from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+
+    source = inspect.getsource(ImitationRLEnv.step)
+    assert "exclude_env_ids" in source and "reset_terminated" in source, (
+        "step() no longer excludes just-reset envs from the post-step MPJPE "
+        "accumulation; their post-reset pose would be misattributed to the "
+        "new episode."
+    )
