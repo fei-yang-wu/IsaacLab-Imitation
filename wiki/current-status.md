@@ -136,9 +136,16 @@ intended budget: 100k PPO iterations at 8192 envs x 12 rollout steps is
   release contract needs release-scale iteration counts to leave the flat
   regime, and 100k iterations now supplies that on one GPU.
 
-Not yet run: no training job has exercised this default+contract
-combination end-to-end. The next ICE submissions (VRAM/throughput ablation
-and the BONES-SEED SONIC-latent job below) are the first validation of it.
+Submitted 2026-07-20: the VRAM/throughput ablation
+(`experiments/submit_sonic_latent_vram_ablation_ice.sh`, corrected LAFAN1,
+2B-frame cap each) as ICE jobs `5523769` (v1, 8192 envs x 12 steps — njmax
+95/nconmax 18), `5523770` (v2, 12288x12 — 143/27), `5523771` (v3, 16384x12 —
+190/36), and `5523772` (v4, 12288x24 — 143/27); and the BONES-SEED
+SONIC-latent job (`experiments/submit_bones_seed_100_sonic_latent_ice.sh`,
+91/100-motion SONIC-exclusion-filtered manifest, L1 scale 8192x12, 3B-frame
+cap, njmax 288/nconmax 32) as ICE job `5523773`. None have reported results
+yet; the njmax/nconmax values for v2-v4 are the unvalidated proportional
+extrapolation noted in the ablation script, not independently qualified.
 
 ### Non-paper BONES-SEED SONIC latent training
 
