@@ -1778,19 +1778,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 
 if __name__ == "__main__":
-    import traceback
-
-    status = 0
     try:
         main()
-    except BaseException:
-        status = 1
-        traceback.print_exc()
-        raise
     finally:
-        try:
-            simulation_app.close()
-        except Exception:
-            status = 1
-            traceback.print_exc()
-    raise SystemExit(status)
+        simulation_app.close()

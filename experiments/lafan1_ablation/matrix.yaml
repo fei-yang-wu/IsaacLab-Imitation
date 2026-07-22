@@ -1,0 +1,75 @@
+# LAFAN1 horizon ablation: one planner per trajectory.
+
+dataset:
+  full_manifest: data/lafan1/manifests/g1_lafan1_manifest.json
+  seed: 0
+  ranks: all
+
+planner_unit: trajectory
+
+interfaces:
+  latent_cont:
+    kind: latent
+    latent_mode: deterministic
+    task: Isaac-Imitation-G1-Latent-v0
+    algo: IPMD
+  latent_fsq:
+    kind: latent_online_fsq
+    quantizer: fsq
+    task: Isaac-Imitation-G1-Latent-VQVAE-v0
+    algo: IPMD
+  ee_chunk:
+    kind: chunk
+    interface: ee_trajectory
+    task: Isaac-Imitation-G1-v0
+    algo: IPMD
+  wb_chunk:
+    kind: chunk
+    interface: full_body_trajectory
+    task: Isaac-Imitation-G1-v0
+    algo: IPMD
+
+tables:
+  horizon_ablation:
+    windows: [10, 5, 1]
+    interfaces: [latent_cont, latent_fsq, ee_chunk, wb_chunk]
+
+budgets:
+  full:
+    total_frames: 2000000000
+    skill_updates: 50000
+    skill_train_split: train
+    skill_eval_split: eval
+    skill_eval_trajectory_fraction: 0.1
+    pretrain_updates: 2000
+    finetune_updates: 2000
+    eval_steps: 500
+    planner_rows_per_trajectory: 1000
+    collect_steps: 1000
+    num_envs: 4096
+  smoke:
+    total_frames: 8192
+    skill_updates: 2
+    skill_train_split: train
+    skill_eval_split: eval
+    skill_eval_trajectory_fraction: 0.1
+    pretrain_updates: 2
+    finetune_updates: 2
+    eval_steps: 16
+    planner_rows_per_trajectory: 2
+    collect_steps: 2
+    num_envs: 16
+    ranks: "0"
+
+eval_settings:
+  - oracle
+  - pretrained
+  - finetuned
+
+metrics_primary:
+  - success_rate
+  - mpjpe_l_mm
+  - e_vel
+  - e_acc
+  - survival_steps_mean
+  - joint_pos_rmse_rad_mean

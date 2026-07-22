@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import random
 import sys
-import traceback
 from typing import Any
 
 from isaaclab.app import AppLauncher
@@ -1386,8 +1385,5 @@ def main(
 if __name__ == "__main__":
     try:
         main()
-    except BaseException:
-        traceback.print_exc()
-        raise
     finally:
         simulation_app.close()
