@@ -94,6 +94,71 @@ ALGORITHM_CLASS_MAP = {
 }
 
 
+def _sync_env_window_params(env_cfg: object) -> None:
+    sync_derived_fields = getattr(env_cfg, "sync_derived_fields", None)
+    if callable(sync_derived_fields):
+        sync_derived_fields()
+        return
+    for method_name in (
+        "_sync_expert_window_observation_params",
+        "_sync_expert_goal_observation_params",
+    ):
+        sync_method = getattr(env_cfg, method_name, None)
+        if callable(sync_method):
+            sync_method()
+
+
+def _assert_command_window_contract(env_cfg: object, agent_cfg: object) -> None:
+    ipmd_cfg = getattr(agent_cfg, "ipmd", None)
+    if bool(getattr(ipmd_cfg, "use_latent_command", False)):
+        return
+    command_space = (
+        str(getattr(agent_cfg, "command_space", "single_frame_full_body"))
+        .strip()
+        .lower()
+        .replace("-", "_")
+    )
+    term_names_by_space = {
+        "full_body_trajectory": (
+            "expert_motion",
+            "expert_anchor_pos_b",
+            "expert_anchor_ori_b",
+        ),
+        "ee_trajectory": ("expert_ee_pos_b", "expert_ee_ori_b"),
+    }
+    term_names = term_names_by_space.get(command_space)
+    if term_names is None:
+        return
+
+    observations = getattr(env_cfg, "observations", None)
+    expert_window = getattr(observations, "expert_window", None)
+    if expert_window is None:
+        raise RuntimeError(
+            f"command_space={command_space!r} requires observations.expert_window."
+        )
+    expected_past = int(getattr(env_cfg, "latent_patch_past_steps", 0))
+    expected_future = int(getattr(env_cfg, "latent_patch_future_steps", 0))
+    for term_name in term_names:
+        term = getattr(expert_window, term_name, None)
+        if term is None:
+            raise RuntimeError(
+                f"command_space={command_space!r} requires expert_window.{term_name}."
+            )
+        params = getattr(term, "params", None)
+        if not isinstance(params, dict):
+            raise RuntimeError(f"expert_window.{term_name} has no params dict.")
+        actual_past = int(params.get("past_steps", -1))
+        actual_future = int(params.get("future_steps", -1))
+        if actual_past != expected_past or actual_future != expected_future:
+            raise RuntimeError(
+                "Expert-window command contract is stale after config overrides: "
+                f"{term_name} has past/future=({actual_past}, {actual_future}), "
+                f"expected ({expected_past}, {expected_future}) for "
+                f"command_space={command_space!r}. Call env_cfg.sync_derived_fields() "
+                "before creating the environment."
+            )
+
+
 def _render_frame_to_numpy(frame):
     """Convert render outputs to contiguous CPU uint8 arrays for video logging."""
     if isinstance(frame, list):
@@ -330,12 +395,18 @@ def train(
     env_cfg.sim.device = (
         args_cli.device if args_cli.device is not None else env_cfg.sim.device
     )
+    _sync_env_window_params(env_cfg)
+    _assert_command_window_contract(env_cfg, agent_cfg)
 
     # directory for logging into
     run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(
-        os.path.join("logs", "rlopt", args_cli.algorithm.lower(), args_cli.task)
-    )
+    configured_log_root = str(getattr(agent_cfg.logger, "log_dir", "") or "")
+    if configured_log_root and configured_log_root != "logs":
+        log_root_path = os.path.abspath(configured_log_root)
+    else:
+        log_root_path = os.path.abspath(
+            os.path.join("logs", "rlopt", args_cli.algorithm.lower(), args_cli.task)
+        )
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # The Ray Tune workflow extracts experiment name using the logging line below, hence,
     # do not change it (see PR #2346, comment-2819298849)

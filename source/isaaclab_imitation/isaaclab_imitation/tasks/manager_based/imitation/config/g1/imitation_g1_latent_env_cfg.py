@@ -252,8 +252,7 @@ class ImitationG1LatentEnvCfg(ImitationG1LafanTrackEnvCfg):
         self.random_reset_step_min = 0
         self.random_reset_step_max = 200
         self.random_reset_full_trajectory = False
-        self._sync_expert_window_observation_params()
-        self._sync_expert_goal_observation_params()
+        self.sync_derived_fields()
         # No reference-based terminations in latent mode
         # self.terminations.anchor_pos = None
         # self.terminations.anchor_ori = None
@@ -410,7 +409,7 @@ class ImitationG1LatentFutureCVAEEnvCfg(ImitationG1LatentEnvCfg):
         self.latent_patch_past_steps = 0
         self.latent_patch_future_steps = 9
         self.command_hold_steps = 0
-        self._sync_expert_window_observation_params()
+        self.sync_derived_fields()
 
 
 @configclass

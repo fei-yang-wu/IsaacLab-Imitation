@@ -229,6 +229,21 @@ def _disable_tracking_terminations(terminations: Any) -> list[str]:
     return disabled
 
 
+def _disable_curriculum_terms_for_terminations(
+    curriculum: Any, termination_names: list[str]
+) -> list[str]:
+    disabled: list[str] = []
+    for term_name in termination_names:
+        curriculum_name = f"{term_name}_threshold"
+        if (
+            hasattr(curriculum, curriculum_name)
+            and getattr(curriculum, curriculum_name) is not None
+        ):
+            setattr(curriculum, curriculum_name, None)
+            disabled.append(curriculum_name)
+    return disabled
+
+
 from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
 from interface_planner_common import (  # noqa: E402
@@ -352,6 +367,10 @@ def _disable_observation_corruption(env_cfg: object) -> None:
 
 
 def _sync_env_window_params(env_cfg: object) -> None:
+    sync_derived_fields = getattr(env_cfg, "sync_derived_fields", None)
+    if callable(sync_derived_fields):
+        sync_derived_fields()
+        return
     for method_name in (
         "_sync_expert_window_observation_params",
         "_sync_expert_goal_observation_params",
@@ -415,6 +434,15 @@ def _resolve_existing_body_names(
     return names
 
 
+def _as_torch_tensor(value: Any) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        return value
+    torch_value = getattr(value, "torch", None)
+    if isinstance(torch_value, torch.Tensor):
+        return torch_value
+    return torch.as_tensor(value)
+
+
 def _mean_body_pose_errors(
     base_env: ImitationRLEnv,
     names: list[str],
@@ -424,6 +452,10 @@ def _mean_body_pose_errors(
     body_ids = [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
     actual_pos, actual_quat = base_env._get_robot_body_pose_w_fast(body_ids)
     ref_pos, ref_quat = base_env._get_reference_body_pose_w_fast(tuple(names))
+    actual_pos = _as_torch_tensor(actual_pos)
+    actual_quat = _as_torch_tensor(actual_quat)
+    ref_pos = _as_torch_tensor(ref_pos)
+    ref_quat = _as_torch_tensor(ref_quat)
     pos_error = torch.linalg.vector_norm(actual_pos - ref_pos, dim=-1).mean(dim=-1)
     ori_error = math_utils.quat_error_magnitude(
         actual_quat.reshape(-1, 4),
@@ -446,14 +478,14 @@ def _body_tracking_tensors(
         tuple(names)
     )
     return {
-        "actual_pos": actual_pos,
-        "actual_quat": actual_quat,
-        "actual_ang_vel": actual_ang_vel,
-        "actual_lin_vel": actual_lin_vel,
-        "ref_pos": ref_pos,
-        "ref_quat": ref_quat,
-        "ref_ang_vel": ref_ang_vel,
-        "ref_lin_vel": ref_lin_vel,
+        "actual_pos": _as_torch_tensor(actual_pos),
+        "actual_quat": _as_torch_tensor(actual_quat),
+        "actual_ang_vel": _as_torch_tensor(actual_ang_vel),
+        "actual_lin_vel": _as_torch_tensor(actual_lin_vel),
+        "ref_pos": _as_torch_tensor(ref_pos),
+        "ref_quat": _as_torch_tensor(ref_quat),
+        "ref_ang_vel": _as_torch_tensor(ref_ang_vel),
+        "ref_lin_vel": _as_torch_tensor(ref_lin_vel),
     }
 
 
@@ -471,12 +503,20 @@ def _tracking_metrics(
     root_pos_ref, root_quat_ref, root_lin_vel_ref, root_ang_vel_ref = (
         base_env._get_reference_root_state_w_fast()
     )
+    root_pos = _as_torch_tensor(robot_data.root_pos_w)
+    root_quat = _as_torch_tensor(robot_data.root_quat_w)
+    root_lin_vel = _as_torch_tensor(robot_data.root_lin_vel_w)
+    root_ang_vel = _as_torch_tensor(robot_data.root_ang_vel_w)
+    root_pos_ref = _as_torch_tensor(root_pos_ref)
+    root_quat_ref = _as_torch_tensor(root_quat_ref)
+    root_lin_vel_ref = _as_torch_tensor(root_lin_vel_ref)
+    root_ang_vel_ref = _as_torch_tensor(root_ang_vel_ref)
+    joint_pos = _as_torch_tensor(robot_data.joint_pos)
+    joint_vel = _as_torch_tensor(robot_data.joint_vel)
     joint_pos_ref = base_env.current_expert_frame["joint_pos"]
     joint_vel_ref = base_env.current_expert_frame["joint_vel"]
-    root_pos_error = robot_data.root_pos_w - root_pos_ref
-    root_ori_error = math_utils.quat_error_magnitude(
-        robot_data.root_quat_w, root_quat_ref
-    )
+    root_pos_error = root_pos - root_pos_ref
+    root_ori_error = math_utils.quat_error_magnitude(root_quat, root_quat_ref)
     root_height_error = torch.abs(root_pos_error[:, 2])
     tracking_failure = torch.zeros_like(root_height_error, dtype=torch.bool)
     if float(tracking_success_root_height_threshold) > 0.0:
@@ -492,16 +532,16 @@ def _tracking_metrics(
         "root_height_error_m": root_height_error,
         "root_ori_error_rad": root_ori_error,
         "joint_pos_rmse_rad": torch.sqrt(
-            torch.mean((robot_data.joint_pos - joint_pos_ref).square(), dim=-1)
+            torch.mean((joint_pos - joint_pos_ref).square(), dim=-1)
         ),
         "joint_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.joint_vel - joint_vel_ref).square(), dim=-1)
+            torch.mean((joint_vel - joint_vel_ref).square(), dim=-1)
         ),
         "root_lin_vel_rmse_mps": torch.sqrt(
-            torch.mean((robot_data.root_lin_vel_w - root_lin_vel_ref).square(), dim=-1)
+            torch.mean((root_lin_vel - root_lin_vel_ref).square(), dim=-1)
         ),
         "root_ang_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.root_ang_vel_w - root_ang_vel_ref).square(), dim=-1)
+            torch.mean((root_ang_vel - root_ang_vel_ref).square(), dim=-1)
         ),
     }
     tracked_body_lin_vel: tuple[torch.Tensor, torch.Tensor] | None = None
@@ -515,7 +555,7 @@ def _tracking_metrics(
             tracked_tensors["ref_quat"].reshape(-1, 4),
         ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
         actual_root_rel = (
-            tracked_tensors["actual_pos"] - robot_data.root_pos_w[:, None, :]
+            tracked_tensors["actual_pos"] - root_pos[:, None, :]
         )
         ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
         tracking_mpjpe_m = torch.linalg.vector_norm(
@@ -888,6 +928,7 @@ def main(
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
+    disabled_curriculum_terms: list[str] = []
     if args_cli.disable_tracking_terminations:
         if not hasattr(env_cfg, "random_reset_step_min") or not hasattr(
             env_cfg, "random_reset_step_max"
@@ -921,6 +962,11 @@ def main(
             raise ValueError(
                 "M3 metrics-only evaluation requires the base_too_low fall "
                 "termination to remain active."
+            )
+        curriculum = getattr(env_cfg, "curriculum", None)
+        if curriculum is not None:
+            disabled_curriculum_terms = _disable_curriculum_terms_for_terminations(
+                curriculum, disabled_tracking_termination_terms
             )
     step_dt = _configured_step_dt(env_cfg)
     episode_length_extension_enabled = bool(
@@ -1048,6 +1094,7 @@ def main(
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
+            "disabled_curriculum_terms": disabled_curriculum_terms,
             "survival_definition": "no_base_too_low_termination",
             "time_out_enabled": True,
             "episode_length_extension_enabled": episode_length_extension_enabled,
@@ -1141,6 +1188,9 @@ def main(
     tracking_failure_events = torch.zeros(num_envs, dtype=torch.float32)
     valid_transition_count = 0
     planner_publish_count = 0
+    command_window_steps = (
+        int(args_cli.command_past_steps) + int(args_cli.command_future_steps) + 1
+    )
     saved_sample_files = 0
     saved_sample_rows = 0
     steps_run = 0
@@ -1226,7 +1276,7 @@ def main(
             )
             if args_cli.save_rollout_training_samples:
                 expert_batch = base_env.current_expert_macro_transition_batch(
-                    horizon_steps=int(args_cli.command_future_steps),
+                    horizon_steps=command_window_steps,
                     env_ids=renew_env_ids,
                     state_history_steps=int(args_cli.state_history_steps),
                 )
@@ -1552,6 +1602,7 @@ def main(
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
+            "disabled_curriculum_terms": disabled_curriculum_terms,
             "survival_definition": "no_base_too_low_termination",
             "time_out_enabled": True,
             "episode_length_extension_enabled": episode_length_extension_enabled,

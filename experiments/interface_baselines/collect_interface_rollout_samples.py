@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import random
 import sys
-import traceback
 from typing import Any
 
 from isaaclab.app import AppLauncher
@@ -373,6 +372,10 @@ def _disable_observation_corruption(env_cfg: object) -> None:
 
 
 def _sync_env_window_params(env_cfg: object) -> None:
+    sync_derived_fields = getattr(env_cfg, "sync_derived_fields", None)
+    if callable(sync_derived_fields):
+        sync_derived_fields()
+        return
     for method_name in (
         "_sync_expert_window_observation_params",
         "_sync_expert_goal_observation_params",
@@ -796,6 +799,9 @@ def main(
     valid_transition_count = 0
     planner_publish_count = 0
     planner_sampler = getattr(agent, "_hl_skill_command_sampler", None)
+    command_window_steps = (
+        int(args_cli.command_past_steps) + int(args_cli.command_future_steps) + 1
+    )
     with torch.inference_mode(), set_exploration_type(InteractionType.DETERMINISTIC):
         for step_idx in range(total_control_steps):
             step_active = active.clone()
@@ -803,7 +809,7 @@ def main(
                 stop_reason = "all_envs_done"
                 break
             expert_batch = base_env.current_expert_macro_transition_batch(
-                horizon_steps=int(args_cli.command_future_steps),
+                horizon_steps=command_window_steps,
                 state_history_steps=int(args_cli.state_history_steps),
             )
             achieved_batch = base_env.current_causal_planner_observation(
@@ -1379,8 +1385,5 @@ def main(
 if __name__ == "__main__":
     try:
         main()
-    except BaseException:
-        traceback.print_exc()
-        raise
     finally:
         simulation_app.close()

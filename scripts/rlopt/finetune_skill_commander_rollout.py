@@ -110,11 +110,27 @@ def _load_samples(samples_dir: Path) -> dict[str, torch.Tensor]:
     steps: list[int] = []
     for path in paths:
         sample = torch.load(path, map_location="cpu", weights_only=False)
-        sample_rows: dict[str, torch.Tensor] = {}
-        for key in rows:
-            if key not in sample:
+        sample_values: dict[str, Any] = {
+            "planner_state": sample.get("planner_state"),
+            "expert_planner_state": sample.get("expert_planner_state"),
+            "lang": sample.get("lang", sample.get("language_embedding")),
+            "z_target": sample.get("z_target", sample.get("demonstration_target")),
+            "traj_rank": sample.get("traj_rank", sample.get("trajectory_rank")),
+        }
+        for key in (
+            "planner_state",
+            "expert_planner_state",
+            "z_target",
+            "traj_rank",
+        ):
+            if sample_values[key] is None:
                 raise KeyError(f"Sample {path} is missing required key {key!r}.")
-            value = sample[key]
+
+        sample_rows: dict[str, torch.Tensor] = {}
+        for key, value in sample_values.items():
+            if value is None and key == "lang":
+                row_count = int(sample_values["planner_state"].shape[0])
+                value = torch.zeros((row_count, 0), dtype=torch.float32)
             if not isinstance(value, torch.Tensor):
                 raise TypeError(
                     f"Sample {path} key {key!r} must be a tensor, got {type(value).__name__}."

@@ -27,7 +27,7 @@ class ImitationG1LatentVQVAEEnvCfg(ImitationG1LatentEnvCfg):
         # the current frame emitted by the trajectory manager.
         self.latent_patch_past_steps = 8
         self.latent_patch_future_steps = 0
-        self._sync_expert_window_observation_params()
+        self.sync_derived_fields()
 
 
 ImitationG1LatentVQVAEEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict

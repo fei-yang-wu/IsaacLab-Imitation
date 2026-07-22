@@ -1079,6 +1079,13 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             term.params["future_steps"] = future_steps
             term.params["reference_body_names"] = tuple(self.command_ee_body_names)
 
+    def sync_derived_fields(self) -> None:
+        """Refresh observation params derived from mutable task fields."""
+        self._sync_expert_window_observation_params()
+        sync_goal_params = getattr(self, "_sync_expert_goal_observation_params", None)
+        if callable(sync_goal_params):
+            sync_goal_params()
+
     def __post_init__(self) -> None:
         super().__post_init__()  # type: ignore
 
@@ -1165,7 +1172,7 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
                 "adaptive_failure_reset_failure_rate_max_over_mean must be positive."
             )
 
-        self._sync_expert_window_observation_params()
+        self.sync_derived_fields()
 
 
 @configclass
@@ -1405,10 +1412,7 @@ def _g1_lafan_track_env_cfg_from_dict(
         data = self._apply_optional_hydra_overrides(data)
 
     ImitationG1BaseTrackingEnvCfg.from_dict(self, data)
-    self._sync_expert_window_observation_params()
-    sync_goal_params = getattr(self, "_sync_expert_goal_observation_params", None)
-    if callable(sync_goal_params):
-        sync_goal_params()
+    self.sync_derived_fields()
 
     self.loader_kwargs = copy.deepcopy(self.loader_kwargs)
     self._normalize_sequence_overrides()

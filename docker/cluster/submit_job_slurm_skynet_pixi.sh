@@ -16,10 +16,13 @@ cpus_per_task="${CLUSTER_SLURM_CPUS_PER_TASK:-8}"
 mem="${CLUSTER_SLURM_MEM:-96G}"
 gpu_gres="${CLUSTER_SLURM_GPU_GRES:-gpu:a40:1}"
 nodelist="${CLUSTER_SLURM_NODELIST:-}"
+exclude_nodes="${CLUSTER_SLURM_EXCLUDE:-}"
 job_name_prefix="${CLUSTER_SLURM_JOB_NAME_PREFIX:-isaaclab-pixi}"
 output_dir="${CLUSTER_SLURM_OUTPUT_DIR:-logs/slurm}"
 pixi_env="${CLUSTER_PIXI_ENV:-isaaclab}"
 pixi_cache_dir="${CLUSTER_PIXI_CACHE_DIR:-/coc/flash12/${USER}/Research/IsaacLab/pixi-cache}"
+pixi_skip_install="${CLUSTER_PIXI_SKIP_INSTALL:-0}"
+pixi_install_lock_wait="${CLUSTER_PIXI_INSTALL_LOCK_WAIT:-7200}"
 data_dir="${CLUSTER_DATA_DIR:-/coc/flash12/${USER}/Research/IsaacLab/data}"
 python_executable="${CLUSTER_PYTHON_EXECUTABLE:-scripts/rlopt/run_bones_seed_language_pipeline.py}"
 keep_job_script="${CLUSTER_SLURM_KEEP_JOB_SCRIPT:-0}"
@@ -56,6 +59,11 @@ if [ -n "$nodelist" ]; then
     nodelist_directive="#SBATCH --nodelist=${nodelist}"
     echo "[INFO] Constraining to nodes: ${nodelist}"
 fi
+exclude_directive=""
+if [ -n "$exclude_nodes" ]; then
+    exclude_directive="#SBATCH --exclude=${exclude_nodes}"
+    echo "[INFO] Excluding nodes: ${exclude_nodes}"
+fi
 
 cat <<EOT > job.sh
 #!/bin/bash
@@ -72,6 +80,7 @@ cat <<EOT > job.sh
 #SBATCH --gres=${gpu_gres}
 #SBATCH --time=${time_limit}
 ${nodelist_directive}
+${exclude_directive}
 
 set -euo pipefail
 export PATH="/opt/slurm/Ubuntu-20.04/24.11.0/bin:/nethome/${USER}/.pixi/bin:\$PATH"
@@ -120,8 +129,17 @@ else
     echo "[INFO] No W&B API key file configured."
 fi
 
-echo "[INFO] Installing Pixi environment if needed."
-pixi install --locked -e ${quoted_pixi_env}
+if [ "${pixi_skip_install}" = "1" ]; then
+    echo "[INFO] CLUSTER_PIXI_SKIP_INSTALL=1: skipping Pixi install."
+else
+    echo "[INFO] Installing Pixi environment if needed."
+    pixi_lock_path="\${PIXI_CACHE_DIR}/isaaclab-imitation-pixi-install.lock"
+    if command -v flock >/dev/null 2>&1; then
+        flock -w ${pixi_install_lock_wait} "\$pixi_lock_path" pixi install --locked -e ${quoted_pixi_env}
+    else
+        pixi install --locked -e ${quoted_pixi_env}
+    fi
+fi
 
 echo "[INFO] Launching workload."
 set +e

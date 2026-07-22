@@ -347,6 +347,15 @@ def _body_ids_for_names(base_env: ImitationRLEnv, names: list[str]) -> list[int]
     return [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
 
 
+def _as_torch_tensor(value: Any) -> torch.Tensor:
+    if isinstance(value, torch.Tensor):
+        return value
+    torch_value = getattr(value, "torch", None)
+    if isinstance(torch_value, torch.Tensor):
+        return torch_value
+    return torch.as_tensor(value)
+
+
 def _mean_body_pose_errors(
     base_env: ImitationRLEnv,
     names: list[str],
@@ -356,6 +365,10 @@ def _mean_body_pose_errors(
     body_ids = _body_ids_for_names(base_env, names)
     actual_pos, actual_quat = base_env._get_robot_body_pose_w_fast(body_ids)
     ref_pos, ref_quat = base_env._get_reference_body_pose_w_fast(tuple(names))
+    actual_pos = _as_torch_tensor(actual_pos)
+    actual_quat = _as_torch_tensor(actual_quat)
+    ref_pos = _as_torch_tensor(ref_pos)
+    ref_quat = _as_torch_tensor(ref_quat)
     pos_error = torch.linalg.vector_norm(actual_pos - ref_pos, dim=-1).mean(dim=-1)
     ori_error = math_utils.quat_error_magnitude(
         actual_quat.reshape(-1, 4),
@@ -378,14 +391,14 @@ def _body_tracking_tensors(
         tuple(names)
     )
     return {
-        "actual_pos": actual_pos,
-        "actual_quat": actual_quat,
-        "actual_ang_vel": actual_ang_vel,
-        "actual_lin_vel": actual_lin_vel,
-        "ref_pos": ref_pos,
-        "ref_quat": ref_quat,
-        "ref_ang_vel": ref_ang_vel,
-        "ref_lin_vel": ref_lin_vel,
+        "actual_pos": _as_torch_tensor(actual_pos),
+        "actual_quat": _as_torch_tensor(actual_quat),
+        "actual_ang_vel": _as_torch_tensor(actual_ang_vel),
+        "actual_lin_vel": _as_torch_tensor(actual_lin_vel),
+        "ref_pos": _as_torch_tensor(ref_pos),
+        "ref_quat": _as_torch_tensor(ref_quat),
+        "ref_ang_vel": _as_torch_tensor(ref_ang_vel),
+        "ref_lin_vel": _as_torch_tensor(ref_lin_vel),
     }
 
 
@@ -399,16 +412,23 @@ def _tracking_metrics(
     root_pos_ref, root_quat_ref, root_lin_vel_ref, root_ang_vel_ref = (
         base_env._get_reference_root_state_w_fast()
     )
+    root_pos = _as_torch_tensor(robot_data.root_pos_w)
+    root_quat = _as_torch_tensor(robot_data.root_quat_w)
+    root_lin_vel = _as_torch_tensor(robot_data.root_lin_vel_w)
+    root_ang_vel = _as_torch_tensor(robot_data.root_ang_vel_w)
+    root_pos_ref = _as_torch_tensor(root_pos_ref)
+    root_quat_ref = _as_torch_tensor(root_quat_ref)
+    root_lin_vel_ref = _as_torch_tensor(root_lin_vel_ref)
+    root_ang_vel_ref = _as_torch_tensor(root_ang_vel_ref)
+    joint_pos = _as_torch_tensor(robot_data.joint_pos)
+    joint_vel = _as_torch_tensor(robot_data.joint_vel)
     joint_pos_ref = base_env.current_expert_frame["joint_pos"]
     joint_vel_ref = base_env.current_expert_frame["joint_vel"]
 
-    root_pos_error = robot_data.root_pos_w - root_pos_ref
-    root_lin_vel_error = robot_data.root_lin_vel_w - root_lin_vel_ref
-    root_ang_vel_error = robot_data.root_ang_vel_w - root_ang_vel_ref
-    root_ori_error = math_utils.quat_error_magnitude(
-        robot_data.root_quat_w,
-        root_quat_ref,
-    )
+    root_pos_error = root_pos - root_pos_ref
+    root_lin_vel_error = root_lin_vel - root_lin_vel_ref
+    root_ang_vel_error = root_ang_vel - root_ang_vel_ref
+    root_ori_error = math_utils.quat_error_magnitude(root_quat, root_quat_ref)
     root_height_error = root_pos_error[:, 2].abs()
 
     metrics = {
@@ -423,10 +443,10 @@ def _tracking_metrics(
             torch.mean(root_ang_vel_error.square(), dim=-1)
         ),
         "joint_pos_rmse_rad": torch.sqrt(
-            torch.mean((robot_data.joint_pos - joint_pos_ref).square(), dim=-1)
+            torch.mean((joint_pos - joint_pos_ref).square(), dim=-1)
         ),
         "joint_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.joint_vel - joint_vel_ref).square(), dim=-1)
+            torch.mean((joint_vel - joint_vel_ref).square(), dim=-1)
         ),
     }
 
@@ -441,7 +461,7 @@ def _tracking_metrics(
             tracked_tensors["ref_quat"].reshape(-1, 4),
         ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
         actual_root_rel = (
-            tracked_tensors["actual_pos"] - robot_data.root_pos_w[:, None, :]
+            tracked_tensors["actual_pos"] - root_pos[:, None, :]
         )
         ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
         tracking_mpjpe_m = torch.linalg.vector_norm(
@@ -1113,6 +1133,10 @@ def _write_csv(summary: dict[str, Any], output_csv: Path, *, append: bool) -> No
 
 
 def _sync_env_window_params(env_cfg: object) -> None:
+    sync_derived_fields = getattr(env_cfg, "sync_derived_fields", None)
+    if callable(sync_derived_fields):
+        sync_derived_fields()
+        return
     for method_name in (
         "_sync_expert_window_observation_params",
         "_sync_expert_goal_observation_params",

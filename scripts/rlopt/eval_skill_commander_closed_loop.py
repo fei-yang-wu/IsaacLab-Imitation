@@ -255,6 +255,16 @@ parser.add_argument(
     help="Save achieved-state planner inputs and target z tensors for finetuning.",
 )
 parser.add_argument(
+    "--target_z_source",
+    type=str,
+    default="skill_encoder",
+    choices=("skill_encoder", "ipmd_vqvae"),
+    help=(
+        "Source for metric/sample z targets. Use skill_encoder for DiffSR and "
+        "ipmd_vqvae for online VQ/FSQ latent checkpoints."
+    ),
+)
+parser.add_argument(
     "--sample_rows_per_file",
     type=int,
     default=1,
@@ -355,7 +365,8 @@ from rlopt.agent import (
     SkillCommanderConfig,
     SkillCommanderTrainer,
 )
-from tensordict import TensorDictBase
+from rlopt.agent.imitation.latent_learning import build_latent_learner
+from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import InteractionType
 from torch import Tensor
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
@@ -586,6 +597,15 @@ def _resolve_existing_body_names(
     return names
 
 
+def _as_torch_tensor(value: Any) -> Tensor:
+    if isinstance(value, Tensor):
+        return value
+    torch_value = getattr(value, "torch", None)
+    if isinstance(torch_value, Tensor):
+        return torch_value
+    return torch.as_tensor(value)
+
+
 def _mean_body_pose_errors(
     base_env: ImitationRLEnv,
     names: list[str],
@@ -595,6 +615,10 @@ def _mean_body_pose_errors(
     body_ids = [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
     actual_pos, actual_quat = base_env._get_robot_body_pose_w_fast(body_ids)
     ref_pos, ref_quat = base_env._get_reference_body_pose_w_fast(tuple(names))
+    actual_pos = _as_torch_tensor(actual_pos)
+    actual_quat = _as_torch_tensor(actual_quat)
+    ref_pos = _as_torch_tensor(ref_pos)
+    ref_quat = _as_torch_tensor(ref_quat)
     pos_error = torch.linalg.vector_norm(actual_pos - ref_pos, dim=-1).mean(dim=-1)
     ori_error = math_utils.quat_error_magnitude(
         actual_quat.reshape(-1, 4),
@@ -617,14 +641,14 @@ def _body_tracking_tensors(
         tuple(names)
     )
     return {
-        "actual_pos": actual_pos,
-        "actual_quat": actual_quat,
-        "actual_ang_vel": actual_ang_vel,
-        "actual_lin_vel": actual_lin_vel,
-        "ref_pos": ref_pos,
-        "ref_quat": ref_quat,
-        "ref_ang_vel": ref_ang_vel,
-        "ref_lin_vel": ref_lin_vel,
+        "actual_pos": _as_torch_tensor(actual_pos),
+        "actual_quat": _as_torch_tensor(actual_quat),
+        "actual_ang_vel": _as_torch_tensor(actual_ang_vel),
+        "actual_lin_vel": _as_torch_tensor(actual_lin_vel),
+        "ref_pos": _as_torch_tensor(ref_pos),
+        "ref_quat": _as_torch_tensor(ref_quat),
+        "ref_ang_vel": _as_torch_tensor(ref_ang_vel),
+        "ref_lin_vel": _as_torch_tensor(ref_lin_vel),
     }
 
 
@@ -640,12 +664,20 @@ def _tracking_metrics(
     root_pos_ref, root_quat_ref, root_lin_vel_ref, root_ang_vel_ref = (
         base_env._get_reference_root_state_w_fast()
     )
-    joint_pos_ref = base_env.current_expert_frame["joint_pos"]
-    joint_vel_ref = base_env.current_expert_frame["joint_vel"]
-    root_pos_error = robot_data.root_pos_w - root_pos_ref
-    root_ori_error = math_utils.quat_error_magnitude(
-        robot_data.root_quat_w, root_quat_ref
-    )
+    root_pos = _as_torch_tensor(robot_data.root_pos_w)
+    root_quat = _as_torch_tensor(robot_data.root_quat_w)
+    root_lin_vel = _as_torch_tensor(robot_data.root_lin_vel_w)
+    root_ang_vel = _as_torch_tensor(robot_data.root_ang_vel_w)
+    root_pos_ref = _as_torch_tensor(root_pos_ref)
+    root_quat_ref = _as_torch_tensor(root_quat_ref)
+    root_lin_vel_ref = _as_torch_tensor(root_lin_vel_ref)
+    root_ang_vel_ref = _as_torch_tensor(root_ang_vel_ref)
+    joint_pos = _as_torch_tensor(robot_data.joint_pos)
+    joint_vel = _as_torch_tensor(robot_data.joint_vel)
+    joint_pos_ref = _as_torch_tensor(base_env.current_expert_frame["joint_pos"])
+    joint_vel_ref = _as_torch_tensor(base_env.current_expert_frame["joint_vel"])
+    root_pos_error = root_pos - root_pos_ref
+    root_ori_error = math_utils.quat_error_magnitude(root_quat, root_quat_ref)
     root_height_error = torch.abs(root_pos_error[:, 2])
     tracking_failure = torch.zeros_like(root_height_error, dtype=torch.bool)
     if float(tracking_success_root_height_threshold) > 0.0:
@@ -661,16 +693,16 @@ def _tracking_metrics(
         "root_height_error_m": root_height_error,
         "root_ori_error_rad": root_ori_error,
         "joint_pos_rmse_rad": torch.sqrt(
-            torch.mean((robot_data.joint_pos - joint_pos_ref).square(), dim=-1)
+            torch.mean((joint_pos - joint_pos_ref).square(), dim=-1)
         ),
         "joint_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.joint_vel - joint_vel_ref).square(), dim=-1)
+            torch.mean((joint_vel - joint_vel_ref).square(), dim=-1)
         ),
         "root_lin_vel_rmse_mps": torch.sqrt(
-            torch.mean((robot_data.root_lin_vel_w - root_lin_vel_ref).square(), dim=-1)
+            torch.mean((root_lin_vel - root_lin_vel_ref).square(), dim=-1)
         ),
         "root_ang_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.root_ang_vel_w - root_ang_vel_ref).square(), dim=-1)
+            torch.mean((root_ang_vel - root_ang_vel_ref).square(), dim=-1)
         ),
     }
     tracked_body_lin_vel: tuple[Tensor, Tensor] | None = None
@@ -684,7 +716,7 @@ def _tracking_metrics(
             tracked_tensors["ref_quat"].reshape(-1, 4),
         ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
         actual_root_rel = (
-            tracked_tensors["actual_pos"] - robot_data.root_pos_w[:, None, :]
+            tracked_tensors["actual_pos"] - root_pos[:, None, :]
         )
         ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
         tracking_mpjpe_m = torch.linalg.vector_norm(
@@ -903,14 +935,32 @@ def _disable_tracking_terminations(terminations: Any) -> list[str]:
     return disabled
 
 
-def _disable_non_reference_terminations(terminations: Any) -> None:
+def _disable_non_reference_terminations(terminations: Any) -> list[str]:
+    disabled: list[str] = []
     names = set(getattr(terminations, "__dict__", {}).keys())
     names.update(("anchor_pos", "anchor_ori", "ee_body_pos", "base_too_low"))
     for name in sorted(names):
         if name.startswith("_") or name == "reference_finished":
             continue
-        if hasattr(terminations, name):
+        if hasattr(terminations, name) and getattr(terminations, name) is not None:
             setattr(terminations, name, None)
+            disabled.append(name)
+    return disabled
+
+
+def _disable_curriculum_terms_for_terminations(
+    curriculum: Any, termination_names: list[str]
+) -> list[str]:
+    disabled: list[str] = []
+    for term_name in termination_names:
+        curriculum_name = f"{term_name}_threshold"
+        if (
+            hasattr(curriculum, curriculum_name)
+            and getattr(curriculum, curriculum_name) is not None
+        ):
+            setattr(curriculum, curriculum_name, None)
+            disabled.append(curriculum_name)
+    return disabled
 
 
 def _planner_state(batch: Any, state_history_steps: int) -> Tensor:
@@ -924,6 +974,112 @@ def _planner_state(batch: Any, state_history_steps: int) -> Tensor:
             raise ValueError(msg)
         return state_history.reshape(int(state_history.shape[0]), -1).contiguous()
     return batch.get((group, "state"))
+
+
+def _ipmd_vqvae_z_target_at_cursor(
+    *,
+    isaac_env: ImitationRLEnv,
+    learner: Any,
+    traj_rank: Tensor,
+    local_step: Tensor,
+    z_dim: int,
+    device: torch.device,
+) -> Tensor:
+    """Encode the online VQ/FSQ expert window at the same demo cursor."""
+    cfg = learner._config()
+    past_steps = int(cfg.patch_past_steps)
+    future_steps = int(cfg.patch_future_steps)
+    keys = [
+        tuple(key) if isinstance(key, list) else key
+        for key in list(getattr(cfg, "posterior_input_keys", None) or [])
+    ]
+    if not keys:
+        keys = [
+            tuple(key) if isinstance(key, list) else key
+            for key in learner.required_expert_batch_keys()
+            if isinstance(key, (tuple, list)) and key[0] == "expert_window"
+        ]
+    expert_raw = isaac_env._sample_expert_window_slice_for_trajectory_ranks(
+        traj_rank,
+        local_step,
+        past_steps=past_steps,
+        future_steps=future_steps,
+    )
+    batch_size = int(traj_rank.reshape(-1).shape[0])
+    env_ids = torch.arange(batch_size, device=isaac_env.device, dtype=torch.long)
+    terms = isaac_env._build_expert_window_terms(
+        expert_raw,
+        env_ids,
+        context="expert",
+        past_steps=past_steps,
+        joint_ids=slice(None),
+        anchor_body_name=getattr(isaac_env, "_expert_anchor_body_name", "torso_link"),
+    )
+    batch: dict[Any, Tensor] = {}
+    for key in keys:
+        if key == "expert_action":
+            continue
+        if isinstance(key, tuple) and len(key) >= 2 and key[0] == "expert_window":
+            term = str(key[1])
+            if term not in terms:
+                raise KeyError(
+                    f"Expert window term {term!r} missing for VQ/FSQ target."
+                )
+            batch[key] = terms[term]
+            continue
+        raise ValueError(f"Unsupported posterior key for VQ/FSQ target: {key!r}.")
+    if not batch:
+        raise RuntimeError("No expert_window keys available for VQ/FSQ z target.")
+    td = TensorDict(batch, batch_size=[batch_size])
+    z_target = learner.infer_expert_latents(td, detach=True).to(
+        device=device, dtype=torch.float32
+    )
+    if int(z_target.shape[-1]) > int(z_dim):
+        z_target = z_target[:, : int(z_dim)]
+    if int(z_target.shape[-1]) != int(z_dim):
+        raise ValueError(
+            f"VQ/FSQ z target width {int(z_target.shape[-1])} != z_dim={int(z_dim)}."
+        )
+    return z_target
+
+
+def _latent_learner_input_dim_from_checkpoint(state: dict[str, Any]) -> int:
+    modules = state.get("modules")
+    if not isinstance(modules, dict):
+        raise ValueError("latent_learner_state_dict is missing module states.")
+    encoder_state = modules.get("encoder")
+    if not isinstance(encoder_state, dict):
+        raise ValueError("latent_learner_state_dict is missing encoder state.")
+    first_weight = encoder_state.get("network.0.weight")
+    if not isinstance(first_weight, Tensor) or first_weight.ndim != 2:
+        raise ValueError(
+            "Could not infer latent learner input dim from encoder network.0.weight."
+        )
+    return int(first_weight.shape[1])
+
+
+def _load_metric_latent_learner_from_checkpoint(
+    *,
+    agent: Any,
+    checkpoint_path: Path,
+) -> Any:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    learner_state = checkpoint.get("latent_learner_state_dict")
+    if not isinstance(learner_state, dict):
+        raise RuntimeError(
+            f"{checkpoint_path} does not contain latent_learner_state_dict."
+        )
+    method = str(agent.config.ipmd.latent_learning.method)
+    learner = build_latent_learner(method)
+    learner.agent = agent
+    ensure_modules = getattr(learner, "_ensure_modules", None)
+    if not callable(ensure_modules):
+        raise RuntimeError(
+            f"Latent learner {type(learner).__name__} cannot restore modules."
+        )
+    ensure_modules(_latent_learner_input_dim_from_checkpoint(learner_state))
+    learner.load_checkpoint_state_dict(learner_state)
+    return learner
 
 
 def _cosine_mean(lhs: Tensor, rhs: Tensor) -> float:
@@ -948,6 +1104,7 @@ def _measure_commander(
     *,
     trainer: SkillCommanderTrainer,
     wrapped_env: IsaacLabWrapper,
+    isaac_env: ImitationRLEnv,
     env_ids: Tensor,
     sample_path: Path | None = None,
     sample_writer: PlannerSampleWriter | None = None,
@@ -956,6 +1113,7 @@ def _measure_commander(
     episode_ids: Tensor | None = None,
     sample_motion_names: list[str] | None = None,
     compute_metrics: bool = True,
+    target_latent_learner: Any | None = None,
 ) -> dict[str, float]:
     if sample_path is not None and sample_writer is not None:
         raise ValueError("Provide sample_path or sample_writer, not both.")
@@ -993,7 +1151,22 @@ def _measure_commander(
         causal_planner_batch, state_history_steps
     ).to(device=trainer.device, dtype=torch.float32)
 
-    z_target = trainer._target_z(expert_state, future_window)
+    if target_latent_learner is None:
+        z_target = trainer._target_z(expert_state, future_window)
+    else:
+        local_step = (
+            expert_batch.get(("hl", "local_step"))
+            .reshape(-1)
+            .to(device=trainer.device, dtype=torch.long)
+        )
+        z_target = _ipmd_vqvae_z_target_at_cursor(
+            isaac_env=isaac_env,
+            learner=target_latent_learner,
+            traj_rank=traj_rank,
+            local_step=local_step,
+            z_dim=int(trainer.z_dim),
+            device=trainer.device,
+        )
     lang = trainer._lang_for_ranks(traj_rank)
 
     if sample_path is not None or sample_writer is not None:
@@ -1181,6 +1354,7 @@ def main(
     if args_cli.deterministic_tracking:
         deterministic_tracking_record = disable_domain_randomization(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
+    disabled_curriculum_terms: list[str] = []
     if args_cli.disable_tracking_terminations:
         if terminations is None:
             raise ValueError(
@@ -1206,9 +1380,23 @@ def main(
                 "M3 metrics-only evaluation requires the base_too_low fall "
                 "termination to remain active."
             )
+        curriculum = getattr(env_cfg, "curriculum", None)
+        if curriculum is not None:
+            disabled_curriculum_terms = _disable_curriculum_terms_for_terminations(
+                curriculum, disabled_tracking_termination_terms
+            )
     elif not args_cli.keep_early_terminations:
         if terminations is not None:
-            _disable_non_reference_terminations(terminations)
+            disabled_termination_terms = _disable_non_reference_terminations(
+                terminations
+            )
+            curriculum = getattr(env_cfg, "curriculum", None)
+            if curriculum is not None:
+                disabled_curriculum_terms = (
+                    _disable_curriculum_terms_for_terminations(
+                        curriculum, disabled_termination_terms
+                    )
+                )
     if args_cli.extend_episode_length_for_max_steps:
         if int(args_cli.max_steps) <= 0:
             raise ValueError(
@@ -1287,10 +1475,12 @@ def main(
             args_cli.disable_tracking_terminations
         ),
         "disabled_tracking_termination_terms": disabled_tracking_termination_terms,
+        "disabled_curriculum_terms": disabled_curriculum_terms,
         "survival_definition": "no_base_too_low_termination",
         "reward_clipping_enabled": not bool(args_cli.disable_reward_clipping),
         "continue_after_reset": bool(args_cli.continue_after_reset),
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),
+        "target_z_source": str(args_cli.target_z_source),
         "tracking_success_root_height_threshold": float(
             args_cli.tracking_success_root_height_threshold
         ),
@@ -1436,10 +1626,25 @@ def main(
     )
     trainer.generator.eval()
 
+    if hasattr(agent_cfg, "logger"):
+        agent_cfg.logger.backend = ""
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
     agent.load_model(str(checkpoint_path))
+    target_latent_learner = None
+    if args_cli.target_z_source == "ipmd_vqvae":
+        target_latent_learner = getattr(agent, "_latent_learner", None)
+        if target_latent_learner is None:
+            target_latent_learner = _load_metric_latent_learner_from_checkpoint(
+                agent=agent,
+                checkpoint_path=checkpoint_path,
+            )
+        for value in vars(target_latent_learner).values():
+            if isinstance(value, torch.nn.Module):
+                value.eval()
+                for parameter in value.parameters():
+                    parameter.requires_grad_(False)
     collector_policy = agent.collector_policy
     collector_policy.eval()
     planner_latency_timer: PlannerForwardTimer | None = None
@@ -1510,7 +1715,8 @@ def main(
             },
             "state_history_steps": int(trainer.config.state_history_steps),
             "command_past_steps": 0,
-            "command_future_steps": int(trainer.horizon_steps),
+            "command_future_steps": max(0, int(trainer.horizon_steps) - 1),
+            "command_window_steps": int(trainer.horizon_steps),
             "task": args_cli.task,
             "algorithm": args_cli.algorithm,
             "seed": int(agent_cfg.seed),
@@ -1548,6 +1754,7 @@ def main(
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
+            "disabled_curriculum_terms": disabled_curriculum_terms,
             "survival_definition": "no_base_too_low_termination",
             "time_out_enabled": bool(args_cli.keep_time_out),
             "episode_length_extension_enabled": bool(
@@ -1558,6 +1765,7 @@ def main(
             "push_perturbation": interval_event_metadata(env_cfg, "push_robot"),
             "deterministic_tracking": deterministic_tracking_record,
             "language_conditioning": language_metadata,
+            "target_z_source": str(args_cli.target_z_source),
             "provenance": {
                 "low_level_checkpoint": str(checkpoint_path),
                 "planner_checkpoint": (
@@ -1731,7 +1939,9 @@ def main(
                     _measure_commander(
                         trainer=trainer,
                         wrapped_env=wrapped_env,
+                        isaac_env=base_env,
                         env_ids=env_ids,
+                        target_latent_learner=target_latent_learner,
                     )
                 )
             if should_save:
@@ -1739,6 +1949,7 @@ def main(
                 _measure_commander(
                     trainer=trainer,
                     wrapped_env=wrapped_env,
+                    isaac_env=base_env,
                     env_ids=sample_env_ids,
                     sample_writer=sample_writer,
                     sample_step=timestep,
@@ -1746,6 +1957,7 @@ def main(
                     episode_ids=episode_ids.index_select(0, sample_env_ids_cpu),
                     sample_motion_names=sample_motion_names,
                     compute_metrics=False,
+                    target_latent_learner=target_latent_learner,
                 )
             if should_measure:
                 row = {
@@ -1996,6 +2208,7 @@ def main(
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
+            "disabled_curriculum_terms": disabled_curriculum_terms,
             "survival_definition": "no_base_too_low_termination",
             "time_out_enabled": bool(args_cli.keep_time_out),
             "episode_length_extension_enabled": bool(
@@ -2006,6 +2219,7 @@ def main(
             "push_perturbation": interval_event_metadata(env_cfg, "push_robot"),
             "deterministic_tracking": deterministic_tracking_record,
             "language_conditioning": language_metadata,
+            "target_z_source": str(args_cli.target_z_source),
         },
         "aggregate": aggregate,
         "metrics": rollout_metrics,
