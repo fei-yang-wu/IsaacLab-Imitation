@@ -37,6 +37,7 @@ output_dir="${CLUSTER_SLURM_OUTPUT_DIR:-logs/slurm}"
 keep_job_script="${CLUSTER_SLURM_KEEP_JOB_SCRIPT:-0}"
 print_job_script="${CLUSTER_SLURM_PRINT_JOB_SCRIPT:-1}"
 use_srun="${CLUSTER_SLURM_USE_SRUN:-0}"
+dependency="${CLUSTER_SLURM_DEPENDENCY:-}"
 
 account_directive=""
 partition_directive=""
@@ -47,6 +48,7 @@ node_list_directive=""
 exclude_directive=""
 module_block=""
 run_prefix=""
+dependency_directive=""
 
 if [ -n "$account" ]; then
     account_directive="#SBATCH --account=${account}"
@@ -68,6 +70,13 @@ if [ -n "$node_list" ]; then
 fi
 if [ -n "$exclude_nodes" ]; then
     exclude_directive="#SBATCH --exclude=${exclude_nodes}"
+fi
+if [ -n "$dependency" ]; then
+    if [[ ! "$dependency" =~ ^afterok:[0-9]+(:[0-9]+)*$ ]]; then
+        echo "[ERROR] CLUSTER_SLURM_DEPENDENCY must use afterok:<job>[:<job>...]." >&2
+        exit 2
+    fi
+    dependency_directive="#SBATCH --dependency=${dependency}"
 fi
 if [ -n "$modules" ]; then
     module_block=$(
@@ -128,6 +137,7 @@ cat <<EOT > job.sh
 #!/bin/bash
 
 #SBATCH --job-name="${job_name_prefix}-$(date +"%Y%m%d-%H%M")"
+$dependency_directive
 #SBATCH --output="${output_dir}/%x_%j.log"
 #SBATCH --error="${output_dir}/%x_%j.log"
 ${account_directive}

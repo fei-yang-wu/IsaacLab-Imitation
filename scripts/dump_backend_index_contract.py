@@ -19,12 +19,12 @@ Examples (run from the repository root):
 .. code-block:: bash
 
     pixi run -e isaaclab python scripts/dump_backend_index_contract.py \
-        --task Isaac-Imitation-G1-Latent-Strict-v0 \
+        --task Isaac-Imitation-G1-Latent-v0 \
         --output logs/index_contract/newton.json \
         physics=newton_mjwarp
 
     pixi run -e isaaclab python scripts/dump_backend_index_contract.py \
-        --task Isaac-Imitation-G1-Latent-Strict-v0 \
+        --task Isaac-Imitation-G1-Latent-v0 \
         --output logs/index_contract/physx.json \
         physics=physx
 

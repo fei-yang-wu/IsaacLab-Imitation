@@ -3,12 +3,14 @@ import gymnasium as gym
 from . import (
     agents,
     imitation_g1_env_cfg,
+    imitation_g1_latent_ablation_env_cfg,
     imitation_g1_latent_env_cfg,
     imitation_g1_latent_vqvae_env_cfg,
 )
 
 __all__ = [
     "imitation_g1_env_cfg",
+    "imitation_g1_latent_ablation_env_cfg",
     "imitation_g1_latent_env_cfg",
     "imitation_g1_latent_vqvae_env_cfg",
     "agents",
@@ -26,6 +28,19 @@ _VANILLA_TASK_KWARGS = {
     "rlopt_ipmd_bilinear_cfg_entry_point": f"{agents.__name__}.rlopt_ipmd_bilinear_cfg:G1ImitationRLOptIPMDBilinearConfig",
     "rlopt_gail_cfg_entry_point": f"{agents.__name__}.rlopt_gail_cfg:G1ImitationRLOptGAILConfig",
     "rlopt_amp_cfg_entry_point": f"{agents.__name__}.rlopt_amp_cfg:G1ImitationRLOptAMPConfig",
+}
+
+# Strict-protocol explicit-command surface (2026-07-21): the vanilla
+# observation/agent contract on the same protocol deltas as the strict latent
+# default (pelvis anchor, strict SONIC terminations, [0, 200] reset starts).
+# Built for the interface ablation so full-body-chunk / EE-chunk / single-frame
+# trackers (selected via `agent.command_space`) train on the same env protocol
+# as the latent tracker and differ only in the command space.
+_VANILLA_STRICT_TASK_KWARGS = {
+    **_VANILLA_TASK_KWARGS,
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_env_cfg:ImitationG1StrictTrackEnvCfg"
+    ),
 }
 
 # DEPRECATED (2026-07-19): the pre-migration beyondmimic-style latent surface
@@ -51,7 +66,7 @@ _LATENT_LEGACY_TASK_KWARGS = {
 # default on 2026-07-20 on the theory that single-GPU ICE H100's ~10B-frame
 # budget (8192 envs x 12 steps x 100k iterations) matches the release's own
 # convergence criterion; reverted the same week once W&B run bn931wny
-# (Latent-Strict-v0 + the legacy/local optimizer contract, same 8192x12x12288
+# (the strict surface, now Latent-v0, + the legacy/local optimizer contract, same 8192x12x12288
 # scale) was found to reach episode/length=244 / episode/return=13.1 --
 # far above anything the SONIC release-optimizer contract produced at matched
 # scale in the concurrent VRAM ablation. Reachable only via the explicit
@@ -146,6 +161,22 @@ _LATENT_VQVAE_TASK_KWARGS = {
     ),
 }
 
+_LATENT_ABLATION_TASK_KWARGS = {
+    **_LATENT_STRICT_TASK_KWARGS,
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_latent_ablation_env_cfg:"
+        "ImitationG1LatentAblationEnvCfg"
+    ),
+    "rlopt_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_latent_ablation_cfg:"
+        "G1ImitationLatentAblationRLOptIPMDConfig"
+    ),
+    "rlopt_ipmd_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_latent_ablation_cfg:"
+        "G1ImitationLatentAblationRLOptIPMDConfig"
+    ),
+}
+
 gym.register(
     id="Isaac-Imitation-G1-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -160,6 +191,14 @@ gym.register(
     kwargs=_VANILLA_TASK_KWARGS,
 )
 
+# Strict-protocol explicit-command surface; see _VANILLA_STRICT_TASK_KWARGS.
+gym.register(
+    id="Isaac-Imitation-G1-Strict-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_VANILLA_STRICT_TASK_KWARGS,
+)
+
 # Default latent task (2026-07-21): the strict/legacy-optimizer surface; see
 # _LATENT_STRICT_TASK_KWARGS above.
 gym.register(
@@ -169,12 +208,27 @@ gym.register(
     kwargs=_LATENT_STRICT_TASK_KWARGS,
 )
 
-# Back-compat alias; same kwargs as Isaac-Imitation-G1-Latent-v0.
+# History ablation (2026-07-21): the strict default surface with SONIC's
+# 10-step proprioceptive history observations and input keys, on the local
+# optimizer contract. Only the observation/history contract differs from
+# Isaac-Imitation-G1-Latent-v0.
 gym.register(
-    id="Isaac-Imitation-G1-Latent-Strict-v0",
+    id="Isaac-Imitation-G1-Latent-History-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
-    kwargs=_LATENT_STRICT_TASK_KWARGS,
+    kwargs={
+        **_LATENT_STRICT_TASK_KWARGS,
+        "env_cfg_entry_point": (
+            f"{__name__}.imitation_g1_latent_env_cfg:"
+            "ImitationG1LatentStrictHistoryEnvCfg"
+        ),
+        "rlopt_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig"
+        ),
+        "rlopt_ipmd_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig"
+        ),
+    },
 )
 
 # DEPRECATED: pre-migration latent surface; see _LATENT_LEGACY_TASK_KWARGS.
@@ -220,4 +274,11 @@ gym.register(
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
     kwargs=_LATENT_VQVAE_TASK_KWARGS,
+)
+
+gym.register(
+    id="Isaac-Imitation-G1-Latent-Ablation-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_ABLATION_TASK_KWARGS,
 )

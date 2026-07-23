@@ -176,6 +176,14 @@ def _pretrain_cmd(args: argparse.Namespace, output_dir: Path) -> list[str]:
             "--gumbel_hard" if args.gumbel_hard else "--no-gumbel_hard",
             "--fsq_levels",
             *[str(level) for level in args.fsq_levels],
+            *(
+                [
+                    "--encoder_hidden_dims",
+                    *[str(dim) for dim in args.encoder_hidden_dims],
+                ]
+                if args.encoder_hidden_dims
+                else []
+            ),
             "--vq_codebook_size",
             str(args.vq_codebook_size),
             "--vq_ema_decay",
@@ -235,6 +243,13 @@ def _train_cmd(
     command_mode = _normalize_hl_skill_command_mode(args.hl_skill_command_mode)
     command_code_dim = _hl_skill_command_code_dim(args)
     latent_dim = command_code_dim + phase_dim
+    latent_hold_steps = (
+        int(args.latent_hold_steps)
+        if args.latent_hold_steps is not None
+        else int(args.horizon_steps)
+    )
+    if latent_hold_steps < 1:
+        raise ValueError("--latent-hold-steps must be >= 1.")
     logger_backend = _str_to_backend(args.logger_backend)
     exp_name = args.exp_name or _default_train_exp_name(
         pretrain_output_dir=pretrain_output_dir,
@@ -293,8 +308,8 @@ def _train_cmd(
         f"agent.ipmd.hl_skill_checkpoint_path={checkpoint_path}",
         f"agent.ipmd.hl_skill_horizon_steps={args.horizon_steps}",
         f"agent.ipmd.hl_skill_command_mode={command_mode}",
-        f"agent.ipmd.latent_steps_min={args.horizon_steps}",
-        f"agent.ipmd.latent_steps_max={args.horizon_steps}",
+        f"agent.ipmd.latent_steps_min={latent_hold_steps}",
+        f"agent.ipmd.latent_steps_max={latent_hold_steps}",
         f"agent.ipmd.latent_learning.command_phase_mode={args.phase_mode}",
         f"agent.ipmd.latent_learning.code_period={args.horizon_steps}",
         f"agent.ipmd.latent_learning.code_latent_dim={command_code_dim}",
@@ -414,6 +429,13 @@ def _parse_args() -> argparse.Namespace:
         "--gumbel-hard", action=argparse.BooleanOptionalAction, default=False
     )
     parser.add_argument("--fsq-levels", type=int, nargs="+", default=[8, 8, 8, 5, 5])
+    parser.add_argument(
+        "--encoder-hidden-dims",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Skill-encoder trunk MLP hidden widths forwarded to pretraining.",
+    )
     parser.add_argument("--vq-codebook-size", type=int, default=512)
     parser.add_argument("--vq-ema-decay", type=float, default=0.99)
     parser.add_argument("--vq-dead-code-reset-iters", type=int, default=0)
@@ -477,6 +499,17 @@ def _parse_args() -> argparse.Namespace:
         choices=("none", "sin_cos"),
         default="sin_cos",
         help="Phase features appended to the frozen skill latent command.",
+    )
+    parser.add_argument(
+        "--latent-hold-steps",
+        type=int,
+        default=None,
+        help=(
+            "Control steps a published latent command is held before the "
+            "encoder re-encodes (agent.ipmd.latent_steps_min/max). Defaults "
+            "to --horizon-steps (held-chunk contract); 1 gives SONIC-style "
+            "per-step re-encoding over the sliding future window."
+        ),
     )
     parser.add_argument(
         "--hl-skill-command-mode",

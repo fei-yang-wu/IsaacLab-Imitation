@@ -932,9 +932,13 @@ def run_simulator(
                 # motion root arrays do not include the per-environment scene-grid
                 # origin, so remove it before saving to keep body_pos_w and root_pos
                 # in the same coordinate frame.
+                # `.data.*` is a ProxyArray; take `.torch` BEFORE arithmetic so the
+                # subtraction is plain-tensor (env_origins is already a Tensor). The
+                # migration appended `.torch` to the direct reads below but missed this
+                # arithmetic case, where `.torch` on the Tensor result would fail.
                 body_pos_np = (
-                    (robot.data.body_pos_w - scene.env_origins[:, None, :])
-                    .torch.cpu()
+                    (robot.data.body_pos_w.torch - scene.env_origins[:, None, :])
+                    .cpu()
                     .numpy()
                 )
                 body_quat_np = robot.data.body_quat_w.torch.cpu().numpy()

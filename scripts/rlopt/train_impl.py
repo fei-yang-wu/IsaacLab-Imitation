@@ -8,6 +8,7 @@ import os
 import re
 import signal
 import sys
+import uuid
 import warnings
 from pathlib import Path
 
@@ -332,10 +333,39 @@ def train(
     )
 
     # directory for logging into
-    run_info = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_root_path = os.path.abspath(
-        os.path.join("logs", "rlopt", args_cli.algorithm.lower(), args_cli.task)
-    )
+    run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    logger_backend = str(getattr(agent_cfg.logger, "backend", "") or "").lower()
+    if logger_backend.rsplit(".", maxsplit=1)[-1] == "wandb":
+        # Allocate the W&B ID before constructing the local run directory and
+        # export it so TorchRL/W&B reuse the exact same ID during logger init.
+        # A project identifies a collection of runs and is not unique; the run
+        # ID is the collision-proof component needed when concurrent jobs begin
+        # within the same second.
+        wandb_run_id = os.environ.get("WANDB_RUN_ID") or wandb.util.generate_id()
+        os.environ.setdefault("WANDB_RUN_ID", wandb_run_id)
+        run_suffix = f"wandb-{wandb_run_id}"
+    else:
+        # Preserve the same uniqueness guarantee for non-W&B and offline jobs.
+        scheduler_job_id = os.environ.get("SLURM_JOB_ID")
+        run_suffix = (
+            f"slurm-{scheduler_job_id}"
+            if scheduler_job_id
+            else f"run-{uuid.uuid4().hex[:8]}"
+        )
+    run_info = f"{run_timestamp}_{run_suffix}"
+    # An explicit ``agent.logger.log_dir`` override is used verbatim as the log
+    # root; otherwise the repo-relative default applies. Needed on clusters
+    # where the workspace lives on node-local storage that is destroyed when the
+    # scheduler kills the job (ICE Slurm TIMEOUT is a SIGKILL, so nothing is
+    # copied back), and checkpoints must be written straight to a persistent
+    # bind mount instead. ``"logs"`` is the config default, i.e. "not set".
+    configured_log_dir = getattr(agent_cfg.logger, "log_dir", "logs") or "logs"
+    if configured_log_dir != "logs":
+        log_root_path = os.path.abspath(configured_log_dir)
+    else:
+        log_root_path = os.path.abspath(
+            os.path.join("logs", "rlopt", args_cli.algorithm.lower(), args_cli.task)
+        )
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # The Ray Tune workflow extracts experiment name using the logging line below, hence,
     # do not change it (see PR #2346, comment-2819298849)

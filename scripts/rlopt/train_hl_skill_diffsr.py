@@ -122,6 +122,13 @@ parser.add_argument(
     default=[8, 8, 8, 5, 5],
     help="Per-dim levels for --latent_mode fsq (codebook size = product).",
 )
+parser.add_argument(
+    "--encoder_hidden_dims",
+    type=int,
+    nargs="+",
+    default=None,
+    help="Skill-encoder trunk MLP hidden widths (default: config default).",
+)
 parser.add_argument("--vq_codebook_size", type=int, default=512)
 parser.add_argument("--vq_ema_decay", type=float, default=0.99)
 parser.add_argument(
@@ -363,7 +370,9 @@ def _wandb_log(run: Any, row: dict[str, Any]) -> None:
     payload = {
         key: value
         for key, value in row.items()
-        if key != "update" and isinstance(value, (int, float)) and not isinstance(value, bool)
+        if key != "update"
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
     }
     if payload:
         run.log(payload, step=step)
@@ -385,6 +394,11 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         gumbel_tau_anneal_iters=args_cli.gumbel_tau_anneal_iters,
         gumbel_hard=args_cli.gumbel_hard,
         fsq_levels=tuple(args_cli.fsq_levels),
+        **(
+            {"encoder_hidden_dims": tuple(args_cli.encoder_hidden_dims)}
+            if args_cli.encoder_hidden_dims
+            else {}
+        ),
         vq_codebook_size=args_cli.vq_codebook_size,
         vq_ema_decay=args_cli.vq_ema_decay,
         vq_dead_code_reset_iters=args_cli.vq_dead_code_reset_iters,

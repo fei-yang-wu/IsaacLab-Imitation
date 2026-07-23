@@ -1,57 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resumable BONES-SEED-91 job at a 5B-frame cap, chained across multiple
-# Slurm segments because ICE QoS caps every 1-GPU job at 16h
-# (MaxTRESMins gres/gpu=960 on coe-ice/coc-ice/pace-ice; partition MaxTime is
-# 16-18h on top of that).
+# Resumable corrected-LAFAN1 low-level job at a 5B-frame cap, chained across
+# multiple Slurm segments (ICE QoS caps every 1-GPU job at 16h via
+# MaxTRESMins gres/gpu=960). Sibling of
+# experiments/submit_bones_seed_sonic_5b_resumable_ice.sh; see that script's
+# header for the full cross-segment plumbing rationale (per-submission
+# isaaclab_<timestamp>/ workspace dirs, exp_name-filtered resume scan, and
+# /data-bind staging of pretrain + resume checkpoints).
 #
-# TASK is Isaac-Imitation-G1-Latent-v0, which since the 2026-07-21 revert
-# resolves to the strict/legacy-optimizer surface (the SONIC release surface
-# is opt-in only via Isaac-Imitation-G1-Latent-Sonic-v0; the old
-# Latent-Strict-v0 alias was removed on 2026-07-21 -- Latent-v0 always
-# denotes the latest preferred surface). W&B run bn931wny
-# (g1-lafan1-strict/ice3-l1-novideo) is the actual "L1" submission this run
-# is meant to match: this surface + the legacy/local optimizer contract
-# (512/256/128 ELU MLPs, lr 1e-3), which reached episode/length=244 and
-# episode/return=13.1 -- far better than what the new SONIC release-optimizer
-# contract has produced so far in the concurrent VRAM ablation. Latent-v0's
-# kwargs route to the legacy-style G1ImitationLatentRLOptIPMDConfig (not the
-# Sonic one), so selecting this task is sufficient; no separate
-# policy-contract flag needed.
+# TASK is Isaac-Imitation-G1-Latent-v0 (the strict/legacy-optimizer surface,
+# the default since the 2026-07-21 revert; the SONIC release surface is
+# opt-in only via Isaac-Imitation-G1-Latent-Sonic-v0).
 #
-# Each invocation of this script submits exactly ONE segment. Cross-segment
-# plumbing: the skill encoder and every low-level checkpoint are written
-# DIRECTLY to the /data bind (see the DURABILITY note below), which is the only
-# host path a job's container can write that outlives the job. Resume detection
-# is therefore a plain scan of this run's own RUN_TAG-scoped /data directory;
-# cumulative frames are tracked in <data>/ckpt_store/<RUN_TAG>/resume_state.tsv,
-# crediting each segment's own max model_step_<N> exactly once (RLOpt's
-# save_model/load_model restores weights + optimizer state but NOT the frame
-# counter, so step numbers restart per segment).
-# Re-invoke this script after each segment ends (success, crash, or walltime
-# cutoff) until it reports FRAME_CAP reached and refuses to submit further.
+# Scale is the VRAM-ablation-validated scaled config (2026-07-21): 12288 envs
+# x 12 rollout steps, minibatch = frames_per_batch / 8 = 18432, and
+# njmax=320/nconmax=40. Runs on ice-gpu H100 80 GB: the 48 GB ice-bw-gpu
+# Blackwell cards OOM at this scale (job 5525245; the stack itself worked).
 #
-# Uses the 91/100-motion SONIC-exclusion-filtered manifest at the scaled
-# config validated by the VRAM ablation (2026-07-21): 12288 envs x 12 rollout
-# steps (v2, the largest arm that fits one H100; 16384 envs and 12288x24 both
-# OOM), minibatch = frames_per_batch / 8 = 18432, and njmax=320/nconmax=40
-# (fixed per-step contact budget with headroom above the 288/32 that measured
-# zero overflow on BONES-SEED; njmax does NOT scale with env count).
-#
-# Blackwell result (2026-07-21, jobs 5525240/5525245): the ice-bw-gpu
-# rtx_pro_6000_blackwell cards are 48 GB (47.38 GiB visible), not 96 GB. The
-# stack itself works on Blackwell (kernels, Newton solver, pretrain, training
-# start all fine) but this 12288-env config OOMs at the first advantage pass,
-# so the default target is back to ice-gpu H100 80 GB. Pretrain (which fits)
-# was salvaged from those jobs via the pretrain store.
-#
-# RUN_TAG rotated on 2026-07-21 after the Newton joint-order fix
-# (fix/migration, merged as PR #24 / 900c66c): every checkpoint trained
-# before the fix encodes a Newton-specific joint permutation and is invalid,
-# so the old nj288_nc32 tag's tree (segment 1 = cancelled job 5524342) must
-# never be resumed. The fresh tag also retrains the skill encoder under the
-# pinned causal planner frame.
+# Submitted only with post-joint-fix code (fix/migration, merged as PR #24 /
+# 900c66c). The pre-fix LAFAN1 sanity runs (jobs 5524387/5524390) left
+# invalidated Newton checkpoints in the same central log trees; the exp_name
+# filter in resume detection excludes them.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -67,13 +37,13 @@ NJMAX=320
 NCONMAX=40
 FRAMES_PER_BATCH=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
 HORIZON_STEPS="${HORIZON_STEPS:-10}"
-RUN_TAG="${RUN_TAG:-bones_seed_91_strict_h${HORIZON_STEPS}_z256_5b_seed${SEED}_20260721_jointfix_nocur_e12288_r12_nj320_nc40}"
+RUN_TAG="${RUN_TAG:-lafan1_strict_h${HORIZON_STEPS}_z256_5b_seed${SEED}_20260721_jointfix_nocur_e12288_r12_nj320_nc40}"
 EXP_NAME="${EXP_NAME:-${RUN_TAG}_oracle_low_level}"
-MANIFEST_PATH="${MANIFEST_PATH:-/data/bones_seed_100/manifests/g1_bones_seed_100_sonic_filtered_manifest.json}"
-DATASET_PATH="${DATASET_PATH:-/data/bones_seed_100/g1_hl_diffsr_sonic_filtered}"
+MANIFEST_PATH="${MANIFEST_PATH:-/data/lafan1_corrected_8e95d557/manifests/g1_lafan1_manifest.json}"
+DATASET_PATH="${DATASET_PATH:-/data/lafan1_corrected_8e95d557/g1_hl_diffsr}"
 TASK_NAME="${TASK_NAME:-Isaac-Imitation-G1-Latent-v0}"
-EXPECTED_MANIFEST_SHA256="${EXPECTED_MANIFEST_SHA256:-8d48750177efb3e9118c5d0ca14b69d62abedff16eb8c00585920a34bd87ee8d}"
-EXPECTED_NPZ_COUNT="${EXPECTED_NPZ_COUNT:-100}"
+EXPECTED_MANIFEST_SHA256="${EXPECTED_MANIFEST_SHA256:-d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8}"
+EXPECTED_NPZ_COUNT="${EXPECTED_NPZ_COUNT:-40}"
 REMOTE_PROJECT_ROOT="${REMOTE_PROJECT_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab}"
 REMOTE_DATA_ROOT="${REMOTE_DATA_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLab/data}"
 
@@ -100,13 +70,6 @@ SEGMENT_TRAIN_SECONDS="${SEGMENT_TRAIN_SECONDS:-52200}"
 ASSUMED_FPS="${ASSUMED_FPS:-70000}"
 WALLTIME_ITERATIONS=$(( SEGMENT_TRAIN_SECONDS * ASSUMED_FPS / FRAMES_PER_BATCH ))
 
-local_manifest="${REPO_ROOT}/data/bones_seed_100/manifests/g1_bones_seed_100_sonic_filtered_manifest.json"
-actual_local_sha="$(sha256sum "${local_manifest}" | awk '{print $1}')"
-if [[ "${actual_local_sha}" != "${EXPECTED_MANIFEST_SHA256}" ]]; then
-    echo "[ERROR] Local SONIC-filtered BONES-SEED-100 manifest hash mismatch." >&2
-    exit 2
-fi
-
 case "${DRY_RUN}" in
     1|true|TRUE|yes|YES|on|ON) is_dry_run=1 ;;
     0|false|FALSE|no|NO|off|OFF) is_dry_run=0 ;;
@@ -117,10 +80,10 @@ case "${DRY_RUN}" in
 esac
 
 if [[ "${is_dry_run}" == "0" ]]; then
-    actual_remote_sha="$(ssh -o BatchMode=yes -o ConnectTimeout=10 ice "sha256sum '${REMOTE_DATA_ROOT}/bones_seed_100/manifests/g1_bones_seed_100_sonic_filtered_manifest.json'" | awk '{print $1}')"
-    remote_npz_count="$(ssh -o BatchMode=yes -o ConnectTimeout=10 ice "find '${REMOTE_DATA_ROOT}/bones_seed_100/npz/g1' -type f -name '*.npz' | wc -l")"
+    actual_remote_sha="$(ssh -o BatchMode=yes -o ConnectTimeout=10 ice "sha256sum '${REMOTE_DATA_ROOT}/lafan1_corrected_8e95d557/manifests/g1_lafan1_manifest.json'" | awk '{print $1}')"
+    remote_npz_count="$(ssh -o BatchMode=yes -o ConnectTimeout=10 ice "find '${REMOTE_DATA_ROOT}/lafan1_corrected_8e95d557' -type f -name '*.npz' | wc -l")"
     if [[ "${actual_remote_sha}" != "${EXPECTED_MANIFEST_SHA256}" || "${remote_npz_count}" != "${EXPECTED_NPZ_COUNT}" ]]; then
-        echo "[ERROR] ICE BONES-SEED-100 SONIC-filtered data gate failed: sha=${actual_remote_sha}, npz=${remote_npz_count}." >&2
+        echo "[ERROR] ICE corrected-LAFAN1 data gate failed: sha=${actual_remote_sha}, npz=${remote_npz_count}." >&2
         exit 2
     fi
 fi
@@ -251,7 +214,7 @@ export MINIBATCH_SIZE
 export MAX_ITERATIONS="${max_iterations}"
 export PRETRAIN_NUM_ENVS=16
 # 50k updates: the pipeline's own default and the previous full pretrain
-# setting; the earlier 5000 here was a 10x-short qualification value.
+# setting.
 export PRETRAIN_UPDATES=50000
 export PRETRAIN_BATCH_SIZE=8192
 export HORIZON_STEPS
@@ -259,8 +222,8 @@ export TRAIN_VIDEO=0
 export SAVE_INTERVAL=100000000
 export MANIFEST_PATH
 export DATASET_PATH
-export WANDB_PROJECT="${WANDB_PROJECT:-g1-bones-seed-100-sonic-latent-ice}"
-export WANDB_GROUP="${WANDB_GROUP:-strict-e12288-5b-resumable-jointfix}"
+export WANDB_PROJECT="${WANDB_PROJECT:-g1-lafan1-strict}"
+export WANDB_GROUP="${WANDB_GROUP:-scaled-e12288-5b-resumable-jointfix}"
 export EXP_NAME
 export CLUSTER_CONFIG=ice_runtime
 # H100 80 GB is the default: the scaled 12288-env config OOMs on the 48 GB
@@ -271,7 +234,7 @@ export CLUSTER_SLURM_QOS=coe-ice
 export CLUSTER_SLURM_GPU_GRES="${CLUSTER_SLURM_GPU_GRES:-gpu:h100:1}"
 export CLUSTER_SLURM_CPUS_PER_TASK=16
 export CLUSTER_SLURM_MEM=96G
-export CLUSTER_SLURM_JOB_NAME_PREFIX=bones-sonic-5b-resume
+export CLUSTER_SLURM_JOB_NAME_PREFIX=lafan1-5b-resume
 export CLUSTER_G1_USD_PATH=repo
 export EXTRA_PIPELINE_ARGS="${extra_args_string}"
 export DRY_RUN

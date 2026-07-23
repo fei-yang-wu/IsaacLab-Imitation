@@ -382,7 +382,7 @@ class G1ImitationLatentSonicRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
       the default on 2026-07-21: briefly flipped to the release contract on
       2026-07-20 on the theory that single-GPU ICE H100's ~10B-frame /
       100k-iteration budget would be in-scale for it, but W&B run bn931wny
-      (Latent-Strict-v0 + this local contract, same 8192x12x12288 scale)
+      (the strict surface, now Latent-v0, + this local contract, same 8192x12x12288 scale)
       reached episode/length=244 / episode/return=13.1 -- far above anything
       the release contract produced at matched scale in the concurrent VRAM
       ablation. See the CU130 migration wiki page, "Training-gate resolution
@@ -465,7 +465,7 @@ class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
     default as of 2026-07-21 -- the base
     ``G1ImitationLatentSonicRLOptIPMDConfig`` reverted to
     ``sonic_release_optimizer=False`` after underperforming the
-    Latent-Strict-v0 + local-optimizer combination at matched scale (see that
+    strict-surface (now Latent-v0) + local-optimizer combination at matched scale (see that
     class's docstring). Kept as an explicit, override-proof alias for cluster
     submission scripts that need the release contract specifically.
     """

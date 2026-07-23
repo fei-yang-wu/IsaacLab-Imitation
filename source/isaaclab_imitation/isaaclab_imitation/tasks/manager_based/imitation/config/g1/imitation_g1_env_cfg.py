@@ -1388,6 +1388,74 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
         self._resolve_manifest_config()
 
 
+# Anchor-relative observation terms per group on the vanilla observation
+# surface (no latent_command / expert_goal groups there).
+_VANILLA_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
+    "policy": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+    "critic": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+    ),
+    "expert_state": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+    "expert_window": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+    ),
+    "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+}
+
+
+@configclass
+class ImitationG1StrictTrackEnvCfg(ImitationG1LafanTrackEnvCfg):
+    """Explicit-command G1 tracking on the strict/pelvis protocol surface.
+
+    Mirrors ``ImitationG1LatentStrictEnvCfg``'s environment deltas (pelvis
+    anchor, strict SONIC termination functions, [0, 200] reset starts, no
+    curriculum) without the latent command, so explicit-interface trackers
+    (single-frame full-body, full-body chunk, EE chunk via
+    ``agent.command_space``) train on the same protocol as the latent tracker
+    and differ only in the command space.
+    """
+
+    terminations = G1SonicTerminationsCfg()  # type: ignore
+
+    def _set_anchor_body(self, anchor_body_name: str) -> None:
+        """Point every anchor-relative observation term at one body."""
+        for group_name, term_names in _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP.items():
+            group = getattr(self.observations, group_name)
+            for term_name in term_names:
+                term = getattr(group, term_name)
+                if term is None:
+                    continue
+                if "anchor_body_name" in term.params:
+                    term.params["anchor_body_name"] = anchor_body_name
+
+    def _set_reward_anchor_body(self, anchor_body_name: str) -> None:
+        """Point the anchor-relative reward terms at one body."""
+        for term_name in (
+            "motion_global_anchor_pos",
+            "motion_global_anchor_ori",
+            "motion_body_pos",
+            "motion_body_ori",
+        ):
+            getattr(self.rewards, term_name).params["anchor_body_name"] = (
+                anchor_body_name
+            )
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.random_reset_step_min = 0
+        self.random_reset_step_max = 200
+        self.random_reset_full_trajectory = False
+        self.expert_anchor_body_name = "pelvis"
+        self._set_anchor_body("pelvis")
+        self._set_reward_anchor_body("pelvis")
+
+
 # Backward-compatible aliases.
 ImitationG1EnvCfg = ImitationG1LafanTrackEnvCfg
 
@@ -1421,3 +1489,4 @@ def _g1_lafan_track_env_cfg_from_dict(
 
 
 ImitationG1LafanTrackEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+ImitationG1StrictTrackEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict

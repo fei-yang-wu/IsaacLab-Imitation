@@ -322,6 +322,7 @@ capture_cluster_env_overrides() {
     for var_name in \
         CLUSTER_ISAAC_SIM_CACHE_DIR \
         CLUSTER_ISAACLAB_DIR \
+        CLUSTER_PROJECT_LOGS_DIR \
         CLUSTER_SIF_PATH \
         CLUSTER_DATA_DIR \
         CLUSTER_HF_TOKEN_FILE \
@@ -359,6 +360,7 @@ restore_cluster_env_overrides() {
     for var_name in \
         CLUSTER_ISAAC_SIM_CACHE_DIR \
         CLUSTER_ISAACLAB_DIR \
+        CLUSTER_PROJECT_LOGS_DIR \
         CLUSTER_SIF_PATH \
         CLUSTER_DATA_DIR \
         CLUSTER_HF_TOKEN_FILE \
@@ -431,6 +433,11 @@ echo "[INFO] Using per-job TMPDIR: $TMPDIR"
 # Paths in .env.cluster are relative to $HOME; prepend it to make them absolute.
 CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$HOME" "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
 CLUSTER_ISAACLAB_DIR="$(prefix_home_if_relative "$HOME" "$CLUSTER_ISAACLAB_DIR")"
+# Direct invocations that bypass cluster_interface.sh still get a durable
+# per-workspace logs directory.  Normal submissions pass the stable base
+# workspace's logs directory so every run retains the usual centralized tree.
+CLUSTER_PROJECT_LOGS_DIR="${CLUSTER_PROJECT_LOGS_DIR:-${CLUSTER_ISAACLAB_DIR}/logs}"
+CLUSTER_PROJECT_LOGS_DIR="$(prefix_home_if_relative "$HOME" "$CLUSTER_PROJECT_LOGS_DIR")"
 CLUSTER_SIF_PATH="$(prefix_home_if_relative "$HOME" "$CLUSTER_SIF_PATH")"
 CLUSTER_DATA_DIR="$(prefix_home_if_relative "$HOME" "$CLUSTER_DATA_DIR")"
 CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$HOME" "${CLUSTER_HF_TOKEN_FILE:-}")"
@@ -547,6 +554,12 @@ cp -r $1 $TMPDIR
 # Get the directory name
 dir_name=$(basename "$1")
 seed_shared_project_logs_from_submission
+project_logs_bind_args=()
+if [ -n "${CLUSTER_PROJECT_LOGS_DIR:-}" ]; then
+    mkdir -p "$CLUSTER_PROJECT_LOGS_DIR" "$TMPDIR/$dir_name/logs"
+    project_logs_bind_args=(-B "$CLUSTER_PROJECT_LOGS_DIR:/workspace/isaaclab/project/logs:rw")
+    echo "[INFO] Binding persistent project logs: $CLUSTER_PROJECT_LOGS_DIR -> /workspace/isaaclab/project/logs"
+fi
 
 container_image="$TMPDIR/$2.sif"
 if [ "${CLUSTER_USE_SHARED_SIF:-0}" = "1" ]; then
@@ -696,6 +709,7 @@ set +e
     -B "$tmp_isaac_sim_cache_dir/documents:${DOCKER_USER_HOME}/Documents:rw" \
     -B "$tmp_isaac_sim_cache_dir/home:${container_home}:rw" \
     -B "$TMPDIR/$dir_name:/workspace/isaaclab/project:rw" \
+    "${project_logs_bind_args[@]}" \
     -B "${CLUSTER_DATA_DIR}:/data:rw" \
     -B "${CLUSTER_DATA_DIR}:${CLUSTER_DATA_DIR}:rw" \
     "${container_overlay_args[@]}" \

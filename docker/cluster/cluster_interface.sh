@@ -750,6 +750,7 @@ capture_cluster_env_overrides() {
     for var_name in \
         CLUSTER_ISAAC_SIM_CACHE_DIR \
         CLUSTER_ISAACLAB_DIR \
+        CLUSTER_PROJECT_LOGS_DIR \
         CLUSTER_SIF_PATH \
         CLUSTER_DATA_DIR \
         CLUSTER_HF_TOKEN_FILE \
@@ -803,6 +804,7 @@ restore_cluster_env_overrides() {
     for var_name in \
         CLUSTER_ISAAC_SIM_CACHE_DIR \
         CLUSTER_ISAACLAB_DIR \
+        CLUSTER_PROJECT_LOGS_DIR \
         CLUSTER_SIF_PATH \
         CLUSTER_DATA_DIR \
         CLUSTER_HF_TOKEN_FILE \
@@ -856,6 +858,7 @@ build_remote_job_env_args() {
     REMOTE_JOB_ENV_ARGS=()
     add_remote_env_arg_if_set CLUSTER_ISAAC_SIM_CACHE_DIR
     add_remote_env_arg_if_set CLUSTER_ISAACLAB_DIR
+    add_remote_env_arg_if_set CLUSTER_PROJECT_LOGS_DIR
     add_remote_env_arg_if_set CLUSTER_SIF_PATH
     add_remote_env_arg_if_set CLUSTER_DATA_DIR
     add_remote_env_arg_if_set CLUSTER_HF_TOKEN_FILE
@@ -956,6 +959,7 @@ build_remote_job_env_args() {
     REMOTE_JOB_ENV_ARGS=()
     add_remote_env_arg_if_set CLUSTER_ISAAC_SIM_CACHE_DIR
     add_remote_env_arg_if_set CLUSTER_ISAACLAB_DIR
+    add_remote_env_arg_if_set CLUSTER_PROJECT_LOGS_DIR
     add_remote_env_arg_if_set CLUSTER_SIF_PATH
     add_remote_env_arg_if_set CLUSTER_DATA_DIR
     add_remote_env_arg_if_set CLUSTER_HF_TOKEN_FILE
@@ -1411,6 +1415,7 @@ case $command in
         CLUSTER_REMOTE_HOME=$(ssh "$CLUSTER_LOGIN" 'echo $HOME')
         CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
         CLUSTER_ISAACLAB_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAACLAB_DIR")"
+        [ -n "${CLUSTER_PROJECT_LOGS_DIR:-}" ] && CLUSTER_PROJECT_LOGS_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_PROJECT_LOGS_DIR")"
         CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
         CLUSTER_DATA_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_DATA_DIR")"
         CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_HF_TOKEN_FILE")"
@@ -1419,6 +1424,7 @@ case $command in
         [ -n "${CLUSTER_G1_DATA_ROOT:-}" ] && CLUSTER_G1_DATA_ROOT="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_DATA_ROOT")"
         CLUSTER_ISAAC_SIM_CACHE_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAAC_SIM_CACHE_DIR")"
         CLUSTER_ISAACLAB_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_ISAACLAB_DIR")"
+        [ -n "${CLUSTER_PROJECT_LOGS_DIR:-}" ] && CLUSTER_PROJECT_LOGS_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_PROJECT_LOGS_DIR")"
         CLUSTER_SIF_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_SIF_PATH")"
         CLUSTER_DATA_DIR="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_DATA_DIR")"
         CLUSTER_HF_TOKEN_FILE="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "${CLUSTER_HF_TOKEN_FILE:-}")"
@@ -1426,6 +1432,11 @@ case $command in
         [ -n "${CLUSTER_G1_MANIFEST_PATH:-}" ] && CLUSTER_G1_MANIFEST_PATH="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_MANIFEST_PATH")"
         [ -n "${CLUSTER_G1_DATA_ROOT:-}" ] && CLUSTER_G1_DATA_ROOT="$(prefix_home_if_relative "$CLUSTER_REMOTE_HOME" "$CLUSTER_G1_DATA_ROOT")"
         CLUSTER_ISAACLAB_BASE_DIR="$CLUSTER_ISAACLAB_DIR"
+        # All containerized cluster profiles write the project's normal logs/
+        # tree directly to shared storage.  The submitted source snapshot gets
+        # a timestamped directory below, but checkpoints must not depend on an
+        # exit-time copy from compute-local storage.
+        CLUSTER_PROJECT_LOGS_DIR="${CLUSTER_PROJECT_LOGS_DIR:-${CLUSTER_ISAACLAB_BASE_DIR}/logs}"
         # Get current date and time
         current_datetime=$(date +"%Y%m%d_%H%M%S")
         # Append current date and time to CLUSTER_ISAACLAB_DIR
