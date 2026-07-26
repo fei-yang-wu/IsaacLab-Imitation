@@ -13,6 +13,7 @@ RLOpt and RSL-RL.
 - `scripts/rlopt`: training and playback entrypoints for RLOpt
 - `scripts/rsl_rl`: training entrypoints for RSL-RL
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test environment runners
+- `experiments/`: current-campaign navigation, reusable experiment tooling, and the staged paper-facing entrypoint
 - `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/`: required submodule checkouts
 - `source/isaaclab_imitation/isaaclab_imitation/assets/unitree`: vendored Unitree G1 URDF, meshes, and robot config
 - `docker/cluster`: cluster submission utilities
@@ -287,13 +288,7 @@ python scripts/rlopt/train.py \
     agent.bilinear.offline_pretrain.policy_bc_updates=2000
 ```
 
-For the cluster ablation set comparing scratch, state-only SR pretraining,
-reconstructed-action BC, and recorded-label BC:
-
-```bash
-DRY_RUN=1 experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
-experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
-```
+The older cluster ablation launcher for scratch, state-only SR pretraining, reconstructed-action BC, and recorded-label BC was pruned on 2026-07-23. The direct command above remains a development example; start a dated campaign if that comparison is revived.
 
 Train with RLOpt PPO:
 
@@ -360,43 +355,19 @@ samples, and finetunes one shared no-language planner. With the default LAFAN1
 manifest, `--ranks all --seeds 0,1,2` collects 40 motions times 3 seeds, or 120
 rollout trajectories total.
 
-For the command-space oracle ablation comparing the existing single-frame
-full-body command, a full-body trajectory command, and an end-effector
-trajectory command, use:
+The broad command-space oracle ablation is archived. Current Phase-4/5 qualification retains only two internal helpers in `experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/`: checkpoint evaluation and the low-level oracle submission adapter. They are dependencies of guarded paper workflows, not a collaborator-facing command-style sweep. Historical paths and recovery instructions are in [`experiments/PRUNED_SCRIPTS.md`](experiments/PRUNED_SCRIPTS.md).
 
-```bash
-DRY_RUN=1 experiments/command_space_ablation/run_local_oracle_smoke.sh
-experiments/command_space_ablation/run_local_oracle_smoke.sh
+For experiment navigation, begin with
+[`experiments/README.md`](experiments/README.md). It points to the current
+dated campaign, exhaustive live inventory, and paper-facing staging surface.
 
-DRY_RUN=1 experiments/command_space_ablation/submit_cluster_oracle_ablation.sh
-```
-
-Set `COMMAND_OBSERVATION_SOURCE=planner_oracle` to route the same oracle
-commands through the planner command buffers for a bridge smoke test.
-The cluster launcher defaults to three Dance102 seeds (`2024 2025 2026`) and
-uses `docker/cluster/.env.cluster` for the cluster-side manifest path.
-
-After checkpoints are available, evaluate them with the shared deterministic
-table path:
-
-```bash
-SEEDS="2024 2025 2026" \
-CHECKPOINTS="/path/single_seed2024.pt /path/single_seed2025.pt /path/single_seed2026.pt \
-/path/full_body_seed2024.pt /path/full_body_seed2025.pt /path/full_body_seed2026.pt \
-/path/ee_seed2024.pt /path/ee_seed2025.pt /path/ee_seed2026.pt" \
-experiments/command_space_ablation/evaluate_oracle_checkpoints.sh
-```
-
-The detailed two-level plan, metric list, and later closed-loop planner
-comparison live in
-[wiki/command-space-ablation.md](wiki/command-space-ablation.md).
-For trajectory checkpoints, set `PLANNER_MODE=reference`, `hold_current`,
-`noisy_reference`, or `zero` in the evaluator wrapper to compare the planner
-buffer path and simple planner-burden baselines.
-For the paper-facing learned-planner comparison between the learned latent
-interface, full-body trajectory commands, and end-effector trajectory commands,
-use the controlled strong internal baseline workflow in
-[wiki/fair-interface-baselines.md](wiki/fair-interface-baselines.md).
+The paper-facing learned-planner comparison has exactly two rows: the learned
+DiffSR latent interface and the ten-frame explicit vanilla command packet.
+The stable public entrypoint is staged under
+[`experiments/paper/`](experiments/paper/README.md); it remains blocked until
+the documented Phase 4 and Phase 5 release gates pass. The authoritative
+protocol is
+[`wiki/causal-interface-paper-plan.md`](wiki/causal-interface-paper-plan.md).
 
 For the two-stage high-level skill workflow, use the pipeline entrypoint. It
 first runs offline DiffSR skill-encoder pretraining, checks

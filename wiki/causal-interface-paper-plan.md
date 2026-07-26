@@ -486,9 +486,9 @@ infrastructure. They do not add rows to the focused paper comparison.
 The streamed command adapter, strict frozen loader, per-environment schedule,
 provenance checks, and strengthened equivalence certificate are implemented.
 Use
-`experiments/interface_baselines/run_focused_causal_interface_comparison.sh`
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh`
 for the focused local workflow and
-`experiments/interface_baselines/audit_focused_causal_interface_comparison.py`
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_focused_causal_interface_comparison.py`
 for the contract audit.
 
 The local adapter and tracker-code qualification is complete. Approximately
@@ -557,14 +557,14 @@ LATENT_SKILL_CHECKPOINT=logs/path/to/skill.pt \
 VANILLA_QUALIFICATION_AUDIT=logs/path/to/vanilla_audit.json \
 LATENT_QUALIFICATION_AUDIT=logs/path/to/latent_audit.json \
 STREAMED_EQUIVALENCE_CERTIFICATE=logs/path/to/equivalence.json \
-experiments/interface_baselines/submit_phase4_no_language_skynet.sh
+experiments/paper/submit_phase4_no_language_skynet.sh
 ```
 
 After every array task passes, aggregate from the shared output root:
 
 ```bash
 pixi run python \
-  experiments/interface_baselines/aggregate_phase4_no_language_results.py \
+  experiments/paper/aggregate_phase4_no_language_results.py \
   --run_root logs/interface_baselines/phase4_no_language_lafan1
 ```
 
@@ -590,7 +590,7 @@ and trains only two controllers: direct vanilla and DiffSR latent. Render both
 1B-frame jobs with:
 
 ```bash
-DRY_RUN=1 experiments/interface_baselines/run_bones_seed_low_level_skynet.sh
+DRY_RUN=1 experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_low_level_skynet.sh
 ```
 
 The launcher verifies the three persistent data hashes before rendering or
@@ -612,7 +612,7 @@ DRY_RUN=1 \
 VANILLA_TRACKER_CHECKPOINT=logs/path/to/vanilla.pt \
 LATENT_LOW_LEVEL_CHECKPOINT=logs/path/to/latent.pt \
 LATENT_SKILL_CHECKPOINT=logs/path/to/skill.pt \
-experiments/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh
 ```
 
 The qualification workflow evaluates all 100 motions for 1000 steps from
@@ -652,7 +652,7 @@ Use the minimal local gate before any larger job:
 LATENT_LOW_LEVEL_CHECKPOINT=/path/to/latent.pt \
 LATENT_SKILL_CHECKPOINT=/path/to/skill_encoder.pt \
 VANILLA_TRACKER_CHECKPOINT=/path/to/vanilla.pt \
-experiments/interface_baselines/run_bones_seed_language_smoke.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_language_smoke.sh
 ```
 
 The runner intentionally collects only two rows, takes one update, and runs
@@ -681,7 +681,7 @@ LATENT_QUALIFICATION_AUDIT=/path/to/latent_qualification.json \
 STREAMED_EQUIVALENCE_CERTIFICATE=/path/to/equivalence.json \
 OUTPUT_ROOT=logs/interface_baselines/bones_seed_multigoal_seed0 \
 SEED=0 \
-experiments/interface_baselines/run_bones_seed_multigoal_language_comparison.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.sh
 ```
 
 `run_bones_seed_multigoal_language_comparison.py` collects oracle
@@ -701,7 +701,7 @@ match passing oracle audits at the 0.8 threshold, and the streamed-vanilla
 equivalence certificate covers all packet phases and asynchronous renewal.
 Prepare and inspect a submission with
 `DRY_RUN=1 MODE=bones-seed-multigoal-language
-experiments/interface_baselines/submit_cluster_interface_baselines.sh`; do not
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_cluster_interface_baselines.sh`; do not
 submit until the fresh-data and low-level oracle gates pass.
 
 Oracle demonstration collection is now batched safely: motion rank is used
@@ -722,7 +722,7 @@ DRY_RUN=1 \
 VANILLA_TRACKER_CHECKPOINT=logs/path/to/qualified_vanilla.pt \
 LATENT_LOW_LEVEL_CHECKPOINT=logs/path/to/qualified_latent.pt \
 LATENT_SKILL_CHECKPOINT=logs/path/to/qualified_skill.pt \
-experiments/interface_baselines/submit_bones_seed_multiseed_pipeline_skynet.sh
+experiments/paper/submit_bones_seed_multiseed_pipeline_skynet.sh
 ```
 
 The wrapper fixes seeds `0 1 2` and, for a real submission, preflights all
@@ -791,7 +791,7 @@ them with:
 
 ```bash
 pixi run python \
-  experiments/interface_baselines/aggregate_bones_seed_multiseed_results.py \
+  experiments/paper/aggregate_bones_seed_multiseed_results.py \
   --run_roots \
     logs/interface_baselines/bones_seed_100_multigoal_language_seed0 \
     logs/interface_baselines/bones_seed_100_multigoal_language_seed1 \
@@ -903,7 +903,7 @@ with:
 
 ```bash
 pixi run python \
-  experiments/interface_baselines/build_paper_release_bundle.py \
+  experiments/paper/build_paper_release_bundle.py \
   --phase4_aggregate logs/interface_baselines/phase4_no_language_lafan1/aggregate \
   --phase5_aggregate logs/interface_baselines/bones_seed_100_multigoal_language_multiseed \
   --output_dir logs/interface_baselines/paper_release_v1

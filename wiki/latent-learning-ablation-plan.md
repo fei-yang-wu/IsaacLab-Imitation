@@ -139,9 +139,9 @@ not weakened to retain it.
 ## Launchers and gate
 
 ```text
-experiments/latent_ablation/submit_lafan1_reconstruction_ablation_ice.sh
-experiments/latent_ablation/submit_lafan1_diffsr_bottleneck_ablation_ice.sh
-experiments/latent_ablation/training_profile.example.env
+experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/submit_lafan1_reconstruction_ablation_ice.sh
+experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/submit_lafan1_diffsr_bottleneck_ablation_ice.sh
+experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/training_profile.example.env
 ```
 
 Both launchers default to `MODE=print`. Real submission requires a copied
@@ -151,7 +151,7 @@ profile containing `PROFILE_APPROVED=1`, plus:
 MODE=submit \
 CONFIRM_SUBMIT=lafan1-latent-ablation \
 TRAINING_PROFILE=/absolute/path/to/approved.env \
-experiments/latent_ablation/submit_lafan1_reconstruction_ablation_ice.sh
+experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/submit_lafan1_reconstruction_ablation_ice.sh
 ```
 
 The approved profile was selected from the independent H100/H200 and
@@ -165,7 +165,7 @@ RLOpt logs. Preview all twelve commands with:
 
 ```bash
 MODE=print \
-experiments/latent_ablation/submit_all_h200_after_local_qualification.sh
+experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/submit_all_h200_after_local_qualification.sh
 ```
 
 Actual submission additionally requires all twelve passing
@@ -175,7 +175,7 @@ refuses missing or failed arms. Generate those records with:
 ```bash
 MODE=run \
 OUTPUT_ROOT=/absolute/path/to/local_10m_gate \
-experiments/latent_ablation/run_lafan1_local_10m_qualification.sh
+experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/run_lafan1_local_10m_qualification.sh
 ```
 
 Before submission, exercise the complete gate and print the exact twelve
@@ -184,8 +184,8 @@ commands without changing scheduler state:
 ```bash
 MODE=validate \
 LOCAL_QUALIFICATION_ROOT=/absolute/path/to/local_10m_gate \
-TRAINING_PROFILE=experiments/latent_ablation/training_profile.h200.approved.env \
-experiments/latent_ablation/submit_all_h200_after_local_qualification.sh
+TRAINING_PROFILE=experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/training_profile.h200.approved.env \
+experiments/campaigns/2026-07-22-latent-learning-ablation/latent_ablation/submit_all_h200_after_local_qualification.sh
 ```
 
 If an arm has not plateaued before the 16-hour boundary, both launchers accept

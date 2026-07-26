@@ -82,7 +82,7 @@ The code gate is:
 LATENT_LOW_LEVEL_CHECKPOINT=/path/to/latent.pt \
 LATENT_SKILL_CHECKPOINT=/path/to/skill_encoder.pt \
 VANILLA_TRACKER_CHECKPOINT=/path/to/vanilla.pt \
-experiments/interface_baselines/run_bones_seed_language_smoke.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_language_smoke.sh
 ```
 
 The runner performs the body-name/event preflight, writes a separate
@@ -125,7 +125,7 @@ LATENT_QUALIFICATION_AUDIT=/path/to/latent_qualification.json \
 STREAMED_EQUIVALENCE_CERTIFICATE=/path/to/equivalence.json \
 OUTPUT_ROOT=logs/interface_baselines/bones_seed_multigoal_seed0 \
 SEED=0 \
-experiments/interface_baselines/run_bones_seed_multigoal_language_comparison.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.sh
 ```
 
 Use Skynet for the complete motion set and paper seeds. Local work should only

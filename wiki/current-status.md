@@ -1,5 +1,7 @@
 # Project Live Status
 
+Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
+
 Last verified: 2026-07-22, after the cluster-wide persistent central-log bind
 was validated by ICE checkpoint smoke job `5526584`. Previously, after the
 joint-order fix merged to main
@@ -27,6 +29,14 @@ This is the living memory for the active research project. Read it first when
 returning to the project or starting a new agent session. It answers **where we
 are now**. The detailed protocol and experiment history remain in the linked
 phase documents.
+
+Human-facing launcher navigation now starts at
+[`experiments/README.md`](../experiments/README.md). It marks the
+2026-07-22 latent-learning ablation as the primary current campaign, keeps the
+BONES h10 scale screen as its supporting campaign, and reserves
+`experiments/paper/` for the eventual stable release entrypoint. Dated
+campaign folders index canonical scripts rather than copying their
+implementation.
 
 Update this page after a meaningful code decision, qualification result,
 cluster submission, job failure, or paper result. Verify changing external
@@ -116,7 +126,7 @@ all other PPO/environment settings are fixed. Checkpoints are written every
 25M frames. Compare arms by sustained wall-clock time to matched episodic
 return and episodic-length levels, not final sample count alone. The W&B
 project is `g1-bones-seed-h10-gpu-lr-ablation-ice`. Launcher:
-`experiments/submit_bones_seed_h10_gpu_lr_ablation_ice.sh`.
+`experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_bones_seed_h10_gpu_lr_ablation_ice.sh`.
 
 PACE submission now accepts the same restricted
 `CLUSTER_SLURM_DEPENDENCY=afterok:<job>[:<job>...]` contract as the general
@@ -741,6 +751,52 @@ preparation data reached planner training or evaluation. These failed chains
 are not paper results and must not be resumed without auditing the partial
 artifacts.
 
+**2026-07-23 latent-only H200 language pilot submitted.** The new H200
+controller is intentionally being tested outside the paper comparison: it was
+trained on the 91-motion SONIC-filtered manifest and has no matched qualified
+vanilla checkpoint. The campaign therefore sets `INTERFACES=latent_skill` and
+does not run a full-body baseline, controller comparison, or GPU/parameter
+ablation. It uses ten goals common to the 91-motion and fresh 100-motion trees,
+150 demonstration rows plus 150 planner-rollout rows per goal, ten same-goal
+rollout environments, and the fixed 500-step evaluation.
+
+The guarded dependency chain is:
+
+| Stage | Slurm job |
+| --- | ---: |
+| Prepare | `3560697` |
+| Rollout array | `3560698` |
+| Fine-tune | `3560699` |
+| Final eval array | `3560700` |
+| Summarize | `3560701` |
+
+Output root: `logs/interface_baselines/bones_seed_h200_language_preliminary_seed0_20260723`.
+The persistent record is on Skynet at the corresponding `cluster_submission.json`.
+At submission verification, all five jobs were `PENDING`; no stage had begun.
+The H200 checkpoint SHA-256 is
+`6765a324a840b33a84f9a0b5a817c60303979bbec7a36ebc31242086d61d1572` and the
+encoder binding passed all 14 tensor checks. This run is
+`preliminary_unqualified=true` and cannot enter the paper aggregate.
+
+**2026-07-23 local ten-goal baseline campaign added.** To obtain the two basic
+planner baselines without waiting on cluster queues, the campaign
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/` runs the same
+shared Phase-5 workflow entirely on the local workstation: latent-only, the
+same ten goals and frozen H200 checkpoints as the H200 pilot, a derived
+ten-motion subset manifest (`data/bones_seed_phase5_local10/`, source-hash
+recorded) so Isaac only loads the needed references, 150 demonstration plus
+150 rollout rows per goal, and 500-step episodes. Its two deliverables are the
+demonstration-pretrained planner and the rollout-finetuned planner under
+`logs/interface_baselines/bones_seed_phase5_local10_seed0/latent_skill/`. As
+part of this, the canonical stage driver
+`run_bones_seed_multigoal_language_comparison.{py,sh}` (now under
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/`)
+was made location-independent: it resolves its sibling workflow scripts and the
+repository root from its own path instead of the hardcoded pre-reorganization
+`experiments/interface_baselines/` prefix, which had left the pipeline
+unrunnable after the 2026-07-23 script reorganization. Like the H200 pilot,
+this local run is `preliminary_unqualified=true` and is not paper evidence.
+
 Data-budget interpretation is important: one saved row is one 5 Hz planner
 decision containing a ten-frame 50 Hz command chunk. The failed configuration
 requested 100,000 demonstration rows plus 100,000 rollout rows per interface,
@@ -753,10 +809,11 @@ The current recommended Phase 5 budget is:
 - 30,000 unique rows in the merged fine-tuning dataset.
 
 The old 100,000 plus 100,000 configuration should become an optional
-large-data scaling point, not the default paper run. This budget change has
-not yet been encoded into a replacement launcher or submitted. Before doing
-so, verify that the four difficult motions can reach 150 rows and increase the
-collection safety limit without changing the 500-step episode protocol.
+large-data scaling point, not the default paper run. The 150-row setting is
+encoded in the latent-only preliminary campaign above; it has not replaced the
+guarded paper launcher. Before changing the paper launcher, verify that the
+four difficult motions can reach 150 rows and increase the collection safety
+limit without changing the 500-step episode protocol.
 
 Data preparation and hashes:
 [BONES-SEED Phase-5 Data Preparation](bones-seed-phase5-data-preparation.md).
@@ -815,6 +872,11 @@ Exact diagnostic tables and artifact paths are in
 
 ## Document Map
 
+- [Project Progress Report](progress-report.md): results-facing summary in
+  three fixed sections (latent encoder ablations, interface design,
+  hardware), updated on every result change.
+- [Experiment Navigation](../experiments/README.md): current dated campaign,
+  historical launcher indexes, and staged paper-facing entrypoint.
 - [Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md):
   authoritative research design and phase contract.
 - [Whole-Body VLA and Latent-Action Literature Review](whole-body-vla-literature-review.md):

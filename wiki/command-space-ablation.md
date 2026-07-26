@@ -1,5 +1,7 @@
 # Command-Space Ablation
 
+Status: **archived exploratory plan**. Its manual smoke, CSV, comparison, and evaluation-wrapper scripts were pruned on 2026-07-23. Current paper qualification retains only `evaluate_checkpoint.py` and `submit_cluster_oracle_ablation.sh` as internal dependencies; the historical commands below are not live entrypoints. Their paths and recovery commands are in [`experiments/PRUNED_SCRIPTS.md`](../experiments/PRUNED_SCRIPTS.md).
+
 This plan compares how much whole-body imitation performance depends on the
 high-level command representation, separately from how good a planner is at
 generating that command.
@@ -38,7 +40,7 @@ tests. Override it if you only need training logs.
 Full cluster dry run:
 
 ```bash
-DRY_RUN=1 experiments/command_space_ablation/submit_cluster_oracle_ablation.sh
+DRY_RUN=1 experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/submit_cluster_oracle_ablation.sh
 ```
 
 The default cluster launcher runs three seeds (`2024 2025 2026`) for the three
@@ -62,7 +64,7 @@ Useful overrides:
 COMMAND_SPACES="full_body_trajectory ee_trajectory" \
 COMMAND_FUTURE_STEPS=50 \
 SEEDS="2024 2025 2026" \
-DRY_RUN=1 experiments/command_space_ablation/submit_cluster_oracle_ablation.sh
+DRY_RUN=1 experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/submit_cluster_oracle_ablation.sh
 ```
 
 ## Evaluation Table
@@ -158,7 +160,7 @@ error when the planner bridge is used.
 For a single checkpoint:
 
 ```bash
-pixi run -e isaaclab python experiments/command_space_ablation/evaluate_checkpoint.py \
+pixi run -e isaaclab python experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
     --task Isaac-Imitation-G1-v0 \
     --algo IPMD \
     --headless \

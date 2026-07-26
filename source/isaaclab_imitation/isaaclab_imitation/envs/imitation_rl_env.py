@@ -1,4 +1,5 @@
 import logging
+import os as _os
 import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -190,7 +191,21 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         ):
             manifest_resolver = getattr(cfg, "_resolve_manifest_config", None)
             if callable(manifest_resolver):
-                manifest_resolver()
+                # Preserve values applied after config construction. Isaac
+                # Lab's Hydra integration uses plain setattr for late CLI
+                # overrides, so default resolution would silently replace an
+                # explicit cache and motion subset.
+                configured_dataset_path = getattr(cfg, "dataset_path", None)
+                default_dataset_path = getattr(
+                    type(cfg), "dataset_path", "data/lafan1/g1/"
+                )
+                manifest_resolver(
+                    dataset_path_explicit=(
+                        configured_dataset_path is not None
+                        and configured_dataset_path != default_dataset_path
+                    ),
+                    motions_explicit=getattr(cfg, "motions", None) is not None,
+                )
 
         # Get dataset path and determine if we need to create it
         dataset_path = getattr(cfg, "dataset_path", None)
@@ -460,6 +475,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._held_command_anchor_pose: dict[
             str, tuple[torch.Tensor, torch.Tensor]
         ] = {}
+        # Diagnostic command-pipeline trace (see _maybe_trace_command_window).
+        # Inert unless ISAACLAB_COMMAND_TRACE names an output path.
+        self._command_trace_enabled = bool(_os.environ.get("ISAACLAB_COMMAND_TRACE"))
+        self._command_trace_records: list[dict[str, Any]] = []
+        # Set once an external publisher calls capture_held_command_anchor();
+        # from then on it owns the held reference pose and the automatic phase-0
+        # recapture is suppressed. See capture_held_command_anchor().
+        self._external_command_anchor_owner = False
+        # Optional in-step planner publication hook (set_planner_command_provider).
+        self._planner_command_provider: Any = None
+        self._planner_command_provider_token: int | None = None
 
         # Store reference joint mapping
         self.reference_joint_names = reference_joint_names
@@ -1956,6 +1982,84 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             env_ids=env_ids,
         )
 
+    def set_planner_command_provider(self, provider: Any) -> None:
+        """Register a callback that produces planner command packets in-step.
+
+        ``planner_oracle`` fills the command buffer from the expert *inside* the
+        observation pass, so the packet is expressed in the anchor frame of the
+        very step that consumes it and its re-expression is exactly the identity
+        at publication. An external publisher writing between steps cannot match
+        that: it fetches body-frame quantities one physics step early, which
+        silently biases the root command.
+
+        Registering a provider gives a planner the same in-step contract. The
+        callback receives the environment ids being renewed and returns a
+        mapping of command term name to tensor for those environments.
+        """
+        self._planner_command_provider = provider
+        self._planner_command_provider_token = None
+
+    def _maybe_fill_from_planner_provider(self, phase: torch.Tensor) -> None:
+        """Publish the registered planner packet for envs at hold phase zero."""
+        provider = getattr(self, "_planner_command_provider", None)
+        if provider is None:
+            return
+        # get_current_command_window_term runs once per command term; the
+        # planner must be evaluated once per control step, not once per term.
+        token = self.common_step_counter
+        if getattr(self, "_planner_command_provider_token", None) == token:
+            return
+        renew_ids = torch.nonzero(phase == 0, as_tuple=False).flatten()
+        self._planner_command_provider_token = token
+        if renew_ids.numel() == 0:
+            return
+        terms = provider(renew_ids)
+        if terms:
+            self.set_agent_trajectory_command(terms, env_ids=renew_ids)
+
+    def capture_held_command_anchor(
+        self,
+        anchor_body_name: str = "torso_link",
+        env_ids: torch.Tensor | None = None,
+    ) -> None:
+        """Pin the held command anchor pose to the robot's current anchor.
+
+        Published chunks are stored in the anchor frame at publish time and
+        re-expressed into the current anchor frame on every consumption step.
+        The env-filled (``planner_oracle``) path writes the chunk and captures
+        that reference pose atomically inside observation computation, so its
+        re-expression is exactly the identity at publication.
+
+        An external publisher writes the buffer at a different instant, so its
+        chunk is interpreted against a stale reference pose and the root command
+        is systematically wrong. Calling this immediately after
+        :meth:`set_agent_trajectory_command` restores the atomicity.
+        """
+        anchor_pos_w, anchor_quat_w = self._get_robot_anchor_state_w_fast(
+            anchor_body_name
+        )
+        anchor_pos_w = anchor_pos_w.reshape(-1, 3)
+        anchor_quat_w = anchor_quat_w.reshape(-1, 4)
+        # From here on the publisher owns this reference pose: the automatic
+        # phase-0 recapture must not clobber it, or the packet (expressed in the
+        # publish-time anchor frame) would be re-expressed as if it were already
+        # in the consuming step's frame, losing exactly one step of robot motion.
+        self._external_command_anchor_owner = True
+        stored = self._held_command_anchor_pose.get(anchor_body_name)
+        if stored is None:
+            self._held_command_anchor_pose[anchor_body_name] = (
+                anchor_pos_w.clone(),
+                anchor_quat_w.clone(),
+            )
+            return
+        if env_ids is None:
+            stored[0].copy_(anchor_pos_w)
+            stored[1].copy_(anchor_quat_w)
+            return
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        stored[0].index_copy_(0, env_ids, anchor_pos_w.index_select(0, env_ids))
+        stored[1].index_copy_(0, env_ids, anchor_quat_w.index_select(0, env_ids))
+
     def reset_agent_trajectory_command(
         self, env_ids: torch.Tensor | None = None
     ) -> None:
@@ -2026,11 +2130,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         {term_name: value.index_select(0, renew_ids)},
                         env_ids=renew_ids,
                     )
+        elif source == "planner" and hold_steps > 0:
+            # Give a registered planner the same in-step publication contract as
+            # planner_oracle above, so its packet is expressed in the anchor
+            # frame of the step that consumes it rather than one step early.
+            self._maybe_fill_from_planner_provider(self._command_hold_phase())
 
         # Observation tensors must not alias the mutable planner command buffers:
         # resets and subsequent planner publishes update those buffers in-place.
         value = self.get_agent_trajectory_command_term(term_name).clone()
         if hold_steps > 0:
+            raw_traced = value if self._command_trace_enabled else None
             phase = self._command_hold_phase()
             self._update_held_command_anchor_pose(anchor_body_name, phase)
             value = self._shift_window_by_phase(
@@ -2038,16 +2148,99 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 phase,
                 window_steps=self._agent_trajectory_command_window_steps,
             )
+            shifted_traced = value if self._command_trace_enabled else None
             value = self._reexpress_window_in_current_anchor_frame(
                 value,
                 term_name=term_name,
                 anchor_body_name=anchor_body_name,
                 window_steps=self._agent_trajectory_command_window_steps,
             )
+            self._maybe_trace_command_window(
+                term_name=term_name,
+                source=source,
+                raw=raw_traced,
+                shifted=shifted_traced,
+                consumed=value,
+                anchor_body_name=anchor_body_name,
+                past_steps=past_steps,
+                future_steps=future_steps,
+                joint_ids=joint_ids,
+                reference_body_names=reference_body_names,
+            )
         if env_ids is None:
             return value
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
         return value.index_select(0, env_ids)
+
+    def _maybe_trace_command_window(
+        self,
+        *,
+        term_name: str,
+        source: str,
+        raw: torch.Tensor | None,
+        shifted: torch.Tensor | None,
+        consumed: torch.Tensor,
+        anchor_body_name: str,
+        past_steps: int,
+        future_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice,
+        reference_body_names: Sequence[str],
+    ) -> None:
+        """Append one command-pipeline record when tracing is enabled.
+
+        Diagnostic only. Enabled by setting ``ISAACLAB_COMMAND_TRACE`` to an
+        output ``.pt`` path; otherwise this is a single dict lookup and returns
+        immediately, so the normal control path is unchanged.
+
+        Records the buffer at each pipeline stage (raw -> phase-shifted ->
+        re-expressed in the current anchor frame) alongside the expert window
+        for the same control step. Comparing traces from two publication
+        sources that carry identical ground-truth content isolates whether a
+        divergence comes from phase alignment, anchor frame, or slot handling.
+        """
+        trace_path = _os.environ.get("ISAACLAB_COMMAND_TRACE")
+        if not trace_path:
+            return
+        try:
+            expert = self.get_current_expert_window_term(
+                term_name=term_name,
+                past_steps=past_steps,
+                future_steps=future_steps,
+                joint_ids=joint_ids,
+                anchor_body_name=anchor_body_name,
+                reference_body_names=reference_body_names,
+            )
+        except Exception:  # pragma: no cover - tracing must never break a run
+            expert = None
+        record = {
+            "term_name": term_name,
+            "source": source,
+            "episode_length_buf": self.episode_length_buf.detach().cpu().clone(),
+            "phase": self._command_hold_phase().detach().cpu().clone(),
+            "consumed": consumed.detach().cpu().clone(),
+        }
+        if raw is not None:
+            record["raw"] = raw.detach().cpu().clone()
+        if shifted is not None:
+            record["shifted"] = shifted.detach().cpu().clone()
+        if expert is not None:
+            record["expert"] = expert.detach().cpu().clone()
+        held = self._held_command_anchor_pose.get(anchor_body_name)
+        if held is not None:
+            record["held_anchor_pos"] = held[0].detach().cpu().clone()
+            record["held_anchor_quat"] = held[1].detach().cpu().clone()
+        self._command_trace_records.append(record)
+        # Flush incrementally so a crashed or killed run still yields a trace.
+        if len(self._command_trace_records) % 50 == 0:
+            torch.save(self._command_trace_records, trace_path)
+
+    def flush_command_trace(self) -> str | None:
+        """Persist any buffered command-pipeline trace records."""
+        trace_path = _os.environ.get("ISAACLAB_COMMAND_TRACE")
+        if not trace_path or not self._command_trace_records:
+            return None
+        torch.save(self._command_trace_records, trace_path)
+        return trace_path
 
     @property
     def policy_command_mode(self) -> str:
@@ -2220,6 +2413,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 anchor_pos_w.clone(),
                 anchor_quat_w.clone(),
             )
+            return
+        if self._external_command_anchor_owner:
+            # An external publisher pins this pose at publish time; recapturing
+            # it here would discard the frame the packet was expressed in.
             return
         renew_mask = phase == 0
         if bool(renew_mask.any()):

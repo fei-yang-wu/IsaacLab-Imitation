@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 import sys
 import time
@@ -21,7 +22,33 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from isaaclab.app import AppLauncher
+
+# CU130 split-runtime bootstrap (ICE only): scrub Kit's bundled CPython stdlib off
+# sys.path so the runtime python's own platform.py is used (Kit's cannot parse the
+# conda-forge sys.version banner). No-op outside the split runtime.
+if os.environ.get("ISAACLAB_SPLIT_RUNTIME") == "1":
+    _KIT_PY = "/isaac-sim/kit/python"
+    # Drop Kit's stdlib dir (holds the broken platform.py) but KEEP its
+    # site-packages (lazy_loader/hydra/omegaconf, absent from the runtime env).
+    sys.path[:] = [
+        _p
+        for _p in sys.path
+        if not (
+            os.path.realpath(_p or ".").startswith(_KIT_PY)
+            and "site-packages" not in os.path.realpath(_p or ".")
+        )
+    ]
+
+from runtime_bootstrap import (
+    assert_kit_not_loaded,
+    config_contains_type_name,
+    install_kit_import_guard,
+)
+
+
+STRICT_KITLESS = "--assert-kitless" in sys.argv[1:]
+if STRICT_KITLESS:
+    install_kit_import_guard()
 
 
 def _file_sha256(path: str | Path) -> str:
@@ -311,15 +338,20 @@ parser.add_argument(
         "so the two can never be pooled by accident."
     ),
 )
-AppLauncher.add_app_launcher_args(parser)
+parser.add_argument(
+    "--assert-kitless",
+    action="store_true",
+    help="Require Newton and fail if Isaac Sim or Omniverse Kit is imported.",
+)
+from isaaclab_tasks.utils import add_launcher_args
+
+add_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
 if args_cli.video:
     args_cli.enable_cameras = True
 
 sys.argv = [sys.argv[0]] + hydra_args
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
 
 import gymnasium as gym
 import isaaclab_imitation.tasks  # noqa: F401
@@ -340,8 +372,16 @@ from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWra
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
+    G1TerminationsCfg,
 )
-from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
+    LATENT_POLICY_INPUT_KEYS,
+)
+from isaaclab_tasks.utils import (
+    compute_kit_requirements,
+    launch_simulation,
+    resolve_task_config,
+)
 from rlopt.agent import (
     AMP,
     ASE,
@@ -361,13 +401,25 @@ from torch import Tensor
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 
-INTERFACE_BASELINE_DIR = (
-    Path(__file__).resolve().parents[2] / "experiments" / "interface_baselines"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_INTERFACE_BASELINE_CANDIDATES = (
+    _REPO_ROOT
+    / "experiments"
+    / "campaigns"
+    / "2026-07-23-bones-phase5-language-local10"
+    / "interface_baselines",
+    _REPO_ROOT / "experiments" / "paper" / "interface_baselines",
+    _REPO_ROOT / "experiments" / "interface_baselines",
+)
+INTERFACE_BASELINE_DIR = next(
+    (path for path in _INTERFACE_BASELINE_CANDIDATES if path.is_dir()),
+    _INTERFACE_BASELINE_CANDIDATES[0],
 )
 if str(INTERFACE_BASELINE_DIR) not in sys.path:
     sys.path.append(str(INTERFACE_BASELINE_DIR))
 from balanced_motion_rows import BalancedMotionRowSelector  # noqa: E402
 from interface_planner_common import load_planner_checkpoint  # noqa: E402
+from low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
 from paper_protocol_metadata import (  # noqa: E402
     disable_domain_randomization,
     interval_event_metadata,
@@ -586,6 +638,18 @@ def _resolve_existing_body_names(
     return names
 
 
+def _as_torch_tensor(value: Any, *, label: str) -> Tensor:
+    """Normalize Isaac Lab tensors and Newton ProxyArrays at metric boundaries."""
+    if isinstance(value, Tensor):
+        return value
+    torch_value = getattr(value, "torch", None)
+    if isinstance(torch_value, Tensor):
+        return torch_value
+    raise TypeError(
+        f"Expected Tensor or Newton ProxyArray for {label}, got {type(value).__name__}."
+    )
+
+
 def _mean_body_pose_errors(
     base_env: ImitationRLEnv,
     names: list[str],
@@ -595,6 +659,10 @@ def _mean_body_pose_errors(
     body_ids = [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
     actual_pos, actual_quat = base_env._get_robot_body_pose_w_fast(body_ids)
     ref_pos, ref_quat = base_env._get_reference_body_pose_w_fast(tuple(names))
+    actual_pos = _as_torch_tensor(actual_pos, label="robot body positions")
+    actual_quat = _as_torch_tensor(actual_quat, label="robot body orientations")
+    ref_pos = _as_torch_tensor(ref_pos, label="reference body positions")
+    ref_quat = _as_torch_tensor(ref_quat, label="reference body orientations")
     pos_error = torch.linalg.vector_norm(actual_pos - ref_pos, dim=-1).mean(dim=-1)
     ori_error = math_utils.quat_error_magnitude(
         actual_quat.reshape(-1, 4),
@@ -617,14 +685,22 @@ def _body_tracking_tensors(
         tuple(names)
     )
     return {
-        "actual_pos": actual_pos,
-        "actual_quat": actual_quat,
-        "actual_ang_vel": actual_ang_vel,
-        "actual_lin_vel": actual_lin_vel,
-        "ref_pos": ref_pos,
-        "ref_quat": ref_quat,
-        "ref_ang_vel": ref_ang_vel,
-        "ref_lin_vel": ref_lin_vel,
+        "actual_pos": _as_torch_tensor(actual_pos, label="robot body positions"),
+        "actual_quat": _as_torch_tensor(actual_quat, label="robot body orientations"),
+        "actual_ang_vel": _as_torch_tensor(
+            actual_ang_vel, label="robot body angular velocities"
+        ),
+        "actual_lin_vel": _as_torch_tensor(
+            actual_lin_vel, label="robot body linear velocities"
+        ),
+        "ref_pos": _as_torch_tensor(ref_pos, label="reference body positions"),
+        "ref_quat": _as_torch_tensor(ref_quat, label="reference body orientations"),
+        "ref_ang_vel": _as_torch_tensor(
+            ref_ang_vel, label="reference body angular velocities"
+        ),
+        "ref_lin_vel": _as_torch_tensor(
+            ref_lin_vel, label="reference body linear velocities"
+        ),
     }
 
 
@@ -640,11 +716,35 @@ def _tracking_metrics(
     root_pos_ref, root_quat_ref, root_lin_vel_ref, root_ang_vel_ref = (
         base_env._get_reference_root_state_w_fast()
     )
-    joint_pos_ref = base_env.current_expert_frame["joint_pos"]
-    joint_vel_ref = base_env.current_expert_frame["joint_vel"]
-    root_pos_error = robot_data.root_pos_w - root_pos_ref
+    root_pos_ref = _as_torch_tensor(root_pos_ref, label="reference root position")
+    root_quat_ref = _as_torch_tensor(root_quat_ref, label="reference root orientation")
+    root_lin_vel_ref = _as_torch_tensor(
+        root_lin_vel_ref, label="reference root linear velocity"
+    )
+    root_ang_vel_ref = _as_torch_tensor(
+        root_ang_vel_ref, label="reference root angular velocity"
+    )
+    joint_pos_ref = _as_torch_tensor(
+        base_env.current_expert_frame["joint_pos"], label="reference joint position"
+    )
+    joint_vel_ref = _as_torch_tensor(
+        base_env.current_expert_frame["joint_vel"], label="reference joint velocity"
+    )
+    root_pos_w = _as_torch_tensor(robot_data.root_pos_w, label="robot root position")
+    root_quat_w = _as_torch_tensor(
+        robot_data.root_quat_w, label="robot root orientation"
+    )
+    joint_pos = _as_torch_tensor(robot_data.joint_pos, label="robot joint position")
+    joint_vel = _as_torch_tensor(robot_data.joint_vel, label="robot joint velocity")
+    root_lin_vel_w = _as_torch_tensor(
+        robot_data.root_lin_vel_w, label="robot root linear velocity"
+    )
+    root_ang_vel_w = _as_torch_tensor(
+        robot_data.root_ang_vel_w, label="robot root angular velocity"
+    )
+    root_pos_error = root_pos_w - root_pos_ref
     root_ori_error = math_utils.quat_error_magnitude(
-        robot_data.root_quat_w, root_quat_ref
+        root_quat_w, root_quat_ref
     )
     root_height_error = torch.abs(root_pos_error[:, 2])
     tracking_failure = torch.zeros_like(root_height_error, dtype=torch.bool)
@@ -661,16 +761,16 @@ def _tracking_metrics(
         "root_height_error_m": root_height_error,
         "root_ori_error_rad": root_ori_error,
         "joint_pos_rmse_rad": torch.sqrt(
-            torch.mean((robot_data.joint_pos - joint_pos_ref).square(), dim=-1)
+            torch.mean((joint_pos - joint_pos_ref).square(), dim=-1)
         ),
         "joint_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.joint_vel - joint_vel_ref).square(), dim=-1)
+            torch.mean((joint_vel - joint_vel_ref).square(), dim=-1)
         ),
         "root_lin_vel_rmse_mps": torch.sqrt(
-            torch.mean((robot_data.root_lin_vel_w - root_lin_vel_ref).square(), dim=-1)
+            torch.mean((root_lin_vel_w - root_lin_vel_ref).square(), dim=-1)
         ),
         "root_ang_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.root_ang_vel_w - root_ang_vel_ref).square(), dim=-1)
+            torch.mean((root_ang_vel_w - root_ang_vel_ref).square(), dim=-1)
         ),
     }
     tracked_body_lin_vel: tuple[Tensor, Tensor] | None = None
@@ -684,7 +784,7 @@ def _tracking_metrics(
             tracked_tensors["ref_quat"].reshape(-1, 4),
         ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
         actual_root_rel = (
-            tracked_tensors["actual_pos"] - robot_data.root_pos_w[:, None, :]
+            tracked_tensors["actual_pos"] - root_pos_w[:, None, :]
         )
         ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
         tracking_mpjpe_m = torch.linalg.vector_norm(
@@ -1098,11 +1198,15 @@ def _measure_commander(
 agent_entry_point = resolve_agent_cfg_entry_point(args_cli.task, args_cli.algorithm)
 
 
-@hydra_task_config(args_cli.task, agent_entry_point)
 def main(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     agent_cfg: Any,
 ) -> None:
+    print(
+        "[INFO] Entered closed-loop evaluator main: "
+        f"physics={type(getattr(env_cfg.sim, 'physics', None)).__name__}",
+        flush=True,
+    )
     sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
     if callable(sync_input_keys):
         sync_input_keys()
@@ -1161,6 +1265,17 @@ def main(
         if not hasattr(env_cfg, "motions"):
             raise TypeError(f"Task {args_cli.task} does not support --motion_names.")
         env_cfg.motions = selected_motion_names
+    resolve_manifest_config = getattr(env_cfg, "_resolve_manifest_config", None)
+    if (
+        callable(resolve_manifest_config)
+        and getattr(env_cfg, "lafan1_manifest_path", None) is not None
+    ):
+        # Resolve after applying the requested motion subset so a late Hydra
+        # manifest override cannot expand it back to the whole manifest.
+        resolve_manifest_config(
+            dataset_path_explicit=True,
+            motions_explicit=bool(selected_motion_name or selected_motion_names),
+        )
     if args_cli.trajectory_name is not None:
         if not hasattr(env_cfg, "trajectories"):
             raise TypeError(f"Task {args_cli.task} does not support --trajectory_name.")
@@ -1197,6 +1312,19 @@ def main(
             raise ValueError(
                 "M3 tracking termination terms were missing or already disabled: "
                 f"{missing}."
+            )
+        if (
+            not hasattr(terminations, FALL_TERMINATION_NAME)
+            or getattr(terminations, FALL_TERMINATION_NAME) is None
+        ):
+            # The strict SONIC-derived low-level task disables this term during
+            # controller training. Phase-5 planner evaluation defines survival
+            # by this fall event, so restore the shared G1 fall detector before
+            # environment construction instead of silently changing survival.
+            terminations.base_too_low = G1TerminationsCfg().base_too_low
+            print(
+                "[INFO] Restored base_too_low for M3 survival evaluation.",
+                flush=True,
             )
         if (
             not hasattr(terminations, FALL_TERMINATION_NAME)
@@ -1439,9 +1567,14 @@ def main(
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
-    agent.load_model(str(checkpoint_path))
-    collector_policy = agent.collector_policy
-    collector_policy.eval()
+    frozen_tracker = load_frozen_low_level_tracker(
+        agent,
+        checkpoint_path,
+        expected_input_keys=LATENT_POLICY_INPUT_KEYS,
+        map_location=env_cfg.sim.device,
+    )
+    collector_policy = frozen_tracker.policy
+    tracker_provenance = frozen_tracker.provenance
     planner_latency_timer: PlannerForwardTimer | None = None
     if command_source == "skill_commander":
         command_sampler = getattr(agent, "_hl_skill_command_sampler", None)
@@ -1560,6 +1693,7 @@ def main(
             "language_conditioning": language_metadata,
             "provenance": {
                 "low_level_checkpoint": str(checkpoint_path),
+                "low_level_tracker": tracker_provenance,
                 "planner_checkpoint": (
                     str(planner_checkpoint_path)
                     if planner_checkpoint_path is not None
@@ -1639,7 +1773,7 @@ def main(
     stop_reason = "max_steps"
     if int(args_cli.metric_interval) <= 0:
         raise ValueError("--metric_interval must be > 0.")
-    while simulation_app.is_running() and timestep < max_steps:
+    while timestep < max_steps:
         start_time = time.time()
         with (
             torch.inference_mode(),
@@ -1861,9 +1995,6 @@ def main(
             sleep_time = float(dt) - (time.time() - start_time)
             if sleep_time > 0:
                 time.sleep(sleep_time)
-    if not simulation_app.is_running():
-        stop_reason = "simulation_app_stopped"
-
     sample_writer.flush()
     saved_sample_files = sample_writer.file_count
     if saved_sample_rows != sample_writer.row_count:
@@ -1959,6 +2090,7 @@ def main(
             "task": args_cli.task,
             "algorithm": args_cli.algorithm,
             "checkpoint": str(checkpoint_path),
+            "low_level_tracker": tracker_provenance,
             "planner_checkpoint": (
                 str(planner_checkpoint_path)
                 if planner_checkpoint_path is not None
@@ -2081,7 +2213,30 @@ def main(
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        simulation_app.close()
+    resolved_env_cfg, resolved_agent_cfg = resolve_task_config(
+        args_cli.task,
+        agent_entry_point,
+    )
+    print("[INFO] Closed-loop evaluator task configuration resolved.", flush=True)
+    needs_kit, _, _ = compute_kit_requirements(resolved_env_cfg, args_cli)
+    if args_cli.assert_kitless:
+        if needs_kit or not config_contains_type_name(resolved_env_cfg, "NewtonCfg"):
+            raise RuntimeError(
+                "--assert-kitless requires a resolved NewtonCfg with no Kit cameras "
+                "or Kit visualizer. Pass physics=newton_mjwarp."
+            )
+        assert_kit_not_loaded()
+        print(
+            "[INFO] Strict kit-less Newton evaluator runtime validated.",
+            flush=True,
+        )
+    if os.environ.get("ISAACLAB_SPLIT_RUNTIME") == "1" and needs_kit:
+        raise RuntimeError(
+            "The split runtime cannot launch Kit from this evaluator. "
+            "Use physics=newton_mjwarp with --assert-kitless on compute-only GPUs."
+        )
+    with launch_simulation(resolved_env_cfg, args_cli):
+        main(resolved_env_cfg, resolved_agent_cfg)
+    if args_cli.assert_kitless:
+        assert_kit_not_loaded()
+        print("[INFO] Strict kit-less evaluator invariant held through shutdown.")

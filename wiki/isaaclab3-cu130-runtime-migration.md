@@ -1,5 +1,7 @@
 # IsaacLab 3 CU130 Runtime Migration
 
+This page is a migration chronology. One-shot ICE launchers named in its job history were pruned on 2026-07-23 and are recoverable from Git; their paths are not current submission instructions.
+
 Status: the runtime-aware RLOpt entrypoints are implemented, and local
 one-iteration G1 PhysX and strict kit-less Newton runs both pass. The immutable
 SIF, manifests, data, and G1 USD assets are staged on ICE. ICE H100 Newton also

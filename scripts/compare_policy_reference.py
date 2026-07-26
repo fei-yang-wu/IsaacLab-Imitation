@@ -101,6 +101,19 @@ parser.add_argument(
     help="Keep env reward terms enabled. By default comparison playback disables them.",
 )
 parser.add_argument(
+    "--keep_domain_randomization",
+    action="store_true",
+    default=False,
+    help=(
+        "Keep interval pushes and domain randomization enabled. By default "
+        "comparison playback disables them (matching the trusted evaluator's "
+        "--deterministic_tracking pass) so the policy env's rollout is "
+        "deterministic and independent of the reference-replay lane; otherwise "
+        "the two envs share one RNG stream and the policy robot gets different "
+        "random pushes than a single-env eval, diverging the closed loop."
+    ),
+)
+parser.add_argument(
     "--policy_trajectory_rank",
     type=int,
     default=None,
@@ -187,6 +200,7 @@ simulation_app = app_launcher.app
 
 import os
 import random
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -215,6 +229,29 @@ from torchrl.envs.utils import set_exploration_type, step_mdp
 
 import isaaclab_tasks  # noqa: F401
 import isaaclab_imitation.tasks  # noqa: F401
+
+# Reuse the trusted evaluator's exact domain-randomization disabling so the
+# comparison rollout is deterministic and independent of the reference-replay
+# lane (see --keep_domain_randomization).
+_INTERFACE_BASELINE_DIR = next(
+    (
+        p
+        for p in (
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "paper"
+            / "interface_baselines",
+            Path(__file__).resolve().parents[1]
+            / "experiments"
+            / "interface_baselines",
+        )
+        if p.is_dir()
+    ),
+    None,
+)
+if _INTERFACE_BASELINE_DIR is not None and str(_INTERFACE_BASELINE_DIR) not in sys.path:
+    sys.path.append(str(_INTERFACE_BASELINE_DIR))
+from paper_protocol_metadata import disable_domain_randomization  # noqa: E402
 
 ALGORITHM_CLASS_MAP = {
     "PPO": PPO,
@@ -827,6 +864,19 @@ def main(
         print("[INFO] Keeping comparison reward terms enabled.")
     else:
         _disable_reward_terms(env_cfg)
+    if args_cli.keep_domain_randomization:
+        print(
+            "[INFO] Keeping domain randomization / interval pushes enabled "
+            "(rollout will be stochastic and env-count dependent)."
+        )
+    else:
+        _dr_record = disable_domain_randomization(env_cfg)
+        print(
+            "[INFO] Disabled domain randomization / interval pushes for a "
+            "deterministic comparison: "
+            f"events={_dr_record.get('events_disabled', [])}, "
+            f"reset_ranges_zeroed={list(_dr_record.get('reset_ranges_zeroed', {}))}."
+        )
 
     if args_cli.checkpoint is None:
         raise ValueError("--checkpoint is required for compare_policy_reference.py.")
@@ -949,7 +999,37 @@ def main(
     agent = agent_class(env=env, config=agent_cfg)
 
     print(f"[INFO] Loading checkpoint: {checkpoint_path}")
-    agent.load_model(checkpoint_path)
+    # This comparison is inference-only, so optimizer state is irrelevant. Some
+    # frozen low-level checkpoints (e.g. the SONIC-optimizer BONES-SEED
+    # controllers) were trained with a different optimizer param-group layout
+    # than a freshly built eval agent, and load_model would raise
+    # "loaded state dict has a different number of parameter groups". Strip the
+    # optimizer entries into a temp checkpoint before loading so only the
+    # module weights (policy, value, reward estimator, skill encoder, etc.) are
+    # restored; this does not modify the RLOpt submodule.
+    _load_checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if isinstance(_load_checkpoint, dict) and (
+        "optimizer_state_dict" in _load_checkpoint
+        or "reward_optimizer_state_dict" in _load_checkpoint
+    ):
+        _stripped = {
+            key: value
+            for key, value in _load_checkpoint.items()
+            if key not in ("optimizer_state_dict", "reward_optimizer_state_dict")
+        }
+        _tmp = tempfile.NamedTemporaryFile(
+            prefix="compare_ref_weights_only_", suffix=".pt", delete=False
+        )
+        _tmp.close()
+        torch.save(_stripped, _tmp.name)
+        print(
+            "[INFO] Loading module weights only (optimizer state stripped for "
+            "inference)."
+        )
+        agent.load_model(_tmp.name)
+        os.unlink(_tmp.name)
+    else:
+        agent.load_model(checkpoint_path)
 
     collector_policy = agent.collector_policy
     collector_policy.eval()

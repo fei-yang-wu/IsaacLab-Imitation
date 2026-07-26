@@ -1,0 +1,744 @@
+{
+  "empirical_minimums": [
+    {
+      "criterion": "survival_rate == 1 and MPJPE <= 75 mm",
+      "interface": "latent_skill",
+      "minimum_tested_parameter_count": 129680,
+      "stage": "demonstration_only"
+    },
+    {
+      "criterion": "survival_rate == 1 and MPJPE <= 75 mm",
+      "interface": "full_body_trajectory",
+      "minimum_tested_parameter_count": null,
+      "stage": "demonstration_only"
+    },
+    {
+      "criterion": "survival_rate == 1 and MPJPE <= 75 mm",
+      "interface": "latent_skill",
+      "minimum_tested_parameter_count": 129680,
+      "stage": "rollout_finetuned"
+    },
+    {
+      "criterion": "survival_rate == 1 and MPJPE <= 75 mm",
+      "interface": "full_body_trajectory",
+      "minimum_tested_parameter_count": null,
+      "stage": "rollout_finetuned"
+    }
+  ],
+  "evaluation_starts": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "interface_roots": {
+    "large:full_body_trajectory": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory",
+    "large:latent_skill": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill",
+    "medium:full_body_trajectory": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory",
+    "medium:latent_skill": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill",
+    "small:full_body_trajectory": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory",
+    "small:latent_skill": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill",
+    "tiny:full_body_trajectory": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory",
+    "tiny:latent_skill": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill"
+  },
+  "interfaces": [
+    "latent_skill",
+    "full_body_trajectory"
+  ],
+  "interpretation_limits": [
+    "One motion and one seed do not support a paper-level capacity claim.",
+    "The tested curve may be non-monotonic; minimums are observed tested points, not interpolated estimates.",
+    "Each interface is normalized by its own frozen low-level oracle."
+  ],
+  "oracles": {
+    "full_body_trajectory": {
+      "metrics": {
+        "action_delta_l2": 0.30879294872283936,
+        "ee_pos_error_m": 0.0770932212471962,
+        "joint_pos_rmse_rad": 0.08668842166662216,
+        "root_pos_xyz_error_m": 0.06098942458629608,
+        "tracking_acceleration_distance_mps2": 1.80082368850708,
+        "tracking_mpjpe_mm": 23.840110778808594,
+        "tracking_velocity_distance_mps": 0.1433812379837036
+      },
+      "path": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/oracle_baselines/full_body_trajectory/oracle_frame0_700/summary.json",
+      "sha256": "72c896c16af577a8c2cdd4b989a77df2725d3bcabdbecc6f02d4bcb172e7fc71",
+      "survival_rate": 1.0
+    },
+    "latent_skill": {
+      "metrics": {
+        "action_delta_l2": 0.47391796112060547,
+        "ee_pos_error_m": 0.11332222074270248,
+        "joint_pos_rmse_rad": 0.11944505572319031,
+        "root_pos_xyz_error_m": 0.08583950996398926,
+        "tracking_acceleration_distance_mps2": 2.627495765686035,
+        "tracking_mpjpe_mm": 30.609268188476562,
+        "tracking_velocity_distance_mps": 0.16692861914634705
+      },
+      "path": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/oracle_baselines/latent_skill/oracle_frame0_700/summary.json",
+      "sha256": "db8059ed6c1177a66b6ac4c8ddbc30b0db131b97b760c85914f9dc68ba50d464",
+      "survival_rate": 1.0
+    }
+  },
+  "paper_result": false,
+  "rows": [
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "a4fb133cb86e825da93c32bcaa1710e5f3c95354df8b8e65c5b56c1c1f0c17de",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill/planner_pretrain/config.json",
+        "config_sha256": "7a575d774e7524a57658d75f5d40c5223b1e3b7d76ba0d13a5bf06f6b40a548a",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "8fb5fc4063c8feda360eb4ee48d5de971e6b8526654faa07206066197abc005d"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.35369589924812317,
+        "ee_pos_error_m": 0.2910107672214508,
+        "joint_pos_rmse_rad": 0.23536528646945953,
+        "root_pos_xyz_error_m": 0.252888947725296,
+        "tracking_acceleration_distance_mps2": 2.0491511821746826,
+        "tracking_mpjpe_mm": 66.73281860351562,
+        "tracking_velocity_distance_mps": 0.20013248920440674
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 0.7463230522257259,
+        "ee_pos_error_m": 2.567993861346834,
+        "joint_pos_rmse_rad": 1.9704899884253917,
+        "root_pos_xyz_error_m": 2.9460670014470733,
+        "tracking_acceleration_distance_mps2": 0.7798875297672088,
+        "tracking_mpjpe_mm": 2.180150737110352,
+        "tracking_velocity_distance_mps": 1.1989105896152517
+      },
+      "parameter_count": 129680,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 9.13587212562561,
+      "planner_seed": 0,
+      "size": "tiny",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 204.0,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 1.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "5814e61d48f363d24da4222b585c36c267c4a5b818137a22c5abb7d86e3b79f1",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill/planner_finetune/config.json",
+        "config_sha256": "41da66fbd18923a023e88a2e09851411228e0c30d00f3fb02d42231ca1fc908f",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "f951a8a341d87aec48053fdacd6c3d37a8732a7271059d1985fe8fcbd051bed8",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/latent_skill/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "20b6bd186950222b7594a179f7900f6a9705890432e958f20f8da20b59331145"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.36006712913513184,
+        "ee_pos_error_m": 0.24354662001132965,
+        "joint_pos_rmse_rad": 0.21771234273910522,
+        "root_pos_xyz_error_m": 0.19456429779529572,
+        "tracking_acceleration_distance_mps2": 2.2235560417175293,
+        "tracking_mpjpe_mm": 68.25712585449219,
+        "tracking_velocity_distance_mps": 0.20242592692375183
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 0.7597667923024758,
+        "ee_pos_error_m": 2.1491514939889944,
+        "joint_pos_rmse_rad": 1.822698657729675,
+        "root_pos_xyz_error_m": 2.266605411388274,
+        "tracking_acceleration_distance_mps2": 0.8462643672945985,
+        "tracking_mpjpe_mm": 2.2299496163775934,
+        "tracking_velocity_distance_mps": 1.212649622089572
+      },
+      "parameter_count": 129680,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 8.813471602344954,
+      "planner_seed": 0,
+      "size": "tiny",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 212.0,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 1.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "f9d1884b734461c7ed3620b82eef48204793cabbfdc7610724bb275798637d83",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory/planner_pretrain/config.json",
+        "config_sha256": "531ee928335ae0836ce968d4f703a929b6867c57873c4e70b4b08863c1f453cf",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "e55b4929975f0fe3acd11da5caa059f1e67dfcf166b3720238625c10f2c4e78d"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 0.39957717061042786,
+        "ee_pos_error_m": 2.743788480758667,
+        "joint_pos_rmse_rad": 0.4272274672985077,
+        "root_pos_xyz_error_m": 3.0065293312072754,
+        "tracking_acceleration_distance_mps2": 3.7590882778167725,
+        "tracking_mpjpe_mm": 382.4772644042969,
+        "tracking_velocity_distance_mps": 0.45761391520500183
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 1.293997069114013,
+        "ee_pos_error_m": 35.590528406652304,
+        "joint_pos_rmse_rad": 4.928310598865178,
+        "root_pos_xyz_error_m": 49.29591239138896,
+        "tracking_acceleration_distance_mps2": 2.0874271600309378,
+        "tracking_mpjpe_mm": 16.043434862906754,
+        "tracking_velocity_distance_mps": 3.191588534456741
+      },
+      "parameter_count": 131472,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 10.814363589051409,
+      "planner_seed": 0,
+      "size": "tiny",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "0db46acc5b2c97a583cf68605a87b29815067412099cabe6f14d48391aa7ee6d",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory/planner_finetune/config.json",
+        "config_sha256": "4a7c23a186d8942dc8f21b2cec19176186dadaadda806734effdae496b5b5dfd",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "57d0ed4c4aec6d35c5653e6f911e78e4025cd72e9d0507334e2fd8eec0dc95af",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny/full_body_trajectory/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "7332a7932d9c4ee14c8655945a390603e8e5602990483544ae3cd871b9e7692b"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 0.9115345478057861,
+        "ee_pos_error_m": 3.8244943618774414,
+        "joint_pos_rmse_rad": 0.42594704031944275,
+        "root_pos_xyz_error_m": 3.9214320182800293,
+        "tracking_acceleration_distance_mps2": 6.438769340515137,
+        "tracking_mpjpe_mm": 380.0292053222656,
+        "tracking_velocity_distance_mps": 0.5641016364097595
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 2.951927987915114,
+        "ee_pos_error_m": 49.6086984044208,
+        "joint_pos_rmse_rad": 4.9135401490813635,
+        "root_pos_xyz_error_m": 64.29691778336844,
+        "tracking_acceleration_distance_mps2": 3.575457931616287,
+        "tracking_mpjpe_mm": 15.94074829803528,
+        "tracking_velocity_distance_mps": 3.9342779037371267
+      },
+      "parameter_count": 131472,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 10.739361563616473,
+      "planner_seed": 0,
+      "size": "tiny",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "cf91ca50504a70fb09c220bfda4507e2c54bf5d767d96cea559735491287c15f",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_pretrain/config.json",
+        "config_sha256": "c29d897a3a92ded73d6aff0ea3ce32678b7741dcb231d9c9958d0232382d1cc4",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "1c1c8d11b937ac7f09043273c140b0ba1e1461ad55fd7e08e097bc4442f17e96"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.3598058223724365,
+        "ee_pos_error_m": 0.1550273895263672,
+        "joint_pos_rmse_rad": 0.1403171569108963,
+        "root_pos_xyz_error_m": 0.12744775414466858,
+        "tracking_acceleration_distance_mps2": 1.798541784286499,
+        "tracking_mpjpe_mm": 50.08019256591797,
+        "tracking_velocity_distance_mps": 0.15681447088718414
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 0.7592154167815366,
+        "ee_pos_error_m": 1.3680228688630809,
+        "joint_pos_rmse_rad": 1.1747422784587782,
+        "root_pos_xyz_error_m": 1.4847213619711308,
+        "tracking_acceleration_distance_mps2": 0.6845079667775992,
+        "tracking_mpjpe_mm": 1.6361120513417438,
+        "tracking_velocity_distance_mps": 0.9394103401149219
+      },
+      "parameter_count": 4182304,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 15.923109671954686,
+      "planner_seed": 0,
+      "size": "small",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 175.75,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 1.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "4d0d4a9b02b53892c8479a337376a74d39d1ad8ba08b1872e7ed18a8e6effde3",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_finetune/config.json",
+        "config_sha256": "0f4170db24e93b10ecdef98f3cf62e7dd113bfcb18652d5a86ce0c046a74fc66",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "16a574d6a3ebfb3f473b701ec42c2dcb39de400ebd52e29a5c3de2a396c22556",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "f720013a471eb88e8f8b8ffa8c8cf71599bd9c1d67bd72a0f2f7f7af47283c6e"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.4030323028564453,
+        "ee_pos_error_m": 0.17496813833713531,
+        "joint_pos_rmse_rad": 0.1358470916748047,
+        "root_pos_xyz_error_m": 0.13948579132556915,
+        "tracking_acceleration_distance_mps2": 1.9641848802566528,
+        "tracking_mpjpe_mm": 57.01700973510742,
+        "tracking_velocity_distance_mps": 0.170042023062706
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 0.8504263098690181,
+        "ee_pos_error_m": 1.5439879062589108,
+        "joint_pos_rmse_rad": 1.1373186680043543,
+        "root_pos_xyz_error_m": 1.624960247141266,
+        "tracking_acceleration_distance_mps2": 0.7475501600832484,
+        "tracking_mpjpe_mm": 1.862736782337467,
+        "tracking_velocity_distance_mps": 1.018651109272218
+      },
+      "parameter_count": 4182304,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 15.840176341083387,
+      "planner_seed": 0,
+      "size": "small",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 166.25,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 1.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "34b7fc184e88a1f1def944047771d6bea25e8dc45c465567676f7d2429f017e3",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory/planner_pretrain/config.json",
+        "config_sha256": "737719cb49bcbb360e4e79043c107d97c86dc5eca46b26b257860ac4f87ee0a0",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "c942fcfbcba87d62aa06b7a516a6a0e5bf7f4c685e81983b2956c1b296c62eb6"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 2.37168550491333,
+        "ee_pos_error_m": 4.208113193511963,
+        "joint_pos_rmse_rad": 0.4227684736251831,
+        "root_pos_xyz_error_m": 4.2204484939575195,
+        "tracking_acceleration_distance_mps2": 14.272958755493164,
+        "tracking_mpjpe_mm": 348.9695129394531,
+        "tracking_velocity_distance_mps": 0.8861308097839355
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 7.680504087682596,
+        "ee_pos_error_m": 54.58473683462809,
+        "joint_pos_rmse_rad": 4.876873583545271,
+        "root_pos_xyz_error_m": 69.19967719954234,
+        "tracking_acceleration_distance_mps2": 7.925794649739276,
+        "tracking_mpjpe_mm": 14.637914906404342,
+        "tracking_velocity_distance_mps": 6.180242423940092
+      },
+      "parameter_count": 4186144,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 20.28361166678909,
+      "planner_seed": 0,
+      "size": "small",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "4f0b3dd2f63004a6b7bb8e3386439fde1c94dc654de2816254fcaa29d1f2e403",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory/planner_finetune/config.json",
+        "config_sha256": "d8dd448398d96723f4afce297add211944e0cdfde05318007e615ffe45b08ab7",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "213901b1d09687f6c23163e9afb4167014efe908cebd9e510745bdb676d2a8a5",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/full_body_trajectory/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "caa4bcaaf54f3229ef24772b58e353a84277f36e40ce8f483c321aadf732ab30"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 3.3962137699127197,
+        "ee_pos_error_m": 3.620499849319458,
+        "joint_pos_rmse_rad": 0.4705177843570709,
+        "root_pos_xyz_error_m": 3.6893680095672607,
+        "tracking_acceleration_distance_mps2": 22.48490333557129,
+        "tracking_mpjpe_mm": 374.8069152832031,
+        "tracking_velocity_distance_mps": 0.8717080950737
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 10.998352727804773,
+        "ee_pos_error_m": 46.96262253344527,
+        "joint_pos_rmse_rad": 5.427688903675535,
+        "root_pos_xyz_error_m": 60.49193011072017,
+        "tracking_acceleration_distance_mps2": 12.485899357649908,
+        "tracking_mpjpe_mm": 15.721693525701564,
+        "tracking_velocity_distance_mps": 6.079652451967086
+      },
+      "parameter_count": 4186144,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 20.16048013246146,
+      "planner_seed": 0,
+      "size": "small",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "bbc59a1b245f047ab3fe597e13aa12b28d6c2e90ab8f50162380bd37160993c4",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill/planner_pretrain/config.json",
+        "config_sha256": "48bfa28089ac5d4c139597357ae4ac239ba125b01db24a94d70c6ab390a1dd9b",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "f1f30c6dacc05aa5c110a49b711af35e12bcf3d572846799490f42a8cd32a1c1"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.3345741331577301,
+        "ee_pos_error_m": 0.14576001465320587,
+        "joint_pos_rmse_rad": 0.14431637525558472,
+        "root_pos_xyz_error_m": 0.11220630258321762,
+        "tracking_acceleration_distance_mps2": 1.6593170166015625,
+        "tracking_mpjpe_mm": 49.22146987915039,
+        "tracking_velocity_distance_mps": 0.14220011234283447
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 0.7059747901653926,
+        "ee_pos_error_m": 1.2862438954858926,
+        "joint_pos_rmse_rad": 1.2082239351123316,
+        "root_pos_xyz_error_m": 1.3071638296897263,
+        "tracking_acceleration_distance_mps2": 0.6315203389750534,
+        "tracking_mpjpe_mm": 1.6080577155934994,
+        "tracking_velocity_distance_mps": 0.8518617902072683
+      },
+      "parameter_count": 22965792,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 21.04726883030876,
+      "planner_seed": 0,
+      "size": "medium",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 165.75,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 1.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "692d9819c06f118d5b3385ac0095139c32647967b369e9003395c03684434a39",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill/planner_finetune/config.json",
+        "config_sha256": "d68b1472fb680245522ed5ac8e0ead70c9e8cf352e0b9f6f290e13cf8a8554c9",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "f1477e63ded3732941f9ed46dabd102e6d46f1195ac53f71b893002cc0fbc94e",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/latent_skill/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "7a9a27b70905091d230e4b14907ad8d41b498c87945ab2e9a41c7bc5a09b621a"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.38814762234687805,
+        "ee_pos_error_m": 0.14932489395141602,
+        "joint_pos_rmse_rad": 0.14321933686733246,
+        "root_pos_xyz_error_m": 0.12728939950466156,
+        "tracking_acceleration_distance_mps2": 1.9593830108642578,
+        "tracking_mpjpe_mm": 42.2570915222168,
+        "tracking_velocity_distance_mps": 0.1712791919708252
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 0.819018594334516,
+        "ee_pos_error_m": 1.317701797341736,
+        "joint_pos_rmse_rad": 1.1990394746789537,
+        "root_pos_xyz_error_m": 1.4828765862952975,
+        "tracking_acceleration_distance_mps2": 0.7457226140772356,
+        "tracking_mpjpe_mm": 1.3805325649087317,
+        "tracking_velocity_distance_mps": 1.0260624741684587
+      },
+      "parameter_count": 22965792,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 21.21946175715753,
+      "planner_seed": 0,
+      "size": "medium",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 129.0,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 1.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "ef455d2a4e7865136d7ccb34d46e21d81df7524c69e88f7a187d7b917778fb58",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory/planner_pretrain/config.json",
+        "config_sha256": "6acfe31b4bd9faffcb1d43f4abef1405b3f073aa80aa0b3a1b0de39cad44242b",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "da17ae9f96a0958141031fe0c8545d566533bf65d4c5a0ee835caac04626a407"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 1.0165716409683228,
+        "ee_pos_error_m": 3.0335581302642822,
+        "joint_pos_rmse_rad": 0.42677590250968933,
+        "root_pos_xyz_error_m": 3.2321062088012695,
+        "tracking_acceleration_distance_mps2": 5.907570838928223,
+        "tracking_mpjpe_mm": 393.0685119628906,
+        "tracking_velocity_distance_mps": 0.498896062374115
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 3.292081782219575,
+        "ee_pos_error_m": 39.34922008949794,
+        "joint_pos_rmse_rad": 4.923101543490344,
+        "root_pos_xyz_error_m": 52.99453521205219,
+        "tracking_acceleration_distance_mps2": 3.2804826350466993,
+        "tracking_mpjpe_mm": 16.487696538402336,
+        "tracking_velocity_distance_mps": 3.4795072869353967
+      },
+      "parameter_count": 22973472,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 25.950439267562352,
+      "planner_seed": 0,
+      "size": "medium",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "b2709dd05dde681643d8960d52e6871ac188e73d1e51a216ff939b48b9291d5c",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory/planner_finetune/config.json",
+        "config_sha256": "150e87421e863d700357ed5c6e40898821105acacdf65a78572b89c4d5e2b8ad",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "3cd6ed8da7bcfad09a2d0cd0c2a705d43658b91923cadcd1cd9ed1575a8823ff",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium/full_body_trajectory/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "2a32d636e189ded74302416ef763de6941f3fc803bd2495aebb963fda103b55b"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 1.224252462387085,
+        "ee_pos_error_m": 3.3268909454345703,
+        "joint_pos_rmse_rad": 0.4477097988128662,
+        "root_pos_xyz_error_m": 3.4685375690460205,
+        "tracking_acceleration_distance_mps2": 8.386592864990234,
+        "tracking_mpjpe_mm": 304.20458984375,
+        "tracking_velocity_distance_mps": 0.636107861995697
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 3.9646386598222705,
+        "ee_pos_error_m": 43.1541306954477,
+        "joint_pos_rmse_rad": 5.1645858836215135,
+        "root_pos_xyz_error_m": 56.87113122600894,
+        "tracking_acceleration_distance_mps2": 4.657087153236469,
+        "tracking_mpjpe_mm": 12.760200347481463,
+        "tracking_velocity_distance_mps": 4.43647907453551
+      },
+      "parameter_count": 22973472,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 25.729542915317893,
+      "planner_seed": 0,
+      "size": "medium",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "519585cdae37c973294063b8e1e4d63b2da4df089a81efc760edf34344fa20b3",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill/planner_pretrain/config.json",
+        "config_sha256": "638e919cbf83f09eeeef478af99b380cc1a3e1f93508523d6b2a61992f9cdb8b",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "ddc5e5bec07240fd39471120acbe7614a33d017d3ac9d447ac46d90ee0619ea0"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.4127718508243561,
+        "ee_pos_error_m": 0.5265048146247864,
+        "joint_pos_rmse_rad": 0.14213484525680542,
+        "root_pos_xyz_error_m": 0.4967367649078369,
+        "tracking_acceleration_distance_mps2": 2.3090131282806396,
+        "tracking_mpjpe_mm": 56.025917053222656,
+        "tracking_velocity_distance_mps": 0.20301008224487305
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 0.8709774363654291,
+        "ee_pos_error_m": 4.6460862765848265,
+        "joint_pos_rmse_rad": 1.1899600564982606,
+        "root_pos_xyz_error_m": 5.786808022508798,
+        "tracking_acceleration_distance_mps2": 0.8787885249656187,
+        "tracking_mpjpe_mm": 1.8303579395705603,
+        "tracking_velocity_distance_mps": 1.2161490539072466
+      },
+      "parameter_count": 64353056,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 25.38910023021427,
+      "planner_seed": 0,
+      "size": "large",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 277.25,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 0.75
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "2dbc059397d22828abb020c7c9c430e7cabdd11a908d662f3fd2dfcc66a459c4",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill/planner_finetune/config.json",
+        "config_sha256": "8b4a39453fb4a8127e16743112a0faa2dbac5647fa73acedb1a85be4b46e0419",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "7cc2af7b7be89c9131c52477769b95343e7e505bd1c74f8367b233e656c3cabf",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/latent_skill/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "cfe10669b75b5cda41e2050617572fd14f32285301a64a82d1f90d83ace0ed4e"
+      },
+      "interface": "latent_skill",
+      "metrics": {
+        "action_delta_l2": 0.5183199644088745,
+        "ee_pos_error_m": 0.3802899420261383,
+        "joint_pos_rmse_rad": 0.13214513659477234,
+        "root_pos_xyz_error_m": 0.3719862997531891,
+        "tracking_acceleration_distance_mps2": 2.9862358570098877,
+        "tracking_mpjpe_mm": 43.10538101196289,
+        "tracking_velocity_distance_mps": 0.21269270777702332
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 1.0936913283119256,
+        "ee_pos_error_m": 3.355828535072434,
+        "joint_pos_rmse_rad": 1.1063257143185066,
+        "root_pos_xyz_error_m": 4.333509125450996,
+        "tracking_acceleration_distance_mps2": 1.1365330806651885,
+        "tracking_mpjpe_mm": 1.4082460497435456,
+        "tracking_velocity_distance_mps": 1.2741536404285156
+      },
+      "parameter_count": 64353056,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 25.737375591791444,
+      "planner_seed": 0,
+      "size": "large",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 329.75,
+      "target_dim": 256,
+      "threshold_tracking_success_rate": 1.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory/planner_pretrain/checkpoints/latest.pt",
+        "checkpoint_sha256": "6864eec9333f6360ae7109de6973e13725180a1dfe4372da979486aade25cab0",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory/planner_pretrain/config.json",
+        "config_sha256": "a91ed6dfa4733e945ae09621e99081cc9b31a626b02215642fb09b297d23fe14",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory/eval_pretrained_10starts/summary.json",
+        "summary_sha256": "b90881cb8e05368103bde761ea04bc58c89f3cfaa87bea28da91e102755525cd"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 3.128364086151123,
+        "ee_pos_error_m": 3.429513454437256,
+        "joint_pos_rmse_rad": 0.4385855495929718,
+        "root_pos_xyz_error_m": 3.402414083480835,
+        "tracking_acceleration_distance_mps2": 23.465774536132812,
+        "tracking_mpjpe_mm": 438.66827392578125,
+        "tracking_velocity_distance_mps": 1.0129860639572144
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 10.130944048722505,
+        "ee_pos_error_m": 44.48527897726136,
+        "joint_pos_rmse_rad": 5.059332505552369,
+        "root_pos_xyz_error_m": 55.78695169793969,
+        "tracking_acceleration_distance_mps2": 13.030578554631532,
+        "tracking_mpjpe_mm": 18.40042934346229,
+        "tracking_velocity_distance_mps": 7.064983384174351
+      },
+      "parameter_count": 64364576,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 32.24131718709849,
+      "planner_seed": 0,
+      "size": "large",
+      "stage": "demonstration_only",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    },
+    {
+      "artifacts": {
+        "checkpoint": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory/planner_finetune/checkpoints/latest.pt",
+        "checkpoint_sha256": "b5db84e64b5f9cba5d89f5a72e34800975943f5e5950ea1d96edb9ba2f314866",
+        "config": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory/planner_finetune/config.json",
+        "config_sha256": "b7e138ed1483c734a6587b939dad8940b313193ee8fff8cbc4671aa159fb0426",
+        "merge_manifest": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory/demonstration_and_rollout_samples/merge_manifest.json",
+        "merge_manifest_sha256": "cbf3161e649f22b884eb7845b165cee2b78493b4ed9a7b15784fac160401b9dd",
+        "summary": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large/full_body_trajectory/eval_finetuned_10starts/summary.json",
+        "summary_sha256": "8858c3defc58790c5c8f2ef4c809c027e8fb2c72e8f2f1fd156f7b81421db3bc"
+      },
+      "interface": "full_body_trajectory",
+      "metrics": {
+        "action_delta_l2": 0.987384557723999,
+        "ee_pos_error_m": 3.7402632236480713,
+        "joint_pos_rmse_rad": 0.4764542579650879,
+        "root_pos_xyz_error_m": 3.874206304550171,
+        "tracking_acceleration_distance_mps2": 6.93900203704834,
+        "tracking_mpjpe_mm": 367.34710693359375,
+        "tracking_velocity_distance_mps": 0.5725374221801758
+      },
+      "oracle_normalized_metrics": {
+        "action_delta_l2": 3.19756186728939,
+        "ee_pos_error_m": 48.51611027712895,
+        "joint_pos_rmse_rad": 5.496169486132635,
+        "root_pos_xyz_error_m": 63.52259151204846,
+        "tracking_acceleration_distance_mps2": 3.85323787183237,
+        "tracking_mpjpe_mm": 15.408783555658959,
+        "tracking_velocity_distance_mps": 3.993112559435769
+      },
+      "parameter_count": 64364576,
+      "planner_family": "causal_interface_transformer_flow",
+      "planner_inference_latency_ms": 31.91484507524233,
+      "planner_seed": 0,
+      "size": "large",
+      "stage": "rollout_finetuned",
+      "survival_rate": 1.0,
+      "survival_steps_mean": 700.0,
+      "target_dim": 670,
+      "threshold_tracking_success_rate": 0.0
+    }
+  ],
+  "scaling_root": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0",
+  "size_roots": {
+    "large": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/large",
+    "medium": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/medium",
+    "small": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small",
+    "tiny": "/workspace/IsaacLab/project/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/tiny"
+  },
+  "sizes": [
+    "tiny",
+    "small",
+    "medium",
+    "large"
+  ],
+  "stages": [
+    "demonstration_only",
+    "rollout_finetuned"
+  ],
+  "study": "one_motion_planner_capacity_diagnostic"
+}
