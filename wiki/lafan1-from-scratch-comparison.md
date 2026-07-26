@@ -1,5 +1,7 @@
 # LAFAN1 From-Scratch Interface Comparison
 
+This is a chronology page. The earlier three-interface runner, manual capacity tools, and checkpoint-listing helpers recorded below were pruned on 2026-07-23. Use the guarded Phase-4/5 entrypoints classified in `experiments/SCRIPT_INVENTORY.md` for current work. Their paths and recovery commands are in [`experiments/PRUNED_SCRIPTS.md`](../experiments/PRUNED_SCRIPTS.md).
+
 Redo of the PR#19 LAFAN1 motion-tracking comparison with every low-level
 policy trained from scratch, so the comparison measures interface quality
 instead of low-level checkpoint provenance. A fourth, deliberately basic
@@ -412,7 +414,7 @@ capacity-efficiency claim.
 
 All four sizes, both stages, oracle-normalized metrics, exact starts, hashes,
 and training-contract checks are generated from artifacts by
-`experiments/interface_baselines/aggregate_one_motion_capacity_scaling.py`.
+`experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_scaling.py`.
 The current outputs are under
 `logs/interface_baselines/lafan1_one_motion_capacity_scaling_20260716/capacity_summary/`.
 The medium compatibility entries are symbolic links to the original matched
@@ -482,7 +484,7 @@ environments, 50,865 iterations (`5,000,232,960` frames), the exact corrected
 256, fixed reset range 0-200, unchanged rewards and terminations, no reward
 estimator, and no BC. It submits no EE/full-body controller and runs no
 paper-facing planner evaluation. The dedicated launcher is
-`experiments/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh`.
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh`.
 
 Qualification jobs `3503401` and `3503425` were canceled while
 dependency-pending and produced no output. The first predated the exact parsed
@@ -663,7 +665,7 @@ streamed-vanilla equivalence certificate from the exact vanilla checkpoint.
 The DiffSR audit uses the explicit strict tracking-failure rate rather than
 `done_rate`, because a successful motion may end through `reference_finished`.
 The fixed launcher is
-`experiments/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`;
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`;
 it is implemented and tested.
 
 The original qualification job `3502183` was canceled before it ran. Its
@@ -1061,7 +1063,7 @@ PROJECT_NAME=G1-Imitation-LAFAN1-FromScratch \
 GROUP_NAME=lafan1_fromscratch_h10_ipmd_5b_seed0 \
 RUN_PREFIX=lafan1_fromscratch_h10_ipmd_5b_seed0 \
 EXTRA_OVERRIDES="env.random_reset_step_min=0 env.random_reset_step_max=200 env.random_reset_full_trajectory=false env.command_hold_steps=0 agent.ipmd.reward_loss_coeff=0.0 agent.ipmd.reward_l2_coeff=0.0 agent.ipmd.reward_grad_penalty_coeff=0.0 agent.ipmd.reward_logit_reg_coeff=0.0 agent.ipmd.reward_param_weight_decay_coeff=0.0 agent.value_function.num_cells=[768,512,256] agent.logger.backend=wandb" \
-experiments/command_space_ablation/submit_cluster_oracle_ablation.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/submit_cluster_oracle_ablation.sh
 ```
 
 Remove `DRY_RUN=1` only after checking that the rendered batch script retains

@@ -1,0 +1,30 @@
+# Repository-owned lint surface for `pixi run lint` and `pixi run format-check`.
+#
+# Without a root config, `ruff check .` walked the dependency submodules and
+# reported hundreds of findings in code this repo does not own, so the mandated
+# checks in AGENTS.md could never pass. `IsaacLab/`, `RLOpt/`, and
+# `ImitationLearningTools/` keep their own configuration and are linted in their
+# own checkouts; generated run artifacts and scratch space are never linted.
+#
+# This file deliberately sets no style rules: it changes which files are
+# checked, not how they are judged.
+
+extend-exclude = [
+    # Dependency submodules (see the Submodule Boundary section of AGENTS.md).
+    "IsaacLab",
+    "RLOpt",
+    "ImitationLearningTools",
+    "ipmd",
+    # Generated run artifacts and caches.
+    "logs",
+    "outputs",
+    "data",
+    "wandb",
+    ".pixi",
+    ".tmp",
+    # Untracked scratch space for debugging sessions.
+    "scratchpad",
+    # Agent worktree roots.
+    ".agents",
+    ".codex",
+]

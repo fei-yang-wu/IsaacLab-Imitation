@@ -1,5 +1,7 @@
 # IPMD Representation Learning
 
+The representation-learning design remains useful, but the old bilinear pretrain/update-sweep launchers cited later were pruned on 2026-07-23. Start a new dated campaign before reviving those comparisons; use Git history for their exact former commands. Their paths and recovery commands are in [`experiments/PRUNED_SCRIPTS.md`](../experiments/PRUNED_SCRIPTS.md).
+
 This repo is currently being used to study representation learning for
 IPMD-family inverse RL on G1 imitation tasks.
 

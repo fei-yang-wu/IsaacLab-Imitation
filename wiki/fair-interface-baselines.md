@@ -1,5 +1,7 @@
 # Fair Interface Baselines
 
+The focused two-row guide remains current. Older Phase-2/3, held-out, categorical-token, and broad multiseed launchers mentioned in the historical section were pruned on 2026-07-23; recover them from Git history rather than treating their recorded paths as runnable commands.
+
 This page is the operational guide for the focused causal-interface comparison.
 The paper-facing design is intentionally not a sweep over command styles. Read
 [Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md) for
@@ -101,7 +103,7 @@ reference information and is not deployable.
 ## Focused Local Runner
 
 Use
-`experiments/interface_baselines/run_focused_causal_interface_comparison.sh`.
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh`.
 It has no cluster or Skynet submission path. It runs the equivalence
 certificate first, writes direct vanilla under a separate ceiling directory,
 then trains and evaluates only the two planner rows.
@@ -115,7 +117,7 @@ VANILLA_TRACKER_CHECKPOINT=/path/to/vanilla_tracker.pt \
 MANIFEST=/path/to/corrected_one_motion_manifest.json \
 DATASET_PATH=/path/to/matching_corrected_latent_dataset \
 DRY_RUN=1 \
-experiments/interface_baselines/run_focused_causal_interface_comparison.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh
 ```
 
 A small local qualification:
@@ -133,7 +135,7 @@ MODEL_SIZE=medium \
 PRETRAIN_UPDATES=2000 \
 FINETUNE_UPDATES=2000 \
 EVAL_STEPS=1000 \
-experiments/interface_baselines/run_focused_causal_interface_comparison.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh
 ```
 
 Important defaults and checks:
@@ -270,7 +272,7 @@ components and native settings are reproduced.
 Check shell syntax and preview the focused commands:
 
 ```bash
-bash -n experiments/interface_baselines/run_focused_causal_interface_comparison.sh
+bash -n experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh
 
 LATENT_LOW_LEVEL_CHECKPOINT=/tmp/latent_low.pt \
 LATENT_SKILL_CHECKPOINT=/tmp/skill.pt \
@@ -278,7 +280,7 @@ VANILLA_TRACKER_CHECKPOINT=/tmp/vanilla.pt \
 MANIFEST=/tmp/corrected_manifest.json \
 DATASET_PATH=/tmp/corrected_latent_dataset \
 DRY_RUN=1 \
-experiments/interface_baselines/run_focused_causal_interface_comparison.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh
 ```
 
 Do not commit generated logs, checkpoints, videos, sample tensors, equivalence

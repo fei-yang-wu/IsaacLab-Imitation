@@ -109,8 +109,8 @@ If no `-c` is given, the script auto-selects `submit_job_slurm_${CLUSTER_LOGIN}.
 For Georgia Tech ICE/PACE pipeline jobs, use:
 
 ```bash
-DRY_RUN=1 experiments/submit_hl_skill_pipeline_pace_2b.sh
-CLUSTER_SLURM_ACCOUNT=<pace-account> DRY_RUN=0 experiments/submit_hl_skill_pipeline_pace_2b.sh
+DRY_RUN=1 experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_hl_skill_pipeline_pace_2b.sh
+CLUSTER_SLURM_ACCOUNT=<pace-account> DRY_RUN=0 experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_hl_skill_pipeline_pace_2b.sh
 ```
 
 The helper defaults to `ice-gpu`, `gpu:l40s:1`, `coe-ice`, and 32G RAM; override

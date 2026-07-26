@@ -108,6 +108,23 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 - `scripts/rsl_rl/`: RSL-RL training entrypoints.
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test runners.
 - `docker/`: container and cluster-related workflows.
+- `experiments/README.md`: human-facing pointer to current, historical, and
+  paper-facing experiment surfaces.
+- `experiments/campaigns/YYYY-MM-DD-short-purpose/`: dated protocol/status
+  indexes and thin wrappers, plus the implementation that campaign owns in
+  topic-named group subdirectories such as
+  `<campaign>/interface_baselines/`. There are no top-level topical
+  directories; a group directory lives in the newest campaign that uses it and
+  older campaigns reference it rather than copying it.
+- `experiments/paper/`: stable release-facing entrypoints only — `run.sh`, the
+  Phase-4 and Phase-5 submit plus aggregate scripts, and the release-bundle
+  builder. Do not add exploratory launchers, diagnostics, shared
+  implementation, or tests there.
+- The shared planner modules import each other as bare siblings, so the coupled
+  set must stay in one directory. Do not split it across campaigns, and do not
+  rely on a fixed `parents[N]` depth to find the repository root: use the
+  marker-based helper in
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/_repo_paths.py`.
 - `logs/`, `outputs/`: generated run artifacts; do not treat them as source.
 
 ## Working Rules
@@ -228,7 +245,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   unless the user explicitly changes it. Use Skynet for long convergence,
   final verification, and paper numbers.
 - The paper-facing LAFAN1 no-language launcher is
-  `experiments/interface_baselines/submit_phase4_no_language_skynet.sh`. It is
+  `experiments/paper/submit_phase4_no_language_skynet.sh`. It is
   fixed to planner seeds `0 1 2`, all 40 corrected motions, and planner sample
   budgets `1k/10k/50k`; do not repurpose it for a wider command or budget
   sweep. It must remain blocked until manifest-bound LAFAN1 oracle audits pass
@@ -239,10 +256,10 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   `cluster_submission.json`. Aggregate only a complete passing task grid with
   `aggregate_phase4_no_language_results.py`; it refuses overwrite and emits a
   Markdown table plus `aggregation_manifest.json`. Use
-  `experiments/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh` for
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh` for
   the matched corrected-LAFAN1 latent low-level prerequisite; it intentionally
   submits no EE/full-body variants or paper-facing planner stages. Use
-  `experiments/interface_baselines/submit_lafan1_low_level_qualification_skynet.sh`
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_lafan1_low_level_qualification_skynet.sh`
   for the strict two-controller gate. Do not bypass that gate with a local or
   cross-dataset checkpoint.
 - Measure planner inference latency only around the high-level planner's root
@@ -255,7 +272,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   happens on the first control step, temporal-difference metrics are also
   unavailable. Never reject the failure or invent measurements.
 - Build the final paper reproducibility index with
-  `experiments/interface_baselines/build_paper_release_bundle.py` only after
+  `experiments/paper/build_paper_release_bundle.py` only after
   both Phase-4 and Phase-5 paper aggregates exist. It must verify the complete
   aggregate and source-artifact hash chains; do not use it with smoke or
   diagnostic outputs and do not weaken its fixed grids to make an incomplete
@@ -271,7 +288,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   Zarr cache paths exactly as listed in
   `wiki/bones-seed-phase5-data-preparation.md`; do not use the older in-place
   100-motion manifest or an environment-default cache for final paper jobs.
-- Use `experiments/interface_baselines/run_bones_seed_low_level_skynet.sh` for
+- Use `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_low_level_skynet.sh` for
   the paired Phase-5 low-level candidate jobs. Its default block is fixed at
   4096 environments, 10,173 iterations (about 1B frames), seed 0, and a two-day
   walltime. Always run it first with `DRY_RUN=1`. It uses one verified workspace
@@ -280,7 +297,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   evaluate both resulting oracle checkpoints and regenerate the matching
   streamed-vanilla equivalence certificate first.
 - After both low-level jobs finish, use
-  `experiments/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`
   with the three final container-visible checkpoint paths. Its fixed gate is
   100 environments, 1000 steps from frame 0, seed 0, and 0.8 oracle success for
   both controllers. It also certifies all ten streamed-vanilla phases and
@@ -299,10 +316,10 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   name explicitly at deployment and evaluate it against a matching explicit
   motion selection. Never choose the goal embedding from trajectory rank, expert
   history, or the reference cursor. Use
-  `experiments/interface_baselines/run_bones_seed_language_smoke.sh` for the
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_language_smoke.sh` for the
   tiny local code gate; its two rows, one update, and twenty steps are not a
   performance result.
-- Use `experiments/interface_baselines/run_bones_seed_multigoal_language_comparison.sh`
+- Use `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.sh`
   for the shared multi-goal Phase-5 workflow. It must collect balanced rows per
   explicit goal, merge before shared training, evaluate each goal against the
   same named motion, and pass
@@ -319,7 +336,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   per-goal row budget. A goal/reference mismatch must fail immediately. Keep
   pretrained and final closed-loop evaluation at one environment per goal.
 - The paper-facing three-seed Skynet entrypoint is
-  `experiments/interface_baselines/submit_bones_seed_multiseed_pipeline_skynet.sh`.
+  `experiments/paper/submit_bones_seed_multiseed_pipeline_skynet.sh`.
   It fixes planner seeds `0 1 2`, preflights all three before submitting the
   first, and calls the guarded single-seed launcher
   `submit_bones_seed_multigoal_pipeline_skynet.sh`. Each seed uses the
@@ -330,18 +347,9 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   job IDs. Array indices are explicit goal indices; never infer them from
   reference rank. Keep the default dry run, all 100 goals, and chunked sample
   writing. Do not run it while qualification is merely pending or running.
-- A user-approved preliminary exception was submitted on 2026-07-15 only to
-  obtain early DiffSR Phase-5 planner behavior before qualification. Use
-  `submit_bones_seed_diffsr_preliminary_skynet.sh` only for explicitly labeled
-  `latent_skill` diagnostics. Its outputs must record
-  `preliminary_unqualified=true`, cannot run the paper audit, cannot satisfy a
-  qualification gate, and cannot enter the paired or multi-seed paper
-  aggregate. The first chain covers ten goals at seed 0 under jobs
-  `3506446 -> 3506447 -> 3506448 -> 3506449 -> 3506450`. This exception does
-  not authorize an unqualified explicit baseline or the guarded 100-goal,
-  three-seed paper launch.
+- A user-approved preliminary exception was submitted on 2026-07-15 only to obtain early DiffSR Phase-5 planner behavior before qualification. Its one-shot launcher was pruned on 2026-07-23 after that diagnostic completed; recover it only from Git history when auditing the recorded chain. Its outputs must record `preliminary_unqualified=true`, cannot run the paper audit, cannot satisfy a qualification gate, and cannot enter the paired or multi-seed paper aggregate. The first chain covers ten goals at seed 0 under jobs `3506446 -> 3506447 -> 3506448 -> 3506449 -> 3506450`. This exception does not authorize recreating the launcher, an unqualified explicit baseline, or the guarded 100-goal, three-seed paper launch.
 - After at least three complete paper-protocol seeds, use
-  `experiments/interface_baselines/aggregate_bones_seed_multiseed_results.py`.
+  `experiments/paper/aggregate_bones_seed_multiseed_results.py`.
   It fixes the exact seed set `0 1 2` by default and must reject failed audits,
   smoke runs, duplicate or substituted seeds, changed stage
   artifacts, and runs with different protocols, source hashes, data, or

@@ -38,6 +38,7 @@ keep_job_script="${CLUSTER_SLURM_KEEP_JOB_SCRIPT:-0}"
 print_job_script="${CLUSTER_SLURM_PRINT_JOB_SCRIPT:-1}"
 use_srun="${CLUSTER_SLURM_USE_SRUN:-0}"
 dependency="${CLUSTER_SLURM_DEPENDENCY:-}"
+array_spec="${CLUSTER_SLURM_ARRAY:-}"
 
 account_directive=""
 partition_directive=""
@@ -49,6 +50,8 @@ exclude_directive=""
 module_block=""
 run_prefix=""
 dependency_directive=""
+array_directive=""
+job_output_pattern="%x_%j.log"
 
 if [ -n "$account" ]; then
     account_directive="#SBATCH --account=${account}"
@@ -77,6 +80,21 @@ if [ -n "$dependency" ]; then
         exit 2
     fi
     dependency_directive="#SBATCH --dependency=${dependency}"
+fi
+if [ -n "$array_spec" ]; then
+    if [[ ! "$array_spec" =~ ^[0-9]+-[0-9]+(%[1-9][0-9]*)?$ ]]; then
+        echo "[ERROR] CLUSTER_SLURM_ARRAY must use START-END or START-END%MAX_PARALLEL." >&2
+        exit 2
+    fi
+    array_start="${array_spec%%-*}"
+    array_tail="${array_spec#*-}"
+    array_end="${array_tail%%\%*}"
+    if ((array_start > array_end)); then
+        echo "[ERROR] CLUSTER_SLURM_ARRAY start must be <= end." >&2
+        exit 2
+    fi
+    array_directive="#SBATCH --array=${array_spec}"
+    job_output_pattern="%x_%A_%a.log"
 fi
 if [ -n "$modules" ]; then
     module_block=$(
@@ -138,8 +156,9 @@ cat <<EOT > job.sh
 
 #SBATCH --job-name="${job_name_prefix}-$(date +"%Y%m%d-%H%M")"
 $dependency_directive
-#SBATCH --output="${output_dir}/%x_%j.log"
-#SBATCH --error="${output_dir}/%x_%j.log"
+$array_directive
+#SBATCH --output="${output_dir}/${job_output_pattern}"
+#SBATCH --error="${output_dir}/${job_output_pattern}"
 ${account_directive}
 ${partition_directive}
 ${qos_directive}

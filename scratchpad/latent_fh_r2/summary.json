@@ -1,0 +1,1075 @@
+{
+  "aggregate": {
+    "done_rate": 1.0,
+    "fall_free_rate": 1.0,
+    "fall_rate": 0.0,
+    "fallen_env_count": 0,
+    "return_sum_mean": 14.291365623474121,
+    "return_sum_std": 8.131512641906738,
+    "survival_rate": 1.0,
+    "survival_steps_mean": 171.75,
+    "survival_steps_std": 96.79456329345703,
+    "termination_cause_env_counts": {
+      "foot_pos_xyz": 4,
+      "reference_finished": 0,
+      "time_out": 0
+    },
+    "threshold_tracking_success_rate": 1.0,
+    "tracking_failed_env_count": 4,
+    "tracking_failure_rate": 1.0,
+    "tracking_success_rate": 0.0,
+    "tracking_success_root_height_threshold": 0.25,
+    "tracking_success_root_ori_threshold": 1.0,
+    "valid_transition_count": 683
+  },
+  "algorithm": "IPMD",
+  "allow_random_reset": false,
+  "auto_reference_steps": 13064,
+  "balanced_collection": null,
+  "balanced_motion_names": null,
+  "balanced_rows_per_motion": 0,
+  "command": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/.pixi/envs/isaaclab/bin/python -u scripts/rlopt/eval_skill_commander_closed_loop.py --headless --device cuda:0 --task Isaac-Imitation-G1-Latent-v0 --algorithm IPMD --checkpoint logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt --skill_checkpoint logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/skill_encoder/latest.pt --planner_checkpoint logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_finetune/checkpoints/latest.pt --state_history_steps 9 --output_dir scratchpad/latent_fh_r2 --label latent_fh --num_envs 4 --max_steps 700 --seed 0 --metric_interval 10 --keep_time_out --keep_early_terminations --motion_name walk1_subject1 --flow_num_inference_steps 16 --flow_inference_noise_std 0.0 --kit_args=--/app/extensions/fsWatcherEnabled=false agent.logger.backend= agent.ipmd.command_source=skill_commander agent.ipmd.skill_commander_checkpoint_path=logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_finetune/checkpoints/latest.pt agent.ipmd.skill_commander_use_achieved_state=true agent.ipmd.skill_commander_flow_num_inference_steps=16 agent.ipmd.skill_commander_flow_inference_noise_std=0.0 agent.ipmd.hl_skill_checkpoint_path=logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/skill_encoder/latest.pt agent.ipmd.hl_skill_finetune_enabled=false env.lafan1_manifest_path=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json env.dataset_path=data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557 env.refresh_zarr_dataset=false env.random_reset_step_min=0 env.random_reset_step_max=0 env.random_reset_full_trajectory=false env.reset_schedule=sequential env.wrap_steps=false env.observations.policy.enable_corruption=false env.latent_command_dim=258 agent.ipmd.latent_dim=258 agent.ipmd.hl_skill_horizon_steps=10 agent.ipmd.hl_skill_command_mode=z agent.ipmd.latent_steps_min=10 agent.ipmd.latent_steps_max=10 agent.ipmd.latent_learning.command_phase_mode=sin_cos agent.ipmd.latent_learning.code_latent_dim=256 agent.ipmd.latent_learning.code_period=10 agent.ipmd.reward_loss_coeff=0.0 agent.ipmd.reward_l2_coeff=0.0 agent.ipmd.reward_grad_penalty_coeff=0.0 agent.ipmd.reward_logit_reg_coeff=0.0 agent.ipmd.reward_param_weight_decay_coeff=0.0 env.terminations.anchor_pos=null env.terminations.anchor_ori=null env.terminations.ee_body_pos=null env.terminations.base_too_low=null env.events.physics_material=null env.events.add_joint_default_pos=null env.events.base_com=null env.events.push_robot=null env.episode_length_s=20.0 physics=newton_mjwarp env.sim.physics.solver_cfg.njmax=320 env.sim.physics.solver_cfg.nconmax=40",
+  "continue_after_reset": false,
+  "disabled_tracking_termination_terms": [],
+  "episode_length_extension_enabled": false,
+  "final_trajectories": {
+    "local_steps": [
+      28,
+      10,
+      0,
+      79
+    ],
+    "motion_names": [
+      "walk1_subject1",
+      "walk1_subject1",
+      "walk1_subject1",
+      "walk1_subject1"
+    ],
+    "trajectory_lengths": [
+      13064,
+      13064,
+      13064,
+      13064
+    ],
+    "trajectory_ranks": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "goal_motion_match_required": false,
+  "keep_early_terminations": true,
+  "keep_time_out": true,
+  "language_embeddings_override": null,
+  "low_level_checkpoint": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt",
+  "max_steps": 700,
+  "metadata": {
+    "algorithm": "IPMD",
+    "checkpoint": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt",
+    "dataset_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557",
+    "deterministic_tracking": {
+      "enabled": false
+    },
+    "disabled_tracking_termination_terms": [],
+    "early_terminations_enabled": true,
+    "episode_length_extension_enabled": false,
+    "episode_length_s": 20.0,
+    "goal_motion_match_required": false,
+    "interface": "latent_skill",
+    "label": "latent_fh",
+    "language_conditioning": {
+      "embedding_dim": 0,
+      "enabled": false
+    },
+    "low_level_tracker": {
+      "checkpoint_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt",
+      "checkpoint_sha256": "785f5327f2356f4a301ac39fc435b78379e9c5a73293c450deb483dd7c188f7c",
+      "ignored_checkpoint_keys": [
+        "hl_skill_command_sampler_state_dict",
+        "optimizer_state_dict",
+        "reward_estimator_state_dict",
+        "reward_optimizer_state_dict",
+        "value_state_dict"
+      ],
+      "loaded_components": [
+        "policy_state_dict"
+      ],
+      "policy_frozen": true,
+      "policy_input_keys": [
+        [
+          "policy",
+          "latent_command"
+        ],
+        [
+          "policy",
+          "base_ang_vel"
+        ],
+        [
+          "policy",
+          "joint_pos_rel"
+        ],
+        [
+          "policy",
+          "joint_vel_rel"
+        ],
+        [
+          "policy",
+          "last_action"
+        ]
+      ],
+      "policy_parameter_count": 346682,
+      "policy_trainable_parameter_count": 0,
+      "policy_training": false,
+      "strict_policy_restore": true
+    },
+    "motion_manifest": "data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json",
+    "motion_name": "walk1_subject1",
+    "motion_names": null,
+    "num_envs": 4,
+    "planner_checkpoint": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_finetune/checkpoints/latest.pt",
+    "planner_metadata": {
+      "args": {
+        "batch_size": 256,
+        "checkpoint": "logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_pretrain/checkpoints/latest.pt",
+        "d_model": null,
+        "device": "cuda:0",
+        "dropout": null,
+        "endpoint_cosine_coeff": 1.0,
+        "endpoint_loss_coeff": 1.0,
+        "endpoint_num_inference_steps": 4,
+        "eval_batch_size": 512,
+        "eval_max_samples": 4096,
+        "feedforward_dim": null,
+        "flow_inference_noise_std": 0.0,
+        "flow_loss_coeff": 1.0,
+        "flow_num_inference_steps": 16,
+        "grad_clip_norm": 1.0,
+        "interface": "latent_skill",
+        "log_interval": 100,
+        "lr": 0.0001,
+        "max_samples": 0,
+        "micro_batch_size": 32,
+        "model_size": "small",
+        "normalization": "per_dim",
+        "num_heads": null,
+        "num_language_tokens": 1,
+        "num_layers": null,
+        "num_state_tokens": null,
+        "num_updates": 2000,
+        "output_dir": "logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_finetune",
+        "patch_dim": null,
+        "planner_family": "flow",
+        "samples_dir": "logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/demonstration_and_rollout_samples",
+        "seed": 0,
+        "state_key": "planner_state",
+        "use_checkpoint_normalization": false,
+        "weight_decay": 0.0001
+      },
+      "batch_size": 256,
+      "checkpoint_metadata": {
+        "args": {
+          "batch_size": 256,
+          "checkpoint": null,
+          "d_model": null,
+          "device": "cuda:0",
+          "dropout": null,
+          "endpoint_cosine_coeff": 1.0,
+          "endpoint_loss_coeff": 1.0,
+          "endpoint_num_inference_steps": 4,
+          "eval_batch_size": 512,
+          "eval_max_samples": 4096,
+          "feedforward_dim": null,
+          "flow_inference_noise_std": 0.0,
+          "flow_loss_coeff": 1.0,
+          "flow_num_inference_steps": 16,
+          "grad_clip_norm": 1.0,
+          "interface": "latent_skill",
+          "log_interval": 100,
+          "lr": 0.0001,
+          "max_samples": 1000,
+          "micro_batch_size": 32,
+          "model_size": "small",
+          "normalization": "per_dim",
+          "num_heads": null,
+          "num_language_tokens": 1,
+          "num_layers": null,
+          "num_state_tokens": null,
+          "num_updates": 2000,
+          "output_dir": "logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_pretrain",
+          "patch_dim": null,
+          "planner_family": "flow",
+          "samples_dir": "logs/interface_baselines/lafan1_planner_capacity_20260723/oracle_baselines/latent_skill/oracle_demonstrations/rollout_training_samples",
+          "seed": 0,
+          "state_key": "planner_state",
+          "use_checkpoint_normalization": false,
+          "weight_decay": 0.0001
+        },
+        "batch_size": 256,
+        "checkpoint_metadata": {},
+        "endpoint_num_inference_steps": 4,
+        "finetune_num_updates": 2000,
+        "flow_inference_noise_std": 0.0,
+        "flow_num_inference_steps": 16,
+        "gradient_accumulation_steps": 8,
+        "heldout_sample_count": 0,
+        "init_checkpoint": null,
+        "interface": "latent_skill",
+        "language_dim": 0,
+        "last_metrics": {
+          "eval/normalized_target_cosine": 0.9964122176170349,
+          "eval/normalized_target_mse": 0.0072285812348127365,
+          "eval/normalized_target_rmse_mean": 0.08359114825725555,
+          "eval/normalized_target_rmse_std": 0.015527469106018543,
+          "eval/prediction_rms": 0.34514766931533813,
+          "eval/sample_count": 1000,
+          "eval/target_cosine": 0.9973692893981934,
+          "eval/target_mse": 0.0006383635918609798,
+          "eval/target_rms": 0.34261059761047363,
+          "eval/target_rmse_mean": 0.024865908548235893,
+          "eval/target_rmse_std": 0.00447774026542902,
+          "train/flow_loss": 0.16795505862683058,
+          "train/grad_norm": 4.468318462371826,
+          "train/loss": 0.18099254928529263,
+          "train/normalized_endpoint_cosine_loss": 0.0040336474776268005,
+          "train/normalized_endpoint_mse": 0.00900384341366589,
+          "train/objective_loss": 0.16795505862683058,
+          "update": 2000
+        },
+        "lr": 0.0001,
+        "max_samples": 1000,
+        "micro_batch_size": 32,
+        "model_kwargs": {
+          "d_model": 256,
+          "dropout": 0.0,
+          "feedforward_dim": 1024,
+          "num_heads": 4,
+          "num_layers": 4,
+          "num_state_tokens": 2,
+          "patch_dim": 32
+        },
+        "model_size": "small",
+        "num_language_tokens": 1,
+        "num_samples": 1000,
+        "num_updates": 2000,
+        "parameter_count": 4182304,
+        "planner_config": {
+          "d_model": 256,
+          "dropout": 0.0,
+          "feedforward_dim": 1024,
+          "language_dim": 0,
+          "num_heads": 4,
+          "num_language_tokens": 1,
+          "num_layers": 4,
+          "num_state_tokens": 2,
+          "patch_dim": 32,
+          "planner_type": "causal_interface_transformer_flow",
+          "state_dim": 930,
+          "target_dim": 256,
+          "term_widths": [
+            256
+          ]
+        },
+        "planner_family": "flow",
+        "planner_type": "causal_interface_transformer_flow",
+        "pretrain_num_updates": null,
+        "sample_metadata": {
+          "algorithm": "IPMD",
+          "balanced_collection": {
+            "motion_names": [
+              "walk1_subject1"
+            ],
+            "rows_per_motion": 1000
+          },
+          "collection_stage": "oracle_rollout",
+          "command_future_steps": 10,
+          "command_past_steps": 0,
+          "control_rate_hz": 50.0,
+          "dataset_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557",
+          "deterministic_tracking": {
+            "enabled": false
+          },
+          "disabled_tracking_termination_terms": [
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos"
+          ],
+          "early_terminations_enabled": true,
+          "episode_length_extension_enabled": false,
+          "episode_length_s": 10.0,
+          "goal_motion_match_required": false,
+          "interface": "latent_skill",
+          "language_conditioning": {
+            "embedding_dim": 0,
+            "enabled": false
+          },
+          "motion_name": "walk1_subject1",
+          "motion_names": null,
+          "paired_target_contract": {
+            "causal": {
+              "state": "causal_state_history",
+              "target": "causal_target"
+            },
+            "demonstration": {
+              "state": "demonstration_state_history",
+              "target": "demonstration_target"
+            }
+          },
+          "planner_interval_steps": 10,
+          "planner_observation_spec": {
+            "feature_names": [
+              "joint_pos_rel",
+              "joint_vel_rel",
+              "base_ang_vel",
+              "projected_gravity",
+              "last_action"
+            ],
+            "feature_widths": [
+              29,
+              29,
+              3,
+              3,
+              29
+            ],
+            "flat_dim": 930,
+            "frame_dim": 93,
+            "history_frames": 10,
+            "history_order": "oldest_to_newest",
+            "history_steps": 9,
+            "name": "g1_causal_robot_history",
+            "reference_features": [],
+            "reset_padding": "repeat_initial_observation",
+            "version": 1
+          },
+          "planner_rate_hz": 5.0,
+          "policy_observation_corruption_enabled": false,
+          "provenance": {
+            "low_level_checkpoint": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt",
+            "low_level_tracker": {
+              "checkpoint_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt",
+              "checkpoint_sha256": "785f5327f2356f4a301ac39fc435b78379e9c5a73293c450deb483dd7c188f7c",
+              "ignored_checkpoint_keys": [
+                "hl_skill_command_sampler_state_dict",
+                "optimizer_state_dict",
+                "reward_estimator_state_dict",
+                "reward_optimizer_state_dict",
+                "value_state_dict"
+              ],
+              "loaded_components": [
+                "policy_state_dict"
+              ],
+              "policy_frozen": true,
+              "policy_input_keys": [
+                [
+                  "policy",
+                  "latent_command"
+                ],
+                [
+                  "policy",
+                  "base_ang_vel"
+                ],
+                [
+                  "policy",
+                  "joint_pos_rel"
+                ],
+                [
+                  "policy",
+                  "joint_vel_rel"
+                ],
+                [
+                  "policy",
+                  "last_action"
+                ]
+              ],
+              "policy_parameter_count": 346682,
+              "policy_trainable_parameter_count": 0,
+              "policy_training": false,
+              "strict_policy_restore": true
+            },
+            "motion_manifest": "data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json",
+            "planner_checkpoint": "",
+            "skill_checkpoint": "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/skill_encoder/latest.pt"
+          },
+          "push_perturbation": {
+            "enabled": true,
+            "function": "isaaclab.envs.mdp.events.push_by_setting_velocity",
+            "interval_range_s": [
+              1.0,
+              3.0
+            ],
+            "mode": "interval",
+            "term_name": "push_robot",
+            "velocity_range": {
+              "pitch": [
+                -0.52,
+                0.52
+              ],
+              "roll": [
+                -0.52,
+                0.52
+              ],
+              "x": [
+                -0.5,
+                0.5
+              ],
+              "y": [
+                -0.5,
+                0.5
+              ],
+              "yaw": [
+                -0.78,
+                0.78
+              ],
+              "z": [
+                -0.2,
+                0.2
+              ]
+            }
+          },
+          "random_reset_step_max": 0,
+          "random_reset_step_min": 0,
+          "reset_schedule": "sequential",
+          "reward_clipping_enabled": true,
+          "sample_format": {
+            "name": "causal_interface_planner_sample",
+            "version": 2
+          },
+          "seed": 0,
+          "state_history_steps": 9,
+          "survival_definition": "no_base_too_low_termination",
+          "target_spec": {
+            "interface": "latent_skill",
+            "target_dim": 256,
+            "term_names": [
+              "z"
+            ],
+            "term_widths": [
+              256
+            ]
+          },
+          "task": "Isaac-Imitation-G1-Latent-v0",
+          "time_out_enabled": true,
+          "tracking_terminations_enabled": false,
+          "wrap_steps": false
+        },
+        "samples_dir": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/interface_baselines/lafan1_planner_capacity_20260723/oracle_baselines/latent_skill/oracle_demonstrations/rollout_training_samples",
+        "selected_indices": null,
+        "selected_sample_count": 1000,
+        "selection_fraction": 1.0,
+        "selection_seed": 0,
+        "source_sample_count": 1000,
+        "state_dim": 930,
+        "state_key": "planner_state",
+        "target_dim": 256,
+        "trainable_parameter_count": 4182304,
+        "weight_decay": 0.0001
+      },
+      "diffusion_inference_noise_std": 1.0,
+      "diffusion_num_inference_steps": 16,
+      "endpoint_num_inference_steps": 4,
+      "finetune_num_updates": 2000,
+      "flow_inference_noise_std": 0.0,
+      "flow_num_inference_steps": 16,
+      "gradient_accumulation_steps": 8,
+      "heldout_sample_count": 0,
+      "init_checkpoint": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_pretrain/checkpoints/latest.pt",
+      "interface": "latent_skill",
+      "language_dim": 0,
+      "last_metrics": {
+        "eval/normalized_target_cosine": 0.9856298565864563,
+        "eval/normalized_target_mse": 0.026530038565397263,
+        "eval/normalized_target_rmse_mean": 0.15051527321338654,
+        "eval/normalized_target_rmse_std": 0.06225104257464409,
+        "eval/prediction_rms": 0.3586544096469879,
+        "eval/sample_count": 2000,
+        "eval/target_cosine": 0.9902240633964539,
+        "eval/target_mse": 0.0024384267162531614,
+        "eval/target_rms": 0.3528576195240021,
+        "eval/target_rmse_mean": 0.04575285688042641,
+        "eval/target_rmse_std": 0.01857694983482361,
+        "train/flow_loss": 0.22579610720276833,
+        "train/grad_norm": 5.179269790649414,
+        "train/loss": 0.2644192986190319,
+        "train/normalized_endpoint_cosine_loss": 0.013503529131412506,
+        "train/normalized_endpoint_mse": 0.02511966391466558,
+        "train/objective_loss": 0.22579610720276833,
+        "update": 2000
+      },
+      "lr": 0.0001,
+      "max_samples": 0,
+      "micro_batch_size": 32,
+      "model_kwargs": {
+        "d_model": 256,
+        "dropout": 0.0,
+        "feedforward_dim": 1024,
+        "num_heads": 4,
+        "num_layers": 4,
+        "num_state_tokens": 2,
+        "patch_dim": 32
+      },
+      "model_size": "small",
+      "num_language_tokens": 1,
+      "num_samples": 2000,
+      "num_updates": 2000,
+      "parameter_count": 4182304,
+      "planner_config": {
+        "d_model": 256,
+        "dropout": 0.0,
+        "feedforward_dim": 1024,
+        "language_dim": 0,
+        "num_heads": 4,
+        "num_language_tokens": 1,
+        "num_layers": 4,
+        "num_state_tokens": 2,
+        "patch_dim": 32,
+        "planner_type": "causal_interface_transformer_flow",
+        "state_dim": 930,
+        "target_dim": 256,
+        "term_widths": [
+          256
+        ]
+      },
+      "planner_family": "flow",
+      "planner_type": "causal_interface_transformer_flow",
+      "pretrain_num_updates": null,
+      "sample_metadata": {
+        "algorithm": "IPMD",
+        "balanced_collection": {
+          "motion_names": [
+            "walk1_subject1"
+          ],
+          "rows_per_motion": 1000
+        },
+        "collection_stage": "oracle_rollout",
+        "command_future_steps": 10,
+        "command_past_steps": 0,
+        "control_rate_hz": 50.0,
+        "dataset_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557",
+        "deterministic_tracking": {
+          "enabled": false
+        },
+        "disabled_tracking_termination_terms": [
+          "anchor_pos",
+          "anchor_ori",
+          "ee_body_pos"
+        ],
+        "early_terminations_enabled": true,
+        "episode_length_extension_enabled": false,
+        "episode_length_s": 10.0,
+        "goal_motion_match_required": false,
+        "interface": "latent_skill",
+        "language_conditioning": {
+          "embedding_dim": 0,
+          "enabled": false
+        },
+        "motion_name": "walk1_subject1",
+        "motion_names": null,
+        "paired_target_contract": {
+          "causal": {
+            "state": "causal_state_history",
+            "target": "causal_target"
+          },
+          "demonstration": {
+            "state": "demonstration_state_history",
+            "target": "demonstration_target"
+          }
+        },
+        "planner_interval_steps": 10,
+        "planner_observation_spec": {
+          "feature_names": [
+            "joint_pos_rel",
+            "joint_vel_rel",
+            "base_ang_vel",
+            "projected_gravity",
+            "last_action"
+          ],
+          "feature_widths": [
+            29,
+            29,
+            3,
+            3,
+            29
+          ],
+          "flat_dim": 930,
+          "frame_dim": 93,
+          "history_frames": 10,
+          "history_order": "oldest_to_newest",
+          "history_steps": 9,
+          "name": "g1_causal_robot_history",
+          "reference_features": [],
+          "reset_padding": "repeat_initial_observation",
+          "version": 1
+        },
+        "planner_rate_hz": 5.0,
+        "policy_observation_corruption_enabled": false,
+        "provenance": {
+          "low_level_checkpoint": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt",
+          "low_level_tracker": {
+            "checkpoint_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt",
+            "checkpoint_sha256": "785f5327f2356f4a301ac39fc435b78379e9c5a73293c450deb483dd7c188f7c",
+            "ignored_checkpoint_keys": [
+              "hl_skill_command_sampler_state_dict",
+              "optimizer_state_dict",
+              "reward_estimator_state_dict",
+              "reward_optimizer_state_dict",
+              "value_state_dict"
+            ],
+            "loaded_components": [
+              "policy_state_dict"
+            ],
+            "policy_frozen": true,
+            "policy_input_keys": [
+              [
+                "policy",
+                "latent_command"
+              ],
+              [
+                "policy",
+                "base_ang_vel"
+              ],
+              [
+                "policy",
+                "joint_pos_rel"
+              ],
+              [
+                "policy",
+                "joint_vel_rel"
+              ],
+              [
+                "policy",
+                "last_action"
+              ]
+            ],
+            "policy_parameter_count": 346682,
+            "policy_trainable_parameter_count": 0,
+            "policy_training": false,
+            "strict_policy_restore": true
+          },
+          "motion_manifest": "data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json",
+          "planner_checkpoint": "",
+          "skill_checkpoint": "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/skill_encoder/latest.pt"
+        },
+        "push_perturbation": {
+          "enabled": true,
+          "function": "isaaclab.envs.mdp.events.push_by_setting_velocity",
+          "interval_range_s": [
+            1.0,
+            3.0
+          ],
+          "mode": "interval",
+          "term_name": "push_robot",
+          "velocity_range": {
+            "pitch": [
+              -0.52,
+              0.52
+            ],
+            "roll": [
+              -0.52,
+              0.52
+            ],
+            "x": [
+              -0.5,
+              0.5
+            ],
+            "y": [
+              -0.5,
+              0.5
+            ],
+            "yaw": [
+              -0.78,
+              0.78
+            ],
+            "z": [
+              -0.2,
+              0.2
+            ]
+          }
+        },
+        "random_reset_step_max": 0,
+        "random_reset_step_min": 0,
+        "reset_schedule": "sequential",
+        "reward_clipping_enabled": true,
+        "sample_format": {
+          "name": "causal_interface_planner_sample",
+          "version": 2
+        },
+        "seed": 0,
+        "state_history_steps": 9,
+        "survival_definition": "no_base_too_low_termination",
+        "target_spec": {
+          "interface": "latent_skill",
+          "target_dim": 256,
+          "term_names": [
+            "z"
+          ],
+          "term_widths": [
+            256
+          ]
+        },
+        "task": "Isaac-Imitation-G1-Latent-v0",
+        "time_out_enabled": true,
+        "tracking_terminations_enabled": false,
+        "wrap_steps": false
+      },
+      "samples_dir": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/demonstration_and_rollout_samples",
+      "selected_indices": null,
+      "selected_sample_count": 2000,
+      "selection_fraction": 1.0,
+      "selection_seed": 0,
+      "source_sample_count": 2000,
+      "state_dim": 930,
+      "state_key": "planner_state",
+      "target_dim": 256,
+      "trainable_parameter_count": 4182304,
+      "weight_decay": 0.0001
+    },
+    "planner_target_dim": 256,
+    "policy_observation_corruption_enabled": false,
+    "push_perturbation": {
+      "enabled": false,
+      "term_name": "push_robot"
+    },
+    "random_reset_step_max": 0,
+    "random_reset_step_min": 0,
+    "reset_schedule": "sequential",
+    "reward_clipping_enabled": true,
+    "seed": 0,
+    "survival_definition": "no_base_too_low_termination",
+    "task": "Isaac-Imitation-G1-Latent-v0",
+    "time_out_enabled": true,
+    "tracking_terminations_enabled": true,
+    "trajectory_name": null,
+    "wrap_steps": false
+  },
+  "metric_interval": 10,
+  "metric_means": {
+    "m1/z_cosine": 0.5064620623985926,
+    "m1/z_mse": 0.1282736110345771,
+    "m3/z_cosine": 0.575927060097456,
+    "m3/z_mse": 0.11749311812066783,
+    "m3_vs_m1/z_cosine": 0.6011542193979645,
+    "m3_vs_m1/z_mse": 0.08997943031135947,
+    "published_z_vs_m3/z_cosine": 0.9433115298549334,
+    "published_z_vs_m3/z_mse": 0.011956391904580718,
+    "published_z_vs_target/z_cosine": 0.5759408231824636,
+    "published_z_vs_target/z_mse": 0.11581008710588019,
+    "state/achieved_vs_expert/mae": 0.20271424297243357,
+    "state/achieved_vs_expert/max_abs": 2.219413477306565,
+    "state/achieved_vs_expert/rmse": 0.3783244838317235,
+    "state/expert_anchor_ori_b/achieved_vs_expert/mae": 8.084397590026512e-13,
+    "state/expert_anchor_ori_b/achieved_vs_expert/max_abs": 1.9402553637822468e-11,
+    "state/expert_anchor_ori_b/achieved_vs_expert/rmse": 3.9605298207678885e-12,
+    "state/expert_anchor_pos_b/achieved_vs_expert/mae": 0.0,
+    "state/expert_anchor_pos_b/achieved_vs_expert/max_abs": 0.0,
+    "state/expert_anchor_pos_b/achieved_vs_expert/rmse": 0.0,
+    "state/expert_motion/achieved_vs_expert/mae": 0.23416989964122573,
+    "state/expert_motion/achieved_vs_expert/max_abs": 2.219413477306565,
+    "state/expert_motion/achieved_vs_expert/rmse": 0.4066191748715937,
+    "step": 115.0
+  },
+  "metrics": {
+    "action_delta_l2": {
+      "count": 683,
+      "mean": 0.3998708128929138,
+      "std": 0.3458661437034607
+    },
+    "action_l2": {
+      "count": 687,
+      "mean": 9.0936861038208,
+      "std": 1.7307794094085693
+    },
+    "ee_ori_error_rad": {
+      "count": 683,
+      "mean": 0.38508278131484985,
+      "std": 0.14260424673557281
+    },
+    "ee_pos_error_m": {
+      "count": 683,
+      "mean": 0.17266184091567993,
+      "std": 0.032229047268629074
+    },
+    "joint_pos_rmse_rad": {
+      "count": 683,
+      "mean": 0.14161257445812225,
+      "std": 0.056069497019052505
+    },
+    "joint_vel_rmse_radps": {
+      "count": 683,
+      "mean": 0.6097251772880554,
+      "std": 0.4985969364643097
+    },
+    "planner_target_rmse": {
+      "count": 24,
+      "mean": 0.34277269162036206,
+      "std": 0.0
+    },
+    "root_ang_vel_rmse_radps": {
+      "count": 683,
+      "mean": 0.2084968537092209,
+      "std": 0.17516963183879852
+    },
+    "root_height_error_m": {
+      "count": 683,
+      "mean": 0.009126756340265274,
+      "std": 0.0033033303916454315
+    },
+    "root_lin_vel_rmse_mps": {
+      "count": 683,
+      "mean": 0.07148382812738419,
+      "std": 0.07124553620815277
+    },
+    "root_ori_error_rad": {
+      "count": 683,
+      "mean": 0.33439186215400696,
+      "std": 0.12176383286714554
+    },
+    "root_pos_xy_error_m": {
+      "count": 683,
+      "mean": 0.13020385801792145,
+      "std": 0.04374362900853157
+    },
+    "root_pos_xyz_error_m": {
+      "count": 683,
+      "mean": 0.13063012063503265,
+      "std": 0.04354912415146828
+    },
+    "tracked_body_ang_vel_error_radps": {
+      "count": 683,
+      "mean": 0.7382549047470093,
+      "std": 0.5462853312492371
+    },
+    "tracked_body_lin_vel_error_mps": {
+      "count": 683,
+      "mean": 0.16345669329166412,
+      "std": 0.13257427513599396
+    },
+    "tracked_body_ori_error_rad": {
+      "count": 683,
+      "mean": 0.36588555574417114,
+      "std": 0.11928714066743851
+    },
+    "tracked_body_pos_error_m": {
+      "count": 683,
+      "mean": 0.1478513479232788,
+      "std": 0.03608890250325203
+    },
+    "tracking_acceleration_distance_mps2": {
+      "count": 679,
+      "mean": 1.861104965209961,
+      "std": 1.938425898551941
+    },
+    "tracking_failure": {
+      "count": 683,
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "tracking_mpjpe_m": {
+      "count": 683,
+      "mean": 0.06493983417749405,
+      "std": 0.018409548327326775
+    },
+    "tracking_mpjpe_mm": {
+      "count": 683,
+      "mean": 64.9398422241211,
+      "std": 18.409547805786133
+    },
+    "tracking_velocity_distance_mps": {
+      "count": 683,
+      "mean": 0.16345669329166412,
+      "std": 0.13257427513599396
+    }
+  },
+  "motion_name": "walk1_subject1",
+  "motion_names": null,
+  "num_envs": 4,
+  "num_metric_rows": 24,
+  "output_dir": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/scratchpad/latent_fh_r2",
+  "per_environment": [
+    {
+      "done": true,
+      "env_id": 0,
+      "fell": false,
+      "motion_name": "walk1_subject1",
+      "return_sum": 18.431461334228516,
+      "survival_steps": 212,
+      "survived_without_fall": true,
+      "terminated": true,
+      "termination_terms": [
+        "foot_pos_xyz"
+      ],
+      "tracking_success": false,
+      "trajectory_rank": 0,
+      "truncated": false
+    },
+    {
+      "done": true,
+      "env_id": 1,
+      "fell": false,
+      "motion_name": "walk1_subject1",
+      "return_sum": 18.631397247314453,
+      "survival_steps": 230,
+      "survived_without_fall": true,
+      "terminated": true,
+      "termination_terms": [
+        "foot_pos_xyz"
+      ],
+      "tracking_success": false,
+      "trajectory_rank": 0,
+      "truncated": false
+    },
+    {
+      "done": true,
+      "env_id": 2,
+      "fell": false,
+      "motion_name": "walk1_subject1",
+      "return_sum": 19.863372802734375,
+      "survival_steps": 240,
+      "survived_without_fall": true,
+      "terminated": true,
+      "termination_terms": [
+        "foot_pos_xyz"
+      ],
+      "tracking_success": false,
+      "trajectory_rank": 0,
+      "truncated": false
+    },
+    {
+      "done": true,
+      "env_id": 3,
+      "fell": false,
+      "motion_name": "walk1_subject1",
+      "return_sum": 0.23923265933990479,
+      "survival_steps": 5,
+      "survived_without_fall": true,
+      "terminated": true,
+      "termination_terms": [
+        "foot_pos_xyz"
+      ],
+      "tracking_success": false,
+      "trajectory_rank": 0,
+      "truncated": false
+    }
+  ],
+  "planner_checkpoint": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/interface_baselines/lafan1_planner_capacity_20260723/scaling/seed0/small/latent_skill/planner_finetune/checkpoints/latest.pt",
+  "planner_config": {
+    "batch_size": 1,
+    "condition_on_language": false,
+    "cosine_loss_coeff": 1.0,
+    "device": "cpu",
+    "diffusion_beta_schedule": "squaredcos_cap_v2",
+    "diffusion_ddim_eta": 0.0,
+    "diffusion_inference_noise_std": 1.0,
+    "diffusion_inference_scheduler": "ddpm",
+    "diffusion_num_inference_steps": 16,
+    "diffusion_num_train_timesteps": 100,
+    "diffusion_prediction_type": "epsilon",
+    "diffusion_time_embed_dim": 64,
+    "dit_dropout": 0.0,
+    "dit_feedforward_dim": 704,
+    "dit_model_dim": 176,
+    "dit_num_heads": 8,
+    "dit_num_layers": 4,
+    "dit_num_state_tokens": 4,
+    "dit_patch_dim": 16,
+    "eval_batch_size": 1,
+    "eval_batches": 1,
+    "eval_split": "eval",
+    "eval_trajectory_fraction": 0.1,
+    "flow_inference_noise_std": 1.0,
+    "flow_num_inference_steps": 16,
+    "flow_time_embed_dim": 64,
+    "flow_train_noise_std": 1.0,
+    "generator_hidden_dims": [
+      1024,
+      512,
+      512
+    ],
+    "grad_clip_norm": 1.0,
+    "language_contrastive_coeff": 0.0,
+    "language_contrastive_margin": 0.05,
+    "language_contrastive_warmup_updates": 0,
+    "language_embeddings_path": "",
+    "log_interval": 100,
+    "lr": 0.0003,
+    "num_updates": 1,
+    "planner_type": "flow_matching",
+    "preflight_batch_size": 8,
+    "skill_checkpoint_path": "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/skill_encoder/latest.pt",
+    "state_feature_dropout_mode": "shuffle",
+    "state_feature_dropout_prob": 0.0,
+    "state_feature_dropout_terms": [
+      "expert_motion"
+    ],
+    "state_feature_dropout_warmup_updates": 0,
+    "state_history_steps": 9,
+    "state_noise_std": 0.0,
+    "train_split": "train",
+    "trajectory_split_seed": 0,
+    "weight_decay": 0.0,
+    "z_norm_coeff": 0.0001
+  },
+  "planner_inference_latency_ms": {
+    "batch_sizes": [
+      1,
+      2,
+      3
+    ],
+    "mean": 8.506489470235858,
+    "measured_call_count": 51,
+    "p50": 8.45795520581305,
+    "p95": 8.798772585578263,
+    "scope": "high_level_planner_forward_only",
+    "std": 0.21665161145765066,
+    "synchronized_cuda": true,
+    "total_call_count": 52,
+    "unit": "ms",
+    "warmup_calls_excluded": 1
+  },
+  "planner_target_dim": 256,
+  "planner_update": 2000,
+  "random_reset_step_max": 0,
+  "random_reset_step_min": 0,
+  "reward_clipping_enabled": true,
+  "sample_file_count": 0,
+  "sample_rows_per_file": 1,
+  "save_rollout_training_samples": false,
+  "saved_rows": 0,
+  "saved_steps": 0,
+  "seed": 0,
+  "skill_checkpoint_override": "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/skill_encoder/latest.pt",
+  "start_trajectories": {
+    "local_steps": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "motion_names": [
+      "walk1_subject1",
+      "walk1_subject1",
+      "walk1_subject1",
+      "walk1_subject1"
+    ],
+    "trajectory_lengths": [
+      13064,
+      13064,
+      13064,
+      13064
+    ],
+    "trajectory_ranks": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "steps_run": 240,
+  "stop_reason": "all_envs_done",
+  "survival_definition": "no_base_too_low_termination",
+  "task": "Isaac-Imitation-G1-Latent-v0",
+  "tracking_success_root_height_threshold": 0.25,
+  "tracking_success_root_ori_threshold": 1.0,
+  "tracking_terminations_enabled": true,
+  "trajectory_name": null,
+  "video_dir": null
+}
