@@ -44,6 +44,88 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Grouped-VQ capacity ablation prepared (2026-07-26)
+
+New campaign
+[`experiments/campaigns/2026-07-26-groupvq-capacity-ablation/`](../experiments/campaigns/2026-07-26-groupvq-capacity-ablation/),
+documented as "Study C" in
+[`wiki/latent-learning-ablation-plan.md`](latent-learning-ablation-plan.md).
+It fixes the DiffSR spectral bottleneck at the grouped product codebook
+(`gumbel_multicat`, hard straight-through) and sweeps only its two capacity
+axes around the `G=64, C=128` anchor that previously tracked the continuous
+deterministic latent: `G` in {16, 32, 64, 128} at `C=128`, and `C` in
+{16, 64, 128, 512} at `G=64` — seven arms, seed 0, corrected LAFAN1, approved
+H200 geometry, 5B cap.
+
+Status: CPU pre-flight passed for all seven grid points (build, quantize,
+checkpoint round-trip), and all seven passed the local 10M wiring gate in
+`logs/groupvq_ablation/local_10m_gate_20260726/`.
+
+**Live jobs (coe-gpu H100, submitted 2026-07-26 ~19:15):** `5540442`
+g16_c128, `5540443` g32_c128, `5540445` g64_c128, `5540446` g128_c128,
+`5540448` g64_c16, `5540449` g64_c64, `5540450` g64_c512. All seven confirmed
+RUNNING with clean logs and falling DiffSR pretrain loss. Each needs one
+continuation segment: 12,288 x 12 at ~80k FPS covers about 4.0B of the 5B cap
+in one 14h segment.
+
+Getting there took three submission rounds and exposed three defects, two
+pre-existing:
+
+1. `submit_hl_skill_pipeline_pace_2b.sh` computed `REPO_ROOT` from a fixed
+   `..`, which broke when the 07-23 reorg moved it into
+   `experiments/campaigns/<dated>/`. Now marker-based. This had also silently
+   broken the 2026-07-22 campaign's launchers.
+2. **Concurrent dataset-cache rebuild.** Seven arms sharing
+   `/data/lafan1_corrected_8e95d557/g1_hl_diffsr` each ran with
+   `env.refresh_zarr_dataset=true`; they rebuilt it underneath each other,
+   four arms died on `FileNotFoundError`, and the cache was truncated to
+   56 KB. Rebuilt to the full 1.2 GB / 40 motions by one-time job `5540413`
+   from the intact NPZ source and the hash-matching manifest. Arms now always
+   pass `refresh=false` and the cache is owned by
+   `groupvq_ablation/build_lafan1_cache_ice.sh`. **The 07-22 launcher has the
+   same pattern across twelve overlapping arms and is the likely explanation
+   for its checkpoint-less `continuous_ae` arm.**
+3. **`atl1-1-03-010-15-0` has a dead GPU** (`No devices were found`,
+   `no CUDA-capable device is detected`) while Slurm still advertises it as
+   `mix` with no drain reason, so it keeps accepting and killing jobs. Both
+   launchers exclude it via `CLUSTER_SLURM_EXCLUDE`; worth a PACE ticket.
+
+An initial six-arm submission to ice-gpu H200 (`5539991`-`5539999`) sat
+PENDING for two hours without starting and was cancelled: every H200 GPU on
+ice-gpu and coe-gpu was allocated (one free cluster-wide) and the sixth ice-gpu
+H200 node has been admin-drained since 07-24. coe-gpu had about 40 free H100s,
+so the grid was moved there at 12,288 envs x 12 steps, minibatch 18,432 --
+the 07-22 `h100_e12288_lr1e3` geometry, because an 80 GB H100 cannot hold the
+16,384-environment point.
+
+Consequence: **all seven arms including `g64_c128` are re-run on H100.** The
+finished 4.53B H200 `lafan1_diffsr_gumbel_multicat_b448_h10_z256_seed0` run
+differs in env count and minibatch, so it is not a row of this grid and the
+07-22 study remains a separate table.
+
+Save interval for these arms is 100M frames, not the 25M of the 07-22 study,
+because ICE scratch had roughly 20-40 GB of headroom. The 07-22 runs were
+thinned to the same 100M granularity to make room (see below), so
+plateau-checkpoint selection now resolves to 100M across both studies.
+
+Two corrections to earlier entries on this page:
+
+- **The 2026-07-22 latent-learning H200 ablation did run.** Eleven of its
+  twelve arms reached 4,525,129,728 frames on ICE (the twelfth,
+  `continuous_ae`, has no checkpoints in its run dir and needs a separate
+  look). Any statement that no H200 jobs from that study were submitted is
+  stale.
+- **07-22 checkpoints were thinned on 2026-07-26.** ICE scratch hit 300/300 GB
+  and blocked submission. With user approval, intermediate checkpoints were
+  deleted from the eleven finished runs, keeping every ~100M-frame checkpoint
+  plus each run's final one (181 -> 84 per run, 1,062 files, ~42 GB). No run
+  directory, metric CSV, or final checkpoint was removed.
+
+Caveat to carry into any table: bandwidth, per-group code dim, and encoder head
+width all move together across this grid (encoder parameters span 2.4M-18.8M),
+and grouped code usage/perplexity are currently pooled over groups rather than
+reported per group.
+
 ## Data-loss incident: Slurm TIMEOUT destroys node-local output (2026-07-22)
 
 **All three 2026-07-21 night segments produced zero retained checkpoints.**

@@ -171,6 +171,16 @@ parser.add_argument(
     help="Publish from the outer loop (historical behaviour).",
 )
 parser.add_argument(
+    "--use_command_publisher",
+    action="store_true",
+    default=False,
+    help=(
+        "Route publication through the shared CommandPublisher (option b). It "
+        "owns joint-order pinning and the renewal schedule, so both interfaces "
+        "share one control plane. Must reproduce the legacy path exactly."
+    ),
+)
+parser.add_argument(
     "--publish_phase_offset",
     type=int,
     default=0,
@@ -298,6 +308,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env
     G1_TRACKED_BODY_NAMES,
 )
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
+    EE_POLICY_INPUT_KEYS,
     VANILLA_POLICY_INPUT_KEYS,
 )
 from isaaclab_tasks.utils.hydra import hydra_task_config
@@ -329,6 +340,10 @@ def _disable_tracking_terminations(terminations: Any) -> list[str]:
     return disabled
 
 
+from command_publisher import (  # noqa: E402
+    ChunkCommandPublisher,
+    renewal_env_ids as publisher_renewal_env_ids,
+)
 from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
 from interface_planner_common import (  # noqa: E402
@@ -1216,12 +1231,21 @@ def main(
     low_level_command_mode = str(args_cli.low_level_command_mode)
     low_level_command_space = interface
     if low_level_command_mode == "streamed_vanilla":
-        if interface != "full_body_trajectory":
+        # Both chunk trackers are SINGLE-FRAME consumers -- full-body 157 =
+        # 90 proprioception + 67 command, EE 126 = 90 + 36 (4 bodies x 9). So a
+        # published 10-frame packet drives either one slot-by-slot: the window is
+        # phase-shifted each control step and the time-aligned frame is taken.
+        if interface == "full_body_trajectory":
+            low_level_command_space = "single_frame_full_body"
+            env_cfg.policy_command_mode = "full_body_chunk_current_slot"
+        elif interface == "ee_trajectory":
+            low_level_command_space = "single_frame_ee"
+            env_cfg.policy_command_mode = "ee_chunk_current_slot"
+        else:
             raise ValueError(
-                "streamed_vanilla requires a full_body_trajectory planner target."
+                "streamed_vanilla supports full_body_trajectory or ee_trajectory "
+                f"planner targets; got {interface!r}."
             )
-        low_level_command_space = "single_frame_full_body"
-        env_cfg.policy_command_mode = "full_body_chunk_current_slot"
     else:
         env_cfg.policy_command_mode = "reference"
 
@@ -1409,6 +1433,24 @@ def main(
     pinned_command_joint_ids = (
         resolve_pinned_command_joint_ids(base_env) if pin_command_joints else None
     )
+    # Option (b): one shared control plane. The publisher owns joint-order
+    # pinning and the renewal schedule; the env remains the buffer owner, so this
+    # is behaviour-preserving by construction and can be A/B verified.
+    command_publisher = None
+    if bool(args_cli.use_command_publisher) and interface == "full_body_trajectory":
+        command_publisher = ChunkCommandPublisher(
+            num_envs=int(base_env.num_envs),
+            term_widths=dict(
+                zip(target_spec.term_names, [int(w) for w in target_spec.term_widths])
+            ),
+            hold_steps=int(args_cli.planner_update_interval),
+            window_steps=(
+                int(args_cli.command_past_steps) + 1 + int(args_cli.command_future_steps)
+            ),
+            device=base_env.device,
+            joint_reindex=pinned_command_joint_ids,
+        )
+        print("[COMMAND] publication routed through the shared CommandPublisher.")
     if pinned_command_joint_ids is not None:
         print(
             "[COMMAND] publishing full-body packets in the pinned joint order "
@@ -1531,7 +1573,11 @@ def main(
         frozen_tracker = load_frozen_low_level_tracker(
             agent,
             checkpoint_path,
-            expected_input_keys=VANILLA_POLICY_INPUT_KEYS,
+            expected_input_keys=(
+                EE_POLICY_INPUT_KEYS
+                if interface == "ee_trajectory"
+                else VANILLA_POLICY_INPUT_KEYS
+            ),
             map_location=env_cfg.sim.device,
         )
         policy = frozen_tracker.policy
@@ -1678,11 +1724,18 @@ def main(
         step_active = active.clone()
         if not bool(step_active.any()):
             break
-        renew_env_ids = planner_renew_env_ids(
-            base_env.episode_length_buf + int(args_cli.publish_phase_offset),
-            planner_update_interval,
-            initial_publication=step_idx == 0,
-        )
+        if command_publisher is not None:
+            renew_env_ids = publisher_renewal_env_ids(
+                base_env.episode_length_buf + int(args_cli.publish_phase_offset),
+                planner_update_interval,
+                initial=step_idx == 0,
+            )
+        else:
+            renew_env_ids = planner_renew_env_ids(
+                base_env.episode_length_buf + int(args_cli.publish_phase_offset),
+                planner_update_interval,
+                initial_publication=step_idx == 0,
+            )
         if int(renew_env_ids.numel()) > 0:
             active_on_device = step_active.to(device=renew_env_ids.device)
             renew_env_ids = renew_env_ids[
@@ -1757,7 +1810,9 @@ def main(
             # are produced in the live articulation order; the env consumes this
             # buffer through a term pinned to G1_29DOF_ISAACLAB_JOINT_NAMES.
             # Re-index here so every joint target reaches its own joint.
-            if pinned_command_joint_ids is not None:
+            if command_publisher is not None:
+                command_terms = command_publisher.pin_joint_order(command_terms)
+            elif pinned_command_joint_ids is not None:
                 command_terms = pin_command_joint_order(
                     command_terms,
                     pinned_joint_ids=pinned_command_joint_ids,
@@ -2166,6 +2221,7 @@ def main(
         # joint and are not comparable to the env-filled oracle.
         "command_joint_order_pinned": bool(pin_command_joints),
         "atomic_command_anchor": bool(atomic_command_anchor),
+        "use_command_publisher": bool(command_publisher is not None),
         "in_step_publication": bool(in_step_publication),
         "video_dir": str(video_dir) if video_dir is not None else None,
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),

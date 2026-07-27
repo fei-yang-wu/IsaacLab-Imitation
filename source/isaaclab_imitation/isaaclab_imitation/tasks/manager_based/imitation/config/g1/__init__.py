@@ -248,6 +248,26 @@ gym.register(
     kwargs=_LATENT_SONIC_TASK_KWARGS,
 )
 
+# SONIC release environment (rewards, adaptive strict terminations, threshold
+# curriculum, level0_4 randomization, SONIC actuators/robot, full-trajectory
+# adaptive-failure resets) with this repo's single-frame observations instead
+# of SONIC's 10-step proprioceptive histories -- the 2026-07-21 isolated
+# history ablation found those histories buy little at our scale. Optimizer
+# contract is the local/legacy one (`sonic_release_optimizer=False`), so the
+# only axis moving against `Isaac-Imitation-G1-Latent-v0` is the environment.
+gym.register(
+    id="Isaac-Imitation-G1-Latent-Sonic-NoHist-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        **_LATENT_SONIC_TASK_KWARGS,
+        "env_cfg_entry_point": (
+            f"{__name__}.imitation_g1_latent_env_cfg:"
+            "ImitationG1LatentSonicNoHistoryEnvCfg"
+        ),
+    },
+)
+
 gym.register(
     id="Isaac-Imitation-G1-Latent-Goal-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",

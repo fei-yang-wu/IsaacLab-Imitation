@@ -12,6 +12,33 @@ VANILLA_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "last_action"),
 ]
 
+# Ordered actor contract for the EE-chunk tracker (126 = 12 + 24 + 3 + 29 + 29
+# + 29). The command halves come from the ``expert_window`` group rather than
+# ``policy``; under ee_chunk_current_slot those terms return the phase-aligned
+# slot of the held packet, so the tracker still sees a single 36-value frame.
+# Heracles-style 38D: 29 joint positions + 3D root position + 6D root
+# orientation, per frame. No joint velocities -- the controller is trained on
+# this space, so they are absent rather than reconstructed.
+ROOT_QPOS_COMMAND_KEYS: list[tuple[str, str]] = [
+    ("policy", "expert_motion_qpos"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
+]
+
+SINGLE_FRAME_EE_COMMAND_KEYS: list[tuple[str, str]] = [
+    ("policy", "expert_ee_pos_b"),
+    ("policy", "expert_ee_ori_b"),
+]
+
+EE_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
+    ("policy", "expert_ee_pos_b"),
+    ("policy", "expert_ee_ori_b"),
+    ("policy", "base_ang_vel"),
+    ("policy", "joint_pos_rel"),
+    ("policy", "joint_vel_rel"),
+    ("policy", "last_action"),
+]
+
 VANILLA_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
     ("critic", "expert_motion"),
     ("critic", "expert_anchor_pos_b"),
@@ -55,6 +82,8 @@ EE_TRAJECTORY_COMMAND_KEYS: list[tuple[str, str]] = [
 
 COMMAND_SPACE_ALIASES: dict[str, str] = {
     "single_frame_full_body": "single_frame_full_body",
+    "single_frame_ee": "single_frame_ee",
+    "root_qpos": "root_qpos",
     "single_frame": "single_frame_full_body",
     "vanilla": "single_frame_full_body",
     "full_state": "single_frame_full_body",
@@ -122,6 +151,16 @@ LATENT_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
 
 SONIC_LATENT_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
     ("critic", "latent_command"),
+    # Restored 2026-07-27. Dropping this left the critic without the expert's
+    # 29 joint positions and velocities, reachable only through the 258-d
+    # latent, while the actor-side SONIC contract only *adds* projected
+    # gravity. ICE job 5541139 halved the per-step `motion_body_ori` and
+    # `motion_body_ang_vel` reward against the Study B `deterministic` row and
+    # left the anchor terms nearly intact -- the signature of a critic starved
+    # of joint-configuration detail. SONIC's own release critic
+    # (`privileged_mf_hist`) is likewise reference-aware, so the omission was
+    # not release fidelity.
+    ("critic", "expert_motion"),
     ("critic", "expert_anchor_pos_b"),
     ("critic", "expert_anchor_ori_b"),
     ("critic", "body_pos"),
@@ -159,6 +198,12 @@ def command_space_policy_input_keys(command_space: str) -> list[tuple[str, str]]
         return list(FULL_BODY_TRAJECTORY_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
     if command_space == "ee_trajectory":
         return list(EE_TRAJECTORY_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
+    if command_space == "single_frame_ee":
+        # Chunked EE: the actor consumes one 36-value frame (the phase-aligned
+        # slot of the held packet), exactly as during training.
+        return list(SINGLE_FRAME_EE_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
+    if command_space == "root_qpos":
+        return list(ROOT_QPOS_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
     raise AssertionError(f"Unhandled command space: {command_space}")
 
 
@@ -170,6 +215,10 @@ def command_space_critic_input_keys(command_space: str) -> list[tuple[str, str]]
         return list(FULL_BODY_TRAJECTORY_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
     if command_space == "ee_trajectory":
         return list(EE_TRAJECTORY_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
+    if command_space == "single_frame_ee":
+        return list(SINGLE_FRAME_EE_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
+    if command_space == "root_qpos":
+        return list(ROOT_QPOS_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
     raise AssertionError(f"Unhandled command space: {command_space}")
 
 

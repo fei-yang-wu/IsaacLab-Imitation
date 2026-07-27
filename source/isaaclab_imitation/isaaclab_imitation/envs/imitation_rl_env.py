@@ -36,7 +36,9 @@ NestedKey: TypeAlias = str | tuple[str, ...]
 _MDP_COMPILED: Any | None = None
 
 _COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracle"})
-_POLICY_COMMAND_MODES = frozenset({"reference", "full_body_chunk_current_slot"})
+_POLICY_COMMAND_MODES = frozenset(
+    {"reference", "full_body_chunk_current_slot", "ee_chunk_current_slot"}
+)
 _CAUSAL_PLANNER_HISTORY_STEPS = 9
 # Tracking maths stays in metres; MPJPE is reported in millimetres because that
 # is the unit the closed-loop evaluators and the paper aggregators use.
@@ -130,6 +132,31 @@ def _load_loco_mujoco_loader() -> type[Any]:
     return loader_cls
 
 
+def _normalize_dataset_keys(raw: Any) -> list[str] | None:
+    """Normalize `env.dataset_keys` into an explicit list of Zarr array names.
+
+    A Hydra override such as ``env.dataset_keys=[qpos,qvel]`` can arrive as the
+    literal string ``"[qpos,qvel]"`` rather than a parsed list. Iterating that
+    string yields single characters, which surfaces much later as a confusing
+    ``KeyError: "Key '[' not found"``, so normalize it here instead.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1]
+        names = [part.strip().strip("'\"") for part in text.split(",")]
+    else:
+        names = [str(part).strip().strip("'\"") for part in raw]
+    names = [name for name in names if name]
+    if not names:
+        raise ValueError(
+            "env.dataset_keys was provided but resolved to an empty selection."
+        )
+    return names
+
+
 class ImitationRLEnv(ManagerBasedRLEnv):
     """
     Simplified RL environment for imitation learning with clean dataset interface.
@@ -149,6 +176,18 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         trajectories: str | list[str] | None, optional, trajectory names to load from Zarr
         keys: str | list[str] | None, optional, keys to load from Zarr (default: all keys)
         refresh_zarr_dataset: bool, if True, delete existing zarr and rebuild it using the loader each run
+        dataset_storage_device: str, torch device that holds the reference replay buffer
+            ("cuda:0" by default). Set to "cpu" to use TorchRL's LazyMemmapStorage instead
+            of a GPU-resident LazyTensorStorage, so a reference set larger than VRAM can be
+            trained against. The trajectory manager already indexes on the storage device
+            and copies each sampled batch to the compute device, so only throughput changes.
+        dataset_storage_persist_dir: str | None, reusable directory for the CPU memmap buffer.
+            Only used when dataset_storage_device is a CPU device. A matching build there is
+            memory-mapped in milliseconds instead of refilled from Zarr, which otherwise costs
+            hours for a reference set of this size.
+        dataset_storage_persist_id: str | None, content identity for that buffer, making it
+            relocatable so it can be built once and copied to a compute node.
+        dataset_storage_persist_rebuild: bool, force a refill of dataset_storage_persist_dir.
         reference_start_frame: int, trajectory-local frame index used after each reset (default: 0)
         visualize_reference_arrows: bool, if True show reference velocity/position/heading arrows and
             desired/current frame markers for root and tracked bodies (default: False)
@@ -294,17 +333,42 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             datasets = getattr(cfg, "datasets", None)
             motions = getattr(cfg, "motions", None)
             traj_names = getattr(cfg, "trajectories", None)
-            keys = getattr(cfg, "keys", None)
+            # `dataset_keys`, not `keys`: on a dict-like config object `cfg.keys`
+            # resolves to the bound `keys()` method, so the old lookup could
+            # never select a subset and silently loaded every array.
+            keys = _normalize_dataset_keys(getattr(cfg, "dataset_keys", None))
 
+            # The reference replay buffer normally lives in VRAM. A reference
+            # set larger than the GPU (e.g. the 129,785-clip BONES-SEED tree,
+            # about 135 GB of transitions) needs CPU storage instead;
+            # `make_rb_from` then builds a LazyMemmapStorage, and
+            # ParallelTrajectoryManager already indexes on the storage device
+            # and copies each sampled batch to the compute device.
+            storage_device = torch.device(
+                str(getattr(cfg, "dataset_storage_device", "cuda:0"))
+            )
+            storage_persist_dir = getattr(cfg, "dataset_storage_persist_dir", None)
             rb, traj_info = make_rb_from(
                 zarr_path=str(zarr_path),
                 datasets=datasets,
                 motions=motions,
                 trajectories=traj_names,
                 keys=keys,
-                device=torch.device("cuda:0"),
+                device=storage_device,
+                persist_dir=storage_persist_dir,
+                persist_id=getattr(cfg, "dataset_storage_persist_id", None)
+                if storage_persist_dir is not None
+                else None,
+                persist_rebuild=bool(
+                    getattr(cfg, "dataset_storage_persist_rebuild", False)
+                ),
                 verbose_tree=False,
+                # Prefetch threads only help the CPU-storage path; on a
+                # GPU-resident buffer the gather is already ~15 us.
                 prefetch=3,
+                # Pinning a >100 GB CPU buffer would exhaust pinned memory and
+                # is unnecessary: samples are copied one small batch at a time.
+                pin_memory=storage_device.type == "cuda",
             )
         else:
             raise ValueError(
@@ -1817,6 +1881,23 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_robot_body_anchor_frame_cache[cache_key] = body_state
         return body_state
 
+    def get_expert_motion_qpos_command(
+        self, joint_ids: Sequence[int] | slice = slice(None)
+    ) -> torch.Tensor:
+        """Expert joint POSITIONS only, without the velocity half.
+
+        The Heracles-style ``root_qpos`` interface (its 38D config: 29 joint
+        positions + 3D root position + 6D root orientation) carries no joint
+        velocities at all. Because its controller is trained on this command
+        space directly, the velocities are simply absent rather than
+        reconstructed -- there is nothing to finite-difference.
+        """
+        self._ensure_mdp_step_cache()
+        qpos = self.current_expert_frame["joint_pos"]
+        if isinstance(joint_ids, slice):
+            return qpos
+        return qpos.index_select(-1, self._get_joint_ids_tensor_fast(joint_ids))
+
     def _get_expert_motion_command_fast(
         self, joint_ids: Sequence[int] | slice
     ) -> torch.Tensor:
@@ -2253,6 +2334,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         *,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
+        reference_body_names: Sequence[str] = (),
         env_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Consume the current frame of a held full-body command chunk.
@@ -2262,9 +2344,12 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         robot frame. Selecting slot zero here therefore exposes the exact
         67-D command contract expected by the vanilla 50 Hz tracker.
         """
-        if self._policy_command_mode != "full_body_chunk_current_slot":
+        if self._policy_command_mode not in (
+            "full_body_chunk_current_slot",
+            "ee_chunk_current_slot",
+        ):
             raise RuntimeError(
-                "Full-body chunk adapter requested while policy_command_mode="
+                "Chunk slot adapter requested while policy_command_mode="
                 f"{self._policy_command_mode!r}."
             )
         if self._command_observation_source not in {"planner", "planner_oracle"}:
@@ -2295,6 +2380,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             future_steps=future_steps,
             joint_ids=joint_ids,
             anchor_body_name=anchor_body_name,
+            reference_body_names=reference_body_names,
             env_ids=env_ids,
         )
         if value.ndim != 2 or int(value.shape[1]) % window_steps != 0:
@@ -2307,12 +2393,23 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             expected_frame_width = 2 * int(
                 self._get_joint_ids_tensor_fast(joint_ids).numel()
             )
+        elif term_name == "expert_motion_qpos":
+            # Positions only -- half the full-body joint payload.
+            expected_frame_width = int(
+                self._get_joint_ids_tensor_fast(joint_ids).numel()
+            )
         elif term_name == "expert_anchor_pos_b":
             expected_frame_width = 3
         elif term_name == "expert_anchor_ori_b":
             expected_frame_width = 6
+        elif term_name in ("expert_ee_pos_b", "expert_ee_ori_b"):
+            # One 3-vector / rot6d per referenced end-effector body.
+            n_bodies = max(int(len(reference_body_names)), 1)
+            expected_frame_width = n_bodies * (
+                3 if term_name == "expert_ee_pos_b" else 6
+            )
         else:
-            raise KeyError(f"Unsupported full-body tracker command term {term_name!r}.")
+            raise KeyError(f"Unsupported chunk tracker command term {term_name!r}.")
         if frame_width != expected_frame_width:
             raise RuntimeError(
                 f"Streamed command term {term_name!r} has per-frame width "

@@ -2,7 +2,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Marker-based, not a fixed parent depth: this script has already moved once
+# (experiments/ -> experiments/campaigns/<dated>/) and a hard-coded ".." then
+# resolved REPO_ROOT to experiments/campaigns.
+REPO_ROOT="${SCRIPT_DIR}"
+while [ ! -x "${REPO_ROOT}/docker/cluster/cluster_interface.sh" ]; do
+    if [ "${REPO_ROOT}" = "/" ]; then
+        echo "[ERROR] Could not locate the repository root above ${SCRIPT_DIR}." >&2
+        exit 2
+    fi
+    REPO_ROOT="$(dirname "${REPO_ROOT}")"
+done
 cd "$REPO_ROOT"
 
 TASK="${TASK:-Isaac-Imitation-G1-Latent-v0}"

@@ -117,9 +117,26 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   directories; a group directory lives in the newest campaign that uses it and
   older campaigns reference it rather than copying it.
 - `experiments/paper/`: stable release-facing entrypoints only — `run.sh`, the
-  Phase-4 and Phase-5 submit plus aggregate scripts, and the release-bundle
-  builder. Do not add exploratory launchers, diagnostics, shared
-  implementation, or tests there.
+  Phase-4 and Phase-5 submit plus aggregate scripts, the release-bundle
+  builder, and the reference-buffer workflow. Do not add exploratory launchers,
+  diagnostics, shared implementation, or tests there.
+- Every script in `experiments/paper/` must be **self-contained, current, and
+  runnable as-is**. Concretely:
+  - It runs from the repository root with no undocumented prerequisite step and
+    no hand-editing before use.
+  - Every configurable parameter lives either inside the script as an explicit
+    named constant, or in a config file next to it. Prefer Hydra: a
+    `@hydra.main` entrypoint with its YAML under `experiments/paper/conf/`, so
+    parameters are discoverable, overridable on the command line, and recorded
+    in the run directory. Do not leave required values to be supplied only by
+    environment variables or by editing the source.
+  - It stays updated when the code it drives changes. A stale script here is a
+    defect, not history — move superseded launchers out rather than leaving
+    them to rot.
+  - It fails loudly on a missing input or an unmet gate instead of silently
+    doing less work.
+  `reference_buffer_workflow.py` plus `conf/reference_buffer.yaml` is the
+  reference implementation of this shape.
 - The shared planner modules import each other as bare siblings, so the coupled
   set must stay in one directory. Do not split it across campaigns, and do not
   rely on a fixed `parents[N]` depth to find the repository root: use the

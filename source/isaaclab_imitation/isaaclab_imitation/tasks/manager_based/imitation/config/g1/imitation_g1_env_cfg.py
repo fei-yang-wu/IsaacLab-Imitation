@@ -289,6 +289,21 @@ def _g1_expert_window_anchor_obs_params() -> dict[str, object]:
     }
 
 
+def _g1_expert_ee_obs_params() -> dict[str, object]:
+    """Single-frame EE command params for the actor.
+
+    The EE tracker is a single-frame consumer (126 = 90 proprioception + 36).
+    Under ee_chunk_current_slot these terms return the phase-aligned slot of the
+    held packet, mirroring how the full-body actor reads its command from the
+    policy group rather than from the 10-frame expert_window group.
+    """
+    return {
+        "asset_cfg": SceneEntityCfg("robot"),
+        "reference_body_names": tuple(G1_EE_BODY_NAMES),
+        "anchor_body_name": G1_OBS_ANCHOR_BODY_NAME,
+    }
+
+
 def _g1_expert_window_ee_obs_params() -> dict[str, object]:
     return {
         "asset_cfg": SceneEntityCfg("robot"),
@@ -355,6 +370,24 @@ class G1ObservationCfg:
         expert_anchor_ori_b = ObsTerm(
             func=mdp.policy_expert_anchor_ori_b,
             params=_g1_expert_anchor_obs_params(),
+        )
+        expert_motion_qpos = ObsTerm(
+            func=mdp.policy_expert_motion_qpos,
+            params={
+                "asset_cfg": SceneEntityCfg(
+                    "robot",
+                    joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
+                    preserve_order=True,
+                )
+            },
+        )
+        expert_ee_pos_b = ObsTerm(
+            func=mdp.policy_expert_ee_pos_b,
+            params=_g1_expert_ee_obs_params(),
+        )
+        expert_ee_ori_b = ObsTerm(
+            func=mdp.policy_expert_ee_ori_b,
+            params=_g1_expert_ee_obs_params(),
         )
         base_lin_vel = ObsTerm(
             func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5)

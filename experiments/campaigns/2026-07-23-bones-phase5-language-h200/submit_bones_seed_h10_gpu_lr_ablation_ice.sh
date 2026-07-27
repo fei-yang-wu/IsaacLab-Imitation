@@ -7,7 +7,16 @@ set -euo pipefail
 # confounded by different latent encoders.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Marker-based, not a fixed parent depth: this script moved from experiments/
+# into experiments/campaigns/<dated>/, where ".." resolved to the wrong root.
+REPO_ROOT="${SCRIPT_DIR}"
+while [ ! -x "${REPO_ROOT}/docker/cluster/cluster_interface.sh" ]; do
+    if [ "${REPO_ROOT}" = "/" ]; then
+        echo "[ERROR] Could not locate the repository root above ${SCRIPT_DIR}." >&2
+        exit 2
+    fi
+    REPO_ROOT="$(dirname "${REPO_ROOT}")"
+done
 cd "${REPO_ROOT}"
 
 STAGE="${STAGE:-pretrain}"
