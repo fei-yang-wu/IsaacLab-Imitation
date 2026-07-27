@@ -244,6 +244,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env
     G1_TRACKED_BODY_NAMES,
 )
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
+    EE_POLICY_INPUT_KEYS,
     VANILLA_POLICY_INPUT_KEYS,
 )
 from isaaclab_tasks.utils.hydra import hydra_task_config
@@ -551,9 +552,10 @@ def main(
     if args_cli.interface in {"full_body_trajectory", "ee_trajectory"}:
         low_level_command_space = args_cli.interface
     if low_level_command_mode == "streamed_vanilla":
-        if args_cli.interface != "full_body_trajectory":
+        if args_cli.interface not in ("full_body_trajectory", "ee_trajectory"):
             raise ValueError(
-                "streamed_vanilla requires --interface full_body_trajectory."
+                "streamed_vanilla requires --interface full_body_trajectory or "
+                f"ee_trajectory; got {args_cli.interface!r}."
             )
         if int(args_cli.command_past_steps) != 0:
             raise ValueError("streamed_vanilla requires --command_past_steps 0.")
@@ -564,8 +566,14 @@ def main(
                 "streamed_vanilla requires command_future_steps + 1 >= "
                 "planner_interval_steps."
             )
-        low_level_command_space = "single_frame_full_body"
-        env_cfg.policy_command_mode = "full_body_chunk_current_slot"
+        # Both chunk trackers consume a single frame; the env phase-shifts the
+        # held window and hands over the time-aligned slot each control step.
+        if args_cli.interface == "full_body_trajectory":
+            low_level_command_space = "single_frame_full_body"
+            env_cfg.policy_command_mode = "full_body_chunk_current_slot"
+        else:
+            low_level_command_space = "single_frame_ee"
+            env_cfg.policy_command_mode = "ee_chunk_current_slot"
     else:
         env_cfg.policy_command_mode = "reference"
     if args_cli.interface in {"full_body_trajectory", "ee_trajectory"}:
@@ -734,7 +742,11 @@ def main(
         frozen_tracker = load_frozen_low_level_tracker(
             agent,
             checkpoint_path,
-            expected_input_keys=VANILLA_POLICY_INPUT_KEYS,
+            expected_input_keys=(
+                EE_POLICY_INPUT_KEYS
+                if args_cli.interface == "ee_trajectory"
+                else VANILLA_POLICY_INPUT_KEYS
+            ),
             map_location=env_cfg.sim.device,
         )
         policy = frozen_tracker.policy

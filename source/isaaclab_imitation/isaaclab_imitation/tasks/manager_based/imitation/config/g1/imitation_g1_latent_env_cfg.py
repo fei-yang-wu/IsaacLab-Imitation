@@ -360,6 +360,32 @@ class ImitationG1LatentSonicEnvCfg(ImitationG1LatentEnvCfg):
 
 
 @configclass
+class ImitationG1LatentSonicNoHistoryEnvCfg(ImitationG1LatentSonicEnvCfg):
+    """SONIC release environment with this repo's single-frame observations.
+
+    Everything on the environment side stays the SONIC release recipe --
+    ``G1SonicRewardsCfg`` (pelvis anchor, 3-point local reward points,
+    anti-shake, feet joint acceleration, elbow-exempt contact penalty),
+    ``G1SonicTerminationsCfg`` (adaptive ``anchor_pos``/``ee_body_pos``,
+    full ``anchor_ori``, ``foot_pos_xyz``, no ``base_too_low``),
+    ``G1SonicTerminationCurriculumCfg``, ``G1SonicEventCfg`` (level0_4
+    randomization), ``G1SonicActionsCfg``, ``G1SonicRobotCfg``, and SONIC's
+    full-trajectory adaptive-failure reset sampling.
+
+    The one deliberate departure is the observation set: the 2026-07-21
+    isolated history ablation (``ImitationG1LatentStrictHistoryEnvCfg`` vs.
+    the single-frame strict surface) showed SONIC's 10-step proprioceptive
+    histories buy little at our scale, so this surface keeps the repo's
+    single-frame ``G1LatentObservationCfg``. Term *names* are unchanged, so
+    ``G1ImitationLatentSonicRLOptIPMDConfig``'s SONIC input-key selection
+    (which adds ``projected_gravity`` and drops the robot body-pose terms
+    from the actor) still resolves; only the per-term history length differs.
+    """
+
+    observations = G1LatentObservationCfg()
+
+
+@configclass
 class ImitationG1LatentStrictEnvCfg(ImitationG1LatentEnvCfg):
     """Pelvis-anchored legacy surface with strict-from-scratch terminations.
 
@@ -440,6 +466,7 @@ class ImitationG1LatentPerStepVQEnvCfg(ImitationG1LatentFutureCVAEEnvCfg):
 
 ImitationG1LatentEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentSonicEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+ImitationG1LatentSonicNoHistoryEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentStrictEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentGoalEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentFutureCVAEEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict

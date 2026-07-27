@@ -1,0 +1,121 @@
+# Configuration for experiments/paper/reference_buffer_workflow.py.
+#
+# Every parameter the workflow needs lives here. Override any of them on the
+# command line, e.g.
+#   pixi run python experiments/paper/reference_buffer_workflow.py \
+#       stages=[build] dataset=bones_seed_129k
+#
+# Defaults describe the full 129,785-clip BONES-SEED set, because that is the
+# case the workflow exists for.
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${paths.work_root}/hydra/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+
+# Which stages to run, in order.
+#   build  : NPZ manifest -> Zarr -> persisted CPU memmap replay buffer
+#   pack   : split the buffer into upload-sized parts + hashed index
+#   push   : upload the packed parts to a Hugging Face dataset repo
+#   fetch  : download + reassemble + verify a published buffer (compute node)
+#   verify : reopen a buffer in place and check it against its manifest
+stages: [build, pack]
+
+paths:
+  # Root for generated artifacts that are not the buffer itself.
+  work_root: ${oc.env:PWD}/logs/reference_buffer
+  # Source NPZ manifest. Paths inside are resolved relative to the manifest
+  # when its metadata sets paths_are_relative_to_manifest.
+  manifest: /home/fwu91/Storage/bones_seed_full/manifests/g1_bones_seed_sonic_full_manifest.json
+  # Intermediate Zarr. Consumed exactly once, by `build`; it never has to reach
+  # a compute node and may be deleted afterwards.
+  zarr: /home/fwu91/Storage/bones_seed_full/zarr/g1_bones_seed_sonic_full
+  # The persisted replay buffer. This is the artifact that gets published.
+  buffer: /home/fwu91/Storage/bones_seed_full/rb/g1_bones_seed_sonic_full
+  # Where `pack` writes parts and where `push` uploads from.
+  packed: /home/fwu91/Storage/bones_seed_full/rb_packed/g1_bones_seed_sonic_full
+  # Where `fetch` reassembles a downloaded buffer. On a cluster point this at
+  # node-local scratch: ICE compute nodes carry ~11 TB on /tmp.
+  fetch_dest: /tmp/g1_bones_seed_sonic_full_rb
+  # Staging directory for the raw download, before reassembly.
+  fetch_cache: /tmp/g1_bones_seed_sonic_full_dl
+
+buffer:
+  # Content identity. This is what makes the buffer relocatable: it is checked
+  # instead of the absolute Zarr path, so a buffer built here can be reopened
+  # on a compute node where the Zarr does not exist. Change it whenever the
+  # source content changes.
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  # Restrict which Zarr arrays enter the buffer. null loads all 21 keys
+  # (2,696 B/frame for a 30-body G1 tree). The list below drops the eight
+  # transition-aligned next_* duplicates, which is 2,128 B/frame -- about
+  # 104 GB for this dataset instead of 135 GB, and the difference between
+  # fitting and not fitting in an H200 alongside 4096 environments.
+  #
+  # Training against a next_*-free buffer additionally requires
+  #   env.reconstructed_reference_action=false
+  #   env.observations.policy_supervision=null
+  # because policy_supervision.expert_action is their only consumer and it
+  # hard-errors when the reconstruction is unavailable.
+  keys:
+    - qpos
+    - qvel
+    - root_pos
+    - root_quat
+    - root_lin_vel
+    - root_ang_vel
+    - joint_pos
+    - joint_vel
+    - body_pos_w
+    - body_quat_w
+    - body_lin_vel_w
+    - body_ang_vel_w
+  # Force a refill even when a matching buffer already exists. A persisted
+  # buffer is NOT invalidated by source content changing under the same
+  # persist_id, so set this whenever the NPZ tree or manifest changes.
+  rebuild: false
+  # Rebuild the Zarr even if the directory already exists.
+  rebuild_zarr: false
+
+pack:
+  # Part size for upload. Hugging Face handles multi-GB files, but a single
+  # ~60 GB member file downloads on one stream with no resume granularity;
+  # splitting restores parallel download and resumability.
+  part_bytes: 2000000000
+  # Hash every part. Costs one full read of the buffer (~5 min at 350 MB/s for
+  # 104 GB) and is what lets `fetch` prove it reassembled the right bytes.
+  hash_parts: true
+
+hf:
+  repo_id: GeorgiaTech/g1_bones_seed_sonic_129k_50hz_rb
+  repo_type: dataset
+  private: true
+  revision: main
+  # NOTE: there is deliberately no path prefix here. Uploads use
+  # `upload_large_folder`, which is the API built for this size (worker pool,
+  # resumable, batched commits) but which takes no `path_in_repo` -- it mirrors
+  # the folder at the repo root. The repo is dedicated to one buffer, so a
+  # prefix would add nothing. Do not reintroduce a prefix parameter unless the
+  # upload call actually honours it.
+  # The Xet backend makes per-chunk API calls and trips the free-tier
+  # 1000-request/5-minute limit on uploads this size, stalling with zero
+  # commits. Plain LFS makes a few calls per file instead.
+  disable_xet: true
+  # Token file; falls back to the HF_TOKEN env var and then the cached login.
+  token_file: ~/.hf_token
+
+fetch:
+  # Reassemble from an already-reachable packed directory instead of the Hub.
+  # Useful when the packed parts sit on a shared filesystem and you only want
+  # to land the buffer on node-local scratch. null downloads from Hugging Face.
+  local_source: null
+  # Verify part hashes after download. Leave on for anything paper-facing.
+  verify: true
+  # Delete the raw downloaded parts after successful reassembly.
+  cleanup_parts: true
+  # Reopen the reassembled buffer and check it against its manifest.
+  verify_open: true

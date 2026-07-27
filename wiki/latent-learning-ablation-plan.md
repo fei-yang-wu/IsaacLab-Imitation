@@ -1,9 +1,18 @@
 # LAFAN1 Latent-Learning Ablation Plan
 
-Status: all twelve local qualification arms passed on 2026-07-22. No ICE jobs
-from this study have been submitted. The approved H200 profile is based on the
-independent ICE screen (16,384 environments x 12 steps sustained about 90.4k
-FPS) and the launch wrapper still requires all twelve qualification records.
+Status: all twelve local qualification arms passed on 2026-07-22, and the H200
+jobs subsequently ran. As verified on 2026-07-26, eleven of the twelve arms
+reached 4,525,129,728 frames on ICE; the twelfth, `continuous_ae`, has a run
+directory with no checkpoints and needs a separate look before it can be
+reported. The approved H200 profile is based on the independent ICE screen
+(16,384 environments x 12 steps sustained about 90.4k FPS) and the launch
+wrapper still requires all twelve qualification records.
+
+Checkpoint density note: on 2026-07-26, ICE scratch filled and the eleven
+finished runs were thinned from 181 to 84 checkpoints each, keeping every
+~100M-frame checkpoint plus each run's final one. Selecting the converged
+checkpoint therefore resolves to 100M, not the 25M save interval those jobs
+used. Metric CSVs and final checkpoints are intact.
 
 Local qualification is now an additional mandatory gate. Every arm must train
 for at least 10M frames on the corrected local LAFAN1 cache, produce a loadable
@@ -113,6 +122,66 @@ Continuous deterministic/Gaussian rows have no directly comparable nominal
 bit count. Report their 256 floating-point values and measured entropy or
 effective-rank diagnostics instead of assigning them a fictitious 448-bit
 capacity.
+
+## Study C: grouped-VQ capacity ablation (added 2026-07-26)
+
+Study B asks which bottleneck *family* to use at one fixed capacity. Study C
+holds the family fixed at the grouped product codebook that previously tracked
+the continuous deterministic latent and moves only its two capacity axes: the
+number of groups `G` and the per-group codebook size `C`.
+
+Bottleneck is `gumbel_multicat` for every row — `G` independent per-group
+codebooks of `C` entries, per-group Gumbel-softmax with hard straight-through,
+per-group code dim `256 / G`. Everything else is the Study B protocol: DiffSR
+spectral objective, h10, z256 trunk, 1024/512/512 encoder, 50k pretraining
+updates, frozen encoder during controller learning, held z + sin/cos phase,
+corrected LAFAN1, seed 0, and the approved H200 geometry.
+
+| Arm | G | C | code dim | nominal bits/command | encoder params |
+| --- | --- | --- | --- | --- | --- |
+| `g16_c128` | 16 | 128 | 16 | 112 | 2.92M |
+| `g32_c128` | 32 | 128 | 8 | 224 | 3.97M |
+| `g64_c128` (anchor) | 64 | 128 | 4 | 448 | 6.08M |
+| `g128_c128` | 128 | 128 | 2 | 896 | 10.28M |
+| `g64_c16` | 64 | 16 | 4 | 256 | 2.37M |
+| `g64_c64` | 64 | 64 | 4 | 384 | 3.96M |
+| `g64_c512` | 64 | 512 | 4 | 576 | 18.78M |
+
+`g64_c128` is protocol-identical to the Study B `gumbel_multicat` arm and is
+the reference point for "close to continuous deterministic". If that Study B
+job is ever run, its checkpoint may be reused instead of re-running the anchor;
+they may not both enter one table as independent rows.
+
+Three quantities move together in this grid and none may be reported alone as
+"capacity": nominal bandwidth `G * log2(C)`, per-group code dim `256 / G`, and
+encoder head width `G * C` (hence total encoder parameters, which span 2.4M to
+18.8M here). Report all three per arm alongside per-group code usage and
+perplexity. The current grouped encoder pools its usage/perplexity diagnostics
+over groups rather than reporting them per group; a per-group breakdown is
+still owed before any paper-facing claim about which groups collapse.
+
+The grid is not a substitute for the missing grouped EMA-VQ mode noted in
+Study B. `gumbel_multicat` selects codes from per-group logits, not by
+nearest-neighbour assignment, so Study C ablates the capacity of our grouped
+product codebook, not of a classical VQ quantizer.
+
+Launchers and gate:
+
+```text
+experiments/campaigns/2026-07-26-groupvq-capacity-ablation/run.sh check
+experiments/campaigns/2026-07-26-groupvq-capacity-ablation/run.sh local
+experiments/campaigns/2026-07-26-groupvq-capacity-ablation/run.sh ice
+```
+
+`check` is a seconds-long CPU pre-flight that builds, quantizes, and
+round-trips every grid point. `local` is the same 10M-frame wiring gate the
+Study A/B arms passed, with 5k pretraining updates. `ice` defaults to
+`MODE=print`; `MODE=validate` and `MODE=submit` both require the approved H200
+profile plus a complete passing local qualification root, and `MODE=submit`
+additionally requires `CONFIRM_SUBMIT=lafan1-groupvq-capacity`. At the approved
+geometry one 15:59:00 segment covers about 4.54B of the 5B cap, so each arm
+needs one continuation segment via `TRAIN_CHECKPOINT`, `PRETRAINED_CHECKPOINT`,
+and `COMPLETED_FRAMES`.
 
 ## Convergence and reporting
 

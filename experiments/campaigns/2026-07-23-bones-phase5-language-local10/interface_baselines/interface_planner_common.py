@@ -1078,7 +1078,29 @@ def save_planner_checkpoint(
         "target_spec": target_spec.to_dict(),
         "metadata": serializable_metadata,
     }
-    torch.save(payload, path)
+    # Write to a temporary file and rename, so an interrupted or space-starved
+    # write can never leave a truncated checkpoint at the final path. This is not
+    # hypothetical: node-local /tmp filling mid-write produced a 218MB file where
+    # 275MB was expected, and because `run_if_missing` treats file-existence as
+    # step-completion, the resumable pipeline would have skipped regenerating it
+    # and silently loaded a corrupt planner.
+    tmp_path = path.with_suffix(path.suffix + ".partial")
+    torch.save(payload, tmp_path)
+    written = tmp_path.stat().st_size
+    if written <= 0:
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(f"Checkpoint write produced an empty file: {path}")
+    # Cheap structural check: torch's zip container must be re-openable.
+    try:
+        torch.load(tmp_path, map_location="cpu", weights_only=False)
+    except Exception as exc:  # pragma: no cover - only on a bad write
+        tmp_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Checkpoint at {path} failed verification immediately after writing "
+            f"({written} bytes): {exc}. Refusing to leave an unreadable file that "
+            "a resumable run would treat as complete."
+        ) from exc
+    tmp_path.replace(path)
     config_path = path.parent.parent / "config.yaml"
     config_path.write_text(
         yaml.safe_dump(

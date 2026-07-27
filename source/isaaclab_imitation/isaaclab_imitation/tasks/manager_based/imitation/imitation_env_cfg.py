@@ -304,6 +304,39 @@ class ImitationLearningEnvCfg(ManagerBasedRLEnvCfg):
     window_size: int = 64  # Window size for per-env cache
     batch_size: int = 1  # Batch size for Zarr prefetching
     device: str = "cuda"  # Torch device
+    # Device holding the reference replay buffer. "cuda:0" keeps every
+    # transition in VRAM (fastest: a 4096-row gather is ~15 us). Use "cpu" when
+    # the reference set is larger than the GPU -- TorchRL then builds a
+    # LazyMemmapStorage and the trajectory manager copies each sampled batch to
+    # the compute device. Measured cost of the CPU path is ~1.3 ms per 4096-row
+    # gather, a few percent of a control step at 4096 environments.
+    dataset_storage_device: str = "cuda:0"
+    # Reusable on-disk home for the CPU memmap buffer. CPU storage only. When
+    # this directory already holds a matching build, the buffer is memory-mapped
+    # in milliseconds instead of refilled from Zarr -- filling costs about 66 ms
+    # per trajectory plus 53 us per frame, i.e. hours for a 129,785-clip set,
+    # and every job start would otherwise pay it. None keeps the old behaviour
+    # of a throwaway temp directory.
+    dataset_storage_persist_dir: str | None = None
+    # Content identity for that buffer, which makes it relocatable: set it to
+    # something naming the source content (the manifest sha256, a dataset
+    # release tag) and the buffer can be built once on one machine, copied to a
+    # compute node, and reopened there without the Zarr being present at all.
+    # Leave None only when the buffer is built and consumed in place, where the
+    # absolute Zarr path is used as the identity instead.
+    dataset_storage_persist_id: str | None = None
+    # Force a refill of dataset_storage_persist_dir. A persisted buffer is NOT
+    # invalidated by a Zarr rebuilt in place, nor by a persist_id reused for
+    # changed content; set this whenever the source content changes.
+    dataset_storage_persist_rebuild: bool = False
+    # Restrict which Zarr arrays are loaded into the reference buffer. None
+    # loads every key. This is the main lever on buffer size: for a 30-body G1
+    # tree the full key set is 2,696 B/frame, of which the eight transition-
+    # aligned `next_*` duplicates are 568 B (21%). Dropping them requires
+    # `reconstructed_reference_action=False`, since that is their only consumer.
+    # NOTE: this cannot be named `keys` -- that shadows dict-like access on the
+    # config object and silently resolves to a bound method rather than a field.
+    dataset_keys: list[str] | None = None
     loader_type: str = "lafan1_csv"  # Loader type (required if Zarr does not exist)
     loader_kwargs: dict = {
         "dataset": {"trajectories": {"lafan1_csv": []}},
