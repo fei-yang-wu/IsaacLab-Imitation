@@ -116,7 +116,7 @@ remain per the plan.
 Episode length and return are proxies; the concrete tracking metric is
 root-relative MPJPE, already implemented as `tracking_mpjpe_m[m]` in the
 shared oracle evaluator
-(`experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py`).
+(`source/imitation_experiments/imitation_experiments/lowlevel/evaluate_checkpoint.py`).
 
 1. **Offline, now (local):** evaluate each of the twelve 10M qualification
    checkpoints with the shared evaluator on the matched task

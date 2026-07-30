@@ -488,7 +488,7 @@ provenance checks, and strengthened equivalence certificate are implemented.
 Use
 `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh`
 for the focused local workflow and
-`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_focused_causal_interface_comparison.py`
+`source/imitation_experiments/imitation_experiments/audit/audit_focused_causal_interface_comparison.py`
 for the contract audit.
 
 The local adapter and tracker-code qualification is complete. Approximately

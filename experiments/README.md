@@ -7,18 +7,20 @@ The complete live-file classification is in
 2026-07-23 cleanup and their recovery instructions are in
 [`PRUNED_SCRIPTS.md`](PRUNED_SCRIPTS.md).
 
-The repository organizes everything by campaign:
+The experiment surface has three layers:
 
-- `campaigns/YYYY-MM-DD-short-name/` records when a concrete experiment
-  campaign was frozen and gives collaborators one front door for that work.
-- Each campaign owns its implementation in topic-named group subdirectories,
-  so a script's path states which protocol froze it and when.
-- `paper/` is the one exception: a small, stable set of release-facing
+- **Library** — `source/imitation_experiments/` is the installable, tested
+  implementation (planner training, command publication, low-level tracking,
+  evaluation, audits, provenance). Launchers invoke it with
+  `python -m imitation_experiments.<subpackage>.<module>`. All shared Python
+  lives here with a test; none lives under `experiments/`.
+- **Campaigns** — `campaigns/YYYY-MM-DD-short-name/` records when a concrete
+  experiment protocol was frozen and gives collaborators one front door for
+  that work. A campaign directory is thin: a `README.md`, configuration, and
+  the frozen shell launchers. Frozen campaigns are append-only (status and
+  provenance updates); their launchers are never silently rewritten.
+- **Release** — `paper/` is the small, stable set of release-facing
   entrypoints that must not move as campaigns come and go.
-
-A group directory has exactly one home, in the newest campaign that uses it;
-other campaigns reference it rather than copying it. This keeps chronology
-visible without creating several drifting versions of the same launcher.
 
 ## Current work
 
@@ -53,32 +55,27 @@ The authoritative two-row paper protocol remains
 
 | Path | Purpose |
 | --- | --- |
-| `campaigns/` | Dated experiment decisions, status, wrappers, **and** the implementation each campaign owns. |
-| `campaigns/<date>-<slug>/<group>/` | Implementation grouped by topic inside the campaign that owns it. |
+| `../source/imitation_experiments/` | The shared experiment library and its tests (`pixi run test-experiments`). |
+| `campaigns/` | Dated experiment decisions, status, and the frozen shell launchers a collaborator invokes. |
 | `paper/` | Stable release-facing entrypoints only; no implementation, diagnostics, or tests. |
 
-Implementation lives in a date-stamped subdirectory of the campaign that owns
-it, grouped by topic. There are no top-level topical directories: a bare
-`interface_baselines/` gave no signal about which protocol it belonged to or
-whether it was still current.
+Shared implementation has exactly one home — the package — so a launcher's
+path states which protocol froze it while the code it drives stays current,
+importable, and tested. Older group directories (`interface_baselines/`,
+`command_space_ablation/`) now hold only their campaign's shell launchers;
+their former Python contents live in the package subpackages
+`data`, `planner`, `lowlevel`, `evaluation`, `audit`, `provenance`,
+`pipeline`, and `capacity`.
 
-| Group directory | Owning campaign | Contents |
-| --- | --- | --- |
-| `interface_baselines/` | `2026-07-23-bones-phase5-language-local10` | Shared causal-planner, qualification, audit, summarization, guarded submission, and the tests for all of it. |
-| `command_space_ablation/` | `2026-07-23-bones-phase5-language-local10` | Two shared low-level qualification helpers still called by current paper workflows. |
-| `interface_baselines/` | `2026-07-23-lafan1-planner-capacity` | Capacity-scaling aggregation and its tests. |
-| `latent_ablation/` | `2026-07-22-latent-learning-ablation` | Latent-learning objective and bottleneck ablations. |
-
-A group directory sits in the newest campaign that uses it, so shared code has
-exactly one home. Older campaigns reference it rather than copying it. Because
-the shared planner modules import each other as bare siblings, the coupled set
-must stay in one directory; only genuinely standalone modules may live
-elsewhere.
+Campaign-local Python that is genuinely single-campaign (for example
+`latent_ablation/` in `2026-07-22-latent-learning-ablation`) may stay in that
+campaign, but anything imported or invoked by another campaign, `paper/`, or
+`scripts/` must move into the package.
 
 `paper/` holds the guarded entrypoints and nothing else: `run.sh`, the Phase-4
 and Phase-5 submit plus aggregate scripts, and the release-bundle builder. The
-tests that span this boundary reach the paper modules through
-`campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/conftest.py`.
+tests that span this boundary live in `source/imitation_experiments/tests/`
+and reach the paper entrypoints through that directory's `conftest.py`.
 
 Every retained script must have a row in `SCRIPT_INVENTORY.md`. Completed
 one-off launchers do not remain beside live code merely as an archive: their
@@ -109,9 +106,9 @@ Each campaign must contain a `README.md` that records:
 - result/job pointers;
 - superseding campaign, when applicable.
 
-Keep the campaign directory itself thin: a `README.md` plus the wrappers a
-collaborator invokes. Put shared Python, shell, tests, and configuration in a
-topic-named group subdirectory such as `interface_baselines/`. If the code you
-need already exists in another campaign's group directory, reference it there
-rather than copying it. After a real submission, append status and provenance;
-do not silently rewrite the frozen protocol.
+Keep the campaign directory itself thin: a `README.md`, configuration, and
+the shell wrappers a collaborator invokes. Put reusable Python in
+`source/imitation_experiments/` with a test and call it from the wrapper with
+`python -m`; do not add importable modules, `sys.path` mutation, or copies of
+another campaign's code to a campaign directory. After a real submission,
+append status and provenance; do not silently rewrite the frozen protocol.

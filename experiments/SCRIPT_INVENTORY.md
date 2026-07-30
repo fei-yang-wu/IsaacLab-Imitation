@@ -1,9 +1,13 @@
 # Experiment script inventory
 
 This is the complete classification of executable and Python source files under
-`experiments/` after the 2026-07-23 cleanup. A path belongs here only while it
-has a current caller, a reproducible supporting-study role, or focused test
-coverage. Removed paths are recorded in [`PRUNED_SCRIPTS.md`](PRUNED_SCRIPTS.md).
+`experiments/`, plus the `source/imitation_experiments/` package modules they
+migrated into during the 2026-07-30 reorganization. A path belongs here only
+while it has a current caller, a reproducible supporting-study role, or focused
+test coverage. Removed paths are recorded in
+[`PRUNED_SCRIPTS.md`](PRUNED_SCRIPTS.md).
+`source/imitation_experiments/tests/test_script_inventory.py` fails when a row
+goes stale or a new `experiments/` file is missing a row.
 
 Classes:
 
@@ -53,28 +57,28 @@ Classes:
 | --- | --- | --- |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_sweep.sh` | front door | Dated wrapper for the secondary planner-scaling study. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_capacity_point.sh` | workflow | Runs one capacity point of the scaling sweep. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/enc380_capacity_grid.py` | library | Frozen walk1_subject1 × four sizes × three seeds definition and 0-11 array mapping. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_capacity_entry.py` | workflow | Python entry that dispatches legacy capacity cells and the fixed enc380 0-11 ICE grid. |
+| `source/imitation_experiments/imitation_experiments/capacity/enc380_capacity_grid.py` | library | Frozen walk1_subject1 × four sizes × three seeds definition and 0-11 array mapping. |
+| `source/imitation_experiments/imitation_experiments/capacity/run_capacity_entry.py` | workflow | Python entry that dispatches legacy capacity cells and the fixed enc380 0-11 ICE grid. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_enc380_planner_route_comparison.sh` | workflow | Runs one stage/cell of the shared-tracker root+qpos-versus-latent capacity diagnostic. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_planner_route_ice.sh` | guarded launcher | Submits corrected qualification, one persistent 10-env/100-trajectory walk1 oracle collection, 12 capacity cells, and aggregation with dependencies. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_motion_selection.py` | qualification | Binds the user-requested walk1_subject1 continuity diagnostic to corrected-manifest position 29 and labels it non-representative. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_tracker_completion.py` | qualification | Binds the cross-segment ≥5B frame accounting, completed Slurm job, tracker hash, and encoder hash. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_paired_demonstrations.py` | qualification | Verifies paired causal targets and exact completed `(env_id, episode_id)` segment counts while allowing variable rows per segment. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/materialize_paired_interface_samples.py` | workflow | Promotes root+qpos and latent targets from the same collected simulator rows. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_packet_encoder_pin.py` | qualification | Certifies the explicit-packet-to-frozen-encoder route against oracle latent commands. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_enc380_route_comparison.py` | audit/report | Aggregates walk1_subject1, four capacities, three seeds, one oracle-trained stage, and both routes. |
+| `source/imitation_experiments/imitation_experiments/capacity/audit_enc380_motion_selection.py` | qualification | Binds the user-requested walk1_subject1 continuity diagnostic to corrected-manifest position 29 and labels it non-representative. |
+| `source/imitation_experiments/imitation_experiments/capacity/audit_enc380_tracker_completion.py` | qualification | Binds the cross-segment ≥5B frame accounting, completed Slurm job, tracker hash, and encoder hash. |
+| `source/imitation_experiments/imitation_experiments/capacity/audit_enc380_paired_demonstrations.py` | qualification | Verifies paired causal targets and exact completed `(env_id, episode_id)` segment counts while allowing variable rows per segment. |
+| `source/imitation_experiments/imitation_experiments/capacity/materialize_paired_interface_samples.py` | workflow | Promotes root+qpos and latent targets from the same collected simulator rows. |
+| `source/imitation_experiments/imitation_experiments/capacity/audit_packet_encoder_pin.py` | qualification | Certifies the explicit-packet-to-frozen-encoder route against oracle latent commands. |
+| `source/imitation_experiments/imitation_experiments/capacity/aggregate_enc380_route_comparison.py` | audit/report | Aggregates walk1_subject1, four capacities, three seeds, one oracle-trained stage, and both routes. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/prepare_oracle_baselines.sh` | qualification | Prepares the matched oracle baselines the sweep normalizes against. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/paths.env` | library | Frozen checkpoint and data paths for the capacity sweep. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_scaling.py` | audit/report | Aggregates capacity points into the scaling curve. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_seeds.py` | audit/report | Aggregates repeated seeds at one capacity point. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/test_aggregate_one_motion_capacity_scaling.py` | test | Scaling-curve aggregation coverage. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/test_aggregate_one_motion_capacity_seeds.py` | test | Capacity seed-aggregation coverage. |
+| `source/imitation_experiments/imitation_experiments/capacity/aggregate_one_motion_capacity_scaling.py` | audit/report | Aggregates capacity points into the scaling curve. |
+| `source/imitation_experiments/imitation_experiments/capacity/aggregate_one_motion_capacity_seeds.py` | audit/report | Aggregates repeated seeds at one capacity point. |
+| `source/imitation_experiments/tests/test_aggregate_one_motion_capacity_scaling.py` | test | Scaling-curve aggregation coverage. |
+| `source/imitation_experiments/tests/test_aggregate_one_motion_capacity_seeds.py` | test | Capacity seed-aggregation coverage. |
 
 ## Low-level command support
 
 | Path | Class | Responsibility |
 | --- | --- | --- |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py` | qualification | Shared oracle evaluator used by current LAFAN1 and BONES gates. |
+| `source/imitation_experiments/imitation_experiments/lowlevel/evaluate_checkpoint.py` | qualification | Shared oracle evaluator used by current LAFAN1 and BONES gates. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/submit_cluster_oracle_ablation.sh` | guarded launcher | Shared low-level training submission used by current BONES workflows. |
 
 ## Paper comparison implementation
@@ -83,79 +87,115 @@ Classes:
 | --- | --- | --- |
 | `experiments/paper/aggregate_bones_seed_multiseed_results.py` | audit/report | Produces the fixed three-seed Phase-5 aggregate. |
 | `experiments/paper/aggregate_phase4_no_language_results.py` | audit/report | Produces the complete Phase-4 aggregate. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_bones_seed_language_interface.py` | audit/report | Audits a Phase-5 language-conditioned interface run. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_bones_seed_multigoal_language_comparison.py` | audit/report | Audits paired multi-goal Phase-5 artifacts. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_diffsr_latent_qualification.py` | qualification | Checks the DiffSR low-level oracle gate. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_focused_causal_interface_comparison.py` | audit/report | Checks the focused two-row comparison. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_vanilla_tracker_qualification.py` | qualification | Checks direct and streamed vanilla qualification. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/balanced_motion_rows.py` | library | Enforces balanced per-motion sample selection. |
+| `source/imitation_experiments/imitation_experiments/audit/audit_bones_seed_language_interface.py` | audit/report | Audits a Phase-5 language-conditioned interface run. |
+| `source/imitation_experiments/imitation_experiments/audit/audit_bones_seed_multigoal_language_comparison.py` | audit/report | Audits paired multi-goal Phase-5 artifacts. |
+| `source/imitation_experiments/imitation_experiments/audit/audit_diffsr_latent_qualification.py` | qualification | Checks the DiffSR low-level oracle gate. |
+| `source/imitation_experiments/imitation_experiments/audit/audit_focused_causal_interface_comparison.py` | audit/report | Checks the focused two-row comparison. |
+| `source/imitation_experiments/imitation_experiments/audit/audit_vanilla_tracker_qualification.py` | qualification | Checks direct and streamed vanilla qualification. |
+| `source/imitation_experiments/imitation_experiments/data/balanced_motion_rows.py` | library | Enforces balanced per-motion sample selection. |
 | `experiments/paper/build_paper_release_bundle.py` | audit/report | Builds the hash-verified Phase-4/5 release index. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/closed_loop_metrics.py` | library | Defines retained closed-loop paper metrics. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/collect_interface_rollout_samples.py` | workflow | Collects planner samples with the frozen causal protocol. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py` | workflow | Evaluates planners in the Isaac closed loop. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_offline.py` | workflow | Runs retained offline planner diagnostics. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/interface_planner_common.py` | library | Shared planner models, checkpoints, and data loading. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/low_level_tracker.py` | library | Loads and freezes matched low-level trackers. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/merge_planner_samples.py` | workflow | Merges exact-budget demonstration and rollout samples. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/paper_protocol_metadata.py` | library | Records and validates frozen protocol metadata. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/phase4_no_language_matrix.py` | library | Defines the fixed Phase-4 task grid. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/planner_latency.py` | library | Measures planner-only publication latency. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/planner_publish_schedule.py` | library | Implements per-environment asynchronous publication. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/planner_sample_schema.py` | library | Defines chunked planner sample storage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/resolve_low_level_checkpoint.py` | qualification | Resolves content-specific low-level checkpoints. |
+| `source/imitation_experiments/imitation_experiments/evaluation/closed_loop_metrics.py` | library | Defines retained closed-loop paper metrics. |
+| `source/imitation_experiments/imitation_experiments/data/collect_interface_rollout_samples.py` | workflow | Collects planner samples with the frozen causal protocol. |
+| `source/imitation_experiments/imitation_experiments/evaluation/eval_interface_planner_closed_loop.py` | workflow | Evaluates planners in the Isaac closed loop. |
+| `source/imitation_experiments/imitation_experiments/evaluation/eval_interface_planner_offline.py` | workflow | Runs retained offline planner diagnostics. |
+| `source/imitation_experiments/imitation_experiments/planner/interface_planner_common.py` | library | Shared planner models, checkpoints, and data loading. |
+| `source/imitation_experiments/imitation_experiments/lowlevel/low_level_tracker.py` | library | Loads and freezes matched low-level trackers. |
+| `source/imitation_experiments/imitation_experiments/data/merge_planner_samples.py` | workflow | Merges exact-budget demonstration and rollout samples. |
+| `source/imitation_experiments/imitation_experiments/provenance/paper_protocol_metadata.py` | library | Records and validates frozen protocol metadata. |
+| `source/imitation_experiments/imitation_experiments/provenance/phase4_no_language_matrix.py` | library | Defines the fixed Phase-4 task grid. |
+| `source/imitation_experiments/imitation_experiments/planner/planner_latency.py` | library | Measures planner-only publication latency. |
+| `source/imitation_experiments/imitation_experiments/planner/planner_publish_schedule.py` | library | Implements per-environment asynchronous publication. |
+| `source/imitation_experiments/imitation_experiments/data/planner_sample_schema.py` | library | Defines chunked planner sample storage. |
+| `source/imitation_experiments/imitation_experiments/lowlevel/resolve_low_level_checkpoint.py` | qualification | Resolves content-specific low-level checkpoints. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_language_smoke.sh` | diagnostic | Tiny non-performance language wiring gate. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_low_level_qualification.sh` | qualification | Paired Phase-5 low-level gate implementation. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_low_level_skynet.sh` | guarded launcher | Paired 1B-frame Phase-5 low-level candidate launcher. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.py` | workflow | Python stage driver for the Phase-5 multi-goal comparison. |
+| `source/imitation_experiments/imitation_experiments/pipeline/run_bones_seed_multigoal_language_comparison.py` | workflow | Python stage driver for the Phase-5 multi-goal comparison. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.sh` | workflow | Shell front end for the shared multi-goal workflow. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_dance102_strong_interface_comparison.sh` | workflow | Explicit-packet engine reused by the focused comparison. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_focused_causal_interface_comparison.sh` | workflow | Canonical two-row comparison orchestrator. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_interface_baseline_job.py` | library | Cluster dispatcher restricted to active workflows. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_interface_baseline_job_impl.py` | library | Location-independent implementation behind the cluster dispatcher. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/_repo_paths.py` | library | Resolves the repository root and paper directory by marker, not by nesting depth. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/conftest.py` | test | Puts `experiments/paper/` on `sys.path` for tests that span the paper boundary. |
+| `source/imitation_experiments/imitation_experiments/pipeline/run_interface_baseline_job.py` | library | Cluster dispatcher restricted to active workflows. |
+| `source/imitation_experiments/imitation_experiments/pipeline/run_interface_baseline_job_impl.py` | library | Location-independent implementation behind the cluster dispatcher. |
+| `source/imitation_experiments/imitation_experiments/paths.py` | library | Resolves the repository root and paper directory by marker, not by nesting depth. |
+| `source/imitation_experiments/tests/conftest.py` | test | Puts `experiments/paper/` on `sys.path` for tests that span the paper boundary. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh` | guarded launcher | Corrected-LAFAN1 latent low-level prerequisite. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_lafan1_low_level_qualification.sh` | qualification | Paired corrected-LAFAN1 low-level gate. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_phase4_no_language_sweep.sh` | workflow | Executes one Phase-4 matrix task. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_shared_latent_interface_comparison.sh` | workflow | DiffSR latent row engine reused by the focused comparison. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/smoke_test_causal_planner_env.py` | diagnostic | Minimal causal-planner environment wiring test. |
+| `source/imitation_experiments/imitation_experiments/evaluation/smoke_test_causal_planner_env.py` | diagnostic | Minimal causal-planner environment wiring test. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh` | guarded launcher | Submits the fixed Phase-5 low-level qualification. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_bones_seed_multigoal_pipeline_skynet.sh` | guarded launcher | Submits one guarded Phase-5 seed dependency chain. |
 | `experiments/paper/submit_bones_seed_multiseed_pipeline_skynet.sh` | guarded launcher | Paper-facing three-seed Phase-5 entrypoint. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_cluster_interface_baselines.sh` | guarded launcher | Generic cluster adapter requiring an explicit active mode. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_lafan1_low_level_qualification_skynet.sh` | guarded launcher | Submits the fixed LAFAN1 low-level qualification. |
 | `experiments/paper/submit_phase4_no_language_skynet.sh` | guarded launcher | Paper-facing Phase-4 entrypoint. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/summarize_bones_seed_multigoal_language_comparison.py` | audit/report | Summarizes one paired Phase-5 seed. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/summarize_interface_comparison.py` | audit/report | Summarizes focused interface runs. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py` | workflow | Trains the shared retained planner families. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_bones_seed_planner_submission.py` | audit/report | Preflights exact Phase-5 data and gate provenance. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_latent_skill_checkpoint_binding.py` | qualification | Proves skill-encoder and low-level checkpoint identity. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_phase4_no_language_submission.py` | audit/report | Preflights the fixed Phase-4 submission. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_interface_run_provenance.py` | audit/report | Writes source, checkpoint, and data provenance. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_single_motion_manifest.py` | library | Creates explicit single-motion manifests for fixed tasks. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_motion_subset_manifest.py` | library | Creates N-motion subset manifests with recorded source-manifest hash provenance. |
+| `source/imitation_experiments/imitation_experiments/evaluation/summarize_bones_seed_multigoal_language_comparison.py` | audit/report | Summarizes one paired Phase-5 seed. |
+| `source/imitation_experiments/imitation_experiments/evaluation/summarize_interface_comparison.py` | audit/report | Summarizes focused interface runs. |
+| `source/imitation_experiments/imitation_experiments/planner/train_chunked_transformer_planner.py` | workflow | Trains the shared retained planner families. |
+| `source/imitation_experiments/imitation_experiments/audit/validate_bones_seed_planner_submission.py` | audit/report | Preflights exact Phase-5 data and gate provenance. |
+| `source/imitation_experiments/imitation_experiments/audit/validate_latent_skill_checkpoint_binding.py` | qualification | Proves skill-encoder and low-level checkpoint identity. |
+| `source/imitation_experiments/imitation_experiments/audit/validate_phase4_no_language_submission.py` | audit/report | Preflights the fixed Phase-4 submission. |
+| `source/imitation_experiments/imitation_experiments/provenance/write_interface_run_provenance.py` | audit/report | Writes source, checkpoint, and data provenance. |
+| `source/imitation_experiments/imitation_experiments/data/write_single_motion_manifest.py` | library | Creates explicit single-motion manifests for fixed tasks. |
+| `source/imitation_experiments/imitation_experiments/data/write_motion_subset_manifest.py` | library | Creates N-motion subset manifests with recorded source-manifest hash provenance. |
 
 ## Tests for the paper comparison
 
 | Path | Class | Responsibility |
 | --- | --- | --- |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_aggregate_bones_seed_multiseed_results.py` | test | Phase-5 aggregation invariants. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_audit_diffsr_latent_qualification.py` | test | DiffSR qualification audit coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_audit_vanilla_tracker_qualification.py` | test | Vanilla qualification audit coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_balanced_motion_rows.py` | test | Balanced-row selection coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_bones_seed_multigoal_stages.py` | test | Multi-goal stage contract coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_bones_seed_multiseed_submission.py` | test | Three-seed preflight coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_bones_seed_slurm_pipeline.py` | test | Phase-5 Slurm-chain coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_build_paper_release_bundle.py` | test | Release hash-chain coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_cluster_slurm_dependency.py` | test | Scheduler dependency parsing coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_continuous_planner_families.py` | test | Retained planner-family coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_low_level_tracker.py` | test | Frozen tracker loading coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_paper_protocol_metadata.py` | test | Frozen metadata coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_phase4_no_language.py` | test | Phase-4 grid and launcher coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_planner_latency.py` | test | Latency instrumentation coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_planner_publish_schedule.py` | test | Asynchronous renewal coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_planner_sample_schema.py` | test | Current sample-schema and language merge coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_resolve_low_level_checkpoint.py` | test | Checkpoint resolution coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_summarize_bones_seed_multigoal_language_comparison.py` | test | Phase-5 summary coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_validate_bones_seed_planner_submission.py` | test | Phase-5 preflight coverage. |
-| `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/test_validate_latent_skill_checkpoint_binding.py` | test | Encoder-binding validator coverage. |
+| `source/imitation_experiments/tests/test_aggregate_bones_seed_multiseed_results.py` | test | Phase-5 aggregation invariants. |
+| `source/imitation_experiments/tests/test_audit_diffsr_latent_qualification.py` | test | DiffSR qualification audit coverage. |
+| `source/imitation_experiments/tests/test_audit_vanilla_tracker_qualification.py` | test | Vanilla qualification audit coverage. |
+| `source/imitation_experiments/tests/test_balanced_motion_rows.py` | test | Balanced-row selection coverage. |
+| `source/imitation_experiments/tests/test_bones_seed_multigoal_stages.py` | test | Multi-goal stage contract coverage. |
+| `source/imitation_experiments/tests/test_bones_seed_multiseed_submission.py` | test | Three-seed preflight coverage. |
+| `source/imitation_experiments/tests/test_bones_seed_slurm_pipeline.py` | test | Phase-5 Slurm-chain coverage. |
+| `source/imitation_experiments/tests/test_build_paper_release_bundle.py` | test | Release hash-chain coverage. |
+| `source/imitation_experiments/tests/test_cluster_slurm_dependency.py` | test | Scheduler dependency parsing coverage. |
+| `source/imitation_experiments/tests/test_continuous_planner_families.py` | test | Retained planner-family coverage. |
+| `source/imitation_experiments/tests/test_low_level_tracker.py` | test | Frozen tracker loading coverage. |
+| `source/imitation_experiments/tests/test_paper_protocol_metadata.py` | test | Frozen metadata coverage. |
+| `source/imitation_experiments/tests/test_phase4_no_language.py` | test | Phase-4 grid and launcher coverage. |
+| `source/imitation_experiments/tests/test_planner_latency.py` | test | Latency instrumentation coverage. |
+| `source/imitation_experiments/tests/test_planner_publish_schedule.py` | test | Asynchronous renewal coverage. |
+| `source/imitation_experiments/tests/test_planner_sample_schema.py` | test | Current sample-schema and language merge coverage. |
+| `source/imitation_experiments/tests/test_resolve_low_level_checkpoint.py` | test | Checkpoint resolution coverage. |
+| `source/imitation_experiments/tests/test_summarize_bones_seed_multigoal_language_comparison.py` | test | Phase-5 summary coverage. |
+| `source/imitation_experiments/tests/test_validate_bones_seed_planner_submission.py` | test | Phase-5 preflight coverage. |
+| `source/imitation_experiments/tests/test_validate_latent_skill_checkpoint_binding.py` | test | Encoder-binding validator coverage. |
+
+## Rows added in the 2026-07-30 reorganization audit
+
+These files predate the reorganization but had no inventory row; the coverage
+test now enforces that every `experiments/` script is classified.
+
+| Path | Class | Responsibility |
+| --- | --- | --- |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/qualify_interface.sh` | qualification | Collects oracle qualification rollouts for one reduced command interface. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_bb1_shared_tracker_sweep.sh` | supporting study | BB1 shared-tracker mechanism sweep behind the 3.19x gap finding. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_bb3_noise_curves.sh` | supporting study | BB3 command-noise tolerance curves for both interfaces. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_finetune_method_b.sh` | supporting study | Method-B rollout finetuning arm of the capacity study. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_interface_ablation.sh` | supporting study | Reduced-interface ablation driver over the frozen streaming protocol. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_oracle_substitution_ladder.sh` | supporting study | Oracle-substitution ladder isolating where planner error enters. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_latent_low_level_ice.sh` | guarded launcher | Submits the enc380 latent low-level prerequisite to ICE. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_reduced_interface_low_level_ice.sh` | guarded launcher | Submits reduced-interface low-level trackers to ICE. |
+| `experiments/campaigns/2026-07-26-groupvq-capacity-ablation/run.sh` | front door | Dated wrapper for the GroupVQ capacity ablation. |
+| `experiments/campaigns/2026-07-26-groupvq-capacity-ablation/groupvq_ablation/build_lafan1_cache_ice.sh` | workflow | Builds the content-addressed LAFAN1 cache on ICE for the GroupVQ grid. |
+| `experiments/campaigns/2026-07-26-groupvq-capacity-ablation/groupvq_ablation/check_groupvq_encoder_grid.py` | audit/report | Validates the GroupVQ encoder grid outputs. |
+| `experiments/campaigns/2026-07-26-groupvq-capacity-ablation/groupvq_ablation/groupvq_grid.sh` | workflow | Runs one GroupVQ grid cell. |
+| `experiments/campaigns/2026-07-26-groupvq-capacity-ablation/groupvq_ablation/run_local_10m_qualification.sh` | qualification | Bounded local 10M gate for the GroupVQ arms. |
+| `experiments/campaigns/2026-07-26-groupvq-capacity-ablation/groupvq_ablation/submit_groupvq_capacity_ablation_ice.sh` | guarded launcher | Submits the GroupVQ capacity grid to ICE. |
+| `experiments/campaigns/2026-07-26-groupvq-capacity-ablation/groupvq_ablation/training_profile.h100.coe.env` | library | H100 COE training profile consumed by the GroupVQ launcher. |
+| `experiments/campaigns/2026-07-27-sonic-env-latent-det/run.sh` | front door | Dated wrapper for the SONIC-env latent determinism campaign. |
+| `experiments/campaigns/2026-07-27-sonic-env-latent-det/sonic_env_det/evaluate_stable_converged_checkpoint.sh` | qualification | Evaluates the stable converged SONIC-env checkpoint. |
+| `experiments/campaigns/2026-07-27-sonic-env-latent-det/sonic_env_det/run_local_wiring_gate.sh` | qualification | Local wiring gate before SONIC-env submissions. |
+| `experiments/campaigns/2026-07-27-sonic-env-latent-det/sonic_env_det/submit_latent_v0_reset_sampling_ice.sh` | guarded launcher | Submits the latent-v0 reset-sampling arm to ICE. |
+| `experiments/campaigns/2026-07-27-sonic-env-latent-det/sonic_env_det/submit_sonic_env_latent_det_ice.sh` | guarded launcher | Submits the SONIC-env latent determinism arm to ICE. |
+| `experiments/campaigns/2026-07-29-latent-holdout-horizon/latent_holdout/submit_latent_holdout_horizon_ice.sh` | guarded launcher | Submits the hold-in-{5,1} horizon ablation to ICE. |
+| `experiments/paper/_paper_common.py` | library | Shared provenance/gate plumbing for the paper pipeline stages. |
+| `experiments/paper/_paper_specs.py` | library | Frozen paper protocol specification constants. |
+| `experiments/paper/pipeline/pretrain_latent_encoder.py` | workflow | Hydra stage: pretrain the latent encoder for the paper pipeline. |
+| `experiments/paper/pipeline/train_low_level.py` | workflow | Hydra stage: train a low-level tracker for the paper pipeline. |
+| `experiments/paper/reference_buffer_workflow.py` | workflow | Reference-buffer workflow; the reference implementation of the paper-script standard. |
+| `experiments/paper/run_enc380_planner_route_comparison.py` | workflow | Hydra driver for the enc380 planner-route comparison. |
+| `experiments/paper/run_interface_capacity_study.py` | workflow | Hydra driver for the interface capacity study. |
