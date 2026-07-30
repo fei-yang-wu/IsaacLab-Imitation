@@ -1,0 +1,82 @@
+# Base configuration for imitation_experiments.pipeline.run_latent_e2e.
+# Defaults render a dry run of the full chain. Campaigns pin a variant by
+# shipping their own YAML and running with
+#   --config-dir experiments/campaigns/<campaign>/conf --config-name <pin>
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${oc.env:PWD}/logs/hydra/latent_e2e/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+
+name: latent_e2e
+output_root: ${oc.env:PWD}/logs/latent_e2e/${name}_seed${seed}
+seed: 0
+dry_run: true
+resume: false
+
+stages:
+  - pretrain
+  - low_level
+  - binding
+  - collect
+  - merge
+  - train_planner
+  - eval_offline
+  - eval_closed_loop
+
+python:
+  plain: [pixi, run, python]
+  isaac: [pixi, run, -e, isaaclab, python]
+
+# Stage 1a/1b are the Hydra paper stages; entries here are raw Hydra overrides
+# appended to their own configs (experiments/paper/conf/{pretrain,low_level}.yaml).
+# output_dir, seed, dry_run, and the encoder-checkpoint handoff are wired by
+# the orchestrator — never set those here.
+pretrain:
+  overrides:
+    - latent.mode=deterministic
+
+low_level:
+  encoder_checkpoint: null   # override to reuse a previously trained encoder
+  overrides:
+    - latent_arm=deterministic
+
+# Downstream stages are argparse modules; args render directly as --flags.
+# The tracker checkpoint, output dirs, and seed are wired by the orchestrator.
+collect:
+  checkpoint: null           # override to reuse a previously qualified tracker
+  args:
+    task: Isaac-Imitation-G1-Latent-v0
+    motion_manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
+    num_envs: 10
+    steps: 500
+    state_history_steps: 9
+    command_future_steps: 9
+    planner_interval_steps: 10
+    reset_schedule: random
+    reference_start_frame: 0
+
+merge:
+  args: {}
+
+train_planner:
+  args:
+    num_updates: 2000
+    batch_size: 1024
+    device: cuda:0
+
+eval:
+  planner_checkpoint_name: best.pt   # best.pt | latest.pt
+  offline_args:
+    setting: held_out
+  closed_loop_args:
+    task: Isaac-Imitation-G1-Latent-v0
+    motion_manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
+    num_envs: 10
+    steps: 500
+    state_history_steps: 9
+    command_future_steps: 9

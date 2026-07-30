@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Iterable
 

@@ -10,3 +10,6 @@ requires-python = ">=3.10"
 
 [tool.setuptools.packages.find]
 include = ["imitation_experiments*"]
+
+[tool.setuptools.package-data]
+imitation_experiments = ["**/conf/*.yaml"]
