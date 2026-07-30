@@ -154,6 +154,15 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 - Preserve Isaac Lab / Hydra CLI patterns already used in `scripts/`.
 - Do not assume IDE-only workflows; command-line verification is the default here.
 - Avoid committing generated artifacts, caches, checkpoints, or log directories.
+- For future experiments that use W&B, log runs to the existing shared W&B
+  project rather than creating a separate project for each experiment or
+  feature.
+- Use W&B tags to identify each run's environment or environments, primary
+  change, and other main features.
+- Organize W&B runs with concise, functional group names such as
+  `planner-ablation`, not names based on timestamps or incidental
+  implementation details. Ask the user to confirm the proposed group name
+  before launching the run.
 - For IPMD/Bilinear representation-learning work, use the latent task surface
   `Isaac-Imitation-G1-Latent-v0` unless the user explicitly requests vanilla.
   Do not submit `IPMD_BILINEAR` comparison jobs on `Isaac-Imitation-G1-v0`; the

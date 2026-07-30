@@ -45,7 +45,13 @@ from isaaclab.app import AppLauncher
 # frozen tracker consumes slot-by-slot, as opposed to a latent or token command.
 # These are the interfaces streamed_vanilla accepts.
 _EXPLICIT_INTERFACES = frozenset(
-    {"full_body_trajectory", "ee_trajectory", "root_qpos", "root_points5"}
+    {
+        "full_body_trajectory",
+        "ee_trajectory",
+        "root_qpos",
+        "root_points5",
+        "root_points5_pose",
+    }
 )
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -91,6 +97,7 @@ parser.add_argument(
         "root_qpos",
         "root_points5",
         "future_cvae",
+        "root_points5_pose",
         "per_step_token_sequence",
     ),
     required=True,
@@ -454,6 +461,7 @@ _INTERFACE_COMMAND_SPACE: dict[str, str] = {
     "ee_trajectory": "single_frame_ee",
     "root_qpos": "root_qpos",
     "root_points5": "root_points5",
+    "root_points5_pose": "root_points5_pose",
 }
 
 # Proprioception appears in every command space and is not part of the packet.
@@ -663,7 +671,7 @@ def main(
             # generic chunk-slot adapter; see _POLICY_COMMAND_MODES on why there
             # is no per-space mode name.
             low_level_command_space = args_cli.interface
-            env_cfg.policy_command_mode = "full_body_chunk_current_slot"
+            env_cfg.policy_command_mode = "explicit_chunk_current_slot"
     else:
         env_cfg.policy_command_mode = "reference"
     if args_cli.interface in _EXPLICIT_INTERFACES:

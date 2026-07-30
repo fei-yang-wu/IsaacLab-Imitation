@@ -71,6 +71,32 @@ orchestration.
 
 Current state: **controllers qualified, grid in progress**.
 
+## Enc380 planner-route comparison
+
+[`run_enc380_planner_route_comparison.py`](run_enc380_planner_route_comparison.py)
+with [`conf/enc380_planner_route.yaml`](conf/enc380_planner_route.yaml) compares
+two decomposed routes into one frozen tracker: `root_qpos planner -> frozen
+encoder -> latent tracker` and `latent planner -> latent tracker`. It executes the
+guarded sequence `qualify -> one paired oracle collection -> 12
+capacity/seed cells -> aggregate`. One persistent ten-environment Isaac session
+asynchronously collects 100 complete variable-length `walk1_subject1` segments;
+partial live segments at the cutoff are discarded. Both routes are trained once
+from the same paired causal rows. There is no learned-planner rollout collection
+or finetune stage. This user-selected continuity motion is a preliminary
+diagnostic, not a representative paper motion sample.
+
+```bash
+# Resolve config, verify the intended commands, and touch nothing.
+pixi run python experiments/paper/run_enc380_planner_route_comparison.py
+
+# Run only after replacing/confirming all paths and hashes in the Hydra config.
+pixi run python experiments/paper/run_enc380_planner_route_comparison.py execution.dry_run=false
+```
+
+The checked-in config pins the completed 5B tracker and encoder hashes. A real
+run remains blocked until the corrected 500-control-step, `[0, 200]`-start
+qualification passes.
+
 ## Reference buffer workflow
 
 Training reads the reference motion set through a TorchRL replay buffer.
@@ -141,4 +167,3 @@ Before changing the state to `ready`, require:
 The authoritative scope is exactly two planner rows: DiffSR latent commands
 and the ten-frame explicit vanilla packet. The direct vanilla tracker is a
 low-level ceiling, not a third planner row.
-

@@ -154,13 +154,10 @@ G1_EE_BODY_NAMES: list[str] = [
     "right_wrist_yaw_link",
 ]
 
-# Sparse keypoint set for the ``root_points5`` command space: the four
-# end-effectors plus the pelvis, carried as POSITIONS ONLY in the anchor frame
-# (5 x 3 = 15) alongside the 9-value root pose. The pelvis is not redundant with
-# the torso_link anchor -- the waist joints separate them -- so it supplies the
-# torso/hip configuration a pure end-effector packet lacks. That omission is
-# what made the EE-only interface untrackable (replay floor 405 mm), which is
-# the deficiency HuMI reports adding the root repairs.
+# Sparse keypoint set for explicit-interface ablations: the four end-effectors
+# plus the pelvis. Position and rot6d orientation are exposed as separate terms,
+# so configs can select point targets (5 x 3) or full poses (5 x 9). The pelvis
+# is not redundant with the torso_link anchor -- the waist joints separate them.
 G1_KEYPOINT5_BODY_NAMES: list[str] = [
     "pelvis",
     "left_ankle_roll_link",
@@ -332,10 +329,9 @@ def _g1_expert_window_ee_obs_params() -> dict[str, object]:
 def _g1_expert_keypoint_obs_params() -> dict[str, object]:
     """Single-frame sparse-keypoint command params for the actor.
 
-    ``root_points5`` is the compressed explicit interface: 9 root values plus
-    5 keypoint positions = 24 per frame (240 for a 10-frame packet), against the
-    full-body packet's 67 per frame. Positions only -- no per-keypoint
-    orientation -- so the keypoints are point targets, not frames.
+    Position and orientation are registered independently with these same body
+    and anchor parameters. ``agent.command_components`` decides which terms the
+    native tracker consumes.
     """
     return {
         "asset_cfg": SceneEntityCfg("robot"),
@@ -433,6 +429,10 @@ class G1ObservationCfg:
             func=mdp.policy_expert_keypoint_pos_b,
             params=_g1_expert_keypoint_obs_params(),
         )
+        expert_keypoint_ori_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_ori_b,
+            params=_g1_expert_keypoint_obs_params(),
+        )
         base_lin_vel = ObsTerm(
             func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5)
         )
@@ -470,6 +470,26 @@ class G1ObservationCfg:
         expert_anchor_ori_b = ObsTerm(
             func=mdp.expert_anchor_ori_b,
             params=_g1_expert_anchor_obs_params(),
+        )
+        expert_motion_qpos = ObsTerm(
+            func=mdp.policy_expert_motion_qpos,
+            params=_g1_expert_motion_obs_params(),
+        )
+        expert_ee_pos_b = ObsTerm(
+            func=mdp.policy_expert_ee_pos_b,
+            params=_g1_expert_ee_obs_params(),
+        )
+        expert_ee_ori_b = ObsTerm(
+            func=mdp.policy_expert_ee_ori_b,
+            params=_g1_expert_ee_obs_params(),
+        )
+        expert_keypoint_pos_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_pos_b,
+            params=_g1_expert_keypoint_obs_params(),
+        )
+        expert_keypoint_ori_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_ori_b,
+            params=_g1_expert_keypoint_obs_params(),
         )
         body_pos = ObsTerm(
             func=mdp.robot_body_pos_b,
@@ -557,6 +577,10 @@ class G1ObservationCfg:
         )
         expert_keypoint_pos_b = ObsTerm(
             func=mdp.expert_window_keypoint_pos_b,
+            params=_g1_expert_window_keypoint_obs_params(),
+        )
+        expert_keypoint_ori_b = ObsTerm(
+            func=mdp.expert_window_keypoint_ori_b,
             params=_g1_expert_window_keypoint_obs_params(),
         )
 
@@ -1198,12 +1222,15 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             term.params["past_steps"] = past_steps
             term.params["future_steps"] = future_steps
             term.params["reference_body_names"] = tuple(self.command_ee_body_names)
-        keypoint_term = self.observations.expert_window.expert_keypoint_pos_b
-        keypoint_term.params["past_steps"] = past_steps
-        keypoint_term.params["future_steps"] = future_steps
-        keypoint_term.params["reference_body_names"] = tuple(
-            self.command_keypoint_body_names
-        )
+        for term in (
+            self.observations.expert_window.expert_keypoint_pos_b,
+            self.observations.expert_window.expert_keypoint_ori_b,
+        ):
+            term.params["past_steps"] = past_steps
+            term.params["future_steps"] = future_steps
+            term.params["reference_body_names"] = tuple(
+                self.command_keypoint_body_names
+            )
 
     def __post_init__(self) -> None:
         super().__post_init__()  # type: ignore
@@ -1266,10 +1293,13 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         )
         if normalized_policy_mode not in {
             "reference",
+            "explicit_chunk_current_slot",
             "full_body_chunk_current_slot",
+            "ee_chunk_current_slot",
         }:
             raise ValueError(
-                "policy_command_mode must be reference or full_body_chunk_current_slot."
+                "policy_command_mode must be reference or a supported "
+                "*_chunk_current_slot adapter."
             )
         self.policy_command_mode = normalized_policy_mode
         if int(self.random_reset_step_min) < 0:
@@ -1551,6 +1581,7 @@ _PRUNABLE_COMMAND_TERM_NAMES: tuple[str, ...] = (
     "expert_ee_pos_b",
     "expert_ee_ori_b",
     "expert_keypoint_pos_b",
+    "expert_keypoint_ori_b",
 )
 
 
@@ -1567,10 +1598,13 @@ _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
         "expert_anchor_pos_b",
         "expert_anchor_ori_b",
         "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
     ),
     "critic": (
         "expert_anchor_pos_b",
         "expert_anchor_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
         "body_pos",
         "body_ori",
     ),
@@ -1581,6 +1615,7 @@ _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
         "expert_ee_pos_b",
         "expert_ee_ori_b",
         "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
     ),
     "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
 }

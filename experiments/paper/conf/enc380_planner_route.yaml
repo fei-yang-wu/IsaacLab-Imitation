@@ -1,0 +1,75 @@
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${oc.env:PWD}/logs/hydra/enc380_planner_route/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+
+# qualify -> one paired oracle collection -> 12 size/seed cells (two
+# routes trained once each) -> paired capacity aggregate
+stages: [qualify, demo, train, eval, aggregate]
+
+execution:
+  # Default is intentionally render-only. Set false only after the exact paths,
+  # hashes, checkpoint completeness decision, and cluster request are reviewed.
+  dry_run: true
+  device: cuda:0
+
+paths:
+  output_root: ${oc.env:PWD}/logs/interface_baselines/lafan1_enc380_walk1_route_comparison
+  low_level_checkpoint: ${oc.env:PWD}/logs/downloaded_checkpoints/lafan1_enc380_rootqpos_h10_z256_seed0/model_5b.pt
+  skill_checkpoint: ${oc.env:PWD}/logs/downloaded_checkpoints/lafan1_enc380_rootqpos_h10_z256_seed0/skill_encoder/latest.pt
+  tracker_completion_record: ${oc.env:PWD}/logs/downloaded_checkpoints/lafan1_enc380_rootqpos_h10_z256_seed0/completion.json
+  manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
+  dataset_path: ${oc.env:PWD}/data/lafan1/zarr/g1_hl_diffsr
+
+checkpoint:
+  # Verified shared 5B recovery artifact (ICE job 5549907).
+  low_level_sha256: d33fa146f54222848da8b9a92eb5579f5acb8b3a46c484399c906b076c219260
+  skill_sha256: 1d530fcb5920112b84bc53dbaddf2b3eb3da13a32a379513d8ee8719bc57d546
+  frames: 5000085504
+  intended_frames: 5000000000
+  training_exit: completed
+  preliminary_incomplete_tracker: false
+
+protocol:
+  task: Isaac-Imitation-G1-Latent-Strict-v0
+  # User-requested continuity with the previous one-motion planner study.
+  motion_names: [walk1_subject1]
+  evaluation_steps: 500
+  evaluation_envs: 10
+  render_video: true
+
+qualification:
+  num_envs: 100
+  steps: 500
+  min_oracle_success: 0.8
+
+data:
+  # One persistent 100-env Isaac session collects the trajectories in parallel.
+  # Complete variable-length segments are committed; in-flight segments at the
+  # final cutoff are discarded.
+  collection_envs: 100
+  trajectories_per_motion: 100
+  collection_control_steps: 15000
+
+planner:
+  family: flow
+  model_sizes: [tiny, small, medium, large]
+  seeds: [0, 1, 2]
+  # Capacity-aware optimizer budgets. The effective batch stays matched across
+  # sizes and routes; only the accumulation microbatch changes for memory.
+  train_updates_by_size:
+    tiny: 10000
+    small: 20000
+    medium: 30000
+    large: 50000
+  batch_size: 1024
+  micro_batch_size_by_size:
+    tiny: 1024
+    small: 512
+    medium: 256
+    large: 128
+  flow_inference_steps: 16

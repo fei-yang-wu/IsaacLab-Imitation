@@ -22,6 +22,8 @@ Classes:
 | Path | Class | Responsibility |
 | --- | --- | --- |
 | `experiments/campaigns/2026-07-22-bones-h10-scale/submit.sh` | front door | Dated wrapper for the retained BONES h10 scale screen. |
+| `experiments/campaigns/2026-07-29-sonic-official-fsq/run.sh` | front door | Dated wrapper for the official-window SONIC FSQ32 low-level campaign. |
+| `experiments/campaigns/2026-07-29-sonic-official-fsq/sonic_official_fsq/submit_sonic_official_fsq_ice.sh` | guarded launcher | Validates corrected LAFAN1 inputs and submits one resumable ICE H200 segment under the 5B cap. |
 | `experiments/campaigns/2026-07-22-latent-learning-ablation/run.sh` | front door | Dated wrapper for the current latent-learning ablation. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit.sh` | front door | Preliminary latent-only Phase-5 pilot; fail-closed and excluded from paper aggregation. |
 | `experiments/campaigns/2026-07-23-bones-phase5-language-local10/run.sh` | front door | Local latent-only ten-goal Phase-5 planner baseline: demonstration-pretrained plus rollout-finetuned shared planner, no scheduler. |
@@ -51,7 +53,16 @@ Classes:
 | --- | --- | --- |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_sweep.sh` | front door | Dated wrapper for the secondary planner-scaling study. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_capacity_point.sh` | workflow | Runs one capacity point of the scaling sweep. |
-| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_capacity_entry.py` | workflow | Python entry that dispatches a capacity point and aggregates it. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/enc380_capacity_grid.py` | library | Frozen walk1_subject1 × four sizes × three seeds definition and 0-11 array mapping. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_capacity_entry.py` | workflow | Python entry that dispatches legacy capacity cells and the fixed enc380 0-11 ICE grid. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_enc380_planner_route_comparison.sh` | workflow | Runs one stage/cell of the shared-tracker root+qpos-versus-latent capacity diagnostic. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_planner_route_ice.sh` | guarded launcher | Submits corrected qualification, one persistent 10-env/100-trajectory walk1 oracle collection, 12 capacity cells, and aggregation with dependencies. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_motion_selection.py` | qualification | Binds the user-requested walk1_subject1 continuity diagnostic to corrected-manifest position 29 and labels it non-representative. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_tracker_completion.py` | qualification | Binds the cross-segment ≥5B frame accounting, completed Slurm job, tracker hash, and encoder hash. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_paired_demonstrations.py` | qualification | Verifies paired causal targets and exact completed `(env_id, episode_id)` segment counts while allowing variable rows per segment. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/materialize_paired_interface_samples.py` | workflow | Promotes root+qpos and latent targets from the same collected simulator rows. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_packet_encoder_pin.py` | qualification | Certifies the explicit-packet-to-frozen-encoder route against oracle latent commands. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_enc380_route_comparison.py` | audit/report | Aggregates walk1_subject1, four capacities, three seeds, one oracle-trained stage, and both routes. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/prepare_oracle_baselines.sh` | qualification | Prepares the matched oracle baselines the sweep normalizes against. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/paths.env` | library | Frozen checkpoint and data paths for the capacity sweep. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_scaling.py` | audit/report | Aggregates capacity points into the scaling curve. |
