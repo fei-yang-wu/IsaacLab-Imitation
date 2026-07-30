@@ -104,18 +104,26 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 ## Repo Shape
 
 - `source/isaaclab_imitation/`: installable Isaac Lab extension package for imitation environments.
+- `source/imitation_experiments/`: installable, editable experiment library —
+  the shared planner, evaluation, audit, data, and provenance implementation,
+  organized as `imitation_experiments.{data,planner,lowlevel,evaluation,audit,
+  provenance,pipeline,capacity}` with its tests in
+  `source/imitation_experiments/tests/`. Launchers invoke it with
+  `python -m imitation_experiments.<subpackage>.<module>`. New shared
+  experiment Python goes here with a test, never into a campaign directory.
 - `scripts/rlopt/`: RLOpt train, test, and playback entrypoints.
 - `scripts/rsl_rl/`: RSL-RL training entrypoints.
+- `scripts/data/`, `scripts/audit/`, `scripts/viz/`, `scripts/bench/`:
+  standalone dataset-preparation, audit, visualization, and benchmark tools
+  (see `scripts/README.md`).
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test runners.
 - `docker/`: container and cluster-related workflows.
 - `experiments/README.md`: human-facing pointer to current, historical, and
   paper-facing experiment surfaces.
 - `experiments/campaigns/YYYY-MM-DD-short-purpose/`: dated protocol/status
-  indexes and thin wrappers, plus the implementation that campaign owns in
-  topic-named group subdirectories such as
-  `<campaign>/interface_baselines/`. There are no top-level topical
-  directories; a group directory lives in the newest campaign that uses it and
-  older campaigns reference it rather than copying it.
+  indexes plus the frozen shell launchers a collaborator invokes. Campaign
+  directories are thin: README, configs, and `.sh` wrappers that call the
+  library. They contain no Python implementation.
 - `experiments/paper/`: stable release-facing entrypoints only — `run.sh`, the
   Phase-4 and Phase-5 submit plus aggregate scripts, the release-bundle
   builder, and the reference-buffer workflow. Do not add exploratory launchers,
@@ -137,11 +145,11 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
     doing less work.
   `reference_buffer_workflow.py` plus `conf/reference_buffer.yaml` is the
   reference implementation of this shape.
-- The shared planner modules import each other as bare siblings, so the coupled
-  set must stay in one directory. Do not split it across campaigns, and do not
-  rely on a fixed `parents[N]` depth to find the repository root: use the
-  marker-based helper in
-  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/_repo_paths.py`.
+- The shared planner modules live in the `imitation_experiments` package and
+  import each other absolutely (`from imitation_experiments.planner...`).
+  Never mutate `sys.path` under `experiments/` and never rely on a fixed
+  `parents[N]` depth to find the repository root: use `REPO_ROOT` and the
+  helpers in `source/imitation_experiments/imitation_experiments/paths.py`.
 - `logs/`, `outputs/`: generated run artifacts; do not treat them as source.
 
 ## Working Rules
@@ -415,6 +423,14 @@ environment:
 
 ```bash
 pixi run test-rlopt
+```
+
+Run the experiment-library and standalone-script tests in the default
+environment after touching `source/imitation_experiments/` or `scripts/`:
+
+```bash
+pixi run test-experiments
+pixi run test-scripts
 ```
 
 Tests that import Isaac Lab or Omniverse modules need Isaac Sim's Python

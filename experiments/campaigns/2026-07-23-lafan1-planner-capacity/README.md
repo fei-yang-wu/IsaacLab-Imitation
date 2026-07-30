@@ -14,7 +14,7 @@ Two readouts (Study 1 of `wiki/ablation-experiment-plan.md`, restricted to one m
 
 - Planner family: **flow matching** (fixed; no family sweep here).
 - Sizes: `tiny / small / medium / large` (`MODEL_PRESETS` in
-  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py`).
+  `source/imitation_experiments/imitation_experiments/planner/train_chunked_transformer_planner.py`).
 - Planner seeds: `0 1 2`. Low-level trackers stay seed 0.
 - Planner input: causal `10 × 93` achieved-robot history + task index (one motion → trivial).
 - Publication: 5 Hz, held 10 steps (`planner_update_interval=10`), per-env renewal.
@@ -287,7 +287,7 @@ experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_sweep.sh
 
 Scripts: `paths.env` (resolved inputs), `prepare_oracle_baselines.sh`,
 `run_capacity_point.sh` (one size×seed), `run_sweep.sh` (sizes×seeds + aggregate).
-Aggregators: `experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_scaling.py`
+Aggregators: `source/imitation_experiments/imitation_experiments/capacity/aggregate_one_motion_capacity_scaling.py`
 (per seed, 3-interface) and `aggregate_one_motion_capacity_seeds.py` (across seeds).
 
 ## Run on ICE (PACE)

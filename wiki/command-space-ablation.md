@@ -160,7 +160,7 @@ error when the planner bridge is used.
 For a single checkpoint:
 
 ```bash
-pixi run -e isaaclab python experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+pixi run -e isaaclab python -m imitation_experiments.lowlevel.evaluate_checkpoint \
     --task Isaac-Imitation-G1-v0 \
     --algo IPMD \
     --headless \

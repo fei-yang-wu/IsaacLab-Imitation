@@ -32,7 +32,7 @@ aggregate. Every artifact records `preliminary_unqualified=true`.
   256/32, lr `1e-4`, 16 flow steps.
 - Stage semantics, sample schema, and evaluation metrics are the shared
   Phase-5 implementation in
-  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.py`
+  `source/imitation_experiments/imitation_experiments/pipeline/run_bones_seed_multigoal_language_comparison.py`
   (stages `prepare -> rollout -> finetune -> final-eval -> summarize`).
   Training stages use the default Pixi environment; only collection and
   closed-loop evaluation launch Isaac.

@@ -50,7 +50,7 @@ ablation.
 The binding was checked with:
 
 ```bash
-pixi run python experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_latent_skill_checkpoint_binding.py \
+pixi run python -m imitation_experiments.audit.validate_latent_skill_checkpoint_binding \
   --low_level_checkpoint logs/bones_seed_91_h10_h200_e16384_5b_20260722/visual_check/final_4975165440/model_step_4975165440.pt \
   --skill_checkpoint logs/bones_seed_91_h10_h200_e16384_5b_20260722/visual_check/skill_encoder_h10_z256_latest.pt \
   --output_json logs/bones_seed_91_h10_h200_e16384_5b_20260722/visual_check/final_4975165440/latent_skill_binding.json

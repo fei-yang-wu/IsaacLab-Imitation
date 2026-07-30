@@ -414,7 +414,7 @@ capacity-efficiency claim.
 
 All four sizes, both stages, oracle-normalized metrics, exact starts, hashes,
 and training-contract checks are generated from artifacts by
-`experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_scaling.py`.
+`source/imitation_experiments/imitation_experiments/capacity/aggregate_one_motion_capacity_scaling.py`.
 The current outputs are under
 `logs/interface_baselines/lafan1_one_motion_capacity_scaling_20260716/capacity_summary/`.
 The medium compatibility entries are symbolic links to the original matched
@@ -1239,7 +1239,7 @@ should be labeled as such, not presented as the matched comparison).
 
 Artifacts under `logs/interface_baselines/{bb1_shared_tracker,bb3_noise_curves,covariate_shift,c3_freshness,bb1_repeatability}`.
 Scripts: `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_bb1_shared_tracker_sweep.sh`,
-`run_bb3_noise_curves.sh`, `interface_baselines/analyze_planner_residual_structure.py`.
+`run_bb3_noise_curves.sh`, `imitation_experiments.capacity.analyze_planner_residual_structure`.
 
 **BB1 (headline).** FB planner -> frozen 670 encoder -> latent tracker, vs latent
 planner -> same tracker. Gate: expert packet through the identical path reproduces
