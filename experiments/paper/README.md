@@ -22,6 +22,55 @@ fails loudly rather than silently doing less work.
 [`conf/reference_buffer.yaml`](conf/reference_buffer.yaml) is the reference
 implementation of that shape.
 
+## Command-interface planner-capacity study
+
+[`run_interface_capacity_study.py`](run_interface_capacity_study.py) with
+[`conf/interface_capacity.yaml`](conf/interface_capacity.yaml) reproduces the
+interface ablation and the capacity grid end to end. It asks whether a
+compressed command interface reduces planner-training complexity, across a
+packet-size ladder at a fixed 5 Hz publication rate:
+
+| Interface | Packet | Qualified oracle |
+| --- | --- | --- |
+| `full_body_trajectory` | 670 | 23.8 mm |
+| `root_qpos` | 380 | 23.6 mm |
+| `ee_trajectory` (rootless control, off by default) | 360 | 405.2 mm |
+| `latent_skill` | 258 | 30.5 mm |
+| `root_points5` | 240 | 30.6 mm |
+
+Each interface has its **own** natively-trained low-level controller, so no
+channel is ever reconstructed. Planner rows are normalized by their own
+interface's oracle, because the trackers differ in quality and absolute MPJPE
+alone would conflate planner quality with tracker quality.
+
+```bash
+# everything: qualify -> oracle -> grid -> aggregate
+pixi run python experiments/paper/run_interface_capacity_study.py
+
+# one cell, for a smoke check
+pixi run python experiments/paper/run_interface_capacity_study.py \
+    grid.interfaces=[root_points5] grid.seeds=[0] grid.sizes=[tiny]
+```
+
+`qualify` gates everything downstream: an interface whose own controller cannot
+track it makes every planner number on it meaningless. That is not hypothetical —
+`ee_trajectory` reads a healthy 41.3 mm on the *training* metric while its true
+frame-0/700-step floor is 405.2 mm, because training episodes terminate before
+drift accumulates. Only the gate separates those cases, so never qualify an
+interface on training-log MPJPE.
+
+The study fails loudly rather than degrading: it verifies every checkpoint
+against a recorded sha256, refuses an interface with no `PASS` qualification
+record, refuses a non-empty study root, and writes `study_provenance.json`
+(resolved config, resolved checkpoints, git commit) beside the artifacts.
+
+Implementation lives in
+`experiments/campaigns/2026-07-23-lafan1-planner-capacity/`; this entrypoint
+supplies its inputs and enforces the gates rather than duplicating the
+orchestration.
+
+Current state: **controllers qualified, grid in progress**.
+
 ## Reference buffer workflow
 
 Training reads the reference motion set through a TorchRL replay buffer.

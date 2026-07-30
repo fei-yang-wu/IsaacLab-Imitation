@@ -16,6 +16,17 @@ encoder checkpoint* — this job does not re-pretrain.
 ./run.sh ice       # MODE=print by default; MODE=validate then MODE=submit
 ```
 
+The fixed local two-pass evaluation for a completed Stable checkpoint is:
+
+```bash
+CHECKPOINT=/path/to/model_step_<frames>.pt \
+  sonic_env_det/evaluate_stable_converged_checkpoint.sh
+```
+
+It hash-gates the corrected manifest and shared h10 encoder, refuses an
+existing output root, runs the strict-termination diagnostic, then runs the
+40-motion deterministic non-terminating full horizon with a retained video.
+
 ## What "SONIC's environment" means here
 
 New task id `Isaac-Imitation-G1-Latent-Sonic-NoHist-v0`

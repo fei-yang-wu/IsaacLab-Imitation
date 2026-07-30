@@ -41,6 +41,13 @@ if _os.environ.get("ISAACLAB_SPLIT_RUNTIME") == "1":
 from isaaclab.app import AppLauncher
 
 
+# Explicit command interfaces: those whose packet is a literal robot command the
+# frozen tracker consumes slot-by-slot, as opposed to a latent or token command.
+# These are the interfaces streamed_vanilla accepts.
+_EXPLICIT_INTERFACES = frozenset(
+    {"full_body_trajectory", "ee_trajectory", "root_qpos", "root_points5"}
+)
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--task", type=str, default="Isaac-Imitation-G1-v0")
 parser.add_argument(
@@ -77,6 +84,12 @@ parser.add_argument(
         "single_frame_full_body",
         "full_body_trajectory",
         "ee_trajectory",
+        # Reduced explicit interfaces. Unlike the two above, these are already
+        # single-frame command spaces read from the `policy` group, so the
+        # interface name IS the command space -- there is no separate
+        # "single_frame_*" alias to map onto.
+        "root_qpos",
+        "root_points5",
         "future_cvae",
         "per_step_token_sequence",
     ),
@@ -163,6 +176,16 @@ parser.add_argument(
 )
 parser.add_argument("--command_past_steps", type=int, default=0)
 parser.add_argument("--command_future_steps", type=int, default=25)
+parser.add_argument(
+    "--fall_height_m",
+    type=float,
+    default=0.4,
+    help=(
+        "Torso height below which an environment counts as fallen. Used for the "
+        "base_too_low term injected under --disable_tracking_terminations on "
+        "SONIC surfaces that null it. Default matches the latent surface."
+    ),
+)
 parser.add_argument("--reset_schedule", type=str, default="sequential")
 parser.add_argument("--reference_start_frame", type=int, default=0)
 parser.add_argument("--refresh_zarr_dataset", action="store_true", default=False)
@@ -241,11 +264,11 @@ from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
+    G1_KEYPOINT5_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
 )
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
-    EE_POLICY_INPUT_KEYS,
-    VANILLA_POLICY_INPUT_KEYS,
+    command_space_policy_input_keys,
 )
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
@@ -261,6 +284,7 @@ from low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
 from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
 from interface_planner_common import (  # noqa: E402
+    INTERFACE_TERMS,
     InterfaceTargetSpec,
     flatten_command_terms,
     load_rank_language_embeddings,
@@ -311,6 +335,10 @@ def trajectory_metadata(raw_env: Any) -> dict[str, Any]:
 
 TRACKING_TERMINATION_NAMES = ("anchor_pos", "anchor_ori", "ee_body_pos")
 FALL_TERMINATION_NAME = "base_too_low"
+# Body whose world height defines a fall. Identical to the asset_cfg used by the
+# latent surface's own base_too_low term, so the injected term below cannot
+# disagree with it about what "fallen" means.
+FALL_TERMINATION_BODY_NAME = "torso_link"
 
 
 def _disable_tracking_terminations(terminations: Any) -> list[str]:
@@ -418,11 +446,60 @@ def _configured_step_dt(env_cfg: object) -> float | None:
     return None
 
 
+# Interface -> the command space its frozen tracker was trained on. Packet term
+# names are DERIVED from that space rather than listed separately, so adding a
+# command space cannot leave a stale per-interface list behind.
+_INTERFACE_COMMAND_SPACE: dict[str, str] = {
+    "full_body_trajectory": "single_frame_full_body",
+    "ee_trajectory": "single_frame_ee",
+    "root_qpos": "root_qpos",
+    "root_points5": "root_points5",
+}
+
+# Proprioception appears in every command space and is not part of the packet.
+_PROPRIO_TERM_NAMES = frozenset(
+    {"base_ang_vel", "joint_pos_rel", "joint_vel_rel", "last_action"}
+)
+
+
+def _interface_command_term_names(interface: str) -> tuple[str, ...]:
+    """Packet term names for an interface, in the actor's ordered contract."""
+    try:
+        command_space = _INTERFACE_COMMAND_SPACE[interface]
+    except KeyError as err:
+        raise ValueError(
+            f"Interface {interface!r} has no command-space mapping; expected one "
+            f"of {sorted(_INTERFACE_COMMAND_SPACE)}."
+        ) from err
+    derived = tuple(
+        key[1]
+        for key in command_space_policy_input_keys(command_space)
+        if key[1] not in _PROPRIO_TERM_NAMES
+    )
+    # The planner's target registry and the tracker's actor contract describe the
+    # same packet from opposite ends. If they ever disagree, the planner would be
+    # trained to predict one layout while the tracker consumes another -- silent,
+    # and exactly the class of mismatch that produced the joint-order bug. Fail
+    # loudly at startup instead.
+    declared = INTERFACE_TERMS.get(interface)
+    if declared is not None and tuple(declared) != derived:
+        raise ValueError(
+            f"Interface {interface!r} packet layout disagrees between the planner "
+            f"target registry {tuple(declared)!r} and the tracker's command-space "
+            f"contract {derived!r}."
+        )
+    return derived
+
+
 def _command_reference_kwargs(
-    interface: str, *, ee_body_names: list[str]
+    interface: str, *, ee_body_names: list[str], keypoint_body_names: list[str]
 ) -> dict[str, object]:
+    # Only body-set-valued terms take a body list; joint- and anchor-valued
+    # terms do not. The two interfaces differ in WHICH body set they carry.
     if interface == "ee_trajectory":
         return {"reference_body_names": tuple(ee_body_names)}
+    if interface == "root_points5":
+        return {"reference_body_names": tuple(keypoint_body_names)}
     return {}
 
 
@@ -431,8 +508,13 @@ def _current_reference_command_terms(
     *,
     interface: str,
     ee_body_names: list[str],
+    keypoint_body_names: list[str],
 ) -> dict[str, torch.Tensor]:
-    ref_kwargs = _command_reference_kwargs(interface, ee_body_names=ee_body_names)
+    ref_kwargs = _command_reference_kwargs(
+        interface,
+        ee_body_names=ee_body_names,
+        keypoint_body_names=keypoint_body_names,
+    )
     return {
         term_name: base_env.get_current_expert_window_term(
             term_name=term_name,
@@ -440,11 +522,7 @@ def _current_reference_command_terms(
             future_steps=int(args_cli.command_future_steps),
             **ref_kwargs,
         )
-        for term_name in (
-            ("expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b")
-            if interface == "full_body_trajectory"
-            else ("expert_ee_pos_b", "expert_ee_ori_b")
-        )
+        for term_name in _interface_command_term_names(interface)
     }
 
 
@@ -453,8 +531,13 @@ def _current_demonstration_command_terms(
     *,
     interface: str,
     ee_body_names: list[str],
+    keypoint_body_names: list[str],
 ) -> dict[str, torch.Tensor]:
-    ref_kwargs = _command_reference_kwargs(interface, ee_body_names=ee_body_names)
+    ref_kwargs = _command_reference_kwargs(
+        interface,
+        ee_body_names=ee_body_names,
+        keypoint_body_names=keypoint_body_names,
+    )
     return base_env.current_offline_demo_command_terms(
         past_steps=int(args_cli.command_past_steps),
         future_steps=int(args_cli.command_future_steps),
@@ -549,13 +632,13 @@ def main(
 
     low_level_command_mode = str(args_cli.low_level_command_mode)
     low_level_command_space = str(getattr(agent_cfg, "command_space", "unknown"))
-    if args_cli.interface in {"full_body_trajectory", "ee_trajectory"}:
+    if args_cli.interface in _EXPLICIT_INTERFACES:
         low_level_command_space = args_cli.interface
     if low_level_command_mode == "streamed_vanilla":
-        if args_cli.interface not in ("full_body_trajectory", "ee_trajectory"):
+        if args_cli.interface not in _EXPLICIT_INTERFACES:
             raise ValueError(
-                "streamed_vanilla requires --interface full_body_trajectory or "
-                f"ee_trajectory; got {args_cli.interface!r}."
+                "streamed_vanilla requires --interface one of "
+                f"{sorted(_EXPLICIT_INTERFACES)}; got {args_cli.interface!r}."
             )
         if int(args_cli.command_past_steps) != 0:
             raise ValueError("streamed_vanilla requires --command_past_steps 0.")
@@ -571,12 +654,19 @@ def main(
         if args_cli.interface == "full_body_trajectory":
             low_level_command_space = "single_frame_full_body"
             env_cfg.policy_command_mode = "full_body_chunk_current_slot"
-        else:
+        elif args_cli.interface == "ee_trajectory":
             low_level_command_space = "single_frame_ee"
             env_cfg.policy_command_mode = "ee_chunk_current_slot"
+        else:
+            # root_qpos / root_points5 are already single-frame policy-group
+            # spaces, so the trained command space is used as-is. They share the
+            # generic chunk-slot adapter; see _POLICY_COMMAND_MODES on why there
+            # is no per-space mode name.
+            low_level_command_space = args_cli.interface
+            env_cfg.policy_command_mode = "full_body_chunk_current_slot"
     else:
         env_cfg.policy_command_mode = "reference"
-    if args_cli.interface in {"full_body_trajectory", "ee_trajectory"}:
+    if args_cli.interface in _EXPLICIT_INTERFACES:
         agent_cfg.command_space = low_level_command_space
     sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
     if callable(sync_input_keys):
@@ -645,6 +735,42 @@ def main(
             raise ValueError(
                 "--disable_tracking_terminations requires an environment "
                 "termination configuration."
+            )
+        # SONIC termination configs (the Strict-v0 chunk trackers) null out
+        # base_too_low and fold fall detection into anchor_pos, which M3
+        # disables -- so on those surfaces this branch used to be unusable and
+        # the chunk arms were collected with tracking terminations ACTIVE while
+        # the latent arm had them disabled. Injecting the term the latent
+        # surface already carries (torso_link height < 0.4 m) makes both
+        # surfaces agree on what a fall is, which is what lets the two
+        # demonstration sets be collected under identical settings. Mirrors the
+        # identical injection in eval_interface_planner_closed_loop.py.
+        if getattr(terminations, FALL_TERMINATION_NAME, None) is None:
+            from isaaclab.managers import SceneEntityCfg
+            from isaaclab.managers import TerminationTermCfg as _DoneTerm
+            from isaaclab_imitation.tasks.manager_based.imitation import (
+                mdp as _imitation_mdp,
+            )
+
+            setattr(
+                terminations,
+                FALL_TERMINATION_NAME,
+                _DoneTerm(
+                    func=_imitation_mdp.root_height_below_minimum,
+                    params={
+                        "minimum_height": float(args_cli.fall_height_m),
+                        "asset_cfg": SceneEntityCfg(
+                            "robot", body_names=FALL_TERMINATION_BODY_NAME
+                        ),
+                    },
+                ),
+            )
+            print(
+                f"[INFO] Injected {FALL_TERMINATION_NAME} "
+                f"({FALL_TERMINATION_BODY_NAME} height < "
+                f"{float(args_cli.fall_height_m):.2f} m) for M3 collection on a "
+                "SONIC env that nulls it.",
+                flush=True,
             )
         disabled_tracking_termination_terms = _disable_tracking_terminations(
             terminations
@@ -734,6 +860,10 @@ def main(
         base_env,
         list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
     )
+    keypoint_body_names = resolve_existing_body_names(
+        base_env,
+        list(getattr(env_cfg, "command_keypoint_body_names", G1_KEYPOINT5_BODY_NAMES)),
+    )
 
     agent = ALGORITHM_CLASS_MAP[args_cli.algorithm](env=env, config=agent_cfg)
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
@@ -742,10 +872,15 @@ def main(
         frozen_tracker = load_frozen_low_level_tracker(
             agent,
             checkpoint_path,
-            expected_input_keys=(
-                EE_POLICY_INPUT_KEYS
-                if args_cli.interface == "ee_trajectory"
-                else VANILLA_POLICY_INPUT_KEYS
+            # Derive the contract from the command space rather than hardcoding
+            # a per-interface choice: command_space_policy_input_keys is the one
+            # source of truth the tracker is actually built from, so a new
+            # command space cannot drift out of sync with this check. Verified
+            # identical to the previous hardcoded lists for both existing
+            # interfaces (single_frame_full_body == VANILLA_POLICY_INPUT_KEYS,
+            # single_frame_ee == EE_POLICY_INPUT_KEYS).
+            expected_input_keys=command_space_policy_input_keys(
+                low_level_command_space
             ),
             map_location=env_cfg.sim.device,
         )
@@ -897,6 +1032,7 @@ def main(
                     base_env,
                     interface=args_cli.interface,
                     ee_body_names=ee_body_names,
+                    keypoint_body_names=keypoint_body_names,
                 )
                 target, target_spec = flatten_command_terms(
                     args_cli.interface, command_terms
@@ -907,6 +1043,7 @@ def main(
                         base_env,
                         interface=args_cli.interface,
                         ee_body_names=ee_body_names,
+                        keypoint_body_names=keypoint_body_names,
                     ),
                 )
             if token_learner is not None or future_cvae_learner is not None:
@@ -1150,6 +1287,7 @@ def main(
                         sample_episode_id = episode_ids.index_select(
                             0, renew_env_ids_cpu
                         )
+                        sample_env_id = renew_env_ids_cpu
                         sample_motion_names = motion_names
                         sample_language = language_at_renew
                     else:
@@ -1172,10 +1310,10 @@ def main(
                         )
                         sample_traj_rank = traj_rank.index_select(0, save_row_indices)
                         sample_local_step = local_step.index_select(0, save_row_indices)
-                        sample_episode_id = episode_ids.index_select(
-                            0,
-                            renew_env_ids_cpu.index_select(0, save_row_indices),
+                        sample_env_id = renew_env_ids_cpu.index_select(
+                            0, save_row_indices
                         )
+                        sample_episode_id = episode_ids.index_select(0, sample_env_id)
                         sample_motion_names = [
                             motion_names[int(index)]
                             for index in save_row_indices.tolist()
@@ -1192,6 +1330,7 @@ def main(
                         demonstration_target=sample_demonstration_target,
                         trajectory_rank=sample_traj_rank,
                         episode_id=sample_episode_id,
+                        env_id=sample_env_id,
                         control_step=sample_local_step,
                         planner_step=torch.div(
                             sample_local_step,

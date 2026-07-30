@@ -34,6 +34,20 @@ INTERFACE_TERMS: dict[str, tuple[str, ...]] = {
         "expert_anchor_ori_b",
     ),
     "ee_trajectory": ("expert_ee_pos_b", "expert_ee_ori_b"),
+    # Reduced explicit interfaces. Both keep the same 9-value root as
+    # full_body_trajectory and shrink only the body/joint half:
+    #   root_qpos     29 joint positions (no velocities) -> 38/frame
+    #   root_points5   5 keypoint positions              -> 24/frame
+    "root_qpos": (
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+    ),
+    "root_points5": (
+        "expert_keypoint_pos_b",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+    ),
     "future_cvae": ("z",),
     "per_step_token_sequence": ("token_ids",),
 }

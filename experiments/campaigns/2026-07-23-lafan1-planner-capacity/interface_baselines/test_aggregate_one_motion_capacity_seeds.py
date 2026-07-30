@@ -65,6 +65,9 @@ def _capacity_summary(root: Path, seed: int, *, starts: list[int]) -> Path:
         json.dumps(
             {
                 "evaluation_starts": starts,
+                # Written by the scaling aggregator; the seeds aggregator derives
+                # which stages to report from it rather than assuming both exist.
+                "stages": ["demonstration_only", "rollout_finetuned"],
                 "oracles": {
                     "latent_skill": {"sha256": "latent"},
                     "full_body_trajectory": {"sha256": "explicit"},

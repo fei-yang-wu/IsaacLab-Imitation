@@ -154,6 +154,21 @@ G1_EE_BODY_NAMES: list[str] = [
     "right_wrist_yaw_link",
 ]
 
+# Sparse keypoint set for the ``root_points5`` command space: the four
+# end-effectors plus the pelvis, carried as POSITIONS ONLY in the anchor frame
+# (5 x 3 = 15) alongside the 9-value root pose. The pelvis is not redundant with
+# the torso_link anchor -- the waist joints separate them -- so it supplies the
+# torso/hip configuration a pure end-effector packet lacks. That omission is
+# what made the EE-only interface untrackable (replay floor 405 mm), which is
+# the deficiency HuMI reports adding the root repairs.
+G1_KEYPOINT5_BODY_NAMES: list[str] = [
+    "pelvis",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link",
+    "left_wrist_yaw_link",
+    "right_wrist_yaw_link",
+]
+
 G1_OBS_ANCHOR_BODY_NAME = "torso_link"
 
 
@@ -314,6 +329,31 @@ def _g1_expert_window_ee_obs_params() -> dict[str, object]:
     }
 
 
+def _g1_expert_keypoint_obs_params() -> dict[str, object]:
+    """Single-frame sparse-keypoint command params for the actor.
+
+    ``root_points5`` is the compressed explicit interface: 9 root values plus
+    5 keypoint positions = 24 per frame (240 for a 10-frame packet), against the
+    full-body packet's 67 per frame. Positions only -- no per-keypoint
+    orientation -- so the keypoints are point targets, not frames.
+    """
+    return {
+        "asset_cfg": SceneEntityCfg("robot"),
+        "reference_body_names": tuple(G1_KEYPOINT5_BODY_NAMES),
+        "anchor_body_name": G1_OBS_ANCHOR_BODY_NAME,
+    }
+
+
+def _g1_expert_window_keypoint_obs_params() -> dict[str, object]:
+    return {
+        "asset_cfg": SceneEntityCfg("robot"),
+        "reference_body_names": tuple(G1_KEYPOINT5_BODY_NAMES),
+        "anchor_body_name": G1_OBS_ANCHOR_BODY_NAME,
+        "past_steps": 0,
+        "future_steps": 0,
+    }
+
+
 def _g1_canonical_joint_obs_params() -> dict[str, object]:
     """Return the backend-independent policy joint ordering."""
     return {
@@ -388,6 +428,10 @@ class G1ObservationCfg:
         expert_ee_ori_b = ObsTerm(
             func=mdp.policy_expert_ee_ori_b,
             params=_g1_expert_ee_obs_params(),
+        )
+        expert_keypoint_pos_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_pos_b,
+            params=_g1_expert_keypoint_obs_params(),
         )
         base_lin_vel = ObsTerm(
             func=mdp.base_lin_vel, noise=Unoise(n_min=-0.5, n_max=0.5)
@@ -488,6 +532,13 @@ class G1ObservationCfg:
             func=mdp.expert_window_motion,
             params=_g1_expert_window_motion_obs_params(),
         )
+        # Joint positions only (29), no velocities. Present so the DiffSR macro
+        # state can be built over the root_qpos command space; unused unless
+        # `expert_macro_state_terms` selects it.
+        expert_motion_qpos = ObsTerm(
+            func=mdp.expert_window_motion_qpos,
+            params=_g1_expert_window_motion_obs_params(),
+        )
         expert_anchor_pos_b = ObsTerm(
             func=mdp.expert_window_anchor_pos_b,
             params=_g1_expert_window_anchor_obs_params(),
@@ -503,6 +554,10 @@ class G1ObservationCfg:
         expert_ee_ori_b = ObsTerm(
             func=mdp.expert_window_ee_ori_b,
             params=_g1_expert_window_ee_obs_params(),
+        )
+        expert_keypoint_pos_b = ObsTerm(
+            func=mdp.expert_window_keypoint_pos_b,
+            params=_g1_expert_window_keypoint_obs_params(),
         )
 
         def __post_init__(self):
@@ -1089,16 +1144,48 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # the reported evaluation MPJPE are the same quantity.
     mpjpe_metric_body_names: list[str] = G1_TRACKED_BODY_NAMES.copy()
     command_ee_body_names: list[str] = G1_EE_BODY_NAMES.copy()
+    command_keypoint_body_names: list[str] = G1_KEYPOINT5_BODY_NAMES.copy()
     command_observation_source: str = "reference"
     # The chunk adapter redirects only the three policy command tensors while
     # preserving the vanilla actor keys and 67-D command contract.
     policy_command_mode: str = "reference"
+    # Optional whitelist of policy-group COMMAND terms to keep. The observation
+    # manager computes every term in a group whether or not the actor reads it,
+    # and each command term whose body set differs from the others forces its own
+    # expert-window build. Measured at 1024 envs on Newton: keeping all four
+    # reduced-interface command terms costs 39.5 ms/step versus 36.6 ms with them
+    # dropped -- about 7% of wall clock, or ~3.5 h on a two-day job, paid by every
+    # run including those that read none of them.
+    #
+    # None (the default) keeps every term, so existing runs are unaffected. Set it
+    # to the command terms the active command space actually consumes, e.g.
+    #   env.command_observation_terms='[expert_keypoint_pos_b,expert_anchor_pos_b,expert_anchor_ori_b]'
+    # Pruning is numerically neutral for the actor: these terms carry no
+    # observation noise, so removing them consumes no RNG and the retained terms
+    # are byte-identical.
+    command_observation_terms: list[str] | None = None
+    # Expert-window terms making up one DiffSR macro-state frame. None keeps the
+    # full-body default (expert_motion 58 + anchor_pos 3 + anchor_ori 6 = 67 ->
+    # 670 per 10-frame window, byte-identical to the full-body packet). Set to
+    # ["expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b"] for a
+    # GR00T-style whole-body qpos+root latent space: 29+3+6 = 38 -> 380,
+    # byte-identical to the root_qpos packet. The skill encoder's input width
+    # follows from this, so changing it invalidates any existing encoder.
+    expert_macro_state_terms: list[str] | None = None
 
     def _sync_expert_window_observation_params(self) -> None:
         past_steps = int(self.latent_patch_past_steps)
         future_steps = int(self.latent_patch_future_steps)
+        # Every term in the expert_window group must appear here. A term left
+        # out keeps its declaration-time past/future steps (0/0 -> a 1-step
+        # request) while the rest follow the task's window, and the observation
+        # manager evaluates the whole group regardless of which terms the macro
+        # state selects -- so an unsynced term raises "Planner command window
+        # mismatch" on any task with a multi-step window, even when nothing
+        # reads it.
         for term in (
             self.observations.expert_window.expert_motion,
+            self.observations.expert_window.expert_motion_qpos,
             self.observations.expert_window.expert_anchor_pos_b,
             self.observations.expert_window.expert_anchor_ori_b,
         ):
@@ -1111,6 +1198,12 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             term.params["past_steps"] = past_steps
             term.params["future_steps"] = future_steps
             term.params["reference_body_names"] = tuple(self.command_ee_body_names)
+        keypoint_term = self.observations.expert_window.expert_keypoint_pos_b
+        keypoint_term.params["past_steps"] = past_steps
+        keypoint_term.params["future_steps"] = future_steps
+        keypoint_term.params["reference_body_names"] = tuple(
+            self.command_keypoint_body_names
+        )
 
     def __post_init__(self) -> None:
         super().__post_init__()  # type: ignore
@@ -1419,12 +1512,62 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
         self._normalize_sequence_overrides()
         self._validate_reset_schedule()
         self._resolve_manifest_config()
+        self._prune_command_observation_terms()
+
+    def _prune_command_observation_terms(self) -> None:
+        """Drop policy-group command terms outside ``command_observation_terms``.
+
+        No-op when the field is None, which is the default, so this cannot change
+        an existing run. See the field's comment for why it exists.
+        """
+        if self.command_observation_terms is None:
+            return
+        keep = {str(name) for name in self.command_observation_terms}
+        unknown = keep - set(_PRUNABLE_COMMAND_TERM_NAMES)
+        if unknown:
+            raise ValueError(
+                "command_observation_terms names terms that are not policy "
+                f"command terms: {sorted(unknown)}. Expected a subset of "
+                f"{sorted(_PRUNABLE_COMMAND_TERM_NAMES)}."
+            )
+        if not keep:
+            raise ValueError(
+                "command_observation_terms is empty; the actor would receive no "
+                "command at all. Leave it None to keep every term."
+            )
+        for term_name in _PRUNABLE_COMMAND_TERM_NAMES:
+            if term_name not in keep:
+                setattr(self.observations.policy, term_name, None)
+
+
+# Policy-group command terms that `command_observation_terms` may retain. Only
+# command terms are listed: proprioception is read by every command space, so
+# pruning it would silently change the actor contract rather than save work.
+_PRUNABLE_COMMAND_TERM_NAMES: tuple[str, ...] = (
+    "expert_motion",
+    "expert_motion_qpos",
+    "expert_anchor_pos_b",
+    "expert_anchor_ori_b",
+    "expert_ee_pos_b",
+    "expert_ee_ori_b",
+    "expert_keypoint_pos_b",
+)
 
 
 # Anchor-relative observation terms per group on the vanilla observation
 # surface (no latent_command / expert_goal groups there).
 _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
-    "policy": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+    # The keypoint term must follow the anchor body: root_points5's keypoints
+    # and its root pose are one packet, re-expressed together by a single
+    # anchor-frame transform. (The policy-group EE terms are deliberately not
+    # listed: the abandoned EE tracker was trained with them pinned to
+    # torso_link, and re-anchoring them now would break that checkpoint's
+    # command contract.)
+    "policy": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_keypoint_pos_b",
+    ),
     "critic": (
         "expert_anchor_pos_b",
         "expert_anchor_ori_b",
@@ -1437,6 +1580,7 @@ _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
         "expert_anchor_ori_b",
         "expert_ee_pos_b",
         "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
     ),
     "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
 }

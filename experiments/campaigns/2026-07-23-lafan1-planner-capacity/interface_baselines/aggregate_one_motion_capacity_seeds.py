@@ -13,9 +13,22 @@ from pathlib import Path
 from typing import Any
 
 
-INTERFACES = ("latent_skill", "full_body_trajectory", "ee_trajectory")
+# Ordered by packet size so tables read as a compression ladder. Only the
+# interfaces present in every per-seed payload become active.
+INTERFACES = (
+    "latent_skill",
+    "full_body_trajectory",
+    "root_qpos",
+    "root_points5",
+    "ee_trajectory",
+)
 # Explicit (non-latent) interfaces paired against the latent interface.
-EXPLICIT_INTERFACES = ("full_body_trajectory", "ee_trajectory")
+EXPLICIT_INTERFACES = (
+    "full_body_trajectory",
+    "root_qpos",
+    "root_points5",
+    "ee_trajectory",
+)
 CORE_METRICS = (
     "tracking_mpjpe_mm",
     "root_pos_xyz_error_m",
@@ -123,10 +136,34 @@ def aggregate(
                 (row["interface"], row["stage"])
             )
             rows.append(row)
-    expected_members = {
-        (interface, stage)
-        for interface in active_interfaces
+    # Stages are derived from the payloads, not assumed. A DEMO_ONLY grid has
+    # only `demonstration_only`, and requiring `rollout_finetuned` there would
+    # reject a complete run for lacking a stage the protocol never produced.
+    missing_stage_key = [
+        str(path) for path, payload in zip(inputs, payloads) if "stages" not in payload
+    ]
+    if missing_stage_key:
+        # Distinguish a schema problem from a genuine stage mismatch: without
+        # this, an aggregate written by an older scaling run reads as "no stages
+        # in common" and the error blames the protocol instead of the input.
+        raise ValueError(
+            "Per-seed payloads are missing the 'stages' key, so the stages "
+            "present cannot be determined. Re-run "
+            "aggregate_one_motion_capacity_scaling.py to regenerate them: "
+            f"{missing_stage_key}"
+        )
+    active_stages = tuple(
+        stage
         for stage in ("demonstration_only", "rollout_finetuned")
+        if all(stage in payload.get("stages", []) for payload in payloads)
+    )
+    if not active_stages:
+        raise ValueError(
+            "No stage is present in every per-seed payload; got "
+            f"{[payload.get('stages') for payload in payloads]}"
+        )
+    expected_members = {
+        (interface, stage) for interface in active_interfaces for stage in active_stages
     }
     incomplete = {
         str(key): sorted(expected_members - members)

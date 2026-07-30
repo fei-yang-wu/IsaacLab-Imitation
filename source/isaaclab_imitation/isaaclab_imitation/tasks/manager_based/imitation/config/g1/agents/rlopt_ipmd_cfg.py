@@ -12,10 +12,6 @@ VANILLA_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "last_action"),
 ]
 
-# Ordered actor contract for the EE-chunk tracker (126 = 12 + 24 + 3 + 29 + 29
-# + 29). The command halves come from the ``expert_window`` group rather than
-# ``policy``; under ee_chunk_current_slot those terms return the phase-aligned
-# slot of the held packet, so the tracker still sees a single 36-value frame.
 # Heracles-style 38D: 29 joint positions + 3D root position + 6D root
 # orientation, per frame. No joint velocities -- the controller is trained on
 # this space, so they are absent rather than reconstructed.
@@ -25,11 +21,25 @@ ROOT_QPOS_COMMAND_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_anchor_ori_b"),
 ]
 
+# HuMI-style sparse keypoints, 24D per frame: 5 keypoint positions (pelvis plus
+# the four end-effectors) + 3D root position + 6D root orientation. The most
+# compressed explicit interface in the study -- and the one that tests whether
+# adding the root repairs the deficiency that made EE-only untrackable.
+ROOT_POINTS5_COMMAND_KEYS: list[tuple[str, str]] = [
+    ("policy", "expert_keypoint_pos_b"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
+]
+
 SINGLE_FRAME_EE_COMMAND_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_ee_pos_b"),
     ("policy", "expert_ee_ori_b"),
 ]
 
+# Ordered actor contract for the EE-chunk tracker (126 = 12 + 24 + 3 + 29 + 29
+# + 29). The command halves come from the ``expert_window`` group rather than
+# ``policy``; under ee_chunk_current_slot those terms return the phase-aligned
+# slot of the held packet, so the tracker still sees a single 36-value frame.
 EE_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_ee_pos_b"),
     ("policy", "expert_ee_ori_b"),
@@ -84,6 +94,7 @@ COMMAND_SPACE_ALIASES: dict[str, str] = {
     "single_frame_full_body": "single_frame_full_body",
     "single_frame_ee": "single_frame_ee",
     "root_qpos": "root_qpos",
+    "root_points5": "root_points5",
     "single_frame": "single_frame_full_body",
     "vanilla": "single_frame_full_body",
     "full_state": "single_frame_full_body",
@@ -204,6 +215,8 @@ def command_space_policy_input_keys(command_space: str) -> list[tuple[str, str]]
         return list(SINGLE_FRAME_EE_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
     if command_space == "root_qpos":
         return list(ROOT_QPOS_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
+    if command_space == "root_points5":
+        return list(ROOT_POINTS5_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
     raise AssertionError(f"Unhandled command space: {command_space}")
 
 
@@ -219,6 +232,8 @@ def command_space_critic_input_keys(command_space: str) -> list[tuple[str, str]]
         return list(SINGLE_FRAME_EE_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
     if command_space == "root_qpos":
         return list(ROOT_QPOS_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
+    if command_space == "root_points5":
+        return list(ROOT_POINTS5_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
     raise AssertionError(f"Unhandled command space: {command_space}")
 
 
@@ -584,3 +599,38 @@ class G1ImitationLatentPerStepVQRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig
         self.ipmd.latent_learning.train_posterior_through_policy = False
         self.ipmd.latent_learning.recon_coeff = 1.0
         self.ipmd.latent_learning.action_recon_coeff = 0.0
+
+
+@configclass
+class G1ImitationLatentSonicFSQRLOptIPMDConfig(
+    G1ImitationLatentPerStepVQRLOptIPMDConfig
+):
+    """SONIC-motivated per-step FSQ token interface.
+
+    Same per-step, ten-token packet contract as the parent, with SONIC's own
+    parameter choices substituted for the as-built ones. Three differences, each
+    taken from ``gear_sonic``:
+
+    * ``quantizer='fsq'`` at 64 dims x 32 levels (~320 bits per command), i.e.
+      ``all_mlp_v1.yaml``'s tokens of shape ``(2, 32)`` at ``num_fsq_levels=32``.
+      The parent's ``vq_ema`` at ``codebook_size=512`` is only 9 bits, which the
+      latent-learning ablation plan already tags as a lower-capacity diagnostic
+      that "cannot support a capacity-matched conclusion".
+    * ``recon_coeff=0.01``. In SONIC the reconstruction decoder is an *auxiliary*
+      loss at 0.01 (``aux_losses/universal_token/g1_recon_and_all_latent.yaml``),
+      not the primary objective the parent's 1.0 makes it.
+    * ``train_posterior_through_policy=True``. SONIC's encoder *is* the actor
+      backbone and takes full policy gradient. This is the axis its paper asserts
+      but never ablates, and the one our 2026-07-22 hold isolation identified as
+      the reason a frozen encoder collapses under per-step renewal
+      (ep_len 2.76 vs 46.38 at 30M frames).
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.ipmd.latent_learning.quantizer = "fsq"
+        # 64 dims x 32 levels = 2**320; FSQQuantizer returns per-dim level
+        # indices because a flat code index would overflow int64.
+        self.ipmd.latent_learning.fsq_levels = [32] * 64
+        self.ipmd.latent_learning.train_posterior_through_policy = True
+        self.ipmd.latent_learning.recon_coeff = 0.01

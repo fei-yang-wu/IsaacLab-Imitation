@@ -216,6 +216,7 @@ def build_planner_sample(
     episode_id: torch.Tensor | int,
     control_step: torch.Tensor | int,
     planner_step: torch.Tensor | int,
+    env_id: torch.Tensor | int | None = None,
     motion_names: Sequence[str],
     metadata: Mapping[str, Any],
     language_embedding: torch.Tensor | None = None,
@@ -288,6 +289,18 @@ def build_planner_sample(
     episode = _row_vector(episode_id, name="episode_id", rows=rows)
     control = _row_vector(control_step, name="control_step", rows=rows)
     planner = _row_vector(planner_step, name="planner_step", rows=rows)
+    # `episode_id` counts resets per environment, so it is NOT a trajectory
+    # identifier on its own: env 0 episode 1 and env 3 episode 1 are different
+    # rollouts that happen to share a number. A trajectory-wise train/val split
+    # needs the (env_id, episode_id) pair. Both are stored; consumers combine
+    # them. No single uid is derived here because the shards are written
+    # independently and any per-shard encoding would collide across files.
+    # -1 marks a writer that predates this field.
+    env = _row_vector(
+        torch.full((rows,), -1, dtype=torch.long) if env_id is None else env_id,
+        name="env_id",
+        rows=rows,
+    )
     record: dict[str, Any] = {
         "causal_state_history": causal,
         "demonstration_state_history": demonstration,
@@ -295,6 +308,7 @@ def build_planner_sample(
         "demonstration_target": demonstration_target_cpu,
         "trajectory_rank": traj_rank,
         "episode_id": episode,
+        "env_id": env,
         "control_step": control,
         "planner_step": planner,
         "motion_name": names,

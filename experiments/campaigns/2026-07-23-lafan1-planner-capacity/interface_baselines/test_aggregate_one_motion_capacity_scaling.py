@@ -27,9 +27,13 @@ def _summary(starts: list[int], scale: float = 1.0) -> dict:
 
 
 def _target_dim(interface: str) -> int:
-    return {"latent_skill": 256, "full_body_trajectory": 670, "ee_trajectory": 360}[
-        interface
-    ]
+    return {
+        "latent_skill": 256,
+        "full_body_trajectory": 670,
+        "ee_trajectory": 360,
+        "root_qpos": 380,
+        "root_points5": 240,
+    }[interface]
 
 
 def _config(interface: str, stage: str) -> dict:
@@ -56,6 +60,8 @@ _ORACLE_SCALE = {
     "latent_skill": 0.5,
     "full_body_trajectory": 0.25,
     "ee_trajectory": 0.2,
+    "root_qpos": 0.4,
+    "root_points5": 0.3,
 }
 
 
@@ -125,9 +131,11 @@ def test_aggregate_records_both_stages_and_oracle_normalization(tmp_path: Path) 
 
 
 def test_aggregate_over_available_interfaces(tmp_path: Path) -> None:
-    # Latent + FB only (EE oracle absent) aggregates the two present interfaces.
+    # Aggregation covers whichever interfaces have an oracle, not a fixed set:
+    # a partial grid must still produce a table for the interfaces present.
     scaling, oracle_paths = _tree(tmp_path)
-    oracle_paths.pop("ee_trajectory")
+    for absent in set(INTERFACES) - {"latent_skill", "full_body_trajectory"}:
+        oracle_paths.pop(absent)
     payload = aggregate(scaling_root=scaling, oracle_paths=oracle_paths, sizes=["tiny"])
     assert set(payload["interfaces"]) == {"latent_skill", "full_body_trajectory"}
     assert len(payload["rows"]) == 2 * 2  # 2 interfaces x 2 stages
@@ -135,8 +143,8 @@ def test_aggregate_over_available_interfaces(tmp_path: Path) -> None:
 
 def test_aggregate_requires_latent_and_one_explicit(tmp_path: Path) -> None:
     scaling, oracle_paths = _tree(tmp_path)
-    oracle_paths.pop("ee_trajectory")
-    oracle_paths.pop("full_body_trajectory")  # latent only
+    for absent in set(INTERFACES) - {"latent_skill"}:
+        oracle_paths.pop(absent)
     with pytest.raises(ValueError, match="at least one explicit"):
         aggregate(scaling_root=scaling, oracle_paths=oracle_paths, sizes=["tiny"])
 

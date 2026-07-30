@@ -77,6 +77,7 @@ parser.add_argument(
         "gumbel_multicat",
         "gumbel",
         "fsq",
+        "sonic_fsq",
         "vq",
     ),
     help=(
@@ -121,6 +122,19 @@ parser.add_argument(
     nargs="+",
     default=[8, 8, 8, 5, 5],
     help="Per-dim levels for --latent_mode fsq (codebook size = product).",
+)
+parser.add_argument(
+    "--sonic_fsq_levels",
+    type=int,
+    nargs="+",
+    default=[32] * 64,
+    help=(
+        "Per-dim levels for --latent_mode sonic_fsq. Default is the SONIC-matched "
+        "token space (64 dims x 32 levels ~= 320 bits per command, i.e. gear_sonic "
+        "tokens of shape (2, 32) at num_fsq_levels=32). This mode publishes the "
+        "quantizer output directly as the command, so --z_dim must equal the "
+        "number of levels given here."
+    ),
 )
 parser.add_argument(
     "--encoder_hidden_dims",
@@ -394,6 +408,7 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         gumbel_tau_anneal_iters=args_cli.gumbel_tau_anneal_iters,
         gumbel_hard=args_cli.gumbel_hard,
         fsq_levels=tuple(args_cli.fsq_levels),
+        sonic_fsq_levels=tuple(args_cli.sonic_fsq_levels),
         **(
             {"encoder_hidden_dims": tuple(args_cli.encoder_hidden_dims)}
             if args_cli.encoder_hidden_dims
