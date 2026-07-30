@@ -202,3 +202,5 @@ test now enforces that every `experiments/` script is classified.
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_enc380_h30_temporal_ensemble.sh` | workflow | Runs the H30 temporal-ensemble diagnostic over reused enc380 H10 rows. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_h30_temporal_ensemble_ice.sh` | guarded launcher | Submits the H30 temporal-ensemble diagnostic to ICE. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/resubmit_enc380_root_route_ice.sh` | guarded launcher | Resubmits the enc380 root+qpos route cells after a partial run. |
+| `experiments/campaigns/2026-07-30-det-latent-e2e/run.sh` | front door | Dated pin of the deterministic-latent end-to-end chain; wraps `imitation_experiments.pipeline.run_latent_e2e` with the campaign config. |
+| `source/imitation_experiments/imitation_experiments/pipeline/run_latent_e2e.py` | workflow | Config-driven conductor for the latent chain: pretrain, low-level, binding gate, collect, merge, planner training, offline and closed-loop eval. |
