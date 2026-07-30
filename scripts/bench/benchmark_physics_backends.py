@@ -17,7 +17,7 @@ Run from the repo root through Pixi:
     pixi run -e isaaclab bench-backends
 
     # Custom
-    pixi run -e isaaclab python scripts/benchmark_physics_backends.py \
+    pixi run -e isaaclab python scripts/bench/benchmark_physics_backends.py \
         --backends physx newton_mjwarp --num_envs 4096 --iterations 102
 """
 

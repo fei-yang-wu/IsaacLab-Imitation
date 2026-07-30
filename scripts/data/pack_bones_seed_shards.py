@@ -15,7 +15,7 @@ Outputs under ``--out_dir``:
 Deterministic: motions are packed in sorted filename order, so identical inputs
 produce identical shards.
 
-    pixi run python scripts/pack_bones_seed_shards.py \
+    pixi run python scripts/data/pack_bones_seed_shards.py \
         --npz_dir ~/Storage/bones_seed_full/npz/g1 \
         --out_dir ~/Storage/bones_seed_full/hf \
         --shard_bytes 1000000000

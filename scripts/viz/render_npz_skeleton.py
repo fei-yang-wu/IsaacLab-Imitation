@@ -9,7 +9,7 @@ boot, so it never contends with a running conversion.
 
 Run in the isaaclab Pixi env (it has matplotlib + imageio):
 
-    pixi run -e isaaclab python scripts/render_npz_skeleton.py \
+    pixi run -e isaaclab python scripts/viz/render_npz_skeleton.py \
         --npz ~/Storage/bones_seed_full/quality_videos/npz/Loop_Forward_Walk_001__A018.npz \
         --out ~/Storage/bones_seed_full/quality_videos/Loop_Forward_Walk_skeleton.mp4
 """

@@ -122,7 +122,7 @@ experiments/campaigns/2026-07-23-bones-phase5-language-local10/render_reference_
 SUBSET="0 2 8" .../render_reference_comparison.sh   # only those goal indices
 ```
 
-Wraps `scripts/compare_policy_reference.py` (env 0 = reference replay, env 1 =
+Wraps `scripts/viz/compare_policy_reference.py` (env 0 = reference replay, env 1 =
 policy). `--video_length 500` forces the full horizon; terminations are
 disabled by the comparison script. Output under
 `<output_root>/compare_reference_vs_planner_<planner>/rank_<i>_<goal>/` plus a

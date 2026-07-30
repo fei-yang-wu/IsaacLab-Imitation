@@ -3,7 +3,7 @@
 """Benchmark Isaac Lab 3.0 camera renderers on the G1 scene.
 
 The G1 imitation tasks are state-based (no cameras), so the training
-benchmark (`scripts/benchmark_physics_backends.py`) is renderer-independent.
+benchmark (`scripts/bench/benchmark_physics_backends.py`) is renderer-independent.
 This script measures the camera-renderer axis in isolation: it spawns the G1
 robot scene with a tiled RGB camera per environment, steps the simulation,
 and reports steps/sec and rendered frames/sec for each renderer backend.
@@ -20,7 +20,7 @@ Run from the repo root through Pixi:
 
     pixi run -e isaaclab bench-renderers
     # or custom:
-    pixi run -e isaaclab python scripts/benchmark_renderers.py \
+    pixi run -e isaaclab python scripts/bench/benchmark_renderers.py \
         --renderers none rtx newton_warp --num_envs 256 --steps 200
 
 Each renderer runs in its own subprocess (one Isaac Sim app per run); a JSON

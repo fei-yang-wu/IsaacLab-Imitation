@@ -49,8 +49,8 @@ comparison surface.
 
 - `ImitationRLEnv.get_offline_dataset_mapper_params()`
 - default Unitree WBT config on the G1 bilinear agent config
-- `scripts/preview_unitree_lerobot_episode.py`
-- `scripts/replay_unitree_lerobot_reference.py`
+- `scripts/viz/preview_unitree_lerobot_episode.py`
+- `scripts/viz/replay_unitree_lerobot_reference.py`
 
 ## Tensor Contract
 
@@ -185,7 +185,7 @@ under-validated mapper.
 Use the Isaac-free cache probe before expensive training:
 
 ```bash
-pixi run -e lerobot python scripts/validate_lerobot_streaming_cache.py \
+pixi run -e lerobot python scripts/audit/validate_lerobot_streaming_cache.py \
     --repo_ids_file data/unitree/g1_wbt_lerobot_repos.json \
     --max_episodes_per_repo 1 \
     --min_ready_transitions 32 \
@@ -199,7 +199,7 @@ pixi run -e lerobot python scripts/validate_lerobot_streaming_cache.py \
 Renderer-free dataset preview works without Isaac Sim:
 
 ```bash
-pixi run -e lerobot python scripts/preview_unitree_lerobot_episode.py \
+pixi run -e lerobot python scripts/viz/preview_unitree_lerobot_episode.py \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
     --episode_index 0 \
     --max_frames 180 \
@@ -216,7 +216,7 @@ tracking quality:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py \
+pixi run -e isaaclab-lerobot python scripts/viz/replay_unitree_lerobot_reference.py \
     --headless \
     --device cuda:0 \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
@@ -234,7 +234,7 @@ raise it deliberately when you want interpolation to a faster control rate:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py \
+pixi run -e isaaclab-lerobot python scripts/viz/replay_unitree_lerobot_reference.py \
     --headless \
     --device cuda:0 \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
@@ -268,7 +268,7 @@ For multi-episode conversion, the batch converter also accepts LeRobot jobs:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-pixi run -e isaaclab-lerobot python scripts/batch_csv_to_npz.py \
+pixi run -e isaaclab-lerobot python scripts/data/batch_csv_to_npz.py \
     --headless \
     --device cuda:0 \
     --jobs_json data/unitree/lerobot_jobs.json \
@@ -280,7 +280,7 @@ same target/action order used by the G1 env. Build a tracking manifest from
 the generated NPZ folder with:
 
 ```bash
-pixi run python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/data/write_lafan1_npz_manifest.py \
     --npz_dir data/unitree/npz \
     --manifest_path data/unitree/manifests/g1_wbt_pillow_30hz.json \
     --dataset_name unitree_lerobot
@@ -323,7 +323,7 @@ After re-image, verify in this order:
 ```bash
 pixi run -e isaaclab python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 pixi run -e isaaclab python -c "from isaacsim import SimulationApp; app = SimulationApp({'headless': True}); print('ok'); app.close()"
-TERM=xterm pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py --headless --device cuda:0 --no_video --max_frames 4
+TERM=xterm pixi run -e isaaclab-lerobot python scripts/viz/replay_unitree_lerobot_reference.py --headless --device cuda:0 --no_video --max_frames 4
 ```
 
 Only after those pass should video replay or full Isaac training be treated as

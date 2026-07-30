@@ -10,15 +10,15 @@ By default this script downloads the Unitree G1 subset from:
 https://huggingface.co/datasets/lvhaidong/LAFAN1_Retargeting_Dataset
 
 It can also optionally convert the downloaded CSV files into NPZ motions and
-generate a manifest JSON by delegating to ``scripts/prepare_lafan1_from_csv.py``.
+generate a manifest JSON by delegating to ``scripts/data/prepare_lafan1_from_csv.py``.
 
 Examples:
-    pixi run python scripts/setup_lafan1_dataset.py
+    pixi run python scripts/data/setup_lafan1_dataset.py
 
-    pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
+    pixi run -e isaaclab python scripts/data/setup_lafan1_dataset.py \
         --prepare-npz --headless
 
-    pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
+    pixi run -e isaaclab python scripts/data/setup_lafan1_dataset.py \
         --prepare-npz --headless --auto_trim_mode g1_shoulder_roll
 """
 

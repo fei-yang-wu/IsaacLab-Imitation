@@ -11,12 +11,12 @@ Examples (run from the repository root):
 
 .. code-block:: bash
 
-    pixi run -e isaaclab python scripts/diagnose_g1_dynamics.py \
+    pixi run -e isaaclab python scripts/bench/diagnose_g1_dynamics.py \
         --task Isaac-Imitation-G1-Latent-v0 --num_envs 128 --steps 500 \
         --assert-kitless physics=newton_mjwarp \
         env.lafan1_manifest_path=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
 
-    pixi run -e isaaclab python scripts/diagnose_g1_dynamics.py \
+    pixi run -e isaaclab python scripts/bench/diagnose_g1_dynamics.py \
         --task Isaac-Imitation-G1-Latent-v0 --num_envs 128 --steps 500 \
         physics=physx \
         env.lafan1_manifest_path=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json

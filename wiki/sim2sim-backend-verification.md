@@ -61,23 +61,23 @@ pinned slot 3 is `left_hip_roll_joint`. Under PhysX the same slot holds
 
 ## Reproducing the audit
 
-`scripts/dump_backend_index_contract.py` dumps every resolved joint/body index,
+`scripts/audit/dump_backend_index_contract.py` dumps every resolved joint/body index,
 the action offset/scale, and all observation term widths, then diffs two
 backends and classifies each term as a correct remap, a wildcard selection, or
 a live-order leak.
 
 ```bash
-pixi run -e isaaclab python scripts/dump_backend_index_contract.py \
+pixi run -e isaaclab python scripts/audit/dump_backend_index_contract.py \
     --task Isaac-Imitation-G1-Latent-Strict-v0 --num_envs 2 --headless \
     --output logs/index_contract/newton.json physics=newton_mjwarp \
     env.lafan1_manifest_path=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
 
-OMNI_KIT_ACCEPT_EULA=YES pixi run -e isaaclab python scripts/dump_backend_index_contract.py \
+OMNI_KIT_ACCEPT_EULA=YES pixi run -e isaaclab python scripts/audit/dump_backend_index_contract.py \
     --task Isaac-Imitation-G1-Latent-Strict-v0 --num_envs 2 --headless \
     --output logs/index_contract/physx.json physics=physx \
     env.lafan1_manifest_path=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
 
-pixi run -e isaaclab python scripts/dump_backend_index_contract.py --compare \
+pixi run -e isaaclab python scripts/audit/dump_backend_index_contract.py --compare \
     logs/index_contract/newton.json logs/index_contract/physx.json
 ```
 
@@ -150,7 +150,7 @@ The remaining suspects, still unquantified:
    (`envs/imitation_rl_env.py`) reorder their joint blocks through the new
    `_pinned_joint_ids()` helper, so the recorded planner frame no longer mixes
    live-order joint state with a pinned `last_action`.
-4. `scripts/batch_csv_to_npz.py` applied the SDK-to-articulation scatter
+4. `scripts/data/batch_csv_to_npz.py` applied the SDK-to-articulation scatter
    **twice** (4f054db added it, e3ebd2b re-added an identical copy). It is a
    permutation, not an involution, so the second application moved 27 of 29
    joints while `joint_names` still claimed the correct order. Live from

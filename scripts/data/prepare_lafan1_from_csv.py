@@ -13,13 +13,13 @@ Workflow:
 4) Write one manifest JSON consumable by ImitationG1LafanTrackEnvCfg.
 
 Example:
-    pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
+    pixi run -e isaaclab python scripts/data/prepare_lafan1_from_csv.py \
       --csv_dir /abs/path/csv_motions \
       --npz_dir /abs/path/npz_motions \
       --manifest_path /abs/path/g1_lafan1_manifest.json \
       --recursive --headless
 
-    pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
+    pixi run -e isaaclab python scripts/data/prepare_lafan1_from_csv.py \
       --csv_dir /abs/path/csv_motions \
       --npz_dir /abs/path/npz_motions \
       --manifest_path /abs/path/g1_lafan1_manifest.json \

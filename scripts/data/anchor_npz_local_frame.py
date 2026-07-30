@@ -15,7 +15,7 @@ because a constant XY translation leaves them invariant. Joint-space fields and
 
 Run from the repo root (default environment, no Isaac needed):
 
-    pixi run python scripts/anchor_npz_local_frame.py --npz_dir data/bones_seed_100/npz/g1
+    pixi run python scripts/data/anchor_npz_local_frame.py --npz_dir data/bones_seed_100/npz/g1
 """
 
 from __future__ import annotations
