@@ -350,7 +350,8 @@ def stage_aggregate(cfg: DictConfig, interfaces: list[str], _ckpts: object) -> N
         input_args += ["--input", str(path)]
     command = [
         sys.executable,
-        str(aggregators / "aggregate_one_motion_capacity_seeds.py"),
+        "-m",
+        "imitation_experiments.capacity.aggregate_one_motion_capacity_seeds",
         *input_args,
         "--min_seeds",
         str(len(cfg.grid.seeds)),
