@@ -285,6 +285,30 @@ parser.add_argument(
     help="Interface the --packet_planner_checkpoint must declare.",
 )
 parser.add_argument(
+    "--packet_prediction_horizon_steps",
+    type=int,
+    default=0,
+    help=(
+        "Explicit planner prediction horizon. Zero uses the frozen encoder's "
+        "native H10 input. Longer horizons still execute H10 per renewal."
+    ),
+)
+parser.add_argument(
+    "--packet_temporal_ensemble",
+    choices=("none", "exponential"),
+    default="none",
+    help=(
+        "For a prediction horizon longer than H10, either execute the first ten "
+        "and discard the rest, or ensemble aligned overlapping predictions."
+    ),
+)
+parser.add_argument(
+    "--packet_temporal_ensemble_decay",
+    type=float,
+    default=0.5,
+    help="Non-negative exponential age decay for overlapping packet predictions.",
+)
+parser.add_argument(
     "--allow_random_reset",
     action="store_true",
     default=False,
@@ -1771,9 +1795,12 @@ def main(
                 f"Packet planner targets {packet_spec.interface!r} but "
                 f"--packet_interface is {args_cli.packet_interface!r}."
             )
+        packet_prediction_horizon = int(args_cli.packet_prediction_horizon_steps)
+        if packet_prediction_horizon <= 0:
+            packet_prediction_horizon = int(trainer.horizon_steps)
         packet_layout = PacketLayout.from_target_spec(
             packet_spec,
-            packet_frames=int(trainer.horizon_steps),
+            packet_frames=packet_prediction_horizon,
         )
 
         def _packet_causal_state(env_ids: Tensor) -> Tensor:
@@ -1817,6 +1844,8 @@ def main(
             z_noise_alpha=float(args_cli.z_noise_alpha),
             noise_seed=int(args_cli.noise_seed),
             noise_reference=packet_noise_reference,
+            temporal_ensemble_mode=str(args_cli.packet_temporal_ensemble),
+            temporal_ensemble_decay=float(args_cli.packet_temporal_ensemble_decay),
         )
         packet_encoder_provenance = {
             "packet_source": str(args_cli.packet_source),
@@ -1824,9 +1853,16 @@ def main(
             "packet_planner_sha256": _file_sha256(packet_planner_path),
             "packet_interface": str(packet_spec.interface),
             "packet_target_dim": int(packet_spec.target_dim),
-            "encoder_input_width": packet_layout.packet_width,
-            "packet_frames": packet_layout.packet_frames,
+            "encoder_input_width": int(trainer.horizon_steps)
+            * packet_layout.frame_width,
+            "packet_frames": int(trainer.horizon_steps),
+            "planner_prediction_frames": packet_layout.packet_frames,
+            "planner_prediction_width": packet_layout.packet_width,
             "packet_term_widths": list(packet_layout.term_widths),
+            "packet_temporal_ensemble": str(args_cli.packet_temporal_ensemble),
+            "packet_temporal_ensemble_decay": float(
+                args_cli.packet_temporal_ensemble_decay
+            ),
         }
         print(
             f"[INFO] BB1: {packet_spec.interface} planner "

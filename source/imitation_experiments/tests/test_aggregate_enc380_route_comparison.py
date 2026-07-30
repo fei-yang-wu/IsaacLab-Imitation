@@ -6,11 +6,30 @@ from pathlib import Path
 import pytest
 
 from imitation_experiments.capacity.aggregate_enc380_route_comparison import METRICS, aggregate
+from imitation_experiments.capacity.enc380_capacity_grid import (
+    PLANNER_BATCH_SIZE,
+    PLANNER_MICRO_BATCH_BY_SIZE,
+    PLANNER_UPDATES_BY_SIZE,
+    ROUTE_TASK_COUNT,
+    decode_route_task,
+    planner_dir_name,
+)
 
 
 def _write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_route_task_grid_gives_each_pair_two_independent_jobs() -> None:
+    tasks = [decode_route_task(index) for index in range(ROUTE_TASK_COUNT)]
+    assert len(tasks) == 24
+    assert tasks[0] == ("walk1_subject1", "tiny", 0, "root_qpos")
+    assert tasks[1] == ("walk1_subject1", "tiny", 0, "latent_skill")
+    assert tasks[-2:] == [
+        ("walk1_subject1", "large", 2, "root_qpos"),
+        ("walk1_subject1", "large", 2, "latent_skill"),
+    ]
 
 
 def _summary(route: str, planner: Path, *, publishes: int) -> dict:
@@ -103,7 +122,7 @@ def _study(tmp_path: Path) -> Path:
     )
     point = root / "motions/motion_a/capacity/medium/seed0"
     for stage in ("oracle_trained",):
-        planner_name = "planner_oracle"
+        planner_name = planner_dir_name("medium")
         samples = 5000
         for route, target_dim, parameters in (
             ("root_qpos", 380, 1_100_000),
@@ -111,7 +130,7 @@ def _study(tmp_path: Path) -> Path:
         ):
             route_root = point / "matched" / route
             planner_dir = route_root / planner_name
-            checkpoint = planner_dir / "checkpoints/latest.pt"
+            checkpoint = planner_dir / "checkpoints/best.pt"
             checkpoint.parent.mkdir(parents=True, exist_ok=True)
             checkpoint.write_bytes(f"{route}-{stage}".encode())
             _write(
@@ -131,7 +150,15 @@ def _study(tmp_path: Path) -> Path:
                     "target_dim": target_dim,
                     "source_sample_count": samples,
                     "selected_sample_count": samples,
-                    "num_updates": 2000,
+                    "num_updates": PLANNER_UPDATES_BY_SIZE["medium"],
+                    "batch_size": PLANNER_BATCH_SIZE,
+                    "micro_batch_size": PLANNER_MICRO_BATCH_BY_SIZE["medium"],
+                    "best_validation_metric_name": (
+                        "val/normalized_target_rmse_mean"
+                    ),
+                    "best_validation_metric": 0.25,
+                    "best_validation_update": 25_000,
+                    "best_checkpoint": str(checkpoint.resolve()),
                     "trajectory_split": {
                         "num_trajectories": 100,
                         "num_train_trajectories": 80,
@@ -185,7 +212,10 @@ def test_aggregate_rejects_noncausal_oracle_training_key(tmp_path: Path) -> None
     root = _study(tmp_path)
     path = (
         root
-        / "motions/motion_a/capacity/medium/seed0/matched/root_qpos/planner_oracle/config.json"
+        / (
+            "motions/motion_a/capacity/medium/seed0/matched/root_qpos/"
+            f"{planner_dir_name('medium')}/config.json"
+        )
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["args"]["state_key"] = "expert_planner_state"
@@ -245,7 +275,7 @@ def test_aggregate_rejects_incomplete_oracle_trajectory_split(
     root = _study(tmp_path)
     path = root / (
         "motions/motion_a/capacity/medium/seed0/matched/"
-        "root_qpos/planner_oracle/config.json"
+        f"root_qpos/{planner_dir_name('medium')}/config.json"
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["trajectory_split"]["num_train_trajectories"] = 79

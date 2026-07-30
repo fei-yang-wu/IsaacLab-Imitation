@@ -199,3 +199,6 @@ test now enforces that every `experiments/` script is classified.
 | `experiments/paper/reference_buffer_workflow.py` | workflow | Reference-buffer workflow; the reference implementation of the paper-script standard. |
 | `experiments/paper/run_enc380_planner_route_comparison.py` | workflow | Hydra driver for the enc380 planner-route comparison. |
 | `experiments/paper/run_interface_capacity_study.py` | workflow | Hydra driver for the interface capacity study. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_enc380_h30_temporal_ensemble.sh` | workflow | Runs the H30 temporal-ensemble diagnostic over reused enc380 H10 rows. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_h30_temporal_ensemble_ice.sh` | guarded launcher | Submits the H30 temporal-ensemble diagnostic to ICE. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/resubmit_enc380_root_route_ice.sh` | guarded launcher | Resubmits the enc380 root+qpos route cells after a partial run. |

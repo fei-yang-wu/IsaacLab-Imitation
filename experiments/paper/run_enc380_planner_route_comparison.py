@@ -24,7 +24,11 @@ CAMPAIGN_RUNNER = (
 from imitation_experiments.capacity.enc380_capacity_grid import (
     MODEL_SIZES,
     MOTIONS,
+    PLANNER_BATCH_SIZE,
+    PLANNER_MICRO_BATCH_BY_SIZE,
     PLANNER_SEEDS,
+    PLANNER_UPDATES_BY_SIZE,
+    planner_dir_name,
 )
 
 CELL_STAGES = ("train", "eval")
@@ -87,6 +91,14 @@ def main(cfg: DictConfig) -> None:
     motions = [str(value) for value in cfg.protocol.motion_names]
     sizes = [str(value) for value in cfg.planner.model_sizes]
     seeds = [int(value) for value in cfg.planner.seeds]
+    updates_by_size = {
+        str(key): int(value)
+        for key, value in cfg.planner.train_updates_by_size.items()
+    }
+    micro_batch_by_size = {
+        str(key): int(value)
+        for key, value in cfg.planner.micro_batch_size_by_size.items()
+    }
     stages = [str(value) for value in cfg.stages]
     if (
         tuple(motions) != MOTIONS
@@ -96,6 +108,18 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(
             "Hydra enc380 grid differs from the frozen campaign grid; update both "
             "intentionally instead of running a partial or substituted matrix."
+        )
+    if updates_by_size != PLANNER_UPDATES_BY_SIZE:
+        raise ValueError(
+            "Hydra optimizer budgets differ from the frozen capacity-aware schedule."
+        )
+    if int(cfg.planner.batch_size) != PLANNER_BATCH_SIZE:
+        raise ValueError(
+            f"enc380 effective planner batch must be {PLANNER_BATCH_SIZE}."
+        )
+    if micro_batch_by_size != PLANNER_MICRO_BATCH_BY_SIZE:
+        raise ValueError(
+            "Hydra microbatches differ from the frozen capacity-aware schedule."
         )
     if int(cfg.data.trajectories_per_motion) * len(motions) != 100:
         raise ValueError(
@@ -122,9 +146,7 @@ def main(cfg: DictConfig) -> None:
             "COLLECT_ENVS": str(cfg.data.collection_envs),
             "DEMO_TRAJECTORIES_PER_MOTION": str(cfg.data.trajectories_per_motion),
             "COLLECT_STEPS": str(cfg.data.collection_control_steps),
-            "TRAIN_UPDATES": str(cfg.planner.train_updates),
             "BATCH_SIZE": str(cfg.planner.batch_size),
-            "MICRO_BATCH_SIZE": str(cfg.planner.micro_batch_size),
             "FLOW_STEPS": str(cfg.planner.flow_inference_steps),
             "EVAL_STEPS": str(cfg.protocol.evaluation_steps),
             "EVAL_ENVS": str(cfg.protocol.evaluation_envs),
@@ -144,6 +166,9 @@ def main(cfg: DictConfig) -> None:
             "seeds": seeds,
             "capacity_cells": len(motions) * len(sizes) * len(seeds),
             "routes_per_cell": 2,
+            "effective_batch_size": PLANNER_BATCH_SIZE,
+            "updates_by_size": updates_by_size,
+            "micro_batch_by_size": micro_batch_by_size,
         },
     }
     print(json.dumps(provenance, indent=2, sort_keys=True), flush=True)
@@ -163,6 +188,9 @@ def main(cfg: DictConfig) -> None:
                             "MOTION_NAME": motion,
                             "MODEL_SIZE": size,
                             "SEED": str(seed),
+                            "TRAIN_UPDATES": str(updates_by_size[size]),
+                            "MICRO_BATCH_SIZE": str(micro_batch_by_size[size]),
+                            "PLANNER_DIR_NAME": planner_dir_name(size),
                         }
                     )
                     _run(environment, stages=selected_cell_stages)

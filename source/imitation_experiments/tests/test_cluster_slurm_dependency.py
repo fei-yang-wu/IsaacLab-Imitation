@@ -39,12 +39,31 @@ def test_afterok_dependency_is_rendered(tmp_path: Path) -> None:
     assert "#SBATCH --dependency=afterok:3501873:3501960" in result.stdout
 
 
-def test_dependency_rejects_unrestricted_sbatch_text(tmp_path: Path) -> None:
+def test_dependency_accepts_afterany_numeric_jobs(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     env = dict(os.environ)
     env["PATH"] = f"{_fake_sbatch(tmp_path)}:{env['PATH']}"
     env["CLUSTER_SLURM_DEPENDENCY"] = "afterany:3501873"
+
+    result = subprocess.run(
+        ["bash", str(SUBMIT_SCRIPT), str(workspace), "isaac-lab-base", "--help"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "#SBATCH --dependency=afterany:3501873" in result.stdout
+
+
+def test_dependency_rejects_unrestricted_sbatch_text(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env = dict(os.environ)
+    env["PATH"] = f"{_fake_sbatch(tmp_path)}:{env['PATH']}"
+    env["CLUSTER_SLURM_DEPENDENCY"] = "singleton,afterok:1 --qos=embers"
 
     result = subprocess.run(
         ["bash", str(SUBMIT_SCRIPT), str(workspace), "isaac-lab-base", "--help"],

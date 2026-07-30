@@ -2,16 +2,16 @@
 set -euo pipefail
 
 # Guarded ICE dependency chain for the completed enc380 tracker:
-#   qualify -> one-session walk1 oracle collection -> 12 cells -> aggregate
-# Each capacity cell is one model-size/seed point and runs both
-# routes: root_qpos -> frozen encoder -> shared tracker, and latent -> tracker.
+#   qualify -> one-session walk1 oracle collection -> 24 route tasks -> aggregate
+# The 24 ICE tasks are 12 logical model-size/seed cells x two routes. Splitting
+# the routes gives each long planner fit the full ICE 16-hour walltime.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
 DRY_RUN="${DRY_RUN:-1}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-logs/interface_baselines/lafan1_enc380_route_capacity_5b_oracle100_v2_20260730}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-logs/interface_baselines/lafan1_enc380_route_capacity_5b_oracle100_progressive_b1024_20260730}"
 LOW_LEVEL_CHECKPOINT="${LOW_LEVEL_CHECKPOINT:-/data/resume_store/lafan1_enc380_rootqpos_h10_z256_seed0/model_5b.pt}"
 SKILL_CHECKPOINT="${SKILL_CHECKPOINT:-/data/enc380_store/lafan1_enc380_rootqpos_h10_z256_seed0/skill_encoder/checkpoints/latest.pt}"
 TRACKER_COMPLETION_RECORD="${TRACKER_COMPLETION_RECORD:-/data/resume_store/lafan1_enc380_rootqpos_h10_z256_seed0/completion.json}"
@@ -19,15 +19,15 @@ LOW_LEVEL_SHA256="${LOW_LEVEL_SHA256:-d33fa146f54222848da8b9a92eb5579f5acb8b3a46
 SKILL_SHA256="${SKILL_SHA256:-1d530fcb5920112b84bc53dbaddf2b3eb3da13a32a379513d8ee8719bc57d546}"
 REMOTE_PROJECT_ROOT="${REMOTE_PROJECT_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab}"
 REMOTE_OUTPUT_ROOT="${REMOTE_PROJECT_ROOT}/${OUTPUT_ROOT}"
-CELL_ARRAY="${CELL_ARRAY:-0-11%8}"
+CELL_ARRAY="${CELL_ARRAY:-0-23%8}"
 
 case "${DRY_RUN}" in
     1|true|TRUE|yes|YES) DRY_RUN=1 ;;
     0|false|FALSE|no|NO) DRY_RUN=0 ;;
     *) echo "[ERROR] DRY_RUN must be boolean, got ${DRY_RUN}." >&2; exit 2 ;;
 esac
-if [[ ! "${CELL_ARRAY}" =~ ^0-11(%[1-9][0-9]*)?$ ]]; then
-    echo "[ERROR] CELL_ARRAY must cover the exact 0-11 grid, optionally with %N." >&2
+if [[ ! "${CELL_ARRAY}" =~ ^0-23(%[1-9][0-9]*)?$ ]]; then
+    echo "[ERROR] CELL_ARRAY must cover the exact 0-23 route-task grid, optionally with %N." >&2
     exit 2
 fi
 if [[ "${DRY_RUN}" == "0" && ! "${LOW_LEVEL_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -71,7 +71,9 @@ if [[ "${DRY_RUN}" == "1" ]]; then
     print_stage aggregate 'afterok:<cell>' "" 01:00:00
     echo "[INFO] Motion: walk1_subject1"
     echo "[INFO] Oracle data: one 100-env session, 100 complete segments total."
-    echo "[INFO] Capacity cells: 1 motion x 4 sizes x 3 seeds = 12; two routes per cell."
+    echo "[INFO] Optimizer updates tiny/small/medium/large: 10k/20k/30k/50k."
+    echo "[INFO] Effective batch: 1024; microbatches: 1024/512/256/128."
+    echo "[INFO] Capacity cells: 12 logical pairs; 24 independent ICE route tasks."
     echo "[INFO] DRY_RUN=1; not contacting ICE."
     exit 0
 fi
@@ -153,9 +155,9 @@ record="$(mktemp)"
     printf '  "motions": ["walk1_subject1"],\n'
     printf '  "sizes": ["tiny", "small", "medium", "large"],\n'
     printf '  "seeds": [0, 1, 2],\n'
-    printf '  "cell_array": "%s",\n' "${CELL_ARRAY}"
+    printf '  "route_task_array": "%s",\n' "${CELL_ARRAY}"
     printf '  "oracle_collection": {"sessions": 1, "parallel_environments": 100, "completed_trajectories_total": 100, "completed_trajectories_per_motion": 100},\n'
-    printf '  "planner_training": {"stages": ["oracle_supervised"], "learned_planner_rollout_collection": false, "finetune": false},\n'
+    printf '  "planner_training": {"stages": ["oracle_supervised"], "effective_batch_size": 1024, "updates_by_size": {"tiny": 10000, "small": 20000, "medium": 30000, "large": 50000}, "micro_batch_by_size": {"tiny": 1024, "small": 512, "medium": 256, "large": 128}, "checkpoint_selection": "minimum held-out normalized target RMSE", "learned_planner_rollout_collection": false, "finetune": false},\n'
     printf '  "jobs": {"qualify": %s, "oracle_collection": %s, "capacity_array": %s, "aggregate": %s}\n' \
         "${qualify_id}" "${demo_id}" "${cell_id}" "${aggregate_id}"
     printf '}\n'

@@ -53,8 +53,9 @@ def main() -> None:
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     metadata = summary.get("metadata", {})
     packet = metadata.get("packet_encoder_command") or {}
-    metric_means = summary.get("metric_means", {})
-    z_mse = float(metric_means.get("published_z_vs_target/z_mse", float("nan")))
+    z_mse = float(packet.get("expert_pin_latent_mse", float("nan")))
+    pin_max_abs = float(packet.get("expert_pin_latent_max_abs", float("nan")))
+    pin_value_count = int(packet.get("expert_pin_latent_value_count", 0))
 
     expected_terms = [
         ["expert_motion_qpos", 29],
@@ -160,10 +161,22 @@ def main() -> None:
             str(encoder_path),
         ),
         _check(
-            "published_latent_mse",
+            "expert_pin_value_count",
+            pin_value_count > 0,
+            pin_value_count,
+            "> 0",
+        ),
+        _check(
+            "expert_pin_latent_mse",
             math.isfinite(z_mse) and z_mse <= args.mse_tolerance,
             z_mse,
             f"<= {args.mse_tolerance}",
+        ),
+        _check(
+            "expert_pin_latent_max_abs",
+            math.isfinite(pin_max_abs) and pin_max_abs <= math.sqrt(args.mse_tolerance),
+            pin_max_abs,
+            f"<= {math.sqrt(args.mse_tolerance)}",
         ),
     ]
     passed = all(check["passed"] for check in checks)
@@ -176,7 +189,9 @@ def main() -> None:
         "low_level_checkpoint_sha256": _sha256(tracker_path),
         "skill_checkpoint": str(encoder_path),
         "skill_checkpoint_sha256": _sha256(encoder_path),
-        "published_latent_mse": z_mse,
+        "expert_pin_latent_mse": z_mse,
+        "expert_pin_latent_max_abs": pin_max_abs,
+        "expert_pin_latent_value_count": pin_value_count,
         "checks": checks,
     }
     output_path = args.output_json.expanduser().resolve()

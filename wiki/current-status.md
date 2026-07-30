@@ -85,13 +85,34 @@ only a 4.9B-credited final checkpoint. W&B run `h874loew`, persistent directory
 10,027,008 segment frames at 90.1k FPS, proving that the Stable config,
 checkpoint restore, and optimizer continuation all entered training.
 
-After training, inspect the late checkpoint curve and evaluate the converged
-checkpoint by model inference on the exact same protocol as the 500M result:
-all 40 corrected motions, seed 0, 1,000 steps, deterministic tracking, and a
-non-terminating full-horizon pass for unbiased MPJPE plus the secondary strict
-termination/success pass and retained video. If the 15:59 ICE walltime catches
-the last fraction of the nominal budget, resume only the missing frames from
-the latest persistent checkpoint.
+Job `5549304` reached its final iteration and therefore computed the full
+4,999,938,048 credited frames, but failed while serializing the endpoint
+checkpoint. `model_step_4099866624.pt` is a zero-byte file and must not be
+used. The last intact checkpoint is `model_step_3587506176.pt`, SHA-256
+`d7b18bf5...e9f4`, corresponding to 4,487,577,600 credited frames after adding
+the original 900,071,424-frame resume point.
+
+The first requested model-inference diagnostic used that intact checkpoint on
+`walk1_subject1`, starting every environment at frame 0: seed 0, 10
+environments, 700 control steps, corrected manifest/cache, frozen h10 encoder,
+Newton/MJWarp, zero flow noise, and the exact submitted source snapshot. The
+non-terminating, unperturbed pass retained all 7,000 transitions and measured
+**26.622 mm root-relative MPJPE**, with 1.0 survival and tracking success. The
+secondary strict-termination pass kept the Stable environment's configured
+pushes and randomization; all ten environments again completed 700 steps with
+no termination and measured **26.322 mm MPJPE**. Artifacts and the 14-second
+full-horizon video are under
+`logs/interface_baselines/lafan1_stable_4488m_walk1_frame0_700_20260730/`.
+
+The most relevant earlier one-motion reference is 30.482 mm from the former
+Strict environment under the same motion/frame-0/700-step/seed-0 full-horizon
+geometry. The new Stable result is 3.860 mm (12.66%) lower, but this is not a
+single-variable convergence claim: the evaluated checkpoint was trained on the
+Stable/SONIC reward and actor-input recipe, whereas the reference checkpoint
+used the former Strict environment.
+
+The remaining broader convergence diagnostic is the all-40 corrected-motion,
+1,000-step deterministic pass plus its strict secondary pass.
 
 ## LAFAN1 Stable-vs-Strict 500M inference diagnostic (2026-07-29)
 
@@ -1113,26 +1134,82 @@ Its retained video is
 (SHA-256 `fec18dab52cde69970f3ef93a9613994c8c989713325332cee340f96acb0262e`).
 The earlier four-motion job `5549977` is superseded.
 
-Both submitted planner chains remained behind `afterok` and were canceled; no
-demonstrations or planner results were produced. The replacement gate keeps the
-old Strict-v0 environment and strict limits but matches the training support:
-starts in `[0, 200]`, 500 control steps, and the original disturbances. A
-separate deterministic, non-terminating pass measures all 500 requested
-transitions without survivorship bias. The 1,000-step result remains only an
-out-of-distribution stress diagnostic; the 0.80 threshold is not being tuned
-post hoc.
+Both earlier submitted planner chains remained behind `afterok` and were
+canceled; no demonstrations or planner results came from them. The replacement
+gate keeps the old Strict-v0 environment and strict limits but matches the
+training support: 100 parallel `walk1_subject1` starts in `[0, 200]`, 500
+control steps, and the original disturbances. The local gate passed at 0.89
+strict success and 1.0 fall-free survival (31.06 mm termination-truncated
+MPJPE). Its separate deterministic, non-terminating pass measured all 50,000
+requested transitions without survivorship bias. The 1,000-step result remains
+only an out-of-distribution stress diagnostic; the 0.80 threshold is not being
+tuned post hoc.
 
 The revised planner workflow removes the learned-planner rollout loop for time
 and first returns to the previous `walk1_subject1` continuity motion. One
-persistent Isaac session uses ten environments, recycles them asynchronously,
-and commits exactly 100 completed variable-length trajectory segments. Rows are
-buffered by `(env_id, episode_id)` until reset, so partial live segments at the
-cutoff are discarded and temporal histories never cross a reset. Each of the
-12 capacity cells (four sizes x three seeds) trains both planners once from the
-same paired oracle data and evaluates them. There is no separate planner
-pretrain, planner-driven collection, merge, retrain, or finetune stage. Because
-the motion was chosen for continuity with prior results, this is a preliminary
-one-motion diagnostic rather than a representative paper sample.
+persistent Isaac session uses 100 environments and commits exactly 100
+completed variable-length trajectory segments. Rows are buffered by
+`(env_id, episode_id)` until reset, so partial live segments at the cutoff are
+discarded and temporal histories never cross a reset. The completed local
+collection has 4,864 high-level rows and paired targets from the same causal
+`10 x 93` histories: 380D root+qpos packets for the explicit-planner route and
+256D latent targets for the direct latent route. It is therefore usable for
+both planners without another collection.
+
+Each of the 12 logical capacity cells (four sizes x three seeds) trains both
+planners once from the same paired oracle data and evaluates them. The frozen
+progressive optimizer schedule is 10k/20k/30k/50k updates for
+tiny/small/medium/large at effective batch 1024, with microbatches
+1024/512/256/128. Evaluation uses the minimum held-out normalized-target-RMSE
+checkpoint. ICE's 16-hour wall is assigned per route, so the 12 paired cells are
+implemented as 24 independent array tasks.
+
+The guarded replacement chain was submitted on 2026-07-30:
+`5550598 -> 5550599 -> 5550601[0-23]%8 -> 5550602`
+(qualification, one-session oracle collection, planner/evaluation route array,
+aggregate). Its fresh output root is
+`logs/interface_baselines/lafan1_enc380_route_capacity_5b_oracle100_progressive_b1024_20260730`.
+There is no separate planner pretrain, planner-driven collection, merge,
+retrain, or finetune stage. Because the motion was chosen for continuity with
+prior results, this is a preliminary one-motion diagnostic rather than a
+representative paper sample.
+
+The follow-up strong-explicit screen reuses these same 4,864 rows for H30
+supervision rather than collecting again. Offline reconstruction preserves the
+causal state, trajectory identity, and trajectory split and reproduces every
+stored H10 prefix with maximum absolute error `1.062e-6`. One medium seed-0 H30
+planner is trained for 30k updates at effective batch 1024 (microbatch 256), then
+the identical checkpoint is evaluated with either its first H10 executed and
+H20 discarded or with exponential temporal ensembling of the three overlapping
+H10 subwindows. Ensembling happens in explicit root+qpos space before the frozen
+enc380 encoder, with old root poses re-expressed against the current pelvis and
+per-environment histories cleared on asynchronous reset. H30 is recorded as a
+higher-bandwidth diagnostic (5,700 values/s versus H10's 1,900), not as a
+replacement for the fixed main explicit row.
+
+The implementation and local gates passed on 2026-07-30: the materializer
+validated all 4,864 rows; the medium H30 model completed a batch-1024,
+microbatch-256 update with target width 1,140; and 20-step one-environment Isaac
+rollouts passed for both first-H10 and exponential execution. The guarded
+launcher is `submit_enc380_h30_temporal_ensemble_ice.sh`; it depends on source
+demo job `5550599`, and its aggregate also waits for source route-array job
+`5550717` so the repaired matching H10 medium/seed-0 baseline is present.
+
+During the original route array, the explicit tasks exposed a defect in the
+packet-encoder pin *audit*: it compared the command held for ten 50 Hz control
+steps against a fresh target recomputed on every control step, producing a false
+MSE near 0.123. The packet contents and encoder layout checks passed, and the
+latent-route sibling tasks completed. Pin v2 compares the expert-packet encoder
+output directly to the oracle encoder output inside the same 5 Hz publication;
+the local actual-encoder gate measured exactly zero MSE and zero max error over
+three publications. Recovery array `5550717[0-11]%8` waits for the original
+array, reuses all existing explicit `best.pt` files, and runs only pin v2 plus
+missing evaluations. Repaired main aggregation is job `5550718`.
+
+The H30 screen is now running as ICE job `5550720`; its audited aggregate is job
+`5550721`, dependent on both the H30 screen and explicit recovery array
+`5550717`. Output:
+`logs/interface_baselines/lafan1_enc380_h30_temporal_medium_seed0_20260730`.
 
 ## Preliminary Planner Evidence
 
