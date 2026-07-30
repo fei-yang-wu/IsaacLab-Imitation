@@ -386,6 +386,62 @@ class ImitationG1LatentSonicNoHistoryEnvCfg(ImitationG1LatentSonicEnvCfg):
 
 
 @configclass
+class ImitationG1LatentStableEnvCfg(ImitationG1LatentSonicNoHistoryEnvCfg):
+    """Default latent surface (2026-07-27): SONIC recipe, this repo's resets.
+
+    The 2026-07-27 reset-sampling screen isolated why the SONIC environment
+    trained so much worse at our scale. Holding geometry at 4096 x 24 and
+    measuring windowed means over >=200M frames:
+
+    ==============================  ========  =========
+    arm                             ep_len    MPJPE
+    ==============================  ========  =========
+    Latent-v0, legacy resets          247.8    47.5 mm
+    SONIC env (full-traj resets)       69.8    61.3 mm
+    Latent-v0 + SONIC resets           44.6    59.7 mm
+    ==============================  ========  =========
+
+    Flipping *only* the reset sampler on an otherwise untouched Latent-v0
+    collapsed episode length 5.6x -- more than the entire SONIC environment
+    cost -- and `reference_finished` stayed at 0.0018, so those were real
+    failures rather than starts landing near clip ends. SONIC trains at 64+
+    GPU scale where full-trajectory adaptive-failure resets are affordable; at
+    4096 environments they starve the policy of recoverable starts.
+
+    This surface therefore keeps the whole SONIC release recipe --
+    ``G1SonicRewardsCfg`` (including the 3-point local ``tracking_reward_points``
+    precision term), ``G1SonicTerminationsCfg``, ``G1SonicEventCfg`` level0_4
+    randomization, ``G1SonicActionsCfg``, ``G1SonicRobotCfg``, pelvis anchor,
+    and single-frame observations -- and takes back only the legacy reset
+    distribution: starts in [0, 200] with
+    ``adaptive_failure_reset_failure_rate_max_over_mean=50``.
+
+    Terminations are the strict release values from frame 0
+    (``curriculum = None``), matching ``ImitationG1LatentStrictEnvCfg``. The
+    SONIC anneal exists to avoid ~5-step early episodes, which legacy resets
+    already prevent, and a moving threshold makes early episode-length and
+    MPJPE curves incomparable across runs.
+
+    Note that the terminations here are *identical* to the previous default's,
+    not stricter -- both are ``G1SonicTerminationsCfg``. The only plausible
+    source of an MPJPE gain over ``ImitationG1LatentStrictEnvCfg`` is the
+    added reward terms, chiefly ``tracking_reward_points`` (weight 2.0,
+    std 0.1).
+    """
+
+    curriculum = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Undo `ImitationG1LatentSonicEnvCfg`'s full-trajectory adaptive-failure
+        # sampler; this is the one axis this surface takes back from SONIC.
+        self.random_reset_step_min = 0
+        self.random_reset_step_max = 200
+        self.random_reset_full_trajectory = False
+        self.adaptive_failure_reset_failure_rate_max_over_mean = 50.0
+
+
+@configclass
 class ImitationG1LatentStrictEnvCfg(ImitationG1LatentEnvCfg):
     """Pelvis-anchored legacy surface with strict-from-scratch terminations.
 
@@ -464,10 +520,40 @@ class ImitationG1LatentPerStepVQEnvCfg(ImitationG1LatentFutureCVAEEnvCfg):
     latent_command_dim: int = 64
 
 
+@configclass
+class ImitationG1LatentSonicFSQEnvCfg(ImitationG1LatentStrictEnvCfg):
+    """Strict-lineage surface for the SONIC-motivated FSQ token interface.
+
+    Publishes one 64-value FSQ token per control step with no phase clock -- the
+    packet slot a planner regresses ten of, matching SONIC's contract where the
+    tokenizer output goes straight into the tracker observation.
+
+    Deliberately derived from :class:`ImitationG1LatentStrictEnvCfg` rather than
+    from :class:`ImitationG1LatentFutureCVAEEnvCfg` the way
+    :class:`ImitationG1LatentPerStepVQEnvCfg` is. That one sits on the
+    :class:`ImitationG1LatentEnvCfg` legacy lineage (registered as
+    ``Isaac-Imitation-G1-Latent-Legacy-v0`` and deprecated), so results on it are
+    not comparable with the qualified LAFAN1 oracles or the Study B/C arms --
+    every one of which ran on the strict surface.
+    """
+
+    latent_command_dim: int = 64
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Current plus nine future reference frames, renewed every control step.
+        self.latent_patch_past_steps = 0
+        self.latent_patch_future_steps = 9
+        self.command_hold_steps = 0
+        self._sync_expert_window_observation_params()
+
+
 ImitationG1LatentEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentSonicEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentSonicNoHistoryEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+ImitationG1LatentStableEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentStrictEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentGoalEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentFutureCVAEEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentPerStepVQEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+ImitationG1LatentSonicFSQEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict

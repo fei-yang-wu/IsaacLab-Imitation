@@ -24,6 +24,7 @@ visible without creating several drifting versions of the same launcher.
 
 | Priority | Campaign | State |
 | --- | --- | --- |
+| Primary | [`2026-07-29-latent-holdout-horizon`](campaigns/2026-07-29-latent-holdout-horizon/README.md) | Command-interface ablation at fixed latent space: one shared frozen h10 encoder, hold in {5, 1} against the hold=10 control curve. Submitted to ICE 2026-07-29 as `5548369` (hold=5) and `5548370` (hold=1), one 16h segment each, no resume chain. |
 | Primary (local, preliminary) | [`2026-07-23-bones-phase5-language-local10`](campaigns/2026-07-23-bones-phase5-language-local10/README.md) | Local latent-only ten-goal Phase-5 run on the workstation: one shared language-conditioned planner, demonstration-pretrained then rollout-finetuned, 150+150 rows per goal, 500-step episodes. No scheduler involved. |
 | Primary (preliminary) | [`2026-07-23-bones-phase5-language-h200`](campaigns/2026-07-23-bones-phase5-language-h200/README.md) | Prepared as a guarded, latent-only H200 pilot: ten shared language goals, 150 demonstration plus 150 planner-rollout rows per goal. Dry-run is ready; no Slurm jobs submitted in this campaign yet. |
 | Primary | [`2026-07-22-latent-learning-ablation`](campaigns/2026-07-22-latent-learning-ablation/README.md) | All twelve local 10M qualification arms passed; the H200 submission remains deliberately gated and was not submitted as of the recorded 2026-07-22 status. |

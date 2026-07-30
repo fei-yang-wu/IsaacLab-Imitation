@@ -136,6 +136,29 @@ def _parse_args() -> argparse.Namespace:
         default=0,
         help="Randomly subsample this many rollout rows for sample-budget sweeps; <=0 means all.",
     )
+    parser.add_argument(
+        "--val_trajectory_fraction",
+        type=float,
+        default=0.2,
+        help=(
+            "Fraction of TRAJECTORIES (not rows) held out for validation. Rows "
+            "within a rollout are near-duplicates, so a row-wise split would "
+            "measure memorization. Requires env_id and episode_id in the sample "
+            "data. Set 0 to disable -- then eval/* is training fit, not "
+            "validation, and must not be reported as generalization."
+        ),
+    )
+    parser.add_argument(
+        "--val_split_seed",
+        type=int,
+        default=0,
+        help=(
+            "Seed for the trajectory split ONLY. Deliberately separate from "
+            "--seed so every interface, size and planner seed in a grid holds "
+            "out the same trajectories; otherwise each cell would be scored on "
+            "a different test set and the table would not be comparable."
+        ),
+    )
     parser.add_argument("--lr", type=float, default=1.0e-4)
     parser.add_argument("--weight_decay", type=float, default=1.0e-4)
     parser.add_argument("--grad_clip_norm", type=float, default=1.0)
@@ -233,6 +256,73 @@ def _model_kwargs(args: argparse.Namespace) -> dict[str, int | float]:
         if value is not None:
             kwargs[key] = value
     return kwargs
+
+
+def _trajectory_split(
+    data: dict[str, torch.Tensor], *, val_fraction: float, seed: int
+) -> tuple[torch.Tensor, torch.Tensor, dict[str, int]]:
+    """Split rows into train/validation **by trajectory**, never by row.
+
+    Rows from one rollout are highly correlated: consecutive planner publishes
+    share almost all of their state history. A row-wise split therefore puts
+    near-duplicates of every validation row into training, and the resulting
+    "validation" RMSE measures memorization, not generalization. Splitting whole
+    trajectories is the only split that answers the question the number claims
+    to answer.
+
+    A trajectory is the (env_id, episode_id) pair. `episode_id` alone is a
+    per-environment reset counter, so env 0 episode 1 and env 3 episode 1 are
+    different rollouts sharing a number -- grouping on it alone would silently
+    merge them and leak across the split.
+    """
+    rows = int(data["causal_target"].shape[0])
+    if float(val_fraction) <= 0.0:
+        return torch.arange(rows), torch.empty(0, dtype=torch.long), {}
+    env_id = data.get("env_id")
+    episode_id = data.get("episode_id")
+    if env_id is None or episode_id is None:
+        raise KeyError(
+            "A trajectory-wise split needs both env_id and episode_id, but the "
+            "sample data is missing at least one. These were added to the "
+            "planner sample schema on 2026-07-28; re-collect the demonstrations "
+            "with prepare_oracle_baselines.sh, or pass "
+            "--val_trajectory_fraction 0 to train without a held-out set (and "
+            "then do not report the eval RMSE as validation)."
+        )
+    env_flat = env_id.reshape(-1).long()
+    if bool((env_flat < 0).any()):
+        raise ValueError(
+            "env_id contains -1 placeholders, which means these samples were "
+            "written before env_id was recorded. Trajectory identity cannot be "
+            "recovered from them; re-collect the demonstrations."
+        )
+    keys = torch.stack([env_flat, episode_id.reshape(-1).long()], dim=1)
+    unique, inverse = torch.unique(keys, dim=0, return_inverse=True)
+    num_trajectories = int(unique.shape[0])
+    num_val = int(round(num_trajectories * float(val_fraction)))
+    if num_val <= 0 or num_val >= num_trajectories:
+        raise ValueError(
+            f"--val_trajectory_fraction {val_fraction} leaves {num_val} of "
+            f"{num_trajectories} trajectories for validation. Collect more "
+            "trajectories or lower the fraction."
+        )
+    generator = torch.Generator(device="cpu").manual_seed(int(seed))
+    order = torch.randperm(num_trajectories, generator=generator)
+    val_trajectories = torch.zeros(num_trajectories, dtype=torch.bool)
+    val_trajectories[order[:num_val]] = True
+    is_val = val_trajectories[inverse]
+    summary = {
+        "num_trajectories": num_trajectories,
+        "num_train_trajectories": num_trajectories - num_val,
+        "num_val_trajectories": num_val,
+        "num_train_rows": int((~is_val).sum().item()),
+        "num_val_rows": int(is_val.sum().item()),
+    }
+    return (
+        (~is_val).nonzero(as_tuple=True)[0],
+        is_val.nonzero(as_tuple=True)[0],
+        summary,
+    )
 
 
 def _select_rows(
@@ -366,6 +456,23 @@ def main() -> None:
     metrics_path = run_dir / "metrics.jsonl"
     checkpoint_path = run_dir / "checkpoints" / "latest.pt"
 
+    # Split BEFORE anything is derived from the data. Normalization statistics
+    # computed over all rows would leak validation into the model.
+    train_rows, val_rows, split_summary = _trajectory_split(
+        data_cpu,
+        val_fraction=float(args.val_trajectory_fraction),
+        seed=int(args.val_split_seed),
+    )
+    if split_summary:
+        print(
+            "[INFO] Trajectory-wise split: "
+            f"{split_summary['num_train_trajectories']} train / "
+            f"{split_summary['num_val_trajectories']} val trajectories "
+            f"({split_summary['num_train_rows']} / "
+            f"{split_summary['num_val_rows']} rows).",
+            flush=True,
+        )
+
     state = data_cpu[args.state_key].to(device=device, dtype=torch.float32)
     target = data_cpu[target_key].to(device=device, dtype=torch.float32)
     language_cpu = data_cpu.get("language_embedding")
@@ -375,6 +482,18 @@ def main() -> None:
         else language_cpu.to(device=device, dtype=torch.float32)
     )
     language_dim = 0 if language is None else int(language.shape[-1])
+    train_rows = train_rows.to(device=device)
+    val_rows = val_rows.to(device=device)
+    train_state = state.index_select(0, train_rows)
+    train_target = target.index_select(0, train_rows)
+    train_language = None if language is None else language.index_select(0, train_rows)
+    val_state = None if val_rows.numel() == 0 else state.index_select(0, val_rows)
+    val_target = None if val_rows.numel() == 0 else target.index_select(0, val_rows)
+    val_language = (
+        None
+        if language is None or val_rows.numel() == 0
+        else language.index_select(0, val_rows)
+    )
     if int(target.shape[-1]) != target_spec.target_dim:
         raise ValueError(
             f"Target width mismatch: sample target has {target.shape[-1]}, "
@@ -426,8 +545,12 @@ def main() -> None:
             f"{language_dim}."
         )
     if not args.use_checkpoint_normalization:
+        # Training rows only: statistics over the full set would leak the
+        # held-out trajectories into the model through the normalizer.
         stats = _normalization_stats(
-            state.detach().cpu(), target.detach().cpu(), mode=args.normalization
+            train_state.detach().cpu(),
+            train_target.detach().cpu(),
+            mode=args.normalization,
         )
         planner.set_normalization(**stats)
 
@@ -474,6 +597,13 @@ def main() -> None:
         "selected_sample_count": selected_sample_count,
         "heldout_sample_count": heldout_sample_count,
         "max_samples": int(args.max_samples),
+        # Trajectory-wise split provenance. The trajectory counts are the budget
+        # figure to quote; row counts are derived (one row per env per publish).
+        # Empty when --val_trajectory_fraction is 0, in which case eval/* is
+        # training fit and there is no validation number.
+        "val_trajectory_fraction": float(args.val_trajectory_fraction),
+        "val_split_seed": int(args.val_split_seed),
+        "trajectory_split": split_summary,
         "batch_size": int(args.batch_size),
         "micro_batch_size": micro_batch_size,
         "gradient_accumulation_steps": int(
@@ -532,7 +662,7 @@ def main() -> None:
             flush=True,
         )
 
-    num_samples = int(state.shape[0])
+    num_samples = int(train_state.shape[0])
     for update in range(1, int(args.num_updates) + 1):
         indices = torch.randint(
             low=0,
@@ -549,10 +679,12 @@ def main() -> None:
         for start in range(0, int(args.batch_size), micro_batch_size):
             stop = min(start + micro_batch_size, int(args.batch_size))
             micro_indices = indices[start:stop]
-            batch_state = state.index_select(0, micro_indices)
-            batch_target = target.index_select(0, micro_indices)
+            batch_state = train_state.index_select(0, micro_indices)
+            batch_target = train_target.index_select(0, micro_indices)
             batch_language = (
-                None if language is None else language.index_select(0, micro_indices)
+                None
+                if train_language is None
+                else train_language.index_select(0, micro_indices)
             )
             if args.planner_family == "flow":
                 objective_loss = planner.flow_matching_loss(
@@ -604,16 +736,36 @@ def main() -> None:
             or update % int(args.log_interval) == 0
             or update == int(args.num_updates)
         ):
+            # eval/* is TRAINING fit. val/* is the held-out trajectories and is
+            # the only number that may be described as generalization.
             eval_metrics = _evaluate(
                 planner,
-                state,
-                target,
-                language,
+                train_state,
+                train_target,
+                train_language,
                 flow_num_inference_steps=int(args.flow_num_inference_steps),
                 flow_inference_noise_std=float(args.flow_inference_noise_std),
                 batch_size=int(args.eval_batch_size),
                 max_samples=int(args.eval_max_samples),
             )
+            if val_state is not None:
+                eval_metrics.update(
+                    {
+                        key.replace("eval/", "val/", 1): value
+                        for key, value in _evaluate(
+                            planner,
+                            val_state,
+                            val_target,
+                            val_language,
+                            flow_num_inference_steps=int(args.flow_num_inference_steps),
+                            flow_inference_noise_std=float(
+                                args.flow_inference_noise_std
+                            ),
+                            batch_size=int(args.eval_batch_size),
+                            max_samples=int(args.eval_max_samples),
+                        ).items()
+                    }
+                )
             row = {
                 "update": update,
                 "train/loss": loss_value,

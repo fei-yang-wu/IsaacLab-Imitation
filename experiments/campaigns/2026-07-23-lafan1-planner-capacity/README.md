@@ -29,20 +29,136 @@ Two readouts (Study 1 of `wiki/ablation-experiment-plan.md`, restricted to one m
 See `paths.env`. Converged seed-0 checkpoints pulled from ICE to
 `logs/downloaded_checkpoints/`:
 
-| Interface | Command @ 5 Hz | Oracle MPJPE / ep_len |
-| --- | --- | --- |
-| `latent_skill` (DiffSR deterministic) | 258-d held z + phase | 45.6 mm / 393 |
-| `full_body_trajectory` (FB chunk) | full-body packet, held 10 | 34.1 mm / 454 |
-| `ee_trajectory` (EE chunk) | EE packet, held 10 | 41.3 mm / 424 |
+The interfaces form a **packet-size ladder** at a fixed 5 Hz publication rate. Each
+has its **own** low-level controller trained natively on that command space — this
+is not one tracker fed adapted commands, so nothing is reconstructed (a
+`root_qpos` controller simply never receives joint velocities).
+
+| Interface | Packet @ 5 Hz | Contents / frame | Frames | Qualified oracle | Training plateau |
+| --- | --- | --- | --- | --- | --- |
+| `full_body_trajectory` | 670 | 29 qpos + 29 qvel + root 9 | 5.000B | **23.8 mm** | 34.1 mm / 454 |
+| `root_qpos` | 380 | 29 qpos + root 9 (no qvel) | 4.600B | **23.6 mm** | — |
+| `ee_trajectory` | 360 | 4 EE poses, **no root** | 5.000B | **405.2 mm** | 41.3 mm / 424 |
+| `latent_skill` (DiffSR det.) | 258 | z256 + phase | 4.525B | **30.5 mm** | 45.6 mm / 393 |
+| `root_points5` | 240 | 5 keypoints ×3 + root 9 | 4.800B | **30.6 mm** | — |
+
+"Root 9" is `expert_anchor_pos_b` (3) + `expert_anchor_ori_b` (rot6d, 6) — a pose,
+**no velocity anywhere** in either reduced packet.
+
+> **Use the qualified column, never the training plateau.** The training metric is
+> measured under random starts with terminations active, so episodes end before
+> drift accumulates. `ee_trajectory` reads a healthy 41.3 mm there while its true
+> frame-0/700-step floor is 405.2 mm — a 10× gap under the same metric name. The
+> same effect made full-body look like 68 mm under random-start M3 versus 309 mm
+> full-horizon.
+
+**`ee_trajectory` is the rootless control, not a failed run.** Its adapter was
+verified correct (chunked streaming reproduced its own floor to −5.3 mm); the
+interface itself is under-determined — 4 body poses in the *torso* frame never say
+where the torso goes, and 4 poses do not determine 29 joints. Note it carries
+**more** values than `root_points5` (360 vs 240) and is 13× worse: packet size does
+not determine trackability, closing the kinematic chain does. It is disabled by
+default in the paper config; enable it only to reproduce that measurement.
 
 The original "main" latent LAFAN1 tracker (job `5525664`) was destroyed in the
 2026-07-22 Slurm-TIMEOUT data-loss incident; the surviving latent-learning-ablation
-`deterministic` arm is the protocol-matched substitute.
+`deterministic` arm is the protocol-matched substitute. Note it is ~475M frames
+short of the explicit arms — a gap that runs *against* the latent claim, so the
+result stands as a conservative lower bound.
+
+### `enc380` — the content-controlled latent arm (in flight, 2026-07-28)
+
+The ladder above confounds two axes. `root_qpos` (380 explicit) reaches 23.6 mm
+and `latent_skill` (258) reaches 30.5 mm, but the latent encoder was fit on the
+**full-body 670** packet — so "explicit vs latent" and "qpos+root content vs
+qpos+qvel+root content" move together, and neither row alone attributes the gap.
+
+`enc380` holds the content fixed and moves only the compression: the same 38
+values per frame the `root_qpos` tracker consumes explicitly are fed through a
+DiffSR skill encoder and published as the same 258-value latent command.
+
+| | planner/oracle output | tracker input |
+| --- | --- | --- |
+| `root_qpos` | 380 explicit values | 380 |
+| `enc380` | 380 → **frozen encoder** | z256 + phase = 258 |
+| `latent_skill` | 670 → **frozen encoder** | z256 + phase = 258 |
+
+`enc380` vs `root_qpos` isolates compression at fixed content; `enc380` vs
+`latent_skill` isolates content at fixed compression.
+
+Everything but the encoder's input width is copied from the frozen latent
+oracle's recipe (deterministic continuous z256 + sin_cos phase, h10 hold,
+encoder 1024/512/512, 50k pretrain updates at batch 8192, corrected 40-motion
+tree), and the tracker geometry is the same H100 point as `root_qpos` /
+`root_points5` (12,288 × 12, minibatch 18,432, lr 1e-3, 5B cap).
+
+The env-side selector is `env.expert_macro_state_terms`; the window term
+`expert_motion_qpos` makes the encoder's input byte-identical to the `root_qpos`
+packet. Launcher: `submit_enc380_latent_low_level_ice.sh`, run as two stages —
+`STAGE=pretrain` once, then `STAGE=train` per ~16 h segment. The split is
+deliberate: the encoder is written to the shared `/data` bind rather than to
+per-submission workspace logs, so a TIMEOUT-killed segment can never silently
+re-pretrain a *different* encoder and resume a tracker into a latent space it was
+never trained on. Nothing downstream would error if that happened.
+
+Local gates that preceded the ICE push (both on `walk1_subject1`, both passed):
+a 5,000-update encoder pretrain over the 380 macro state
+(`logs/interface_baselines/enc380_root_qpos_seed0`, sample-recon L1 62.8 → 0.387,
+z effective rank 135/256) and a 40-iteration frozen-encoder tracker smoke on
+`Isaac-Imitation-G1-Latent-Strict-v0` (`logs/interface_baselines/enc380_tracker_smoke`).
+Neither is a performance result.
+
+## Reproducing the whole study
+
+The paper-facing entrypoint drives the scripts in this directory and enforces the
+gates around them. Prefer it over calling the shell scripts directly — it verifies
+checkpoint hashes, refuses an unqualified interface, refuses a dirty study root,
+and records `study_provenance.json` (resolved config + hashes + git commit) next
+to the artifacts.
+
+```bash
+# everything: qualify -> oracle -> grid -> aggregate
+pixi run python experiments/paper/run_interface_capacity_study.py
+
+# one interface / one cell, for a smoke check
+pixi run python experiments/paper/run_interface_capacity_study.py \
+    grid.interfaces=[root_points5] grid.seeds=[0] grid.sizes=[tiny]
+
+# reproduce the rootless-control measurement (expects UNUSABLE INTERFACE)
+pixi run python experiments/paper/run_interface_capacity_study.py \
+    stages=[qualify] grid.interfaces=[ee_trajectory] \
+    interfaces.ee_trajectory.enabled=true
+```
+
+Every parameter — interfaces, checkpoints + hashes, protocol, planner budget,
+grid, thresholds — lives in `experiments/paper/conf/interface_capacity.yaml`.
+Nothing needs hand-editing before a run.
+
+**Adding an interface** requires, in order: a command space in
+`rlopt_ipmd_cfg.py`; an entry in `INTERFACE_TERMS`; a dispatch arm in
+`run_capacity_point.sh` and `prepare_oracle_baselines.sh`; its own trained
+low-level controller; a PASS from `qualify_interface.sh`; then an entry in the
+paper config. The packet layout is *derived* from the command space in
+`collect_interface_rollout_samples.py` and cross-checked against
+`INTERFACE_TERMS` at startup, so a new interface cannot silently disagree with
+itself — that mismatch is what the joint-order bug was.
+
+## Gates
+
+- `qualify_interface.sh` — replay floor vs 5 Hz oracle stream, plus an absolute
+  floor ceiling (`FLOOR_MAX_MM`). Writes `qualification.json`; the paper
+  entrypoint refuses to spend planner compute without a `PASS`. The ceiling
+  exists because the gate originally *passed* `ee_trajectory` at a 405 mm floor —
+  it only checked faithfulness-to-floor, not whether the floor was sane.
+- `smoke_test_reduced_interface_streaming.py` — certifies that the phase-aligned
+  held-packet slot equals the live unchunked reference at every hold phase, with
+  and without asynchronous resets. Needs no trained policy, so it can run before
+  any controller exists.
 
 ## Pipeline
 
 1. `run_capacity_point.sh` (per size × seed): oracle demos → planner pretrain (demo-only)
-   → eval → rollout collect → merge → finetune → eval, for all three interfaces.
+   → eval → rollout collect → merge → finetune → eval, for each selected interface.
 2. `aggregate_one_motion_capacity_scaling.py` (3-interface) → per-size table + iso-perf minimums.
 3. `aggregate_one_motion_capacity_seeds.py` (3-interface) → across-seed means + latent-minus-explicit pairs.
 

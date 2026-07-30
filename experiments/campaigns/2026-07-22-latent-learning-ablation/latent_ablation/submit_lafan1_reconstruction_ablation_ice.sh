@@ -126,6 +126,11 @@ for arm in ${ARMS}; do
     arm_overrides "${arm}"
     export CLUSTER_SLURM_JOB_NAME_PREFIX="lafan-latent-${arm}"
     exp_name="lafan1_latent_recon_${arm}_h10_seed${SEED}"
+    # Checkpoints must go to the persistent /data bind, never the
+    # per-submission workspace: ICE TIMEOUT is a hard SIGKILL that wipes
+    # node-local output, and the original 2026-07-22 H200 runs of these arms
+    # lost every checkpoint exactly this way (only W&B curves survive).
+    log_dir="/data/latent_ablation_store/${exp_name}/rlopt_train"
     checkpoint_args=()
     if [[ -n "${TRAIN_CHECKPOINT}" ]]; then
         checkpoint_args=(--checkpoint "${TRAIN_CHECKPOINT}")
@@ -168,6 +173,7 @@ for arm in ${ARMS}; do
         "agent.logger.project_name=${WANDB_PROJECT}"
         "agent.logger.group_name=${WANDB_GROUP}"
         "agent.logger.exp_name=${exp_name}"
+        "agent.logger.log_dir=${log_dir}"
         "${ARM_OVERRIDES[@]}"
     )
     printf '[PLAN] %s [%s]: ' "${arm}" "${GPU_GRES}"

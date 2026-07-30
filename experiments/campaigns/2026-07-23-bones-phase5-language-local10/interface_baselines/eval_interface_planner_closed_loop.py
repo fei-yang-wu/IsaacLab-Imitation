@@ -237,6 +237,38 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--no_per_step_metrics",
+    action="store_true",
+    help=(
+        "Skip the per-step metric .npz written next to summary.json. Retained "
+        "by default so fall time and alternative failure thresholds can be "
+        "re-derived without re-running; it is a few hundred KB per eval."
+    ),
+)
+parser.add_argument(
+    "--allow_shorter_planner_interval",
+    action="store_true",
+    default=False,
+    help=(
+        "C3 freshness studies only: permit a runtime planner_interval_steps "
+        "SHORTER than the checkpoint's, consuming only the freshest slots of "
+        "each packet. Records the deviation in the summary; every other "
+        "streamed-vanilla contract term stays hard, and a LONGER interval is "
+        "still refused. A run using this is not matched-contract."
+    ),
+)
+parser.add_argument(
+    "--fall_height_m",
+    type=float,
+    default=0.4,
+    help=(
+        "Absolute torso height below which an environment counts as fallen. "
+        "Detected from raw body height, independently of the termination "
+        "manager, so it stays valid when tracking terminations are disabled. "
+        "Default matches the injected base_too_low term."
+    ),
+)
+parser.add_argument(
     "--tracking_success_root_height_threshold",
     type=float,
     default=0.25,
@@ -305,11 +337,11 @@ from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
+    G1_KEYPOINT5_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
 )
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
-    EE_POLICY_INPUT_KEYS,
-    VANILLA_POLICY_INPUT_KEYS,
+    command_space_policy_input_keys,
 )
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
@@ -329,6 +361,33 @@ from planner_latency import PlannerForwardTimer  # noqa: E402
 
 TRACKING_TERMINATION_NAMES = ("anchor_pos", "anchor_ori", "ee_body_pos")
 FALL_TERMINATION_NAME = "base_too_low"
+# Body whose world height defines a fall. Kept identical to the asset_cfg of the
+# injected base_too_low term so the raw-height detector and the termination term
+# cannot disagree about what "fallen" means.
+FALL_TERMINATION_BODY_NAME = "torso_link"
+# Tracking metrics that are also reported truncated at the first fall, as
+# `<name>_prefall`. Restricted to the headline tracking errors: every metric
+# would double the summary for no interpretive gain.
+FALL_TRUNCATED_METRIC_NAMES = (
+    "tracking_mpjpe_mm",
+    "tracked_body_pos_error_m",
+    "root_pos_xyz_error_m",
+    "root_ori_error_rad",
+    "joint_pos_rmse_rad",
+    "tracking_failure",
+)
+# Metrics written per step to the retained `.npz`. Wider than the truncated set
+# because the threshold sweep needs root height *and* orientation error, which
+# are what the failure definition is built from.
+PER_STEP_RETAINED_METRIC_NAMES = (
+    "tracking_mpjpe_mm",
+    "tracked_body_pos_error_m",
+    "root_pos_xyz_error_m",
+    "root_height_error_m",
+    "root_ori_error_rad",
+    "joint_pos_rmse_rad",
+    "tracking_failure",
+)
 
 
 def _disable_tracking_terminations(terminations: Any) -> list[str]:
@@ -346,7 +405,9 @@ from command_publisher import (  # noqa: E402
 )
 from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
+from closed_loop_metrics import FallTracker  # noqa: E402
 from interface_planner_common import (  # noqa: E402
+    INTERFACE_TERMS,
     flatten_command_terms,
     load_language_goal_embedding,
     load_planner_checkpoint,
@@ -583,6 +644,7 @@ def _tracking_metrics(
     dict[str, torch.Tensor], tuple[torch.Tensor, torch.Tensor] | None, torch.Tensor
 ]:
     robot_data = base_env.robot.data
+
     # Newton backend exposes robot_data.* as warp ProxyArrays; torch/jit ops
     # (quat_error_magnitude) need real tensors. `.torch` bridges them (no-op on
     # PhysX where they are already tensors).
@@ -688,10 +750,24 @@ def _refresh_tensordict_observations(
 
 
 def _command_reference_kwargs(
-    interface: str, *, ee_body_names: list[str]
+    interface: str,
+    *,
+    ee_body_names: list[str],
+    keypoint_body_names: list[str] | None = None,
 ) -> dict[str, object]:
+    """Body list for interfaces whose packet carries body-set-valued terms.
+
+    Joint- and anchor-valued terms take no body list; the two body interfaces
+    differ in WHICH set they carry.
+    """
     if interface == "ee_trajectory":
         return {"reference_body_names": tuple(ee_body_names)}
+    if interface == "root_points5":
+        return {
+            "reference_body_names": tuple(
+                keypoint_body_names or G1_KEYPOINT5_BODY_NAMES
+            )
+        }
     return {}
 
 
@@ -751,6 +827,68 @@ def resolve_pinned_command_joint_ids(base_env: ImitationRLEnv) -> torch.Tensor:
     )
 
 
+# Reduced explicit interfaces: single-frame policy-group command spaces whose
+# name IS the command space, unlike full_body_trajectory / ee_trajectory which
+# map onto a separate "single_frame_*" alias.
+_REDUCED_EXPLICIT_INTERFACES = frozenset({"root_qpos", "root_points5"})
+
+# Interface -> the command space its frozen tracker was trained on.
+_INTERFACE_COMMAND_SPACE: dict[str, str] = {
+    "full_body_trajectory": "single_frame_full_body",
+    "ee_trajectory": "single_frame_ee",
+    "root_qpos": "root_qpos",
+    "root_points5": "root_points5",
+}
+
+# Proprioception appears in every command space and is not part of the packet.
+_PROPRIO_TERM_NAMES = frozenset(
+    {"base_ang_vel", "joint_pos_rel", "joint_vel_rel", "last_action"}
+)
+
+
+def _interface_command_term_names(interface: str) -> tuple[str, ...]:
+    """Packet term names for an interface, in the actor's ordered contract.
+
+    Derived from the command space rather than listed per interface, so adding a
+    command space cannot leave a stale list behind here. Cross-checked against
+    the planner's own target registry: those two describe the same packet from
+    opposite ends, and a disagreement means the planner would be trained to
+    predict one layout while the tracker consumes another -- silent, and exactly
+    what the joint-order bug was.
+    """
+    try:
+        command_space = _INTERFACE_COMMAND_SPACE[interface]
+    except KeyError as err:
+        raise ValueError(
+            f"Interface {interface!r} has no command-space mapping; expected one "
+            f"of {sorted(_INTERFACE_COMMAND_SPACE)}."
+        ) from err
+    derived = tuple(
+        key[1]
+        for key in command_space_policy_input_keys(command_space)
+        if key[1] not in _PROPRIO_TERM_NAMES
+    )
+    declared = INTERFACE_TERMS.get(interface)
+    if declared is not None and tuple(declared) != derived:
+        raise ValueError(
+            f"Interface {interface!r} packet layout disagrees between the planner "
+            f"target registry {tuple(declared)!r} and the tracker's command-space "
+            f"contract {derived!r}."
+        )
+    return derived
+
+
+# Command terms carried in JOINT order, and how many joint-width blocks each one
+# holds per frame. These are the only terms pinning applies to; anchor, EE and
+# keypoint terms are body/root quantities with no joint indexing.
+#   expert_motion       2 blocks: cat(joint_pos, joint_vel)
+#   expert_motion_qpos  1 block:  positions only (root_qpos drops velocities)
+_JOINT_INDEXED_COMMAND_TERMS: dict[str, int] = {
+    "expert_motion": 2,
+    "expert_motion_qpos": 1,
+}
+
+
 def pin_command_joint_order(
     command_terms: dict[str, torch.Tensor],
     *,
@@ -759,43 +897,33 @@ def pin_command_joint_order(
 ) -> dict[str, torch.Tensor]:
     """Re-index a live-order command packet into the env's pinned joint order.
 
-    Only ``expert_motion`` is joint-indexed; it holds ``cat(joint_pos,
-    joint_vel)`` per frame, so both halves are permuted identically. The anchor
-    terms are root quantities and are returned untouched.
+    Every joint-indexed term present is permuted; each of its joint-width blocks
+    gets the same permutation. Terms with no joint indexing are returned
+    untouched. Publishing without this delivers every joint target to the wrong
+    joint -- the defect that invalidated the full-body baseline, and it applies
+    equally to any packet carrying a joint half.
     """
-    name = "expert_motion"
-    if name not in command_terms:
-        return command_terms
     steps = int(window_steps)
-    value = command_terms[name]
-    width = int(value.shape[-1])
-    if width % steps != 0:
-        raise ValueError(
-            f"{name} width {width} is not divisible by window_steps {steps}."
-        )
-    per_frame = width // steps
-    if per_frame % 2 != 0:
-        raise ValueError(
-            f"{name} per-frame width {per_frame} is not an even qpos/qvel split."
-        )
-    half = per_frame // 2
     n_joints = int(pinned_joint_ids.numel())
-    if half != n_joints:
-        raise ValueError(
-            f"{name} has {half} joints per half but the pinned order defines "
-            f"{n_joints}; refusing to publish a mismatched command."
-        )
-    index = pinned_joint_ids.to(value.device)
-    frames = value.view(-1, steps, per_frame)
-    out = torch.cat(
-        (
-            frames[..., :half].index_select(-1, index),
-            frames[..., half:].index_select(-1, index),
-        ),
-        dim=-1,
-    )
     result = dict(command_terms)
-    result[name] = out.reshape(-1, width)
+    for name, blocks in _JOINT_INDEXED_COMMAND_TERMS.items():
+        if name not in command_terms:
+            continue
+        value = command_terms[name]
+        width = int(value.shape[-1])
+        if width % steps != 0:
+            raise ValueError(
+                f"{name} width {width} is not divisible by window_steps {steps}."
+            )
+        per_frame = width // steps
+        if per_frame != blocks * n_joints:
+            raise ValueError(
+                f"{name} per-frame width {per_frame} is not {blocks} x "
+                f"{n_joints} joints; refusing to publish a mismatched command."
+            )
+        index = pinned_joint_ids.to(value.device)
+        frames = value.view(-1, steps, blocks, n_joints)
+        result[name] = frames.index_select(-1, index).reshape(-1, width).contiguous()
     return result
 
 
@@ -961,11 +1089,7 @@ def _current_reference_command_terms(
     env_ids: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     ref_kwargs = _command_reference_kwargs(interface, ee_body_names=ee_body_names)
-    term_names = (
-        ("expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b")
-        if interface == "full_body_trajectory"
-        else ("expert_ee_pos_b", "expert_ee_ori_b")
-    )
+    term_names = _interface_command_term_names(interface)
     return {
         term_name: base_env.get_current_expert_window_term(
             term_name=term_name,
@@ -1061,11 +1185,23 @@ def _require_streamed_tracker_checkpoint_contract(
     planner_metadata: dict[str, Any],
     tracker_provenance: dict[str, Any],
     *,
+    interface: str,
+    low_level_command_space: str,
+    policy_command_mode: str,
     command_future_steps: int,
     planner_interval_steps: int,
     seed: int,
-) -> None:
-    """Reject planners trained for a different explicit low-level interface."""
+    allow_shorter_planner_interval: bool = False,
+) -> dict[str, Any]:
+    """Reject planners trained for a different explicit low-level interface.
+
+    The runtime side is passed in rather than assumed: it used to hardcode the
+    full-body triple, which made every non-full-body interface look like a
+    checkpoint/runtime mismatch even when the planner and tracker agreed. The
+    check itself is the valuable part -- it is what catches a planner trained
+    against one interface being evaluated against another -- so it must compare
+    against what the runtime actually resolved.
+    """
     sample_metadata = planner_metadata.get("sample_metadata")
     if not isinstance(sample_metadata, dict):
         raise ValueError(
@@ -1073,10 +1209,10 @@ def _require_streamed_tracker_checkpoint_contract(
             "retrain it from provenance-bound planner samples."
         )
     expected_values = {
-        "interface": "full_body_trajectory",
+        "interface": str(interface),
         "low_level_command_mode": "streamed_vanilla",
-        "low_level_command_space": "single_frame_full_body",
-        "policy_command_mode": "full_body_chunk_current_slot",
+        "low_level_command_space": str(low_level_command_space),
+        "policy_command_mode": str(policy_command_mode),
         "command_past_steps": 0,
         "command_future_steps": int(command_future_steps),
         "planner_interval_steps": int(planner_interval_steps),
@@ -1107,11 +1243,45 @@ def _require_streamed_tracker_checkpoint_contract(
                 "checkpoint": source_tracker.get(key),
                 "runtime": tracker_provenance.get(key),
             }
+    # C3 freshness studies deliberately republish more often than the planner
+    # was trained to (interval 2 or 5 against a 10-frame packet), consuming only
+    # the freshest slots. That IS a train/deploy deviation and the guard is right
+    # to catch it -- but it is a study axis, not a defect, so it gets a narrow,
+    # explicit, RECORDED exemption rather than a relaxed check. Only
+    # planner_interval_steps may be waived, and only when the runtime interval is
+    # shorter (using fewer, fresher slots of a packet the planner did produce).
+    # A longer interval would consume slots past the trained horizon, which is a
+    # genuine contract violation and stays refused.
+    waived: dict[str, Any] = {}
+    if allow_shorter_planner_interval and "planner_interval_steps" in mismatches:
+        entry = mismatches["planner_interval_steps"]
+        checkpoint_interval = entry.get("checkpoint")
+        runtime_interval = entry.get("runtime")
+        if (
+            isinstance(checkpoint_interval, int)
+            and isinstance(runtime_interval, int)
+            and 0 < runtime_interval < checkpoint_interval
+        ):
+            waived["planner_interval_steps"] = mismatches.pop("planner_interval_steps")
     if mismatches:
         raise ValueError(
             "Planner checkpoint is incompatible with the runtime streamed-vanilla "
             f"contract: {mismatches}."
+            + (
+                ""
+                if not waived
+                else f" (waived under --allow_shorter_planner_interval: {waived})"
+            )
         )
+    if waived:
+        print(
+            "[WARN] Contract deviation permitted for a freshness study: "
+            f"{waived}. Only the freshest slots of each packet are consumed; "
+            "this result is NOT matched-contract and must not be compared "
+            "against one without saying so.",
+            flush=True,
+        )
+    return waived
 
 
 agent_entry_point = resolve_agent_cfg_entry_point(args_cli.task, args_cli.algorithm)
@@ -1197,13 +1367,19 @@ def main(
         )
     interface = target_spec.interface
     pin_mode = str(args_cli.pin_command_joint_order)
-    pin_command_joints = pin_mode == "on" or (
-        pin_mode == "auto" and interface == "full_body_trajectory"
-    )
-    if pin_command_joints and interface != "full_body_trajectory":
+    # Pinning applies to any packet carrying a joint half, not to one named
+    # interface: root_qpos publishes 29 joint targets and needs it exactly as
+    # much as full_body_trajectory. Packets made only of body/root quantities
+    # (root_points5, ee_trajectory) have nothing to permute.
+    packet_terms = tuple(target_spec.term_names)
+    has_joint_term = any(name in _JOINT_INDEXED_COMMAND_TERMS for name in packet_terms)
+    pin_command_joints = pin_mode == "on" or (pin_mode == "auto" and has_joint_term)
+    if pin_command_joints and not has_joint_term:
         raise ValueError(
-            "--pin_command_joint_order=on is only defined for the "
-            f"full_body_trajectory packet; got interface={interface!r}."
+            "--pin_command_joint_order=on requires a packet with a joint-indexed "
+            f"term ({sorted(_JOINT_INDEXED_COMMAND_TERMS)}); interface="
+            f"{interface!r} carries {list(packet_terms)}, which has none. Use "
+            "auto (the default), which pins exactly when there are joints."
         )
     atomic_command_anchor = bool(args_cli.atomic_command_anchor)
     in_step_publication = bool(args_cli.in_step_publication) and (
@@ -1241,10 +1417,19 @@ def main(
         elif interface == "ee_trajectory":
             low_level_command_space = "single_frame_ee"
             env_cfg.policy_command_mode = "ee_chunk_current_slot"
+        elif interface in _REDUCED_EXPLICIT_INTERFACES:
+            # root_qpos / root_points5 are already single-frame policy-group
+            # spaces, so the interface name IS the command space -- there is no
+            # separate "single_frame_*" alias to map onto. They share the generic
+            # chunk-slot adapter (see _POLICY_COMMAND_MODES on why the mode name
+            # is historical rather than per-space).
+            low_level_command_space = interface
+            env_cfg.policy_command_mode = "full_body_chunk_current_slot"
         else:
             raise ValueError(
-                "streamed_vanilla supports full_body_trajectory or ee_trajectory "
-                f"planner targets; got {interface!r}."
+                "streamed_vanilla supports explicit command interfaces "
+                f"{sorted({'full_body_trajectory', 'ee_trajectory'} | _REDUCED_EXPLICIT_INTERFACES)}; "
+                f"got {interface!r}."
             )
     else:
         env_cfg.policy_command_mode = "reference"
@@ -1343,16 +1528,18 @@ def main(
                 _DoneTerm(
                     func=_imitation_mdp.root_height_below_minimum,
                     params={
-                        "minimum_height": 0.4,
+                        "minimum_height": float(args_cli.fall_height_m),
                         "asset_cfg": SceneEntityCfg(
-                            "robot", body_names="torso_link"
+                            "robot", body_names=FALL_TERMINATION_BODY_NAME
                         ),
                     },
                 ),
             )
             print(
-                f"[INFO] Injected {FALL_TERMINATION_NAME} (torso root height "
-                "< 0.4 m) for M3 survival on a SONIC env that nulls it.",
+                f"[INFO] Injected {FALL_TERMINATION_NAME} "
+                f"({FALL_TERMINATION_BODY_NAME} height < "
+                f"{float(args_cli.fall_height_m):.2f} m) for M3 survival on a "
+                "SONIC env that nulls it.",
                 flush=True,
             )
         disabled_tracking_termination_terms = _disable_tracking_terminations(
@@ -1445,7 +1632,9 @@ def main(
             ),
             hold_steps=int(args_cli.planner_update_interval),
             window_steps=(
-                int(args_cli.command_past_steps) + 1 + int(args_cli.command_future_steps)
+                int(args_cli.command_past_steps)
+                + 1
+                + int(args_cli.command_future_steps)
             ),
             device=base_env.device,
             joint_reindex=pinned_command_joint_ids,
@@ -1573,10 +1762,11 @@ def main(
         frozen_tracker = load_frozen_low_level_tracker(
             agent,
             checkpoint_path,
-            expected_input_keys=(
-                EE_POLICY_INPUT_KEYS
-                if interface == "ee_trajectory"
-                else VANILLA_POLICY_INPUT_KEYS
+            # Derived from the command space -- the single source of truth the
+            # tracker is actually built from -- so a new command space cannot
+            # drift out of sync with this check.
+            expected_input_keys=command_space_policy_input_keys(
+                low_level_command_space
             ),
             map_location=env_cfg.sim.device,
         )
@@ -1586,12 +1776,18 @@ def main(
         provenance = sample_metadata.get("provenance")
         if isinstance(provenance, dict):
             provenance["low_level_tracker"] = tracker_provenance
-        _require_streamed_tracker_checkpoint_contract(
+        contract_waivers = _require_streamed_tracker_checkpoint_contract(
             planner_metadata,
             tracker_provenance,
+            interface=interface,
+            low_level_command_space=low_level_command_space,
+            policy_command_mode=str(env_cfg.policy_command_mode),
             command_future_steps=int(args_cli.command_future_steps),
             planner_interval_steps=planner_update_interval,
             seed=int(env_cfg.seed),
+            allow_shorter_planner_interval=bool(
+                args_cli.allow_shorter_planner_interval
+            ),
         )
     else:
         agent.load_model(str(checkpoint_path))
@@ -1599,6 +1795,21 @@ def main(
         policy.eval()
 
     num_envs = int(args_cli.num_envs)
+    # Fall detection reads raw torso height, not the termination manager: under
+    # the full-horizon protocol no fall term is registered at all, so anything
+    # keyed on terminations reports zero falls whether or not the robot fell.
+    # Body and threshold match the injected `base_too_low` term above
+    # (torso_link height < 0.4 m) so survival is defined identically either way.
+    # Resolve once so a missing body fails before the rollout, not at step 0.
+    base_env._get_robot_anchor_body_id_fast(FALL_TERMINATION_BODY_NAME)
+    fall_tracker = FallTracker(
+        num_envs,
+        fall_height_m=float(args_cli.fall_height_m),
+        step_dt=step_dt,
+    )
+    per_step_series: dict[str, list[torch.Tensor]] | None = (
+        None if args_cli.no_per_step_metrics else {}
+    )
     active = torch.ones(num_envs, dtype=torch.bool)
     survival_steps = torch.zeros(num_envs, dtype=torch.float32)
     return_sum = torch.zeros(num_envs, dtype=torch.float32)
@@ -1659,8 +1870,8 @@ def main(
     # same contract. The packet it produces is stashed so the loop below can
     # still report planner_target_rmse against the matching expert window.
     _publish_stash: dict[str, object] = {}
-    _window_steps = int(args_cli.command_past_steps) + 1 + int(
-        args_cli.command_future_steps
+    _window_steps = (
+        int(args_cli.command_past_steps) + 1 + int(args_cli.command_future_steps)
     )
 
     def _planner_command_provider(env_ids):
@@ -1748,9 +1959,7 @@ def main(
             reference_terms = _publish_stash.get("reference_terms")
             if predicted_target is not None and reference_terms is not None:
                 planner_publish_count += int(_publish_stash.get("count", 0))
-                reference_target, _ = flatten_command_terms(
-                    interface, reference_terms
-                )
+                reference_target, _ = flatten_command_terms(interface, reference_terms)
         elif int(renew_env_ids.numel()) > 0:
             achieved_batch = base_env.current_causal_planner_observation(
                 env_ids=renew_env_ids,
@@ -1940,6 +2149,7 @@ def main(
                     demonstration_target=demonstration_target,
                     trajectory_rank=traj_rank,
                     episode_id=episode_ids.index_select(0, sample_env_ids_cpu),
+                    env_id=sample_env_ids_cpu,
                     control_step=local_step,
                     planner_step=torch.div(
                         local_step,
@@ -2056,6 +2266,41 @@ def main(
             ),
         )
         tracking_failure_events += (tracking_failure.cpu() & step_active).float()
+        # Raw-height fall detection, and pre-fall truncation of the tracking
+        # metrics. A fallen robot keeps accruing error for the rest of the
+        # rollout while the reference walks away, so the full-horizon mean below
+        # conflates "tracks badly" with "fell at step N"; the *_prefall values
+        # answer only the first question.
+        fall_body_pos_w, _ = base_env._get_robot_anchor_state_w_fast(
+            FALL_TERMINATION_BODY_NAME
+        )
+        fall_body_height = fall_body_pos_w[:num_envs, 2]
+        fall_tracker.update(
+            fall_body_height,
+            {
+                name: values[:num_envs]
+                for name, values in tracking_metrics.items()
+                if name in FALL_TRUNCATED_METRIC_NAMES
+            },
+        )
+        # A3: retain the per-step series so fall time, pre-fall windows and
+        # alternative failure thresholds can be re-derived post hoc. The
+        # aggregate above collapses to {mean, std, count} and throws away
+        # exactly the time structure those questions need. Rollouts are
+        # deterministic, so this is the only copy that matters.
+        if per_step_series is not None:
+            per_step_series.setdefault(
+                f"{FALL_TERMINATION_BODY_NAME}_height_m", []
+            ).append(fall_body_height.detach().float().cpu().clone())
+            per_step_series.setdefault("step_active", []).append(
+                step_active.detach().cpu().clone()
+            )
+            for name in PER_STEP_RETAINED_METRIC_NAMES:
+                values = tracking_metrics.get(name)
+                if values is not None:
+                    per_step_series.setdefault(name, []).append(
+                        values[:num_envs].detach().float().cpu().clone()
+                    )
         for metric_name, values in tracking_metrics.items():
             _accumulate_metric(metric_stats, metric_name, values.cpu(), metric_mask)
         if body_lin_vel is not None and step_dt is not None:
@@ -2092,10 +2337,31 @@ def main(
     active_mask = survival_steps > 0
     return_mean, return_std = _tensor_mean_std(return_sum, active_mask)
     survival_mean, survival_std = _tensor_mean_std(survival_steps, active_mask)
-    fall_events = termination_hits.get(
-        FALL_TERMINATION_NAME, torch.zeros(num_envs, dtype=torch.bool)
-    )
+    # Falls come from raw torso height, never from the termination manager.
+    # `G1SonicTerminationsCfg` sets base_too_low=None and the full-horizon
+    # protocol nulls the remaining tracking terms, so the previous
+    # `termination_hits.get(FALL_TERMINATION_NAME, zeros)` default made "no
+    # detector registered" indistinguishable from "no falls" -- every run
+    # reported fall_rate 0.00 while robots lay on the floor for hundreds of
+    # steps. FallTracker does not depend on which terms are active.
+    fall_summary = fall_tracker.summary()
+    fall_events = fall_tracker.fall_step >= 0
     fall_free = ~fall_events
+    # Report the termination-derived count alongside, but do not require the two
+    # to match and do not use it as the headline. When the term is registered it
+    # *resets* the environment on the step it fires, so the state this loop
+    # reads afterwards is the post-reset upright pose -- the height detector
+    # legitimately sees fewer breaches than the term counts. The two are
+    # different quantities, not a consistency check.
+    fall_summary["fall_detection_source"] = "raw_body_height"
+    fall_summary["fall_body_name"] = FALL_TERMINATION_BODY_NAME
+    termination_fall_events = termination_hits.get(FALL_TERMINATION_NAME)
+    fall_summary["termination_registered"] = termination_fall_events is not None
+    fall_summary["termination_fallen_env_count"] = (
+        None
+        if termination_fall_events is None
+        else int(termination_fall_events.sum().item())
+    )
     aggregate = {
         "return_sum_mean": return_mean,
         "return_sum_std": return_std,
@@ -2148,6 +2414,12 @@ def main(
             term_name: int(values[active_mask].sum().item())
             for term_name, values in termination_hits.items()
         },
+        # Raw-height fall detection: fall_step / fall_time_s per environment,
+        # plus every FALL_TRUNCATED_METRIC_NAMES entry averaged over pre-fall
+        # steps only, as `<name>_prefall`. The full-horizon means above keep
+        # accruing error after a fall, so quote *_prefall when the question is
+        # "how well does it track" and fall_step when it is "did it stay up".
+        "fall_detection": fall_summary,
     }
     summary = {
         "metadata": {
@@ -2170,8 +2442,18 @@ def main(
             "planner_metadata": planner_metadata,
             "planner_observation_spec": runtime_planner_observation_spec,
             "low_level_tracker": tracker_provenance,
+            # Non-empty only when --allow_shorter_planner_interval waived a
+            # streamed-vanilla contract term. Present so a C3 freshness result
+            # can never be mistaken downstream for a matched-contract one.
+            "streamed_contract_waivers": contract_waivers,
             "num_envs": int(num_envs),
             "seed": int(env_cfg.seed),
+            # The physics backend the rollout actually ran on. The frozen
+            # low-level checkpoints are Newton-trained, so evaluating them under
+            # PhysX would be a silent plant mismatch -- and nothing else in this
+            # summary would show it. command.txt carries the override, but the
+            # aggregators read this file, so record it where they can see it.
+            "physics_backend": type(getattr(env_cfg.sim, "physics", None)).__name__,
             "motion_manifest": str(motion_manifest)
             if motion_manifest is not None
             else None,
@@ -2262,6 +2544,8 @@ def main(
                 "survival_steps": int(survival_steps[env_id].item()),
                 "survived_without_fall": bool(fall_free[env_id].item()),
                 "fell": bool(fall_events[env_id].item()),
+                "fall_step": fall_summary["fall_step"][env_id],
+                "fall_time_s": fall_summary["fall_time_s"][env_id],
                 "done": bool(done_events[env_id].item() > 0),
                 "terminated": bool(terminated_events[env_id].item() > 0),
                 "truncated": bool(truncated_events[env_id].item() > 0),
@@ -2289,6 +2573,30 @@ def main(
         json.dumps(summary, indent=2, default=_json_default) + "\n",
         encoding="utf-8",
     )
+    if per_step_series:
+        import numpy as _np
+
+        per_step_path = output_json.with_name(f"{output_json.stem}_per_step.npz")
+        # [steps, num_envs] per key, so a reader can slice either axis without
+        # knowing the schema.
+        _np.savez_compressed(
+            per_step_path,
+            **{
+                name: torch.stack(chunks).numpy()
+                for name, chunks in per_step_series.items()
+            },
+            fall_step=fall_tracker.fall_step.numpy(),
+            step_dt=_np.asarray(
+                float("nan") if step_dt is None else float(step_dt), dtype=_np.float64
+            ),
+            fall_height_m=_np.asarray(float(args_cli.fall_height_m)),
+        )
+        summary["metadata"]["per_step_metrics_path"] = str(per_step_path)
+        output_json.write_text(
+            json.dumps(summary, indent=2, default=_json_default) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[INFO] Wrote per-step metrics: {per_step_path}", flush=True)
     if balanced_selector is not None and not balanced_selector.complete:
         raise RuntimeError(
             "Balanced collection ended before the selected motion reached its "

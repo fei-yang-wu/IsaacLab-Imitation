@@ -72,10 +72,13 @@ case "${VARIANT}" in
         echo "        See qualify_interface.sh; use root_points5 instead." >&2
         exit 2 ;;
     root_qpos)
+        # Command space BUILT and certified 2026-07-27: streamed slots reproduce
+        # the unchunked reference bit-exactly on the joint half and to ~1e-6 on
+        # the root half, at all 10 hold phases (smoke_test_reduced_interface_streaming.py).
         PER_FRAME=38
         LOW_LEVEL="${ROOT_QPOS_LOW_LEVEL_CHECKPOINT:-}"
         CONTROLLER="NEEDS TRAINING (~1B frames, 2-day walltime)"
-        NEEDS="command space 'root_qpos' in COMMAND_SPACE_ALIASES + its input-key list; then train the controller" ;;
+        NEEDS="the low-level controller for command_space='root_qpos' (the command space itself is built and certified)" ;;
     root_qpos_sel)
         SELECTED_JOINTS="${SELECTED_JOINTS:?set SELECTED_JOINTS, e.g. the 12 leg joints}"
         PER_FRAME=$((9 + $(awk -F, '{print NF}' <<<"${SELECTED_JOINTS}")))
@@ -83,10 +86,14 @@ case "${VARIANT}" in
         CONTROLLER="NEEDS TRAINING (~1B frames, 2-day walltime)"
         NEEDS="command space 'root_qpos_sel' + a PRINCIPLED joint-selection rule; then train the controller" ;;
     root_points5)
+        # Command space BUILT and certified 2026-07-27 alongside root_qpos.
+        # Keypoints are pelvis + the four EE bodies, positions only, expressed in
+        # the same anchor frame as the root half so one transform re-expresses
+        # the whole packet.
         PER_FRAME=24
         LOW_LEVEL="${ROOT_POINTS5_LOW_LEVEL_CHECKPOINT:-}"
         CONTROLLER="NEEDS TRAINING (~1B frames, 2-day walltime)"
-        NEEDS="command space 'root_points5' (4 EE + pelvis) + its input-key list; then train the controller" ;;
+        NEEDS="the low-level controller for command_space='root_points5' (the command space itself is built and certified)" ;;
     *) echo "[ERROR] unknown VARIANT=${VARIANT}" >&2; exit 2 ;;
 esac
 # ------------------------------------------------------- horizon / overlap --
@@ -142,8 +149,22 @@ cat <<INFO
 INFO
 
 # Fail fast rather than silently running the full-body packet under an ablation
-# label. Every variant below needs target-spec support that is not yet built.
-if [[ "${ALLOW_UNIMPLEMENTED:-0}" != "1" ]]; then
+# label. A variant is READY only once its command space exists, its own low-level
+# controller is trained, and that controller's oracle has passed
+# qualify_interface.sh on this interface.
+#
+# READY as of 2026-07-28 (qualify_interface.sh, walk1_subject1, frame-0/700-step):
+#   root_qpos     380  oracle 23.6 mm  (full-body reference 23.8 mm)
+#   root_points5  240  oracle 30.6 mm  (latent reference     30.5 mm)
+# Chunking loss was +0.0/-0.0 mm on both, so planner error on these interfaces is
+# attributable to the planner.
+READY_VARIANTS="${READY_VARIANTS:-root_qpos root_points5}"
+variant_is_ready=0
+for _ready in ${READY_VARIANTS}; do
+    [[ "${VARIANT}" == "${_ready}" ]] && variant_is_ready=1
+done
+
+if [[ "${variant_is_ready}" != "1" && "${ALLOW_UNIMPLEMENTED:-0}" != "1" ]]; then
     cat >&2 <<ERR
 [ERROR] VARIANT=${VARIANT} is not implemented yet. Missing: ${NEEDS}.
 
@@ -171,8 +192,20 @@ fi
 # reduced interface. If the oracle cannot track, the interface is unusable and
 # planner results on it would be meaningless.
 ORACLE_DIR="${STUDY_ROOT}/oracle_baselines/${VARIANT}"
-echo "[ablation] STEP 1 oracle qualification -> ${ORACLE_DIR}"
-[[ "${DRY_RUN}" == "1" ]] || mkdir -p "${ORACLE_DIR}"
+echo "[ablation] STEP 1 oracle metrics + demonstrations -> ${ORACLE_DIR}"
+# The grid's planner-pretrain stage reads
+# ${ORACLE_DIR}/oracle_demonstrations/rollout_training_samples, so the demos must
+# actually be collected here -- creating the directory is not enough.
+if [[ -s "${ORACLE_DIR}/oracle_demonstrations/rollout_training_samples/sample_step_000000.pt" ]]; then
+    echo "[ablation]   demonstrations already present; skipping collection"
+elif [[ "${DRY_RUN}" == "1" ]]; then
+    echo "[ablation]   would run prepare_oracle_baselines.sh INTERFACES=${VARIANT}"
+else
+    mkdir -p "${ORACLE_DIR}"
+    INTERFACES="${VARIANT}" OUTPUT_ROOT="${STUDY_ROOT}/oracle_baselines" \
+    MOTION_NAME="${MOTION_NAME}" MANIFEST="${MANIFEST}" \
+        "${SCRIPT_DIR}/prepare_oracle_baselines.sh"
+fi
 
 # ------------------------------------------------------------------ grid ----
 echo "[ablation] STEP 2 capacity grid (one cell per size x seed)"

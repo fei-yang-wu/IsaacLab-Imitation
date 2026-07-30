@@ -12,13 +12,13 @@ job chronology, and incident history stay in
 documents. Update this page whenever a campaign produces or invalidates a
 result, and stamp the section with the verification date.
 
-Last updated: 2026-07-23.
+Last updated: 2026-07-29.
 
 ---
 
 ## 1. Latent encoder experiments and ablations
 
-Verified: 2026-07-22 (local 10M qualification gate complete).
+Verified: 2026-07-29 (Stable-vs-Strict 500M inference diagnostic complete).
 
 ### Question
 
@@ -72,6 +72,32 @@ Qualification root:
   optimization landscape.
 - Adding policy gradient into the encoder (`sonic_fsq_pg` vs `fsq_recon`)
   did not help at this budget (21.73 vs 24.63 ep_len).
+
+### Stable-vs-Strict low-level inference at ~500M
+
+ICE retained both checkpoints needed for this diagnostic. Completed job
+`5542378` supplied the new Stable/SONIC
+`Isaac-Imitation-G1-Latent-v0` checkpoint at 500,072,448 frames; the earlier
+Strict run supplied `Isaac-Imitation-G1-Latent-Strict-v0` at 500,170,752
+frames. Both use the same tensor-identical h10 DiffSR skill encoder
+(`5c84ff72...264ea`).
+
+Matched full-horizon model inference covered all 40 corrected LAFAN1 motions
+for 1,000 steps each, with deterministic tracking and every early termination
+disabled:
+
+| Recipe | Root-relative MPJPE | Joint RMSE | Velocity | Acceleration | Action change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Stable/SONIC | 111.17 mm | 0.303 rad | 0.654 m/s | 11.884 m/s2 | 1.692 |
+| Strict | 129.84 mm | 0.275 rad | 0.576 m/s | 8.009 m/s2 | 1.085 |
+
+Stable's MPJPE is 18.67 mm (`14.38%`) lower, while its joint and temporal
+metrics are worse. This is a diagnostic trend rather than a claim: it is just
+below the roughly 15% resolution threshold suggested by earlier repeated
+inference, and the two ICE runs used different training geometry
+(`4096 x 24` versus `16384 x 12`). The strict-termination pass favored Stable
+on truncated MPJPE (33.32 vs 40.79 mm) but favored Strict on success
+(0.24 vs 0.19), reinforcing why the equal full-horizon comparison is primary.
 
 ### Status and next step
 

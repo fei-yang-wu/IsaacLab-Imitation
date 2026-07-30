@@ -36,6 +36,13 @@ NestedKey: TypeAlias = str | tuple[str, ...]
 _MDP_COMPILED: Any | None = None
 
 _COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracle"})
+# ``*_chunk_current_slot`` all mean the same thing: the actor reads its command
+# from the phase-aligned slot of the held packet instead of from the live
+# reference. Only the packet's *content* differs by command space, so the
+# reduced explicit interfaces (root_qpos, root_points5) reuse
+# ``full_body_chunk_current_slot`` rather than adding names that behave
+# identically. ``ee_chunk_current_slot`` is retained for the abandoned EE
+# tracker's recorded contract.
 _POLICY_COMMAND_MODES = frozenset(
     {"reference", "full_body_chunk_current_slot", "ee_chunk_current_slot"}
 )
@@ -519,6 +526,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._command_ee_body_names = tuple(
             str(name) for name in getattr(cfg, "command_ee_body_names", ())
         )
+        self._command_keypoint_body_names = tuple(
+            str(name) for name in getattr(cfg, "command_keypoint_body_names", ())
+        )
         self._command_observation_source = _normalize_command_observation_source(
             getattr(cfg, "command_observation_source", "reference")
         )
@@ -566,6 +576,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 window_steps=self._agent_trajectory_command_window_steps,
                 num_joints=len(self.reference_joint_names),
                 num_ee_bodies=len(self._command_ee_body_names),
+                num_keypoint_bodies=len(self._command_keypoint_body_names),
                 device=torch.device(device),
             )
         )
@@ -1943,6 +1954,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         window_steps: int,
         num_joints: int,
         num_ee_bodies: int,
+        num_keypoint_bodies: int = 0,
         device: torch.device,
     ) -> dict[str, torch.Tensor]:
         def zeros(width: int) -> torch.Tensor:
@@ -1951,10 +1963,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         window_steps = int(window_steps)
         return {
             "expert_motion": zeros(window_steps * 2 * int(num_joints)),
+            # root_qpos: the position half only, so the packet carries no joint
+            # velocities at all rather than zero-filling them.
+            "expert_motion_qpos": zeros(window_steps * int(num_joints)),
             "expert_anchor_pos_b": zeros(window_steps * 3),
             "expert_anchor_ori_b": zeros(window_steps * 6),
             "expert_ee_pos_b": zeros(window_steps * int(num_ee_bodies) * 3),
             "expert_ee_ori_b": zeros(window_steps * int(num_ee_bodies) * 6),
+            # root_points5: positions only, and a body set of its own so its
+            # packet slot never collides with the EE interface's.
+            "expert_keypoint_pos_b": zeros(window_steps * int(num_keypoint_bodies) * 3),
         }
 
     def _ensure_agent_trajectory_command_terms(self) -> None:
@@ -2389,14 +2407,20 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 f"{tuple(value.shape)} for window_steps={window_steps}."
             )
         frame_width = int(value.shape[1]) // window_steps
-        if term_name == "expert_motion":
-            expected_frame_width = 2 * int(
-                self._get_joint_ids_tensor_fast(joint_ids).numel()
+        if term_name in ("expert_motion", "expert_motion_qpos"):
+            # ``joint_ids`` defaults to slice(None), for which the fast lookup
+            # returns the slice itself rather than an index tensor -- that is
+            # every reference joint, which is what the window path selects too.
+            joint_ids_t = self._get_joint_ids_tensor_fast(joint_ids)
+            num_joints = (
+                len(self.reference_joint_names)
+                if isinstance(joint_ids_t, slice)
+                else int(joint_ids_t.numel())
             )
-        elif term_name == "expert_motion_qpos":
-            # Positions only -- half the full-body joint payload.
-            expected_frame_width = int(
-                self._get_joint_ids_tensor_fast(joint_ids).numel()
+            # expert_motion carries positions AND velocities; expert_motion_qpos
+            # is the position half only.
+            expected_frame_width = num_joints * (
+                2 if term_name == "expert_motion" else 1
             )
         elif term_name == "expert_anchor_pos_b":
             expected_frame_width = 3
@@ -2408,6 +2432,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             expected_frame_width = n_bodies * (
                 3 if term_name == "expert_ee_pos_b" else 6
             )
+        elif term_name == "expert_keypoint_pos_b":
+            # One 3-vector per keypoint; no orientation half.
+            expected_frame_width = max(int(len(reference_body_names)), 1) * 3
         else:
             raise KeyError(f"Unsupported chunk tracker command term {term_name!r}.")
         if frame_width != expected_frame_width:
@@ -4246,29 +4273,67 @@ class ImitationRLEnv(ManagerBasedRLEnv):
 
         terms = {
             "expert_motion": expert_motion,
+            "expert_motion_qpos": joint_pos.reshape(batch_size, -1),
             "expert_anchor_pos_b": anchor_pos_b.reshape(batch_size, -1),
             "expert_anchor_ori_b": compiled.quat_to_rot6d_flat(anchor_ori_b).reshape(
                 batch_size, -1
             ),
         }
         if body_terms_enabled:
-            terms["expert_ee_pos_b"] = body_pos_b.reshape(batch_size, -1)
+            body_pos_flat = body_pos_b.reshape(batch_size, -1)
+            terms["expert_ee_pos_b"] = body_pos_flat
             terms["expert_ee_ori_b"] = compiled.quat_to_rot6d_flat(body_ori_b).reshape(
                 batch_size, -1
             )
+            # root_points5 wants the same anchor-frame body positions without the
+            # orientation half. Exposing them under a second name lets the two
+            # interfaces request different body sets: the cache key upstream
+            # already includes reference_body_names, so a keypoint request builds
+            # its own entry rather than reusing the EE one.
+            terms["expert_keypoint_pos_b"] = body_pos_flat
         return terms
 
-    @staticmethod
-    def _expert_macro_feature_term_order() -> tuple[str, ...]:
+    def _expert_macro_feature_term_order(self) -> tuple[str, ...]:
+        """Expert-window terms that make up one DiffSR macro-state frame.
+
+        Configurable because the skill encoder's input width is defined by this
+        selection: the default gives 58+3+6 = 67/frame -> 670 for a 10-frame
+        window, byte-identical to the full-body packet. Selecting
+        ``expert_motion_qpos`` instead gives 29+3+6 = 38 -> 380, byte-identical
+        to the root_qpos packet, which is what a GR00T-style whole-body
+        qpos+root latent interface needs. Nothing in the DiffSR trainer has to
+        know -- it reads whatever macro state the environment produces.
+        """
+        configured = getattr(self.cfg, "expert_macro_state_terms", None)
+        if configured:
+            # A bare string is iterable, so `for name in configured` would
+            # silently yield single characters as term names. Hydra delivers
+            # `env.expert_macro_state_terms=[a,b,c]` as a string in some
+            # invocation forms, so accept and split it rather than producing
+            # nonsense terms.
+            if isinstance(configured, str):
+                configured = [
+                    part.strip()
+                    for part in configured.strip().strip("[]").split(",")
+                    if part.strip()
+                ]
+            names = tuple(str(name) for name in configured)
+            if not names or any(len(name) <= 1 for name in names):
+                raise ValueError(
+                    "expert_macro_state_terms parsed to "
+                    f"{names!r}, which is not a list of term names. Pass it as "
+                    "a list, e.g. "
+                    "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]."
+                )
+            return names
         return (
             "expert_motion",
             "expert_anchor_pos_b",
             "expert_anchor_ori_b",
         )
 
-    @classmethod
     def _expert_macro_state_sequence_from_terms(
-        cls,
+        self,
         terms: dict[str, torch.Tensor],
         *,
         batch_size: int,
@@ -4276,7 +4341,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     ) -> torch.Tensor:
         """Convert flattened expert-window terms into [B, T, D] state features."""
         features: list[torch.Tensor] = []
-        for term_name in cls._expert_macro_feature_term_order():
+        for term_name in self._expert_macro_feature_term_order():
             value = terms[term_name]
             if value.ndim != 2 or int(value.shape[0]) != int(batch_size):
                 raise ValueError(
@@ -4293,9 +4358,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             features.append(value.reshape(batch_size, window_steps, -1))
         return torch.cat(features, dim=-1)
 
-    @classmethod
     def _expert_macro_state_feature_slices_from_terms(
-        cls,
+        self,
         terms: dict[str, torch.Tensor],
         *,
         batch_size: int,
@@ -4305,7 +4369,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         del batch_size
         cursor = 0
         slices: dict[str, tuple[int, int]] = {}
-        for term_name in cls._expert_macro_feature_term_order():
+        for term_name in self._expert_macro_feature_term_order():
             value = terms[term_name]
             if value.ndim != 2:
                 raise ValueError(
@@ -4488,11 +4552,12 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                         "Expert mapper received expert_window requests without trajectory-local steps."
                     )
                     return None
-                reference_body_names = (
-                    self._command_ee_body_names
-                    if term_name in {"expert_ee_pos_b", "expert_ee_ori_b"}
-                    else ()
-                )
+                if term_name in {"expert_ee_pos_b", "expert_ee_ori_b"}:
+                    reference_body_names = self._command_ee_body_names
+                elif term_name == "expert_keypoint_pos_b":
+                    reference_body_names = self._command_keypoint_body_names
+                else:
+                    reference_body_names = ()
                 cache_key = (
                     int(past_steps),
                     int(future_steps),

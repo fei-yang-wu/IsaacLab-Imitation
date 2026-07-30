@@ -183,6 +183,28 @@ def expert_window_motion(
     )
 
 
+def expert_window_motion_qpos(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Window form of :func:`policy_expert_motion_qpos`.
+
+    Exists so the DiffSR macro state can be built over the ``root_qpos`` command
+    space (29 joint positions + 9 root = 38/frame -> 380 per 10-frame window)
+    instead of the full-body space (67/frame -> 670). That makes the skill
+    encoder's input width byte-identical to the ``root_qpos`` packet, exactly as
+    the existing 670-wide encoder matches the full-body packet.
+    """
+    return env.get_current_command_window_term(
+        term_name="expert_motion_qpos",
+        past_steps=past_steps,
+        future_steps=future_steps,
+        joint_ids=asset_cfg.joint_ids,
+    )
+
+
 def expert_window_anchor_pos_b(
     env: ImitationRLEnv,
     past_steps: int = 1,
@@ -282,6 +304,53 @@ def policy_expert_ee_ori_b(
         )
     return env.current_full_body_tracker_command_term(
         "expert_ee_ori_b",
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def policy_expert_keypoint_pos_b(
+    env: ImitationRLEnv,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor sparse-keypoint command, direct or streamed from a published chunk.
+
+    ``root_points5`` carries keypoint POSITIONS only (no per-keypoint rot6d), so
+    this is the position half of the same anchor-frame body transform the EE
+    terms use, exposed under its own name so its body set and its slot in the
+    held packet stay independent of the EE interface's.
+    """
+    del asset_cfg
+    if env.policy_command_mode == "reference":
+        return expert_window_keypoint_pos_b(
+            env,
+            past_steps=0,
+            future_steps=0,
+            reference_body_names=reference_body_names,
+            anchor_body_name=anchor_body_name,
+        )
+    return env.current_full_body_tracker_command_term(
+        "expert_keypoint_pos_b",
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def expert_window_keypoint_pos_b(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    del asset_cfg
+    return env.get_current_command_window_term(
+        term_name="expert_keypoint_pos_b",
+        past_steps=past_steps,
+        future_steps=future_steps,
         anchor_body_name=anchor_body_name,
         reference_body_names=reference_body_names,
     )

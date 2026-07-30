@@ -196,6 +196,98 @@ def tracking_metrics(
     return metrics, tracked_body_lin_vel, tracking_failure
 
 
+class FallTracker:
+    """Detect falls from raw root height and truncate metrics at the first fall.
+
+    Why this is not read from the termination manager: under the full-horizon
+    protocol every tracking termination is nulled, and `G1SonicTerminationsCfg`
+    already sets `base_too_low = None`, so no fall term is registered at all.
+    Anything keyed on terminations therefore reports zero falls whether or not
+    the robot fell -- a missing detector is indistinguishable from no falls.
+    Root height is observable regardless of which terms are active.
+
+    Truncation matters because a fallen robot keeps accruing tracking error for
+    the rest of the rollout while the reference walks away, so a full-horizon
+    mean conflates "tracks badly" with "fell at step N". `mpjpe_prefall` answers
+    only the first question; `fall_step` answers only the second.
+
+    Batched counterpart of ``_PolicyTrackingMetrics`` in
+    ``scripts/compare_policy_reference.py``.
+    """
+
+    def __init__(
+        self, num_envs: int, *, fall_height_m: float = 0.4, step_dt: float | None = None
+    ) -> None:
+        self._fall_height = float(fall_height_m)
+        self._step_dt = None if step_dt is None else float(step_dt)
+        self._steps = 0
+        self.fall_step = torch.full((int(num_envs),), -1, dtype=torch.long)
+        self.min_root_height = torch.full((int(num_envs),), float("inf"))
+        # Per-metric running sums restricted to pre-fall steps.
+        self._prefall_sums: dict[str, torch.Tensor] = {}
+        self._prefall_counts = torch.zeros(int(num_envs), dtype=torch.long)
+
+    @property
+    def upright(self) -> torch.Tensor:
+        """Environments that have not yet fallen."""
+        return self.fall_step < 0
+
+    def update(
+        self, root_height: torch.Tensor, metrics: dict[str, torch.Tensor]
+    ) -> None:
+        """Record one control step. Call once per step, before metrics are masked."""
+        height = root_height.detach().float().cpu().reshape(-1)
+        self.min_root_height = torch.minimum(self.min_root_height, height)
+        was_upright = self.upright
+        breaching = height < self._fall_height
+        # Accumulate over steps STRICTLY BEFORE the first breach, matching
+        # `values[:fallen_at]` in the single-env reference. The breaching step
+        # itself is already a collapsed pose, so including it would let the fall
+        # contaminate the pre-fall average -- exactly what truncation exists to
+        # prevent.
+        contributing = was_upright & ~breaching
+        if contributing.any():
+            self._prefall_counts += contributing.long()
+            for name, value in metrics.items():
+                flat = value.detach().float().cpu().reshape(-1)
+                total = self._prefall_sums.setdefault(name, torch.zeros_like(flat))
+                total += torch.where(contributing, flat, torch.zeros_like(flat))
+        newly_fallen = was_upright & breaching
+        self.fall_step = torch.where(
+            newly_fallen, torch.full_like(self.fall_step, self._steps), self.fall_step
+        )
+        self._steps += 1
+
+    def summary(self) -> dict[str, Any]:
+        fell = self.fall_step >= 0
+        survived = torch.where(
+            fell, self.fall_step, torch.full_like(self.fall_step, self._steps)
+        )
+        prefall = {
+            f"{name}_prefall": (total / self._prefall_counts.clamp_min(1))
+            for name, total in self._prefall_sums.items()
+        }
+        return {
+            "fall_height_threshold_m": self._fall_height,
+            "steps": int(self._steps),
+            "fall_rate": float(fell.float().mean().item()),
+            "fallen_env_count": int(fell.sum().item()),
+            "fall_step": [int(v) if v >= 0 else None for v in self.fall_step.tolist()],
+            "fall_time_s": [
+                None if v < 0 or self._step_dt is None else float(v) * self._step_dt
+                for v in self.fall_step.tolist()
+            ],
+            "survived_steps_mean": float(survived.float().mean().item()),
+            "survived_fraction_mean": float(
+                (survived.float() / max(self._steps, 1)).mean().item()
+            ),
+            "min_root_height_m": float(self.min_root_height.min().item()),
+            # Averaged before the fall, so a collapsed robot can neither flatter
+            # nor inflate the tracking numbers.
+            **{name: float(values.mean().item()) for name, values in prefall.items()},
+        }
+
+
 def accumulate_metric(
     stats: dict[str, list[torch.Tensor]],
     metric_name: str,
@@ -226,9 +318,7 @@ def finalize_metric_stats(
     return finalized
 
 
-def tensor_mean_std(
-    values: torch.Tensor, mask: torch.Tensor
-) -> tuple[float, float]:
+def tensor_mean_std(values: torch.Tensor, mask: torch.Tensor) -> tuple[float, float]:
     """Return population mean and standard deviation over a boolean mask."""
     selected = values[mask]
     if selected.numel() == 0:

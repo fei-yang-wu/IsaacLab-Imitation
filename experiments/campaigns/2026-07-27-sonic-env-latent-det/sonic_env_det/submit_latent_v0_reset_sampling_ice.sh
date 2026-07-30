@@ -143,7 +143,7 @@ fi
 
 submit_arm() {
     local arm="$1"
-    local run_tag="latent_v0_e4096_s24_reset_${arm}_seed${SEED}"
+    local run_tag="${RUN_TAG_PREFIX:-latent_v0}_e4096_s24_reset_${arm}_seed${SEED}"
 
     local extra=(
         --assert-kitless

@@ -23,15 +23,23 @@ EVAL_SEED="${EVAL_SEED:-0}"
 DEVICE="${DEVICE:-cuda:0}"
 DRY_RUN="${DRY_RUN:-0}"
 EVAL_STEPS="${EVAL_STEPS:-700}"
-DEMO_ROWS="${DEMO_ROWS:-1000}"
+# Demonstration budget, in ROWS. This must match what prepare_oracle_baselines.sh
+# actually collected (DEMO_TRAJECTORIES=100 -> 5000 rows), because it is passed
+# as the trainer's --max_samples cap: leaving it at the old 1000 would silently
+# subsample away 80% of the demonstration set and quietly reinstate the thin-data
+# regime the 100-trajectory re-collection exists to leave. Quote the budget as
+# 100 trajectories; 5000 rows is the derived number (one row per env per publish).
+DEMO_ROWS="${DEMO_ROWS:-5000}"
+# Unchanged on purpose: the optimizer budget must stay identical across
+# interfaces and sizes, so more data means fewer epochs, not more updates.
 NUM_UPDATES="${NUM_UPDATES:-2000}"
-# Rollout-collection horizon. The balanced collector stops as soon as it has
-# the exact per-motion row budget, so this is slack, not extra data: 10 envs x
-# 1000 steps / 10-step publication interval is EXACTLY DEMO_ROWS with zero
-# margin, and any env that reaches the end of the motion (wrap_steps=false)
-# then leaves the budget unreachable. AGENTS.md allows the outer collector to
-# continue across resets until the exact row count is met.
-COLLECT_STEPS="${COLLECT_STEPS:-3000}"
+# Rollout-collection horizon for the finetune stage. The balanced collector stops
+# as soon as it has the exact per-motion row budget, so this is slack, not extra
+# data: 10 envs x COLLECT_STEPS / 10-step publication interval must EXCEED
+# DEMO_ROWS with margin, because any env that reaches the end of the motion
+# (wrap_steps=false) leaves the budget unreachable. AGENTS.md allows the outer
+# collector to continue across resets until the exact row count is met.
+COLLECT_STEPS="${COLLECT_STEPS:-15000}"
 # DEMO_ONLY=1 stops after the demonstration-only planner and its evaluation,
 # skipping rollout collection, merge, finetune and the finetuned evaluation.
 # The demo-only row is the paper-leading comparison (identical footing for both
@@ -205,7 +213,7 @@ chunk_eval() {  # interface checkpoint planner output label
         --headless --device "${DEVICE}" --task "${CHUNK_TASK}" --algorithm IPMD \
         --checkpoint "${checkpoint}" --low_level_command_mode streamed_vanilla \
         --planner_checkpoint "${planner}" --output_json "${output}/summary.json" \
-        --pin_command_joint_order on \
+        --pin_command_joint_order "${PIN_COMMAND_JOINT_ORDER:-auto}" \
         --label "${label}" --motion_manifest "${MANIFEST}" --motion_name "${MOTION_NAME}" \
         --num_envs "${FH_ENVS}" --steps "${EVAL_STEPS}" --seed "${EVAL_SEED}" \
         --state_history_steps 9 --command_past_steps 0 --command_future_steps 9 \
@@ -224,7 +232,7 @@ chunk_collect() {  # interface checkpoint pretrained_planner output
         --headless --device "${DEVICE}" --task "${CHUNK_TASK}" --algorithm IPMD \
         --checkpoint "${checkpoint}" --low_level_command_mode streamed_vanilla \
         --planner_checkpoint "${planner}" --output_json "${output}/summary.json" \
-        --pin_command_joint_order on \
+        --pin_command_joint_order "${PIN_COMMAND_JOINT_ORDER:-auto}" \
         --label "capacity_${MODEL_SIZE}_seed${PLANNER_SEED}_${interface}_rollout" \
         --motion_manifest "${MANIFEST}" --motion_name "${MOTION_NAME}" \
         --num_envs 10 --steps "${COLLECT_STEPS}" --seed "${EVAL_SEED}" --state_history_steps 9 \
@@ -294,6 +302,11 @@ for interface in ${INTERFACES:-latent_skill full_body_trajectory ee_trajectory};
         latent_skill) run_interface latent_skill latent ;;
         full_body_trajectory) run_interface full_body_trajectory chunk "${FBCHUNK_LOW_LEVEL_CHECKPOINT}" ;;
         ee_trajectory) run_interface ee_trajectory chunk "${EECHUNK_LOW_LEVEL_CHECKPOINT}" ;;
+        # Reduced explicit interfaces (qualified 2026-07-28). They use the same
+        # chunk path as full-body: a single-frame tracker consuming one slot per
+        # control step, with the packet published at 5 Hz.
+        root_qpos) run_interface root_qpos chunk "${ROOT_QPOS_LOW_LEVEL_CHECKPOINT}" ;;
+        root_points5) run_interface root_points5 chunk "${ROOT_POINTS5_LOW_LEVEL_CHECKPOINT}" ;;
         *) echo "[ERROR] unknown interface ${interface}" >&2; exit 2 ;;
     esac
 done

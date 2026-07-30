@@ -17,7 +17,16 @@ from pathlib import Path
 from typing import Any
 
 
-INTERFACES = ("latent_skill", "full_body_trajectory", "ee_trajectory")
+# Ordered by packet size so tables read as a compression ladder. Only the
+# interfaces actually passed via --oracle become active (see active_interfaces),
+# so listing one here does not require it to be present in a given study.
+INTERFACES = (
+    "latent_skill",
+    "full_body_trajectory",
+    "root_qpos",
+    "root_points5",
+    "ee_trajectory",
+)
 STAGES = {
     "demonstration_only": "eval_pretrained_10starts/summary.json",
     "rollout_finetuned": "eval_finetuned_10starts/summary.json",
@@ -67,6 +76,15 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output_dir", type=Path)
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--stages",
+        nargs="+",
+        default=None,
+        choices=sorted(STAGES),
+        help="Stages to aggregate. Defaults to all. Use "
+        "--stages demonstration_only for a DEMO_ONLY run, which produces no "
+        "eval_finetuned_* artifacts.",
+    )
     return parser.parse_args()
 
 
@@ -172,6 +190,17 @@ def _row(
         "survival_steps_mean": float(
             summary.get("aggregate", {}).get("survival_steps_mean", float("nan"))
         ),
+        # Raw-height fall detection and metrics truncated at the first fall.
+        # The full-horizon `metrics` above keep accruing error after a robot is
+        # already on the floor, so they partly measure *when* it fell; the
+        # *_prefall entries here measure only how well it tracked while upright.
+        # Report both -- a low prefall MPJPE with an early fall_step means good
+        # tracking that did not last, which the full-horizon mean cannot express.
+        "fall_detection": summary.get("aggregate", {}).get("fall_detection", {}),
+        # Held-out validation fit from the trajectory-wise split. Absent when
+        # the planner was trained with --val_trajectory_fraction 0, in which
+        # case there is no generalization number for this cell.
+        "trajectory_split": config.get("trajectory_split", {}),
         "planner_inference_latency_ms": _latency(summary),
         "metrics": metrics,
         "oracle_normalized_metrics": normalized,
@@ -217,10 +246,20 @@ def aggregate(
     sizes: list[str],
     size_roots: dict[str, Path] | None = None,
     interface_roots: dict[tuple[str, str], Path] | None = None,
+    stages: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     # Aggregate over whichever interfaces have an oracle (latent is required, plus
     # at least one explicit interface). This allows a latent+FB run before the
     # EE-chunk adapter lands, then a full latent+FB+EE run later.
+    # DEMO_ONLY runs produce no eval_finetuned_* artifacts. The paper config
+    # defaults to grid.demo_only=true, so the aggregator must support that subset
+    # rather than requiring a stage the protocol never generated.
+    active_stages = tuple(stages) if stages else tuple(STAGES)
+    unknown_stages = [stage for stage in active_stages if stage not in STAGES]
+    if unknown_stages:
+        raise ValueError(
+            f"Unknown stage(s) {unknown_stages}; expected a subset of {list(STAGES)}."
+        )
     active_interfaces = tuple(i for i in INTERFACES if i in oracle_paths)
     if "latent_skill" not in active_interfaces or len(active_interfaces) < 2:
         raise ValueError(
@@ -245,11 +284,11 @@ def aggregate(
     rows: list[dict[str, Any]] = []
     starts: list[tuple[int, ...]] = []
     contracts_by_stage: dict[str, list[dict[str, Any]]] = {
-        stage: [] for stage in STAGES
+        stage: [] for stage in active_stages
     }
     for size in sizes:
         for interface in active_interfaces:
-            for stage in STAGES:
+            for stage in active_stages:
                 row, row_starts, contract = _row(
                     interface_root=resolved_interface_roots[(size, interface)],
                     size=size,
@@ -268,7 +307,7 @@ def aggregate(
                 [contract[key] for contract in contracts],
             )
     empirical_minimums: list[dict[str, Any]] = []
-    for stage in STAGES:
+    for stage in active_stages:
         for interface in active_interfaces:
             candidates = [
                 row
@@ -299,7 +338,7 @@ def aggregate(
             for (size, interface), root in resolved_interface_roots.items()
         },
         "interfaces": list(active_interfaces),
-        "stages": list(STAGES),
+        "stages": list(active_stages),
         "evaluation_starts": list(common_starts),
         "oracles": oracles,
         "rows": rows,
@@ -411,6 +450,7 @@ def main() -> None:
         sizes=[str(size) for size in args.sizes],
         size_roots=size_roots,
         interface_roots=interface_roots,
+        stages=tuple(args.stages) if args.stages else None,
     )
     json_path = output_dir / "capacity_results.json"
     markdown_path = output_dir / "capacity_results.md"

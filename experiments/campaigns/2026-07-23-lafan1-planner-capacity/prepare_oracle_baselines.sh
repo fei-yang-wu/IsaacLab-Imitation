@@ -20,8 +20,43 @@ source "${SCRIPT_DIR}/paths.env"
 DEVICE="${DEVICE:-cuda:0}"
 DRY_RUN="${DRY_RUN:-0}"
 ORACLE_SEED="${ORACLE_SEED:-0}"
-DEMO_ROWS="${DEMO_ROWS:-1000}"
 ORACLE_STEPS="${ORACLE_STEPS:-700}"
+ORACLE_ENVS="${ORACLE_ENVS:-10}"
+
+# ------------------------------------------------- DEMONSTRATION BUDGET ------
+# The budget is expressed in TRAJECTORIES, not rows. A trajectory is one episode
+# in one environment -- the unit VLA work reports and the unit a held-out split
+# has to respect. Rows are a derived quantity: one row per environment per
+# planner publish, so a 500-step episode published every 10 steps contributes 50
+# rows. Reporting "1000 rows" conflated the two and made a 10-trajectory set
+# look like a large one.
+DEMO_TRAJECTORIES="${DEMO_TRAJECTORIES:-100}"
+DEMO_ENVS="${DEMO_ENVS:-10}"
+# Episode length, pinned identically for every interface. Both collectors
+# otherwise pick their own: the chunk collector stretches the timeout to cover
+# all control steps (recorded 20.04 s -> one uninterrupted rollout), while the
+# latent one keeps the task default (10.0 s -> a reset every 500 steps).
+# Different reset cadence means different training state distributions, which is
+# not something a capacity comparison may vary.
+DEMO_EPISODE_LENGTH_S="${DEMO_EPISODE_LENGTH_S:-10.0}"
+DEMO_CONTROL_HZ="${DEMO_CONTROL_HZ:-50}"
+DEMO_PUBLISH_INTERVAL="${DEMO_PUBLISH_INTERVAL:-10}"
+
+# Derived. Kept as arithmetic rather than magic numbers so changing the budget
+# in trajectories cannot silently desynchronize the step count from the row
+# count -- collection stops at whichever limit binds first, so a mismatch would
+# quietly truncate the set.
+DEMO_EPISODE_STEPS=$(awk "BEGIN{printf \"%d\", ${DEMO_EPISODE_LENGTH_S} * ${DEMO_CONTROL_HZ}}")
+if (( DEMO_TRAJECTORIES % DEMO_ENVS != 0 )); then
+    echo "[ERROR] DEMO_TRAJECTORIES (${DEMO_TRAJECTORIES}) must be a multiple of DEMO_ENVS (${DEMO_ENVS}) so every environment contributes equally." >&2
+    exit 2
+fi
+DEMO_EPISODES_PER_ENV=$(( DEMO_TRAJECTORIES / DEMO_ENVS ))
+DEMO_STEPS=$(( DEMO_EPISODES_PER_ENV * DEMO_EPISODE_STEPS ))
+DEMO_ROWS="${DEMO_ROWS:-$(( DEMO_TRAJECTORIES * DEMO_EPISODE_STEPS / DEMO_PUBLISH_INTERVAL ))}"
+echo "[INFO] Demonstration budget: ${DEMO_TRAJECTORIES} trajectories" \
+     "(${DEMO_ENVS} envs x ${DEMO_EPISODES_PER_ENV} episodes x ${DEMO_EPISODE_STEPS} steps)" \
+     "-> ${DEMO_STEPS} control steps, ${DEMO_ROWS} rows."
 OUTPUT_ROOT="${OUTPUT_ROOT:-logs/interface_baselines/lafan1_planner_capacity_20260723/oracle_baselines}"
 
 # Runtime abstraction: local uses pixi; inside the ICE container ISAAC_PY is set
@@ -88,6 +123,11 @@ _FH_COMMON=(
 LATENT_FH=("${_FH_COMMON[@]}")
 CHUNK_FH=("${_FH_COMMON[@]}")
 
+# INTERFACES gates every block below, latent included. It used to gate only the
+# chunk rows, so the two latent Isaac runs fired on every invocation -- including
+# `INTERFACES=root_points5`, and once per interface when a caller loops.
+INTERFACES="${INTERFACES:-latent_skill full_body_trajectory ee_trajectory}"
+
 # ---------------------------------------------------------------- LATENT -----
 latent_oracle="${OUTPUT_ROOT}/latent_skill/oracle_frame0_${ORACLE_STEPS}"
 latent_demos="${OUTPUT_ROOT}/latent_skill/oracle_demonstrations"
@@ -114,23 +154,38 @@ latent_common=(
     "${LATENT_CMD[@]}" "${LATENT_REWARD_ZEROS[@]}" "${NEWTON_ARGS[@]}"
 )
 
-# (a) frame-0 / ORACLE_STEPS full-horizon oracle metrics summary.
-run_if_missing "${latent_oracle}/summary.json" \
-    "${latent_common[@]}" \
-    --num_envs 10 --max_steps "${ORACLE_STEPS}" \
-    "${VIDEO_ARGS[@]}" \
-    --output_dir "${latent_oracle}" --label latent_oracle_frame0_${ORACLE_STEPS} \
-    "${LATENT_FH[@]}"
+if [[ " ${INTERFACES} " == *" latent_skill "* ]]; then
+    # (a) frame-0 / ORACLE_STEPS full-horizon oracle metrics summary.
+    run_if_missing "${latent_oracle}/summary.json" \
+        "${latent_common[@]}" \
+        --num_envs 10 --max_steps "${ORACLE_STEPS}" \
+        "${VIDEO_ARGS[@]}" \
+        --output_dir "${latent_oracle}" --label latent_oracle_frame0_${ORACLE_STEPS} \
+        "${LATENT_FH[@]}"
 
-# (b) balanced oracle demonstration rows (broad coverage over the motion).
-run_if_missing "${latent_demos}/rollout_training_samples/sample_step_000000.pt" \
-    "${latent_common[@]}" \
-    --num_envs 10 --max_steps 1000 --disable_tracking_terminations \
-    --save_rollout_training_samples --continue_after_reset \
-    --balanced_rows_per_motion "${DEMO_ROWS}" --balanced_motion_names "${MOTION_NAME}" \
-    --sample_rows_per_file "${DEMO_ROWS}" \
-    --output_dir "${latent_demos}" --label latent_oracle_demonstrations \
-    env.random_reset_step_min=0 env.random_reset_step_max=200
+    # (b) balanced oracle demonstration rows (broad coverage over the motion).
+    #
+    # --allow_random_reset is required for the two overrides on the last line to
+    # survive. Without it `eval_skill_commander_closed_loop.py:1282-1289` forces
+    # random_reset_step_min/max back to 0/0 *after* Hydra has applied them, so
+    # every recorded latent demonstration set until 2026-07-28 started at frame
+    # 0 while the explicit sets started uniformly in 0-200 (confirmed in the
+    # recorded summary.json: latent max 0, explicit max 200). The override was
+    # dead code, not a setting.
+    run_if_missing "${latent_demos}/rollout_training_samples/sample_step_000000.pt" \
+        "${latent_common[@]}" \
+        --num_envs "${DEMO_ENVS}" --max_steps "${DEMO_STEPS}" \
+        --disable_tracking_terminations \
+        --save_rollout_training_samples --continue_after_reset \
+        --allow_random_reset \
+        --balanced_rows_per_motion "${DEMO_ROWS}" --balanced_motion_names "${MOTION_NAME}" \
+        --sample_rows_per_file "${DEMO_ROWS}" \
+        --output_dir "${latent_demos}" --label latent_oracle_demonstrations \
+        env.random_reset_step_min=0 env.random_reset_step_max=200 \
+        "env.episode_length_s=${DEMO_EPISODE_LENGTH_S}"
+else
+    echo "[SKIP] latent_skill not in INTERFACES"
+fi
 
 # ------------------------------------------------------------- FB / EE CHUNK -
 chunk_oracle() {
@@ -145,28 +200,62 @@ chunk_oracle() {
         --motion_manifest "${MANIFEST}"
         --planner_interval_steps 10 --command_future_steps 9 --command_past_steps 0
         --low_level_command_mode streamed_vanilla --state_history_steps 9
-        --seed "${ORACLE_SEED}" --num_envs 10 "${KIT_QUIET[@]}" "${NEWTON_ARGS[@]}"
+        --seed "${ORACLE_SEED}" "${KIT_QUIET[@]}" "${NEWTON_ARGS[@]}"
     )
     # (a) frame-0 / ORACLE_STEPS full-horizon oracle metrics summary (eval only).
     run_if_missing "${oracle}/summary.json" \
         "${collect[@]}" \
-        --control_steps "${ORACLE_STEPS}" \
+        --control_steps "${ORACLE_STEPS}" --num_envs "${ORACLE_ENVS}" \
         --reference_start_frame 0 --evaluation_only "${VIDEO_ARGS[@]}" \
         --output_dir "${oracle}" "${CHUNK_FH[@]}"
     # (b) balanced oracle demonstration rows.
+    #
+    # The two flags below exist to make this collection identical to the latent
+    # arm's. Without them the demonstration sets were collected under different
+    # start distributions, so every downstream capacity comparison was
+    # uncontrolled (audit 2026-07-28):
+    #
+    #   --disable_tracking_terminations  disables anchor_pos / anchor_ori /
+    #       ee_body_pos, which the latent call has disabled since it was
+    #       written. This is the asymmetry that actually mattered: with those
+    #       terms ACTIVE, an explicit episode was terminated and reset the
+    #       moment its tracker drifted, so the explicit demonstration sets
+    #       contain only well-tracked states while the latent set contains
+    #       drifted ones too (recorded state std 0.854-0.904 vs latent 1.014).
+    #       An explicit planner trained only on well-tracked states has never
+    #       seen the drifted states it must recover from at test time, which
+    #       biases the closed-loop comparison against it. The flag also pins
+    #       random_reset_step_min/max to 0/200 -- already what the explicit arms
+    #       recorded, so that part is a no-op here and the equalizing change on
+    #       the latent side is --allow_random_reset.
+    #
+    #   --keep_configured_episode_length  the collector otherwise stretches
+    #       episode_length_s to cover all 1000 control steps (recorded 20.04),
+    #       giving one uninterrupted rollout per env. The latent call does NOT
+    #       pass --extend_episode_length_for_max_steps, so it kept the 10 s /
+    #       500-step episode and reset once mid-collection. Both are now pinned
+    #       to DEMO_EPISODE_LENGTH_S so the reset cadence is identical.
     run_if_missing "${demos}/rollout_training_samples/sample_step_000000.pt" \
         "${collect[@]}" \
-        --control_steps 1000 --reset_schedule sequential --reference_start_frame 0 \
+        --control_steps "${DEMO_STEPS}" --num_envs "${DEMO_ENVS}" \
+        --reset_schedule sequential --reference_start_frame 0 \
+        --disable_tracking_terminations --keep_configured_episode_length \
         --balanced_rows_per_motion "${DEMO_ROWS}" --balanced_motion_names "${MOTION_NAME}" \
         --sample_rows_per_file "${DEMO_ROWS}" \
-        --output_dir "${demos}"
+        --output_dir "${demos}" \
+        "env.episode_length_s=${DEMO_EPISODE_LENGTH_S}"
 }
 
-# streamed_vanilla is full-body only; EE oracle waits on the ee-chunk adapter.
-INTERFACES="${INTERFACES:-latent_skill full_body_trajectory ee_trajectory}"
 [[ " ${INTERFACES} " == *" full_body_trajectory "* ]] && \
     chunk_oracle full_body_trajectory "${FBCHUNK_LOW_LEVEL_CHECKPOINT}"
 [[ " ${INTERFACES} " == *" ee_trajectory "* ]] && \
     chunk_oracle ee_trajectory "${EECHUNK_LOW_LEVEL_CHECKPOINT}"
+# Reduced explicit interfaces (qualified 2026-07-28): same chunk path, own
+# controller. chunk_oracle is interface-generic, so these need no special case
+# beyond naming their checkpoint.
+[[ " ${INTERFACES} " == *" root_qpos "* ]] && \
+    chunk_oracle root_qpos "${ROOT_QPOS_LOW_LEVEL_CHECKPOINT}"
+[[ " ${INTERFACES} " == *" root_points5 "* ]] && \
+    chunk_oracle root_points5 "${ROOT_POINTS5_LOW_LEVEL_CHECKPOINT}"
 
 echo "[PASS] Oracle baselines prepared under ${OUTPUT_ROOT} for: ${INTERFACES}"

@@ -1234,3 +1234,49 @@ should be labeled as such, not presented as the matched comparison).
 - The chunk planners are chunked Transformers (~20M params); the latent
   planner is the existing flow-matching SkillCommander (~2M params). Report
   parameter counts alongside tracking metrics.
+
+## 2026-07-29 mechanism study (shared-tracker BB1/BB3, one motion walk1, seed 0 unless noted)
+
+Artifacts under `logs/interface_baselines/{bb1_shared_tracker,bb3_noise_curves,covariate_shift,c3_freshness,bb1_repeatability}`.
+Scripts: `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_bb1_shared_tracker_sweep.sh`,
+`run_bb3_noise_curves.sh`, `interface_baselines/analyze_planner_residual_structure.py`.
+
+**BB1 (headline).** FB planner -> frozen 670 encoder -> latent tracker, vs latent
+planner -> same tracker. Gate: expert packet through the identical path reproduces
+the latent oracle (30.37 vs 30.42 mm). Over sizes small/medium/large x seeds 0-2,
+latent is **3.19x better** oracle-normalized with no seed overlap between arms and
+no oracle-normalization needed (single shared tracker/encoder/ceiling).
+
+**Mechanism ledger** (each tested, most refuted):
+- Encoder absorbs command error: **NO**, three ways -- white-noise contraction 1.9x,
+  real-residual contraction 1.65 (train) / 1.23 (deploy), all amplifying; and the
+  planner's real error through the shared tracker costs 2.3x more than white noise
+  of matched alpha (122-137 vs 54 mm).
+- Interfaces differ in error tolerance: **only in a narrow band, and it crosses.**
+  Full noise curve (packet-side vs z-side, same latent tracker, 3 reps/point,
+  alphas 0.1-4.0): parity to 0.5; **z 17% cheaper at alpha=1.0 (0.83x)** -- the
+  band real planners occupy; parity again in means by 1.25; z worse by 2.0
+  (1.24x). Both cliffs onset near alpha~1.3 (packet: 54->64->120->173->220 over
+  1.0->2.0). Past onset, z fails BIMODALLY (a=1.5 reps 58/100/177 mm, sd 60 vs
+  packet 23): a corrupted code either stays decodable or leaves the manifold,
+  while the 670-d packet degrades gradually. Zero falls even at alpha=4
+  (+-32 deg/frame). Working story: z's usable region extends ~25% further and
+  covers the planner operating point (FB deploys at alpha~1.12, ~0.2 below the
+  cliff); beyond it the code loses meaning per-rollout rather than by degrees.
+  Ties to BB1 via residual geometry: latent planner errors are low-rank
+  (top-PC 55%), plausibly on-manifold and cheap; FB planner errors act like
+  white noise at alpha~1.5 (120 mm ~ its real 122-137 mm).
+- Covariate shift: FB planner alpha 0.074 on oracle states -> **1.120 on its own
+  visited states (15x)**, temporal coherence 0.356 -> 0.972. Latent planner's
+  visited-state alpha is **higher** (1.301, own units), so shift magnitude does not
+  order the interfaces; latent residual is far more low-rank (top-PC 55% vs 18%).
+- Freshness (C3, recorded contract waiver `streamed_contract_waivers`):
+  republish interval 2/5/10 -> **361/213/104 mm**. Faster replanning is strictly
+  worse; staleness is NOT the failure mode. Supports boundary-discontinuity
+  mechanism -> C1 delta parameterization is the indicated intervention.
+
+**Evaluation noise:** identical runs differ; sd scales with error level
+(~2% relative near oracle, ~12% at 135 mm; 5 identical large/seed0 runs:
+136/118/138/162/125). Single-run cells cannot resolve sub-15% differences in the
+high-error regime. The offline encoder-contraction metric does not transfer to
+closed loop and should not be quoted.

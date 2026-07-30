@@ -108,6 +108,30 @@ _LATENT_STRICT_TASK_KWARGS = {
     ),
 }
 
+# Default latent task surface (2026-07-27): the full SONIC release recipe with
+# this repo's legacy reset distribution ([0, 200] starts,
+# `failure_rate_max_over_mean=50`) and strict-from-scratch terminations. The
+# 2026-07-27 reset-sampling screen showed SONIC's full-trajectory
+# adaptive-failure sampler, not its rewards or actuators, was what cost ~5.6x
+# episode length at 4096 environments; see `ImitationG1LatentStableEnvCfg`.
+#
+# The agent side stays the SONIC input-key contract
+# (`G1ImitationLatentSonicRLOptIPMDConfig`, local optimizer contract), matching
+# the arms this surface was validated against.
+#
+# The previous default (`_LATENT_STRICT_TASK_KWARGS`, the plain strict surface)
+# is still reachable at `Isaac-Imitation-G1-Latent-Strict-v0`. Every result
+# before 2026-07-27 that names `Isaac-Imitation-G1-Latent-v0` -- Study B, the
+# Study C grouped-VQ arms and their continuation segments, and the low-level
+# qualification artifacts -- was produced on that surface and must use the
+# explicit id to stay reproducible.
+_LATENT_STABLE_TASK_KWARGS = {
+    **_LATENT_SONIC_TASK_KWARGS,
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentStableEnvCfg"
+    ),
+}
+
 _LATENT_GOAL_TASK_KWARGS = {
     "env_cfg_entry_point": (
         f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentGoalEnvCfg"
@@ -139,6 +163,24 @@ _LATENT_PER_STEP_VQ_TASK_KWARGS = {
     ),
     "rlopt_ipmd_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentPerStepVQRLOptIPMDConfig"
+    ),
+}
+
+# SONIC-motivated per-step FSQ token interface. Built on the *strict* bundle,
+# not the legacy one `_LATENT_PER_STEP_VQ_TASK_KWARGS` inherits through
+# `ImitationG1LatentFutureCVAEEnvCfg`: the qualified LAFAN1 oracles and the
+# Study B/C arms all ran on the strict surface, so only this lineage is
+# comparable with them.
+_LATENT_SONIC_FSQ_TASK_KWARGS = {
+    **_LATENT_STRICT_TASK_KWARGS,
+    "env_cfg_entry_point": (
+        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentSonicFSQEnvCfg"
+    ),
+    "rlopt_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicFSQRLOptIPMDConfig"
+    ),
+    "rlopt_ipmd_cfg_entry_point": (
+        f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicFSQRLOptIPMDConfig"
     ),
 }
 
@@ -199,10 +241,22 @@ gym.register(
     kwargs=_VANILLA_STRICT_TASK_KWARGS,
 )
 
-# Default latent task (2026-07-21): the strict/legacy-optimizer surface; see
-# _LATENT_STRICT_TASK_KWARGS above.
+# Default latent task (2026-07-27): SONIC release recipe with this repo's
+# legacy reset distribution; see _LATENT_STABLE_TASK_KWARGS above.
 gym.register(
     id="Isaac-Imitation-G1-Latent-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_STABLE_TASK_KWARGS,
+)
+
+# The previous default (2026-07-21 to 2026-07-27). Everything recorded against
+# `Isaac-Imitation-G1-Latent-v0` before 2026-07-27 ran on this surface: Study B
+# DiffSR bottlenecks, the Study C grouped-VQ capacity arms, and the low-level
+# qualification artifacts. Use this explicit id for any continuation segment or
+# re-run of that work; the default id no longer reproduces it.
+gym.register(
+    id="Isaac-Imitation-G1-Latent-Strict-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
     kwargs=_LATENT_STRICT_TASK_KWARGS,
@@ -287,6 +341,16 @@ gym.register(
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
     kwargs=_LATENT_PER_STEP_VQ_TASK_KWARGS,
+)
+
+# SONIC method replication (2026-07-28): per-step FSQ tokens, co-trained
+# encoder, strict lineage. See the campaign under
+# experiments/campaigns/2026-07-28-sonic-method-replication/.
+gym.register(
+    id="Isaac-Imitation-G1-Latent-SonicFSQ-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_SONIC_FSQ_TASK_KWARGS,
 )
 
 gym.register(

@@ -5,7 +5,12 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
 SESSION="${SESSION:-lafan1-closed-loop-eval}"
-TASK="${TASK:-Isaac-Imitation-G1-Latent-v0}"
+# Pinned 2026-07-28: this script defaults to a pre-2026-07-27 checkpoint, and on
+# that date `Isaac-Imitation-G1-Latent-v0` was re-pointed to the SONIC-actuator
+# surface (hip stiffness 40->99, action scale 0.55->0.35). Running this frozen
+# policy on the new default would silently evaluate it on a different plant.
+# Override TASK explicitly if you supply a post-07-27 checkpoint.
+TASK="${TASK:-Isaac-Imitation-G1-Latent-Strict-v0}"
 ALGORITHM="${ALGORITHM:-IPMD}"
 CHECKPOINT="${CHECKPOINT:-logs/rlopt/ipmd/Isaac-Imitation-G1-Latent-v0/2026-06-11_23-21-31/models/model_step_4600037376.pt}"
 MANIFEST="${MANIFEST:-/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/data/lafan1/manifests/g1_lafan1_manifest.json}"

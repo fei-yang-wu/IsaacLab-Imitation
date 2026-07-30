@@ -222,6 +222,58 @@ parser.add_argument(
     help="Restrict env.trajectories to this trajectory before env creation.",
 )
 parser.add_argument(
+    "--packet_planner_checkpoint",
+    type=Path,
+    default=None,
+    help=(
+        "BB1 shared-tracker mode: drive this latent tracker from an explicit "
+        "packet planner routed through the frozen skill encoder, instead of "
+        "from the expert window. Requires command_source=hl_skill."
+    ),
+)
+parser.add_argument(
+    "--packet_source",
+    choices=("planner", "expert"),
+    default="planner",
+    help=(
+        "'expert' is the pin test: route the environment's own expert window "
+        "through the identical reorder/split/encode path instead of the "
+        "planner's prediction. It must reproduce the latent oracle exactly; if "
+        "it does not, the bug is in the packet plumbing, not the interface."
+    ),
+)
+parser.add_argument(
+    "--packet_noise_alpha",
+    type=float,
+    default=0.0,
+    help=(
+        "BB3: noise added to the packet BEFORE the encoder, in per-dimension "
+        "std units. Mutually exclusive with --z_noise_alpha."
+    ),
+)
+parser.add_argument(
+    "--z_noise_alpha",
+    type=float,
+    default=0.0,
+    help="BB3: noise added to z AFTER the encoder, in per-dimension std units.",
+)
+parser.add_argument(
+    "--noise_reference_samples",
+    type=Path,
+    default=None,
+    help=(
+        "Oracle sample .pt used to calibrate both BB3 noise scales, so an alpha "
+        "means the same relative perturbation on either side of the encoder."
+    ),
+)
+parser.add_argument("--noise_seed", type=int, default=0)
+parser.add_argument(
+    "--packet_interface",
+    type=str,
+    default="full_body_trajectory",
+    help="Interface the --packet_planner_checkpoint must declare.",
+)
+parser.add_argument(
     "--allow_random_reset",
     action="store_true",
     default=False,
@@ -376,6 +428,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env
 )
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
     LATENT_POLICY_INPUT_KEYS,
+    SONIC_LATENT_POLICY_INPUT_KEYS,
 )
 from isaaclab_tasks.utils import (
     compute_kit_requirements,
@@ -419,6 +472,19 @@ if str(INTERFACE_BASELINE_DIR) not in sys.path:
     sys.path.append(str(INTERFACE_BASELINE_DIR))
 from balanced_motion_rows import BalancedMotionRowSelector  # noqa: E402
 from interface_planner_common import load_planner_checkpoint  # noqa: E402
+
+sys.path.append(  # noqa: E402
+    str(
+        Path(__file__).resolve().parents[2]
+        / "experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines"
+    )
+)
+from packet_to_latent_command import (  # noqa: E402
+    FRAME_WIDTH,
+    build_noise_reference,
+    PACKET_FRAMES,
+    install_packet_encoder_command_source,
+)
 from low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
 from paper_protocol_metadata import (  # noqa: E402
     disable_domain_randomization,
@@ -743,9 +809,7 @@ def _tracking_metrics(
         robot_data.root_ang_vel_w, label="robot root angular velocity"
     )
     root_pos_error = root_pos_w - root_pos_ref
-    root_ori_error = math_utils.quat_error_magnitude(
-        root_quat_w, root_quat_ref
-    )
+    root_ori_error = math_utils.quat_error_magnitude(root_quat_w, root_quat_ref)
     root_height_error = torch.abs(root_pos_error[:, 2])
     tracking_failure = torch.zeros_like(root_height_error, dtype=torch.bool)
     if float(tracking_success_root_height_threshold) > 0.0:
@@ -783,9 +847,7 @@ def _tracking_metrics(
             tracked_tensors["actual_quat"].reshape(-1, 4),
             tracked_tensors["ref_quat"].reshape(-1, 4),
         ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
-        actual_root_rel = (
-            tracked_tensors["actual_pos"] - root_pos_w[:, None, :]
-        )
+        actual_root_rel = tracked_tensors["actual_pos"] - root_pos_w[:, None, :]
         ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
         tracking_mpjpe_m = torch.linalg.vector_norm(
             actual_root_rel - ref_root_rel, dim=-1
@@ -1115,6 +1177,11 @@ def _measure_commander(
             demonstration_target=z_target,
             trajectory_rank=traj_rank,
             episode_id=episode_ids,
+            # Rows here are the full env batch in order, so the env index is the
+            # row index. Needed with episode_id to identify a trajectory: the
+            # counter is per-env, so env 0 episode 1 and env 3 episode 1 are
+            # different rollouts sharing a number.
+            env_id=torch.arange(int(episode_ids.reshape(-1).numel())),
             control_step=local_step,
             planner_step=torch.div(local_step, horizon_steps, rounding_mode="floor"),
             motion_names=sample_motion_names,
@@ -1567,14 +1634,113 @@ def main(
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
+    resolved_policy_input_keys = tuple(agent_cfg.policy.get_input_keys())
+    supported_latent_policy_input_keys = {
+        tuple(LATENT_POLICY_INPUT_KEYS),
+        tuple(SONIC_LATENT_POLICY_INPUT_KEYS),
+    }
+    if resolved_policy_input_keys not in supported_latent_policy_input_keys:
+        raise ValueError(
+            "Closed-loop latent evaluation requires either the legacy/Strict "
+            "or SONIC/Stable ordered actor-input contract, got "
+            f"{resolved_policy_input_keys!r}."
+        )
     frozen_tracker = load_frozen_low_level_tracker(
         agent,
         checkpoint_path,
-        expected_input_keys=LATENT_POLICY_INPUT_KEYS,
+        expected_input_keys=resolved_policy_input_keys,
         map_location=env_cfg.sim.device,
     )
     collector_policy = frozen_tracker.policy
     tracker_provenance = frozen_tracker.provenance
+    # BB1 shared-tracker comparison: drive THIS latent tracker from an explicit
+    # packet planner routed through the frozen skill encoder, so the only thing
+    # that differs from the latent row is the planner's output space. Requires
+    # the oracle sampler, because that is the one holding the encoder.
+    packet_encoder_stats: Any = None
+    packet_encoder_provenance: dict[str, Any] | None = None
+    if args_cli.packet_planner_checkpoint is not None:
+        if command_source != "hl_skill":
+            raise ValueError(
+                "--packet_planner_checkpoint requires "
+                "agent.ipmd.command_source=hl_skill (the oracle sampler owns the "
+                f"frozen skill encoder); got command_source={command_source!r}."
+            )
+        packet_sampler = getattr(agent, "_hl_skill_command_sampler", None)
+        if packet_sampler is None:
+            raise RuntimeError("No high-level command sampler was constructed.")
+        packet_planner_path = (
+            Path(args_cli.packet_planner_checkpoint).expanduser().resolve()
+        )
+        packet_planner, packet_spec, _packet_meta = load_planner_checkpoint(
+            packet_planner_path, map_location=env_cfg.sim.device
+        )
+        # map_location only controls where the *tensors* are unpickled; the
+        # reconstructed module is still built on CPU, so its parameters and
+        # normalization buffers must be moved explicitly or the first forward
+        # dies on a cuda/cpu addmm mismatch.
+        packet_planner = packet_planner.to(device=env_cfg.sim.device)
+        if str(packet_spec.interface) != str(args_cli.packet_interface):
+            raise ValueError(
+                f"Packet planner targets {packet_spec.interface!r} but "
+                f"--packet_interface is {args_cli.packet_interface!r}."
+            )
+
+        def _packet_causal_state(env_ids: Tensor) -> Tensor:
+            return _planner_state(
+                wrapped_env.current_causal_planner_observation(
+                    env_ids=env_ids,
+                    history_steps=int(args_cli.state_history_steps),
+                ),
+                int(args_cli.state_history_steps),
+            )
+
+        packet_noise_reference = None
+        if (
+            float(args_cli.packet_noise_alpha) > 0.0
+            or float(args_cli.z_noise_alpha) > 0.0
+        ):
+            if args_cli.noise_reference_samples is None:
+                raise ValueError(
+                    "BB3 noise requires --noise_reference_samples so both "
+                    "alphas are calibrated against the same oracle packets."
+                )
+            ref = torch.load(
+                Path(args_cli.noise_reference_samples).expanduser().resolve(),
+                map_location="cpu",
+                weights_only=False,
+            )
+            key = "causal_target" if "causal_target" in ref else "demonstration_target"
+            packet_noise_reference = build_noise_reference(
+                packet_sampler.skill_encoder, ref[key]
+            )
+        packet_encoder_stats = install_packet_encoder_command_source(
+            packet_sampler,
+            planner=packet_planner,
+            causal_state_provider=_packet_causal_state,
+            env=raw_isaac_env,
+            flow_num_inference_steps=int(args_cli.flow_num_inference_steps),
+            flow_inference_noise_std=float(args_cli.flow_inference_noise_std),
+            packet_source=str(args_cli.packet_source),
+            packet_noise_alpha=float(args_cli.packet_noise_alpha),
+            z_noise_alpha=float(args_cli.z_noise_alpha),
+            noise_seed=int(args_cli.noise_seed),
+            noise_reference=packet_noise_reference,
+        )
+        packet_encoder_provenance = {
+            "packet_source": str(args_cli.packet_source),
+            "packet_planner_checkpoint": str(packet_planner_path),
+            "packet_planner_sha256": _file_sha256(packet_planner_path),
+            "packet_interface": str(packet_spec.interface),
+            "packet_target_dim": int(packet_spec.target_dim),
+            "encoder_input_width": int(FRAME_WIDTH * PACKET_FRAMES),
+        }
+        print(
+            f"[INFO] BB1: {packet_spec.interface} planner "
+            f"({packet_spec.target_dim}) -> frozen skill encoder -> z -> latent "
+            "tracker.",
+            flush=True,
+        )
     planner_latency_timer: PlannerForwardTimer | None = None
     if command_source == "skill_commander":
         command_sampler = getattr(agent, "_hl_skill_command_sampler", None)
@@ -1694,6 +1860,17 @@ def main(
             "provenance": {
                 "low_level_checkpoint": str(checkpoint_path),
                 "low_level_tracker": tracker_provenance,
+                # BB1: present only when the command came from an explicit packet
+                # planner through the frozen encoder. `publishes` counts encoder
+                # calls so a summary cannot silently report the latent oracle path.
+                "packet_encoder_command": (
+                    None
+                    if packet_encoder_provenance is None
+                    else {
+                        **packet_encoder_provenance,
+                        **(packet_encoder_stats() if packet_encoder_stats else {}),
+                    }
+                ),
                 "planner_checkpoint": (
                     str(planner_checkpoint_path)
                     if planner_checkpoint_path is not None
@@ -2091,6 +2268,17 @@ def main(
             "algorithm": args_cli.algorithm,
             "checkpoint": str(checkpoint_path),
             "low_level_tracker": tracker_provenance,
+            # BB1: present only when the command came from an explicit packet
+            # planner through the frozen encoder. `publishes` counts encoder
+            # calls so a summary cannot silently report the latent oracle path.
+            "packet_encoder_command": (
+                None
+                if packet_encoder_provenance is None
+                else {
+                    **packet_encoder_provenance,
+                    **(packet_encoder_stats() if packet_encoder_stats else {}),
+                }
+            ),
             "planner_checkpoint": (
                 str(planner_checkpoint_path)
                 if planner_checkpoint_path is not None

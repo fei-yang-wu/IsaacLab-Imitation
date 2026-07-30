@@ -31,10 +31,12 @@ cd "${REPO_ROOT}"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/paths.env"
 
-INTERFACE="${INTERFACE:?set INTERFACE=full_body_trajectory|ee_trajectory}"
+INTERFACE="${INTERFACE:?set INTERFACE=full_body_trajectory|ee_trajectory|root_qpos|root_points5}"
 case "${INTERFACE}" in
     full_body_trajectory) DEFAULT_CKPT="${FBCHUNK_LOW_LEVEL_CHECKPOINT}" ;;
     ee_trajectory)        DEFAULT_CKPT="${EECHUNK_LOW_LEVEL_CHECKPOINT}" ;;
+    root_qpos)            DEFAULT_CKPT="${ROOT_QPOS_LOW_LEVEL_CHECKPOINT}" ;;
+    root_points5)         DEFAULT_CKPT="${ROOT_POINTS5_LOW_LEVEL_CHECKPOINT}" ;;
     *) echo "[ERROR] unsupported INTERFACE=${INTERFACE}" >&2; exit 2 ;;
 esac
 CHECKPOINT="${CHECKPOINT:-${DEFAULT_CKPT}}"
@@ -111,9 +113,36 @@ run_case oracle_stream 9 10 --low_level_command_mode streamed_vanilla || true
 
 [[ "${DRY_RUN}" == "1" ]] && exit 0
 
-python - "$OUT_ROOT" "$TOL_MM" "$INTERFACE" <<'PY'
-import json, sys, pathlib
+python - "$OUT_ROOT" "$TOL_MM" "$INTERFACE" "$CHECKPOINT" "$MOTION_NAME" <<'PY'
+import json, sys, pathlib, hashlib
 root, tol, interface = pathlib.Path(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
+checkpoint, motion_name = sys.argv[4], sys.argv[5]
+
+
+def _emit(result: str, detail: dict) -> None:
+    """Write the machine-readable record downstream gates read.
+
+    The printed table is for humans; the paper entrypoint refuses to spend
+    planner compute on an interface without a PASS record here.
+    """
+    ckpt = pathlib.Path(checkpoint)
+    sha = ""
+    if ckpt.is_file():
+        digest = hashlib.sha256()
+        with ckpt.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        sha = digest.hexdigest()
+    payload = {
+        "interface": interface,
+        "motion_name": motion_name,
+        "checkpoint": str(ckpt),
+        "checkpoint_sha256": sha,
+        "tolerance_mm": tol,
+        "result": result,
+        **detail,
+    }
+    (root / "qualification.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
 def load(tag):
     p = root / tag / "summary.json"
     if not p.exists():
@@ -141,9 +170,12 @@ for tag, r in (("replay floor", floor), ("oracle stream", stream)):
     print(f"{tag:16}{r['mpjpe']:10.1f}{r['root']:9.3f}{ee:>8}{jt:>11}{r['steps']:>7}{str(r['surv']):>8}")
 if floor is None or stream is None:
     print("\nRESULT: INCONCLUSIVE -- a case failed to run; see run.log")
+    _emit("INCONCLUSIVE", {"replay_floor": floor, "oracle_stream": stream})
     sys.exit(2)
+cases = {"replay_floor": floor, "oracle_stream": stream}
 floor_max = float(__import__("os").environ.get("FLOOR_MAX_MM", "120"))
 if floor["mpjpe"] > floor_max:
+    _emit("UNUSABLE_INTERFACE", {**cases, "floor_max_mm": floor_max})
     print(f"\nRESULT: UNUSABLE INTERFACE -- the replay floor is {floor['mpjpe']:.1f} mm")
     print(f"        (limit {floor_max:.0f} mm). The controller cannot track this")
     print("        command space even with a perfect command every control step,")
@@ -154,10 +186,12 @@ if floor["mpjpe"] > floor_max:
 gap = stream["mpjpe"] - floor["mpjpe"]
 print(f"\nstreamed minus replay floor: {gap:+.1f} mm (tolerance {tol:.0f} mm)")
 if gap > tol:
+    _emit("FAIL", {**cases, "streamed_minus_floor_mm": gap})
     print("RESULT: FAIL -- chunked streaming loses accuracy the tracker has when")
     print("        fed the reference directly. Fix the interface/adapter before")
     print("        spending planner compute on it.")
     sys.exit(1)
+_emit("PASS", {**cases, "streamed_minus_floor_mm": gap})
 print("RESULT: PASS -- the interface reproduces the tracker's replay accuracy,")
 print("        so later planner error is attributable to the planner.")
 PY
