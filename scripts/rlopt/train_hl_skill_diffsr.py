@@ -163,6 +163,16 @@ parser.add_argument(
     default=512,
     help="DiffSR bilinear embedding dimension.",
 )
+parser.add_argument(
+    "--diffsr_phi_parameterization",
+    type=str,
+    default="concat",
+    choices=("concat", "bilinear"),
+    help=(
+        "DiffSR phi(s,z) parameterization. 'concat' is the newer simple-concat "
+        "path; 'bilinear' restores the legacy matrix F(s) with g(z)^T F(s)."
+    ),
+)
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
 parser.add_argument("--num_updates", type=int, default=2000, help="Training updates.")
 parser.add_argument("--log_interval", type=int, default=100, help="Log cadence.")
@@ -344,7 +354,7 @@ from isaaclab_tasks.utils import compute_kit_requirements, launch_simulation
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import HighLevelSkillDiffSRConfig, HighLevelSkillDiffSRTrainer
 
-AGENT_ENTRY_POINT = "rlopt_ipmd_bilinear_cfg_entry_point"
+AGENT_ENTRY_POINT = "rlopt_ipmd_cfg_entry_point"
 
 
 def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
@@ -419,6 +429,7 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         vq_dead_code_reset_iters=args_cli.vq_dead_code_reset_iters,
         diffsr_feature_dim=args_cli.diffsr_feature_dim,
         diffsr_embed_dim=args_cli.diffsr_embed_dim,
+        diffsr_phi_parameterization=args_cli.diffsr_phi_parameterization,
         batch_size=args_cli.batch_size,
         num_updates=args_cli.num_updates,
         log_interval=args_cli.log_interval,
