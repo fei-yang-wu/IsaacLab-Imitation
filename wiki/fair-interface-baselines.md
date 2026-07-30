@@ -211,7 +211,7 @@ Do not use legacy LAFAN1 NPZs with Isaac scene-grid offsets in
 `body_pos_w`. Run:
 
 ```bash
-pixi run python scripts/audit_g1_lafan1_body_frames.py \
+pixi run python scripts/audit/audit_g1_lafan1_body_frames.py \
     --manifest /path/to/corrected_manifest.json \
     --report /tmp/lafan1_body_frame_audit.json
 ```

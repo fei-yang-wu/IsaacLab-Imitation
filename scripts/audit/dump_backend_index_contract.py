@@ -18,17 +18,17 @@ Examples (run from the repository root):
 
 .. code-block:: bash
 
-    pixi run -e isaaclab python scripts/dump_backend_index_contract.py \
+    pixi run -e isaaclab python scripts/audit/dump_backend_index_contract.py \
         --task Isaac-Imitation-G1-Latent-v0 \
         --output logs/index_contract/newton.json \
         physics=newton_mjwarp
 
-    pixi run -e isaaclab python scripts/dump_backend_index_contract.py \
+    pixi run -e isaaclab python scripts/audit/dump_backend_index_contract.py \
         --task Isaac-Imitation-G1-Latent-v0 \
         --output logs/index_contract/physx.json \
         physics=physx
 
-    python scripts/dump_backend_index_contract.py --compare \
+    python scripts/audit/dump_backend_index_contract.py --compare \
         logs/index_contract/newton.json logs/index_contract/physx.json
 """
 

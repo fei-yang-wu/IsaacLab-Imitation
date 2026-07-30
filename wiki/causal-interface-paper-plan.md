@@ -388,7 +388,7 @@ running at least three independent seeds for paper results.
 
 Paper-facing LAFAN1 runs may not use legacy files whose `body_pos_w` contains
 Isaac scene-grid offsets while `root_pos` remains clip-local. Run
-`scripts/audit_g1_lafan1_body_frames.py`, use a corrected manifest, rebuild
+`scripts/audit/audit_g1_lafan1_body_frames.py`, use a corrected manifest, rebuild
 dependent caches, and record manifest and aggregate data hashes. Never repair
 the source tree in place.
 
@@ -866,7 +866,7 @@ The completed data workflow satisfies these requirements:
   language provenance.
 - Refuse existing or overlapping output directories.
 - Require body names and a passing
-  `scripts/audit_bones_seed_phase5.py --require-body-names` report.
+  `scripts/audit/audit_bones_seed_phase5.py --require-body-names` report.
 - Rebuild every Zarr or derived cache after NPZ replacement.
 - The fresh NPZs reproduce all 100 previously corrected files byte-for-byte,
   so final runs use the fresh manifest and preparation record rather than the

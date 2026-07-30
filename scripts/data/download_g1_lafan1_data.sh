@@ -24,4 +24,4 @@ log "Pixi environment: ${PIXI_ENVIRONMENT}"
 
 cd "${REPO_ROOT}"
 exec pixi run --environment "${PIXI_ENVIRONMENT}" "${PYTHON_BIN}" \
-    "scripts/setup_lafan1_dataset.py" --prepare-npz --headless "$@"
+    "scripts/data/setup_lafan1_dataset.py" --prepare-npz --headless "$@"

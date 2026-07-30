@@ -697,7 +697,7 @@ comparable quality to 4096 x 24 while finishing faster (~4.5h at ~65k fps vs.
 choice to carry forward once re-validated post-fix.
 
 Full detail, the audit tool
-(`scripts/dump_backend_index_contract.py`), and the fix commits are on the
+(`scripts/audit/dump_backend_index_contract.py`), and the fix commits are on the
 unmerged branch; see `wiki/sim2sim-backend-verification.md` there. Not yet
 reviewed for merge into `main`, and not yet reconciled against the
 Strict/legacy-default reversal above (both branches diverged from a shared

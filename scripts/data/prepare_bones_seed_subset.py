@@ -14,7 +14,7 @@ the generic LAFAN1 converter:
 
 Run it from the repo root with the Isaac Lab Pixi environment, for example:
 
-    pixi run -e isaaclab python scripts/prepare_bones_seed_subset.py \
+    pixi run -e isaaclab python scripts/data/prepare_bones_seed_subset.py \
         --archive data/bones_seed/raw/g1.tar.gz --headless --device cuda:0
 """
 

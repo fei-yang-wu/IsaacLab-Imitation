@@ -22,7 +22,7 @@
     "num_motions": 1,
     "input_fps": 60.0,
     "output_fps": 50.0,
-    "converter_script": "../../../scripts/csv_to_npz.py",
+    "converter_script": "../../../scripts/data/csv_to_npz.py",
     "assume_npz_exists": true,
     "trimmed_motion_count": 1,
     "source_trim_applied_in_manifest": true,

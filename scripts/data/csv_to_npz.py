@@ -10,7 +10,7 @@
 .. code-block:: bash
 
     # Usage
-    python scripts/csv_to_npz.py -f path_to_input.csv --input_fps 60
+    python scripts/data/csv_to_npz.py -f path_to_input.csv --input_fps 60
 """
 
 """Launch Isaac Sim Simulator first."""

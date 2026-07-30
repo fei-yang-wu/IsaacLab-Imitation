@@ -6,7 +6,7 @@
 
 """Sync the G1 BONES-SEED-100 NPZ dataset with a Hugging Face dataset repo.
 
-Companion to ``scripts/setup_g1_lafan1_npz_dataset.py`` for the curated
+Companion to ``scripts/data/setup_g1_lafan1_npz_dataset.py`` for the curated
 100-motion BONES-SEED subset. The repo stores a self-contained dataset tree:
 
     npz/g1/*.npz                             local-frame G1 references (joint_names embedded)
@@ -16,10 +16,10 @@ Companion to ``scripts/setup_g1_lafan1_npz_dataset.py`` for the curated
 
 Examples:
     # Pull the dataset into data/bones_seed_100 (default):
-    pixi run python scripts/setup_g1_bones_seed_npz_dataset.py
+    pixi run python scripts/data/setup_g1_bones_seed_npz_dataset.py
 
     # Create the (private) repo and push a freshly built local tree:
-    pixi run python scripts/setup_g1_bones_seed_npz_dataset.py \
+    pixi run python scripts/data/setup_g1_bones_seed_npz_dataset.py \
         --mode upload --create-repo --private --token "$HF_TOKEN"
 """
 

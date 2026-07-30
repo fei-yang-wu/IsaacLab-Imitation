@@ -353,7 +353,7 @@ def main() -> None:
         _run(
             [
                 sys.executable,
-                "scripts/prepare_bones_seed_subset.py",
+                "scripts/data/prepare_bones_seed_subset.py",
                 "--shortlist",
                 str(shortlist),
                 "--archive",

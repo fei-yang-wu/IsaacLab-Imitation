@@ -51,11 +51,11 @@ reused; local qualification uses the fresh content-specific cache
 The code provides two guards:
 
 ```bash
-pixi run python scripts/audit_g1_lafan1_body_frames.py \
+pixi run python scripts/audit/audit_g1_lafan1_body_frames.py \
   --manifest /path/to/manifest.json \
   --report /path/to/body_frame_audit.json
 
-pixi run python scripts/repair_g1_lafan1_body_offsets.py \
+pixi run python scripts/data/repair_g1_lafan1_body_offsets.py \
   --input_dir data/lafan1/npz/g1 \
   --output_dir /path/to/separate_corrected_npz
 ```

@@ -6,7 +6,7 @@ tree is ~100 GB across ~100 tar shards. The repo-owned NPZ uploader
 (``setup_g1_bones_seed_npz_dataset.py``) is NPZ-tree specific and rejects a
 shard-only folder, so this is a dedicated entrypoint.
 
-    pixi run python scripts/upload_bones_seed_shards_hf.py \
+    pixi run python scripts/data/upload_bones_seed_shards_hf.py \
         --repo_id GeorgiaTech/g1_bones_seed_sonic_129k_50hz \
         --folder ~/Storage/bones_seed_full/hf --private
 """

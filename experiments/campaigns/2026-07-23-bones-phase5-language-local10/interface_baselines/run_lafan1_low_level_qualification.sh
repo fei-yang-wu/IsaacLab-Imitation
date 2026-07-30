@@ -98,7 +98,7 @@ if [[ "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" ]]; then
         "${OUTPUT_ROOT}/latent_oracle"
 fi
 
-run_cmd "${PYTHON_CMD[@]}" scripts/audit_g1_lafan1_body_frames.py \
+run_cmd "${PYTHON_CMD[@]}" scripts/audit/audit_g1_lafan1_body_frames.py \
     --manifest "${MANIFEST}" \
     --report "${OUTPUT_ROOT}/protocol_checks/body_frame_audit.json"
 

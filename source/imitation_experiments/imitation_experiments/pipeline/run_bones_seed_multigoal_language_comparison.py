@@ -1383,7 +1383,7 @@ def main() -> None:
         runner.run(
             [
                 *runner.python,
-                "scripts/audit_bones_seed_phase5.py",
+                "scripts/audit/audit_bones_seed_phase5.py",
                 "--manifest",
                 str(manifest),
                 "--report",

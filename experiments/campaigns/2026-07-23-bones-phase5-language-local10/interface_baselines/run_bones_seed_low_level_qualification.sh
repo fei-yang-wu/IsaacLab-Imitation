@@ -86,7 +86,7 @@ run_cmd "${PYTHON_CMD[@]}" \
     --skill_checkpoint "${LATENT_SKILL_CHECKPOINT}" \
     --output_json "${OUTPUT_ROOT}/protocol_checks/latent_skill_binding.json"
 
-run_cmd "${PYTHON_CMD[@]}" scripts/audit_bones_seed_phase5.py \
+run_cmd "${PYTHON_CMD[@]}" scripts/audit/audit_bones_seed_phase5.py \
     --manifest "${MANIFEST}" \
     --report "${OUTPUT_ROOT}/protocol_checks/bones_seed_preflight.json" \
     --require-temporal-events \

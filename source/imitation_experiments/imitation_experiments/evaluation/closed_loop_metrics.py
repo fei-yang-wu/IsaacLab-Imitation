@@ -212,7 +212,7 @@ class FallTracker:
     only the first question; `fall_step` answers only the second.
 
     Batched counterpart of ``_PolicyTrackingMetrics`` in
-    ``scripts/compare_policy_reference.py``.
+    ``scripts/viz/compare_policy_reference.py``.
     """
 
     def __init__(

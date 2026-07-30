@@ -10,14 +10,14 @@ Deterministic selection from ``seed_metadata_v004.csv``:
 
 Outputs:
 
-1. a shortlist JSON consumable by ``scripts/prepare_bones_seed_subset.py``
+1. a shortlist JSON consumable by ``scripts/data/prepare_bones_seed_subset.py``
    (list of ``{filename, overview_description, category, content_name}``), and
 2. a provenance manifest JSON recording where every clip came from
    (archive path, package, category, actor, take, duration, flags).
 
 Run from the repo root (default environment is fine; no Isaac needed):
 
-    pixi run python scripts/select_bones_seed_100.py
+    pixi run python scripts/data/select_bones_seed_100.py
 """
 
 from __future__ import annotations

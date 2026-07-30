@@ -179,14 +179,14 @@ echo "[INFO] Checking G1 dataset under '\${cluster_g1_data_root}' (npz_count=\${
 
 if [ "\${cluster_g1_force_download}" = "1" ]; then
     echo "[INFO] Force-refreshing G1 dataset from Hugging Face repo '\${cluster_g1_repo_id}' at revision '\${cluster_g1_repo_revision}'."
-    /isaac-sim/python.sh scripts/setup_g1_lafan1_npz_dataset.py \\
+    /isaac-sim/python.sh scripts/data/setup_g1_lafan1_npz_dataset.py \\
         --data_root "\${cluster_g1_data_root}" \\
         --repo_id "\${cluster_g1_repo_id}" \\
         --revision "\${cluster_g1_repo_revision}" \\
         --force-download
 elif [ "\${cluster_g1_npz_count}" -lt "\${cluster_g1_expected_motion_count}" ]; then
     echo "[INFO] G1 dataset incomplete. Downloading from Hugging Face repo '\${cluster_g1_repo_id}' at revision '\${cluster_g1_repo_revision}'."
-    /isaac-sim/python.sh scripts/setup_g1_lafan1_npz_dataset.py \\
+    /isaac-sim/python.sh scripts/data/setup_g1_lafan1_npz_dataset.py \\
         --data_root "\${cluster_g1_data_root}" \\
         --repo_id "\${cluster_g1_repo_id}" \\
         --revision "\${cluster_g1_repo_revision}"
@@ -230,7 +230,7 @@ if [ "\${cluster_g1_manifest_refresh_policy}" = "never" ] && [ ! -f "\${cluster_
 fi
 
 if [ "\${cluster_g1_refresh_manifest}" = "1" ]; then
-    /isaac-sim/python.sh scripts/write_lafan1_npz_manifest.py \\
+    /isaac-sim/python.sh scripts/data/write_lafan1_npz_manifest.py \\
         --npz_dir "\${cluster_g1_npz_dir}" \\
         --manifest_path "\${cluster_g1_manifest_path}" \\
         --recursive

@@ -260,7 +260,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   broad architecture sweep.
 - Do not use legacy scene-grid-offset LAFAN1 data or stale caches for
   paper-facing runs. Audit the manifest with
-  `scripts/audit_g1_lafan1_body_frames.py` and preserve data/checkpoint
+  `scripts/audit/audit_g1_lafan1_body_frames.py` and preserve data/checkpoint
   hashes.
 - Local smoke tests and 10M-frame blocks are qualification only. About 50M
   total frames is the maximum useful serious local low-level check, not a
@@ -306,7 +306,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 - Phase 5 uses BONES-SEED language annotations. Prepare corrected data into a
   fresh output tree with recorded input/output hashes and exact commands; do
   not repair source data in place or reuse a cache built from replaced NPZs.
-  Require `scripts/audit_bones_seed_phase5.py --require-body-names` to pass
+  Require `scripts/audit/audit_bones_seed_phase5.py --require-body-names` to pass
   before a Phase-5 run.
 - The provenance-complete 100-motion Phase-5 tree is available inside Skynet
   jobs at `/data/bones_seed_phase5/bones_seed_100`. Use its fresh manifest,

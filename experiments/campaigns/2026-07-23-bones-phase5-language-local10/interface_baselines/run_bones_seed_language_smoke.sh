@@ -60,7 +60,7 @@ latent_planner="${OUTPUT_ROOT}/latent_skill/planner"
 full_closed_loop="${OUTPUT_ROOT}/full_body/closed_loop"
 latent_closed_loop="${OUTPUT_ROOT}/latent_skill/closed_loop"
 
-run_cmd "${PYTHON_CMD[@]}" scripts/audit_bones_seed_phase5.py \
+run_cmd "${PYTHON_CMD[@]}" scripts/audit/audit_bones_seed_phase5.py \
     --manifest "${MANIFEST}" \
     --report "${preflight}" \
     --require-body-names \

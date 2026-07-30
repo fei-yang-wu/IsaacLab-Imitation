@@ -7,7 +7,7 @@ names are source-prefixed by default, and a compact language sidecar is written
 alongside the manifest for building language-goal embedding tables.
 
 Example:
-    pixi run python scripts/merge_g1_motion_manifests.py
+    pixi run python scripts/data/merge_g1_motion_manifests.py
 
     pixi run python scripts/rlopt/build_language_goal_embeddings.py \
         --manifest data/unified/manifests/g1_lafan1_dance102_bones_seed_manifest.json \

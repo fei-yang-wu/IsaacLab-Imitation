@@ -7,11 +7,11 @@
 """Generate a LAFAN1 manifest JSON from an existing folder of NPZ motions.
 
 Examples:
-    pixi run python scripts/write_lafan1_npz_manifest.py \
+    pixi run python scripts/data/write_lafan1_npz_manifest.py \
       --npz_dir data/lafan1/npz/g1 \
       --manifest_path data/lafan1/manifests/g1_lafan1_manifest.json
 
-    pixi run python scripts/write_lafan1_npz_manifest.py \
+    pixi run python scripts/data/write_lafan1_npz_manifest.py \
       --npz_dir data/lafan1/npz/g1 \
       --manifest_path data/lafan1/manifests/g1_debug_manifest.json \
       --select dance1_subject1 dance1_subject2 walk1_subject1

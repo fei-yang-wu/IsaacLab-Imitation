@@ -102,7 +102,7 @@ deterministic contract dump reports no state differences at all.
 Reproduce with:
 
 ```bash
-pixi run -e isaaclab python scripts/dump_backend_index_contract.py --compare \
+pixi run -e isaaclab python scripts/audit/dump_backend_index_contract.py --compare \
     logs/index_contract/fix_newton.json logs/index_contract/fix_physx.json
 ```
 

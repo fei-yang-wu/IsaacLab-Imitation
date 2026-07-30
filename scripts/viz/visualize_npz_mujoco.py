@@ -13,14 +13,14 @@ MJCF), so this is robust to any joint-order differences.
 
 Offscreen mesh MP4 (headless, needs a GPU; sets MUJOCO_GL=egl automatically):
 
-    pixi run -e isaaclab python scripts/visualize_npz_mujoco.py \
+    pixi run -e isaaclab python scripts/viz/visualize_npz_mujoco.py \
         --npz ~/Storage/bones_seed_full/npz/g1/Loop_Forward_Walk_001__A018.npz \
         --out ~/Storage/bones_seed_full/quality_videos/walk_mujoco.mp4
 
 Interactive viewer (run at the workstation with a display; drag to orbit, space
 to pause):
 
-    pixi run -e isaaclab python scripts/visualize_npz_mujoco.py \
+    pixi run -e isaaclab python scripts/viz/visualize_npz_mujoco.py \
         --npz .../Loop_Forward_Walk_001__A018.npz --viewer
 """
 

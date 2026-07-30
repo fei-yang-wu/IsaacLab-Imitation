@@ -180,7 +180,7 @@ parser.add_argument(
     type=str,
     default=None,
     help=(
-        "DIAGNOSTIC ONLY. Path to a scripts/dump_backend_index_contract.py JSON "
+        "DIAGNOSTIC ONLY. Path to a scripts/audit/dump_backend_index_contract.py JSON "
         "whose articulation joint order should be emulated. Permutes the "
         "backend-order-dependent expert command terms and the action offset so a "
         "checkpoint trained under that backend sees the joint ordering it was "

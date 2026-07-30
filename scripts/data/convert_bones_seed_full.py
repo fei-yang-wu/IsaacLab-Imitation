@@ -19,7 +19,7 @@ Every stage is resumable: re-running skips CSVs / NPZs that already exist.
 
 Run from the repo root in the Isaac Lab env for the convert stage:
 
-    pixi run -e isaaclab python scripts/convert_bones_seed_full.py \
+    pixi run -e isaaclab python scripts/data/convert_bones_seed_full.py \
         --selection ~/Storage/bones_seed_full/selection/g1_bones_seed_sonic_selection.json \
         --archive data/bones_seed/raw/g1.tar.gz \
         --work_root ~/Storage/bones_seed_full \
