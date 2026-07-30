@@ -21,10 +21,7 @@ CAMPAIGN_RUNNER = (
     / "experiments/campaigns/2026-07-23-lafan1-planner-capacity"
     / "run_enc380_planner_route_comparison.sh"
 )
-CAMPAIGN_DIR = CAMPAIGN_RUNNER.parent
-if str(CAMPAIGN_DIR) not in sys.path:
-    sys.path.insert(0, str(CAMPAIGN_DIR))
-from enc380_capacity_grid import (  # noqa: E402
+from imitation_experiments.capacity.enc380_capacity_grid import (
     MODEL_SIZES,
     MOTIONS,
     PLANNER_SEEDS,

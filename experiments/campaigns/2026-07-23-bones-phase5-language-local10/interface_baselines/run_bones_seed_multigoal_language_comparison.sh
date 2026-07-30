@@ -61,7 +61,7 @@ read -r -a ISAACLAB_PYTHON_CMD <<< "${INTERFACE_BASELINE_ISAACLAB_PYTHON_CMD:-pi
 
 cmd=(
     "${PYTHON_CMD[@]}"
-    "${SCRIPT_DIR}/run_bones_seed_multigoal_language_comparison.py"
+    -m imitation_experiments.pipeline.run_bones_seed_multigoal_language_comparison
     --latent_low_level_checkpoint "${LATENT_LOW_LEVEL_CHECKPOINT}"
     --latent_skill_checkpoint "${LATENT_SKILL_CHECKPOINT}"
     --vanilla_tracker_checkpoint "${VANILLA_TRACKER_CHECKPOINT}"

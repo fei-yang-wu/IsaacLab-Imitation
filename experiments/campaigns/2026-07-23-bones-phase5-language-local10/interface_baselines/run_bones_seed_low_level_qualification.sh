@@ -81,7 +81,7 @@ fi
 # Fail before launching Isaac if the supplied skill encoder is not the exact
 # encoder embedded in the latent low-level checkpoint.
 run_cmd "${PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_latent_skill_checkpoint_binding.py \
+    -m imitation_experiments.audit.validate_latent_skill_checkpoint_binding \
     --low_level_checkpoint "${LATENT_LOW_LEVEL_CHECKPOINT}" \
     --skill_checkpoint "${LATENT_SKILL_CHECKPOINT}" \
     --output_json "${OUTPUT_ROOT}/protocol_checks/latent_skill_binding.json"
@@ -94,7 +94,7 @@ run_cmd "${PYTHON_CMD[@]}" scripts/audit_bones_seed_phase5.py \
 
 # Direct 50 Hz vanilla ceiling and strict tracker qualification.
 run_cmd "${ISAACLAB_PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+    -m imitation_experiments.lowlevel.evaluate_checkpoint \
     --headless \
     --task Isaac-Imitation-G1-v0 \
     --algorithm IPMD \
@@ -120,7 +120,7 @@ run_cmd "${ISAACLAB_PYTHON_CMD[@]}" \
     env.command_hold_steps=0
 
 run_cmd "${PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_vanilla_tracker_qualification.py \
+    -m imitation_experiments.audit.audit_vanilla_tracker_qualification \
     --summary "${OUTPUT_ROOT}/vanilla_direct/summary.json" \
     --checkpoint "${VANILLA_TRACKER_CHECKPOINT}" \
     --manifest "${MANIFEST}" \
@@ -135,7 +135,7 @@ run_cmd "${PYTHON_CMD[@]}" \
 # The exact vanilla packet must reproduce direct tracker inputs and actions for
 # every phase, including asynchronous per-environment renewal.
 run_cmd "${ISAACLAB_PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+    -m imitation_experiments.lowlevel.evaluate_checkpoint \
     --headless \
     --task Isaac-Imitation-G1-v0 \
     --algorithm IPMD \
@@ -204,7 +204,7 @@ run_cmd "${ISAACLAB_PYTHON_CMD[@]}" scripts/rlopt/eval_skill_commander_closed_lo
     agent.ipmd.reward_param_weight_decay_coeff=0.0
 
 run_cmd "${PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_diffsr_latent_qualification.py \
+    -m imitation_experiments.audit.audit_diffsr_latent_qualification \
     --summary "${OUTPUT_ROOT}/latent_oracle/summary.json" \
     --low_level_checkpoint "${LATENT_LOW_LEVEL_CHECKPOINT}" \
     --skill_checkpoint "${LATENT_SKILL_CHECKPOINT}" \
@@ -229,7 +229,7 @@ export \
     EVAL_STEPS \
     SEED \
     MIN_ORACLE_SUCCESS
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_interface_run_provenance.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.provenance.write_interface_run_provenance \
     --label bones-seed-100-low-level-qualification \
     --output_json "${OUTPUT_ROOT}/run_provenance.json" \
     --result_root "${OUTPUT_ROOT}" \

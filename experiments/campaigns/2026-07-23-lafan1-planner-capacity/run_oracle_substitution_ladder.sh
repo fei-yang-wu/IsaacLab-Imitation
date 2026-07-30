@@ -94,7 +94,7 @@ for seed in ${SEEDS}; do
     for variant in ${VARIANTS}; do
         out="${LADDER_ROOT}/seed${seed}/${MODEL_SIZE}/${STAGE}/subst_${variant//,/_}"
         run_if_missing "${out}/summary.json" \
-            "${ISAAC_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+            "${ISAAC_PY_ARR[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
             --headless --device "${DEVICE}" --task "${CHUNK_TASK}" --algorithm IPMD \
             --checkpoint "${FBCHUNK_LOW_LEVEL_CHECKPOINT}" \
             --low_level_command_mode streamed_vanilla \

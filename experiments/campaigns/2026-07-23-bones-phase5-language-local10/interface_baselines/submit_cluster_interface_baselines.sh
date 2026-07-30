@@ -23,7 +23,7 @@ if [[ "${MODE}" == "bones-seed-multigoal-language" ]]; then
     export CLUSTER_AUTO_SETUP_G1_DATA=0
 fi
 export CLUSTER_APPEND_DEFAULT_G1_MANIFEST=0
-export CLUSTER_PYTHON_EXECUTABLE=experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_interface_baseline_job.py
+export CLUSTER_PYTHON_EXECUTABLE=source/imitation_experiments/imitation_experiments/pipeline/run_interface_baseline_job.py
 export CLUSTER_GIT_SYNC_FIRST="${CLUSTER_GIT_SYNC_FIRST:-0}"
 export CLUSTER_EXTRA_RSYNC_EXCLUDES="${CLUSTER_EXTRA_RSYNC_EXCLUDES:-data/ .tmp/ IsaacLab/ RLOpt/ ImitationLearningTools/}"
 export CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS="${CLUSTER_LINK_ISAACLAB_FROM_PREVIOUS:-1}"

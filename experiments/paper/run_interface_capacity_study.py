@@ -297,7 +297,6 @@ def stage_aggregate(cfg: DictConfig, interfaces: list[str], _ckpts: object) -> N
     quality (23.6-30.6 mm across the ladder), so absolute MPJPE alone would
     conflate planner quality with tracker quality.
     """
-    aggregators = _CAMPAIGN / "interface_baselines"
     study_root = Path(cfg.paths.study_root)
     oracle_root = study_root / "oracle_baselines"
     steps = int(cfg.protocol.control_steps)
@@ -320,7 +319,8 @@ def stage_aggregate(cfg: DictConfig, interfaces: list[str], _ckpts: object) -> N
         out = seed_root / "capacity_summary"
         command = [
             sys.executable,
-            str(aggregators / "aggregate_one_motion_capacity_scaling.py"),
+            "-m",
+            "imitation_experiments.capacity.aggregate_one_motion_capacity_scaling",
             "--scaling_root",
             str(seed_root),
             "--sizes",

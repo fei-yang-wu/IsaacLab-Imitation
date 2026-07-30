@@ -144,7 +144,7 @@ run_cmd() {
     "$@"
 }
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_interface_run_provenance.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.provenance.write_interface_run_provenance \
     --label dance102-strong-single-seed \
     --output_json "${OUTPUT_ROOT}/interface_comparison_run_provenance.json" \
     --result_root "${OUTPUT_ROOT}"
@@ -256,7 +256,7 @@ for interface in ${INTERFACES}; do
     mkdir -p "${interface_root}"
 
     if [[ "${RUN_ORACLE}" == "1" ]]; then
-        run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+        run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.lowlevel.evaluate_checkpoint \
             --headless \
             --task "${TASK}" \
             --algo "${ALGORITHM}" \
@@ -285,7 +285,7 @@ for interface in ${INTERFACES}; do
             echo "[INFO] Recollecting samples: found ${existing_sample_count} rows, need ${min_reuse_sample_count} in ${samples_tensor_dir}"
             rm -rf "${samples_tensor_dir}"
         fi
-        run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/collect_interface_rollout_samples.py \
+        run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.data.collect_interface_rollout_samples \
             --headless \
             --task "${TASK}" \
             --algo "${ALGORITHM}" \
@@ -336,7 +336,7 @@ for interface in ${INTERFACES}; do
             fi
             dagger_control_steps="$((dagger_planner_samples * PLANNER_UPDATE_INTERVAL))"
 
-            run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py \
+            run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
                 --samples_dir "${samples_tensor_dir}" \
                 --output_dir "${pretrain_dir}" \
                 --interface "${interface}" \
@@ -358,7 +358,7 @@ for interface in ${INTERFACES}; do
                 offline_eval_filter_args+=(--exclude_checkpoint_selected_indices)
             fi
 
-            run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_offline.py \
+            run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_offline \
                 --samples_dir "${samples_tensor_dir}" \
                 --planner_checkpoint "${pretrain_dir}/checkpoints/latest.pt" \
                 --output_json "${pretrained_offline_eval_dir}/summary.json" \
@@ -372,7 +372,7 @@ for interface in ${INTERFACES}; do
                 --flow_inference_noise_std "${FLOW_NOISE_STD}" \
                 "${offline_eval_filter_args[@]}"
 
-            run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+            run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
                 --headless \
                 --task "${TASK}" \
                 --algo "${ALGORITHM}" \
@@ -401,7 +401,7 @@ for interface in ${INTERFACES}; do
             if [[ "${DRY_RUN}" != "1" ]]; then
                 rm -rf "${planner_rollout_dir}" "${merged_samples_dir}"
             fi
-            run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+            run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
                 --headless \
                 --task "${TASK}" \
                 --algo "${ALGORITHM}" \
@@ -429,7 +429,7 @@ for interface in ${INTERFACES}; do
                 --samples_output_dir "${planner_rollout_samples_dir}" \
                 --kit_args=--/app/extensions/fsWatcherEnabled=false
 
-            run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/merge_planner_samples.py \
+            run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.data.merge_planner_samples \
                 --source "${samples_tensor_dir}" \
                 --source_limit "${max_samples}" \
                 --source "${planner_rollout_samples_dir}" \
@@ -437,7 +437,7 @@ for interface in ${INTERFACES}; do
                 --seed "${SEED}" \
                 --output_dir "${merged_samples_dir}"
 
-            run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py \
+            run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
                 --samples_dir "${merged_samples_dir}" \
                 --output_dir "${finetune_dir}" \
                 --interface "${interface}" \
@@ -456,7 +456,7 @@ for interface in ${INTERFACES}; do
                 --flow_inference_noise_std "${FLOW_NOISE_STD}" \
                 "${finetune_normalization_args[@]}"
 
-            run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_offline.py \
+            run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_offline \
                 --samples_dir "${merged_samples_dir}" \
                 --planner_checkpoint "${finetune_dir}/checkpoints/latest.pt" \
                 --output_json "${finetuned_offline_eval_dir}/summary.json" \
@@ -469,7 +469,7 @@ for interface in ${INTERFACES}; do
                 --flow_num_inference_steps "${FLOW_STEPS}" \
                 --flow_inference_noise_std "${FLOW_NOISE_STD}"
 
-            run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+            run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
                 --headless \
                 --task "${TASK}" \
                 --algo "${ALGORITHM}" \
@@ -498,7 +498,7 @@ for interface in ${INTERFACES}; do
     done
 done
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/summarize_interface_comparison.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.evaluation.summarize_interface_comparison \
     --result_root "${OUTPUT_ROOT}"
 
 echo "[INFO] Done. Results under ${OUTPUT_ROOT}"

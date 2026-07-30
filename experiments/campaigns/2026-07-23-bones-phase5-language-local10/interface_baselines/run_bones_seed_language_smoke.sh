@@ -66,12 +66,12 @@ run_cmd "${PYTHON_CMD[@]}" scripts/audit_bones_seed_phase5.py \
     --require-body-names \
     --require-temporal-events
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_single_motion_manifest.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.data.write_single_motion_manifest \
     --manifest "${MANIFEST}" \
     --motion_name "${GOAL_NAME}" \
     --output "${single_manifest}"
 
-run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/collect_interface_rollout_samples.py \
+run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.data.collect_interface_rollout_samples \
     --headless \
     --task Isaac-Imitation-G1-v0 \
     --algo IPMD \
@@ -145,7 +145,7 @@ run_cmd "${ISAACLAB_PYTHON_CMD[@]}" scripts/rlopt/eval_skill_commander_closed_lo
 
 for row in "full_body:${full_samples}:${full_planner}" "latent_skill:${latent_samples}:${latent_planner}"; do
     IFS=: read -r interface samples planner <<<"${row}"
-    run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py \
+    run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
         --samples_dir "${samples}" \
         --output_dir "${planner}" \
         --interface "${interface/full_body/full_body_trajectory}" \
@@ -160,7 +160,7 @@ for row in "full_body:${full_samples}:${full_planner}" "latent_skill:${latent_sa
         --flow_num_inference_steps 2 \
         --endpoint_num_inference_steps 1 \
         --device cpu
-    run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_offline.py \
+    run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_offline \
         --samples_dir "${samples}" \
         --planner_checkpoint "${planner}/checkpoints/latest.pt" \
         --output_json "${planner}/offline_eval.json" \
@@ -170,7 +170,7 @@ for row in "full_body:${full_samples}:${full_planner}" "latent_skill:${latent_sa
         --device cpu
 done
 
-run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
     --headless \
     --task Isaac-Imitation-G1-v0 \
     --algo IPMD \
@@ -252,7 +252,7 @@ run_cmd "${ISAACLAB_PYTHON_CMD[@]}" scripts/rlopt/eval_skill_commander_closed_lo
     agent.ipmd.reward_logit_reg_coeff=0.0 \
     agent.ipmd.reward_param_weight_decay_coeff=0.0
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_bones_seed_language_interface.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.audit.audit_bones_seed_language_interface \
     --preflight "${preflight}" \
     --latent_samples "${latent_samples}" \
     --full_body_samples "${full_samples}" \

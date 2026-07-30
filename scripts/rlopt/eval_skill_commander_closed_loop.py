@@ -474,39 +474,17 @@ from torch import Tensor
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_INTERFACE_BASELINE_CANDIDATES = (
-    _REPO_ROOT
-    / "experiments"
-    / "campaigns"
-    / "2026-07-23-bones-phase5-language-local10"
-    / "interface_baselines",
-    _REPO_ROOT / "experiments" / "paper" / "interface_baselines",
-    _REPO_ROOT / "experiments" / "interface_baselines",
-)
-INTERFACE_BASELINE_DIR = next(
-    (path for path in _INTERFACE_BASELINE_CANDIDATES if path.is_dir()),
-    _INTERFACE_BASELINE_CANDIDATES[0],
-)
-if str(INTERFACE_BASELINE_DIR) not in sys.path:
-    sys.path.append(str(INTERFACE_BASELINE_DIR))
-from balanced_motion_rows import BalancedMotionRowSelector  # noqa: E402
-from interface_planner_common import load_planner_checkpoint  # noqa: E402
+from imitation_experiments.data.balanced_motion_rows import BalancedMotionRowSelector
+from imitation_experiments.planner.interface_planner_common import load_planner_checkpoint
 
-sys.path.append(  # noqa: E402
-    str(
-        Path(__file__).resolve().parents[2]
-        / "experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines"
-    )
-)
-from packet_to_latent_command import (  # noqa: E402
+from imitation_experiments.capacity.packet_to_latent_command import (
     build_noise_reference,
     frames_to_term_major,
     install_packet_encoder_command_source,
     PacketLayout,
 )
-from low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
-from paper_protocol_metadata import (  # noqa: E402
+from imitation_experiments.lowlevel.low_level_tracker import load_frozen_low_level_tracker
+from imitation_experiments.provenance.paper_protocol_metadata import (
     disable_domain_randomization,
     interval_event_metadata,
 )
@@ -516,9 +494,9 @@ from paper_protocol_metadata import (  # noqa: E402
 # aggregators look up bare names such as "tracking_mpjpe_mm" and will fail
 # loudly rather than silently mix protocols.
 DETERMINISTIC_METRIC_PREFIX = "deterministic_tracking/"
-from planner_latency import PlannerForwardTimer  # noqa: E402
-from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
-from planner_sample_schema import (  # noqa: E402
+from imitation_experiments.planner.planner_latency import PlannerForwardTimer
+from imitation_experiments.planner.planner_publish_schedule import planner_renew_env_ids
+from imitation_experiments.data.planner_sample_schema import (
     CompletedTrajectorySampleWriter,
     PlannerSampleWriter,
     add_sample_format_metadata,

@@ -132,7 +132,7 @@ run_if_missing() {
 train_planner() {  # interface samples_dir output [checkpoint]
     local interface="$1" samples="$2" output="$3" checkpoint="${4:-}"
     local cmd=(
-        "${PLAIN_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner
         --samples_dir "${samples}" --output_dir "${output}"
         --interface "${interface}" --planner_family flow --state_key planner_state
         --device "${DEVICE}" --seed "${PLANNER_SEED}"
@@ -209,7 +209,7 @@ latent_collect() {  # pretrained_planner output
 chunk_eval() {  # interface checkpoint planner output label
     local interface="$1" checkpoint="$2" planner="$3" output="$4" label="$5"
     run_if_missing "${output}/summary.json" \
-        "${ISAAC_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+        "${ISAAC_PY_ARR[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
         --headless --device "${DEVICE}" --task "${CHUNK_TASK}" --algorithm IPMD \
         --checkpoint "${checkpoint}" --low_level_command_mode streamed_vanilla \
         --planner_checkpoint "${planner}" --output_json "${output}/summary.json" \
@@ -228,7 +228,7 @@ chunk_eval() {  # interface checkpoint planner output label
 chunk_collect() {  # interface checkpoint pretrained_planner output
     local interface="$1" checkpoint="$2" planner="$3" output="$4"
     run_if_missing "${output}/rollout_training_samples/sample_step_000000.pt" \
-        "${ISAAC_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+        "${ISAAC_PY_ARR[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
         --headless --device "${DEVICE}" --task "${CHUNK_TASK}" --algorithm IPMD \
         --checkpoint "${checkpoint}" --low_level_command_mode streamed_vanilla \
         --planner_checkpoint "${planner}" --output_json "${output}/summary.json" \
@@ -252,7 +252,7 @@ chunk_collect() {  # interface checkpoint pretrained_planner output
 
 merge_samples() {  # demos rollout output
     run_if_missing "$3/merge_manifest.json" \
-        "${PLAIN_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/merge_planner_samples.py \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.data.merge_planner_samples \
         --source "$1" --source_limit "${DEMO_ROWS}" \
         --source "$2" --source_limit "${DEMO_ROWS}" \
         --seed "${EVAL_SEED}" --output_dir "$3"

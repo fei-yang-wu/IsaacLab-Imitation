@@ -37,7 +37,7 @@ fi
 
 export CLUSTER_LOGIN="${CLUSTER_LOGIN:-login-ice.pace.gatech.edu}"
 export CLUSTER_SLURM_SUBMIT_SCRIPT="${CLUSTER_SLURM_SUBMIT_SCRIPT:-pace}"
-export CLUSTER_PYTHON_EXECUTABLE="experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_capacity_entry.py"
+export CLUSTER_PYTHON_EXECUTABLE="source/imitation_experiments/imitation_experiments/capacity/run_capacity_entry.py"
 export CLUSTER_APPEND_DEFAULT_G1_MANIFEST=0
 export CLUSTER_SLURM_PARTITION="${CLUSTER_SLURM_PARTITION:-ice-gpu}"
 export CLUSTER_SLURM_QOS="${CLUSTER_SLURM_QOS:-coe-ice}"
@@ -79,24 +79,24 @@ fi
 repo_head="$(git rev-parse HEAD)"
 diff_sha="$(git diff --binary -- . ':!logs' | sha256sum | awk '{print $1}')"
 workflow_sources=(
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/enc380_capacity_grid.py
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_capacity_entry.py
+    source/imitation_experiments/imitation_experiments/capacity/enc380_capacity_grid.py
+    source/imitation_experiments/imitation_experiments/capacity/run_capacity_entry.py
     experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_enc380_planner_route_comparison.sh
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_enc380_route_comparison.py
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_motion_selection.py
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_tracker_completion.py
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_enc380_paired_demonstrations.py
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/audit_packet_encoder_pin.py
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/materialize_paired_interface_samples.py
-    experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/packet_to_latent_command.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/interface_planner_common.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/low_level_tracker.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/merge_planner_samples.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/planner_latency.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/planner_sample_schema.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_latent_skill_checkpoint_binding.py
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_diffsr_latent_qualification.py
+    source/imitation_experiments/imitation_experiments/capacity/aggregate_enc380_route_comparison.py
+    source/imitation_experiments/imitation_experiments/capacity/audit_enc380_motion_selection.py
+    source/imitation_experiments/imitation_experiments/capacity/audit_enc380_tracker_completion.py
+    source/imitation_experiments/imitation_experiments/capacity/audit_enc380_paired_demonstrations.py
+    source/imitation_experiments/imitation_experiments/capacity/audit_packet_encoder_pin.py
+    source/imitation_experiments/imitation_experiments/capacity/materialize_paired_interface_samples.py
+    source/imitation_experiments/imitation_experiments/capacity/packet_to_latent_command.py
+    source/imitation_experiments/imitation_experiments/planner/interface_planner_common.py
+    source/imitation_experiments/imitation_experiments/lowlevel/low_level_tracker.py
+    source/imitation_experiments/imitation_experiments/data/merge_planner_samples.py
+    source/imitation_experiments/imitation_experiments/planner/planner_latency.py
+    source/imitation_experiments/imitation_experiments/data/planner_sample_schema.py
+    source/imitation_experiments/imitation_experiments/planner/train_chunked_transformer_planner.py
+    source/imitation_experiments/imitation_experiments/audit/validate_latent_skill_checkpoint_binding.py
+    source/imitation_experiments/imitation_experiments/audit/audit_diffsr_latent_qualification.py
     scripts/rlopt/eval_skill_commander_closed_loop.py
 )
 workflow_source_sha="$(sha256sum "${workflow_sources[@]}" | sha256sum | awk '{print $1}')"

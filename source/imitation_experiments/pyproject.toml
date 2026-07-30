@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imitation-experiments"
+version = "0.1.0"
+description = "Shared experiment library for the IsaacLab-Imitation causal-interface study: planner training, command publication, low-level tracking, evaluation, audits, and provenance."
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["imitation_experiments*"]

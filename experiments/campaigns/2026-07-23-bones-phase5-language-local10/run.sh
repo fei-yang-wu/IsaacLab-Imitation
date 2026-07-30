@@ -88,14 +88,14 @@ read -r -a goal_names <<< "${GOAL_NAMES}"
 
 if [[ ! -f "${SUBSET_MANIFEST}" ]]; then
     echo "[INFO] Building the ${#goal_names[@]}-motion subset manifest: ${SUBSET_MANIFEST}"
-    pixi run python "${IMPL_DIR}/write_motion_subset_manifest.py" \
+    pixi run python -m imitation_experiments.data.write_motion_subset_manifest \
         --manifest "${SOURCE_MANIFEST}" \
         --motion_names "${goal_names[@]}" \
         --output "${SUBSET_MANIFEST}"
 fi
 
 cmd=(
-    pixi run python "${IMPL_DIR}/run_bones_seed_multigoal_language_comparison.py"
+    pixi run python -m imitation_experiments.pipeline.run_bones_seed_multigoal_language_comparison
     --latent_low_level_checkpoint "${LATENT_LOW_LEVEL_CHECKPOINT}"
     --latent_skill_checkpoint "${LATENT_SKILL_CHECKPOINT}"
     --vanilla_tracker_checkpoint "${VANILLA_TRACKER_CHECKPOINT}"

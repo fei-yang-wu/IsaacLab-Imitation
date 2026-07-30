@@ -57,7 +57,7 @@ if [[ -z "${LATENT_LOW_LEVEL_CHECKPOINT}" ]]; then
         latent_log_root="logs/rlopt/ipmd/Isaac-Imitation-G1-Latent-v0"
         LATENT_LOW_LEVEL_CHECKPOINT="$(
             "${PYTHON_CMD[@]}" \
-                experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/resolve_low_level_checkpoint.py \
+                -m imitation_experiments.lowlevel.resolve_low_level_checkpoint \
                 --log_root "${latent_log_root}" \
                 --run_id "${LATENT_LOW_LEVEL_RUN_ID}" \
                 --checkpoint_basename "${EXPECTED_LATENT_CHECKPOINT_BASENAME}"
@@ -103,13 +103,13 @@ run_cmd "${PYTHON_CMD[@]}" scripts/audit_g1_lafan1_body_frames.py \
     --report "${OUTPUT_ROOT}/protocol_checks/body_frame_audit.json"
 
 run_cmd "${PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_latent_skill_checkpoint_binding.py \
+    -m imitation_experiments.audit.validate_latent_skill_checkpoint_binding \
     --low_level_checkpoint "${LATENT_LOW_LEVEL_CHECKPOINT}" \
     --skill_checkpoint "${LATENT_SKILL_CHECKPOINT}" \
     --output_json "${OUTPUT_ROOT}/protocol_checks/latent_skill_binding.json"
 
 run_cmd "${ISAACLAB_PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+    -m imitation_experiments.lowlevel.evaluate_checkpoint \
     --headless \
     --task Isaac-Imitation-G1-v0 \
     --algorithm IPMD \
@@ -135,7 +135,7 @@ run_cmd "${ISAACLAB_PYTHON_CMD[@]}" \
     env.command_hold_steps=0
 
 run_cmd "${PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_vanilla_tracker_qualification.py \
+    -m imitation_experiments.audit.audit_vanilla_tracker_qualification \
     --summary "${OUTPUT_ROOT}/vanilla_direct/summary.json" \
     --checkpoint "${VANILLA_TRACKER_CHECKPOINT}" \
     --manifest "${MANIFEST}" \
@@ -148,7 +148,7 @@ run_cmd "${PYTHON_CMD[@]}" \
     --output_json "${OUTPUT_ROOT}/vanilla_qualification_audit.json"
 
 run_cmd "${ISAACLAB_PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+    -m imitation_experiments.lowlevel.evaluate_checkpoint \
     --headless \
     --task Isaac-Imitation-G1-v0 \
     --algorithm IPMD \
@@ -216,7 +216,7 @@ run_cmd "${ISAACLAB_PYTHON_CMD[@]}" scripts/rlopt/eval_skill_commander_closed_lo
     agent.ipmd.reward_param_weight_decay_coeff=0.0
 
 run_cmd "${PYTHON_CMD[@]}" \
-    experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_diffsr_latent_qualification.py \
+    -m imitation_experiments.audit.audit_diffsr_latent_qualification \
     --summary "${OUTPUT_ROOT}/latent_oracle/summary.json" \
     --low_level_checkpoint "${LATENT_LOW_LEVEL_CHECKPOINT}" \
     --skill_checkpoint "${LATENT_SKILL_CHECKPOINT}" \
@@ -240,7 +240,7 @@ export \
     EVAL_STEPS \
     SEED \
     MIN_ORACLE_SUCCESS
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_interface_run_provenance.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.provenance.write_interface_run_provenance \
     --label corrected-lafan1-low-level-qualification \
     --output_json "${OUTPUT_ROOT}/run_provenance.json" \
     --result_root "${OUTPUT_ROOT}" \

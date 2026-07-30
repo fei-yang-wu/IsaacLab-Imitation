@@ -56,4 +56,10 @@ for entry in "${pythonpath_entries[@]}"; do
 done
 export PYTHONPATH="${clean_pythonpath}"
 
+# The shared experiment library is editable-installed in the Pixi envs, but the
+# CU130 container runtime is a plain interpreter; expose the package explicitly
+# so `python -m imitation_experiments.<...>` works under this runtime too.
+runtime_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export PYTHONPATH="${PYTHONPATH:+${PYTHONPATH}:}${runtime_repo_root}/source/imitation_experiments"
+
 exec "${runtime_python}" "$@"

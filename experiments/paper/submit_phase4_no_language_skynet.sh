@@ -122,7 +122,7 @@ if [[ "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" ]]; then
         "${EXPECTED_MANIFEST_SHA256}" \
         --expected_motion_count "${EXPECTED_MOTION_COUNT}" \
         --minimum_oracle_success "${MIN_ORACLE_SUCCESS}" \
-        < "${SCRIPT_DIR}/validate_phase4_no_language_submission.py"
+        < "${REPO_ROOT}/source/imitation_experiments/imitation_experiments/audit/validate_phase4_no_language_submission.py"
 fi
 
 task_count="$((EXPECTED_MOTION_COUNT * ${#SEED_LIST[@]}))"
