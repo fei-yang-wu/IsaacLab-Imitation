@@ -762,7 +762,7 @@ def _command_reference_kwargs(
     """
     if interface == "ee_trajectory":
         return {"reference_body_names": tuple(ee_body_names)}
-    if interface == "root_points5":
+    if interface in {"root_points5", "root_points5_pose"}:
         return {
             "reference_body_names": tuple(
                 keypoint_body_names or G1_KEYPOINT5_BODY_NAMES
@@ -830,7 +830,9 @@ def resolve_pinned_command_joint_ids(base_env: ImitationRLEnv) -> torch.Tensor:
 # Reduced explicit interfaces: single-frame policy-group command spaces whose
 # name IS the command space, unlike full_body_trajectory / ee_trajectory which
 # map onto a separate "single_frame_*" alias.
-_REDUCED_EXPLICIT_INTERFACES = frozenset({"root_qpos", "root_points5"})
+_REDUCED_EXPLICIT_INTERFACES = frozenset(
+    {"root_qpos", "root_points5", "root_points5_pose"}
+)
 
 # Interface -> the command space its frozen tracker was trained on.
 _INTERFACE_COMMAND_SPACE: dict[str, str] = {
@@ -838,6 +840,7 @@ _INTERFACE_COMMAND_SPACE: dict[str, str] = {
     "ee_trajectory": "single_frame_ee",
     "root_qpos": "root_qpos",
     "root_points5": "root_points5",
+    "root_points5_pose": "root_points5_pose",
 }
 
 # Proprioception appears in every command space and is not part of the packet.
@@ -1424,7 +1427,7 @@ def main(
             # chunk-slot adapter (see _POLICY_COMMAND_MODES on why the mode name
             # is historical rather than per-space).
             low_level_command_space = interface
-            env_cfg.policy_command_mode = "full_body_chunk_current_slot"
+            env_cfg.policy_command_mode = "explicit_chunk_current_slot"
         else:
             raise ValueError(
                 "streamed_vanilla supports explicit command interfaces "

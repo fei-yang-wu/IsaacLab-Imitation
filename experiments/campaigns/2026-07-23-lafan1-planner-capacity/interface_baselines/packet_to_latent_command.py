@@ -48,11 +48,12 @@ requires no change inside RLOpt.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import torch
 
-# Per-frame term widths, in the order the environment concatenates them.
+# Historical full-body defaults remain public for existing diagnostics.
 TERM_WIDTHS: tuple[tuple[str, int], ...] = (
     ("expert_motion", 58),
     ("expert_anchor_pos_b", 3),
@@ -62,50 +63,113 @@ FRAME_WIDTH = sum(width for _, width in TERM_WIDTHS)
 PACKET_FRAMES = 10
 
 
-def term_major_to_frames(packet: torch.Tensor) -> torch.Tensor:
-    """``[B, 670]`` term-major -> ``[B, 10, 67]`` frame-interleaved."""
-    expected = PACKET_FRAMES * FRAME_WIDTH
-    if packet.ndim != 2 or int(packet.shape[-1]) != expected:
+@dataclass(frozen=True)
+class PacketLayout:
+    """Term-major packet layout accepted by one frozen skill encoder."""
+
+    term_widths: tuple[tuple[str, int], ...]
+    packet_frames: int = PACKET_FRAMES
+
+    def __post_init__(self) -> None:
+        if int(self.packet_frames) <= 0:
+            raise ValueError("packet_frames must be positive.")
+        if not self.term_widths:
+            raise ValueError("term_widths must not be empty.")
+        if any(int(width) <= 0 for _, width in self.term_widths):
+            raise ValueError(
+                f"Every per-frame term width must be positive: {self.term_widths}."
+            )
+
+    @property
+    def frame_width(self) -> int:
+        return sum(int(width) for _, width in self.term_widths)
+
+    @property
+    def packet_width(self) -> int:
+        return int(self.packet_frames) * self.frame_width
+
+    @classmethod
+    def from_target_spec(cls, spec: Any, *, packet_frames: int) -> "PacketLayout":
+        """Derive per-frame widths from an ``InterfaceTargetSpec`` packet."""
+        frames = int(packet_frames)
+        names = tuple(str(name) for name in spec.term_names)
+        packet_widths = tuple(int(width) for width in spec.term_widths)
+        if len(names) != len(packet_widths):
+            raise ValueError("Target spec has different term-name and width counts.")
+        invalid = [
+            (name, width)
+            for name, width in zip(names, packet_widths)
+            if width % frames != 0
+        ]
+        if invalid:
+            raise ValueError(
+                f"Target widths are not divisible by packet_frames={frames}: {invalid}."
+            )
+        return cls(
+            term_widths=tuple(
+                (name, width // frames) for name, width in zip(names, packet_widths)
+            ),
+            packet_frames=frames,
+        )
+
+
+DEFAULT_PACKET_LAYOUT = PacketLayout(TERM_WIDTHS, PACKET_FRAMES)
+
+
+def term_major_to_frames(
+    packet: torch.Tensor, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
+) -> torch.Tensor:
+    """Convert a term-major packet to frame-interleaved encoder input."""
+    if packet.ndim != 2 or int(packet.shape[-1]) != layout.packet_width:
         raise ValueError(
-            f"Expected a rank-2 packet of width {expected}, got {tuple(packet.shape)}."
+            f"Expected a rank-2 packet of width {layout.packet_width}, got "
+            f"{tuple(packet.shape)}."
         )
     batch = int(packet.shape[0])
     blocks: list[torch.Tensor] = []
     cursor = 0
-    for _, width in TERM_WIDTHS:
-        span = PACKET_FRAMES * width
+    for _, width in layout.term_widths:
+        span = layout.packet_frames * width
         blocks.append(
-            packet[:, cursor : cursor + span].reshape(batch, PACKET_FRAMES, width)
+            packet[:, cursor : cursor + span].reshape(
+                batch, layout.packet_frames, width
+            )
         )
         cursor += span
     return torch.cat(blocks, dim=-1)
 
 
-def frames_to_term_major(frames: torch.Tensor) -> torch.Tensor:
+def frames_to_term_major(
+    frames: torch.Tensor, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
+) -> torch.Tensor:
     """Inverse of :func:`term_major_to_frames`. Used by the round-trip gate."""
-    if frames.ndim != 3 or tuple(frames.shape[1:]) != (PACKET_FRAMES, FRAME_WIDTH):
+    expected = (layout.packet_frames, layout.frame_width)
+    if frames.ndim != 3 or tuple(frames.shape[1:]) != expected:
         raise ValueError(
-            f"Expected [B, {PACKET_FRAMES}, {FRAME_WIDTH}], got {tuple(frames.shape)}."
+            f"Expected [B, {expected[0]}, {expected[1]}], got {tuple(frames.shape)}."
         )
     batch = int(frames.shape[0])
     blocks: list[torch.Tensor] = []
     cursor = 0
-    for _, width in TERM_WIDTHS:
+    for _, width in layout.term_widths:
         blocks.append(frames[:, :, cursor : cursor + width].reshape(batch, -1))
         cursor += width
     return torch.cat(blocks, dim=-1)
 
 
 def split_packet_for_encoder(
-    packet: torch.Tensor,
+    packet: torch.Tensor, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """``[B, 670]`` term-major -> ``(state [B, 67], future_window [B, 9, 67])``."""
-    frames = term_major_to_frames(packet)
+    """Split a packet into the encoder's current frame and future window."""
+
+    frames = term_major_to_frames(packet, layout)
     return frames[:, 0, :].contiguous(), frames[:, 1:, :].contiguous()
 
 
-def verify_frame_layout(feature_slices: Any) -> None:
-    """Gate: TERM_WIDTHS must match the environment's own per-frame term layout.
+def verify_frame_layout(
+    feature_slices: Any, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
+) -> None:
+    """Gate: selected terms must match the environment's per-frame layout.
 
     Checked against ``ImitationRLEnv._expert_macro_feature_slices``, which the
     environment fills in when it builds the macro sequence. That is an
@@ -123,11 +187,11 @@ def verify_frame_layout(feature_slices: Any) -> None:
             "Refusing to encode a packet whose layout is unchecked."
         )
     cursor = 0
-    for name, width in TERM_WIDTHS:
+    for name, width in layout.term_widths:
         if name not in feature_slices:
             raise RuntimeError(
                 f"Environment frame layout has no term {name!r}; got "
-                f"{sorted(feature_slices)}. TERM_WIDTHS is stale."
+                f"{sorted(feature_slices)}. PacketLayout is stale."
             )
         span = feature_slices[name]
         # `getattr(span, "start", span[0])` would raise on a slice: Python
@@ -139,18 +203,21 @@ def verify_frame_layout(feature_slices: Any) -> None:
         if start != cursor or stop - start != width:
             raise RuntimeError(
                 f"Term {name!r} occupies [{start}, {stop}) in the environment's "
-                f"frame but TERM_WIDTHS assumes [{cursor}, {cursor + width}). "
+                f"frame but PacketLayout assumes [{cursor}, {cursor + width}). "
                 "The encoder would receive permuted features without erroring."
             )
         cursor = stop
-    if cursor != FRAME_WIDTH:
+    if cursor != layout.frame_width:
         raise RuntimeError(
-            f"Environment frame width is {cursor}, TERM_WIDTHS sums to {FRAME_WIDTH}."
+            f"Environment frame width is {cursor}, layout sums to {layout.frame_width}."
         )
 
 
 def build_noise_reference(
-    encoder: Any, packets: torch.Tensor
+    encoder: Any,
+    packets: torch.Tensor,
+    *,
+    packet_layout: PacketLayout = DEFAULT_PACKET_LAYOUT,
 ) -> dict[str, torch.Tensor]:
     """Per-dimension stds of the packet and of z, for calibrated BB3 noise.
 
@@ -160,7 +227,7 @@ def build_noise_reference(
     any crossing between them would be an artifact of the scaling.
     """
     packets = packets.float()
-    state, window = split_packet_for_encoder(packets)
+    state, window = split_packet_for_encoder(packets, packet_layout)
     with torch.no_grad():
         z = encoder(
             state.to(next(encoder.parameters()).device),
@@ -178,6 +245,7 @@ def install_packet_encoder_command_source(
     planner: torch.nn.Module,
     causal_state_provider: Callable[[torch.Tensor], torch.Tensor],
     env: Any,
+    packet_layout: PacketLayout = DEFAULT_PACKET_LAYOUT,
     flow_num_inference_steps: int = 16,
     flow_inference_noise_std: float = 0.0,
     packet_source: str = "planner",
@@ -200,6 +268,17 @@ def install_packet_encoder_command_source(
             "oracle sampler (agent.ipmd.command_source=hl_skill with "
             "--skill_checkpoint), not a frozen commander."
         )
+    if int(getattr(encoder, "state_dim", -1)) != packet_layout.frame_width:
+        raise ValueError(
+            f"Packet frame width {packet_layout.frame_width} does not match the "
+            f"frozen encoder state_dim={getattr(encoder, 'state_dim', None)}."
+        )
+    if int(getattr(encoder, "window_steps", -1)) + 1 != packet_layout.packet_frames:
+        raise ValueError(
+            f"Packet has {packet_layout.packet_frames} frames, but the frozen "
+            f"encoder consumes state plus {getattr(encoder, 'window_steps', None)} "
+            "future frames."
+        )
     original = sampler._encode_current_macro_batch
     # CPU generator so the injected noise is reproducible independently of GPU
     # kernel scheduling -- the rollout itself is already non-deterministic, and
@@ -208,6 +287,9 @@ def install_packet_encoder_command_source(
     stats = {
         "publishes": 0,
         "layout_verified": False,
+        "packet_frames": packet_layout.packet_frames,
+        "packet_frame_width": packet_layout.frame_width,
+        "packet_width": packet_layout.packet_width,
         "packet_noise_alpha": float(packet_noise_alpha),
         "z_noise_alpha": float(z_noise_alpha),
     }
@@ -226,7 +308,9 @@ def install_packet_encoder_command_source(
         # z is replaced, so everything else about the publish is unchanged.
         _, state, future_window, target, initial_z = original(env_ids)
         if verify_layout and not stats["layout_verified"]:
-            verify_frame_layout(getattr(env, "_expert_macro_feature_slices", None))
+            verify_frame_layout(
+                getattr(env, "_expert_macro_feature_slices", None), packet_layout
+            )
             stats["layout_verified"] = True
         if packet_source == "expert":
             # Pin test. Pack the environment's OWN expert window into a
@@ -238,8 +322,13 @@ def install_packet_encoder_command_source(
             # module rather than to the planner or the interface.
             packet = frames_to_term_major(
                 torch.cat(
-                    [state.unsqueeze(1), future_window[:, : PACKET_FRAMES - 1]], dim=1
-                )
+                    [
+                        state.unsqueeze(1),
+                        future_window[:, : packet_layout.packet_frames - 1],
+                    ],
+                    dim=1,
+                ),
+                packet_layout,
             )
         else:
             causal_state = causal_state_provider(env_ids)
@@ -264,7 +353,7 @@ def install_packet_encoder_command_source(
             packet = packet + torch.randn(
                 packet.shape, generator=generator, device="cpu"
             ).to(packet.device, packet.dtype) * std * float(packet_noise_alpha)
-        packet_state, packet_window = split_packet_for_encoder(packet)
+        packet_state, packet_window = split_packet_for_encoder(packet, packet_layout)
         # Compare against the ENCODER's window, not the environment's. The env
         # returns horizon_steps=10 future frames (t+1..t+10), while the encoder
         # consumes state + 9 of them (t..t+9) -- `_encoder_input_window` drops

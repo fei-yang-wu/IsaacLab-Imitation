@@ -31,6 +31,16 @@ ROOT_POINTS5_COMMAND_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_anchor_ori_b"),
 ]
 
+# Five full keypoint poses plus root pose: 54D per frame, 540D per ten-frame
+# packet. This remains a named preset for compatibility, but is assembled from
+# the same independent components available through ``command_components``.
+ROOT_POINTS5_POSE_COMMAND_KEYS: list[tuple[str, str]] = [
+    ("policy", "expert_keypoint_pos_b"),
+    ("policy", "expert_keypoint_ori_b"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
+]
+
 SINGLE_FRAME_EE_COMMAND_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_ee_pos_b"),
     ("policy", "expert_ee_ori_b"),
@@ -95,6 +105,8 @@ COMMAND_SPACE_ALIASES: dict[str, str] = {
     "single_frame_ee": "single_frame_ee",
     "root_qpos": "root_qpos",
     "root_points5": "root_points5",
+    "root_points5_pose": "root_points5_pose",
+    "root_keypoints5_pose": "root_points5_pose",
     "single_frame": "single_frame_full_body",
     "vanilla": "single_frame_full_body",
     "full_state": "single_frame_full_body",
@@ -108,6 +120,103 @@ COMMAND_SPACE_ALIASES: dict[str, str] = {
     "end_effector": "ee_trajectory",
     "ee_pose_trajectory": "ee_trajectory",
 }
+
+# Atomic command components are canonicalized in this order. The config selects
+# a set, not a concatenation order, so spelling the same ablation in a different
+# YAML order cannot silently change a checkpoint's actor contract.
+COMMAND_COMPONENT_ORDER: tuple[str, ...] = (
+    "joint_qpos_qvel",
+    "joint_qpos",
+    "keypoint_pos",
+    "keypoint_ori",
+    "ee_pos",
+    "ee_ori",
+    "root_pos",
+    "root_ori",
+)
+
+COMMAND_COMPONENT_TERM_NAMES: dict[str, str] = {
+    "joint_qpos_qvel": "expert_motion",
+    "joint_qpos": "expert_motion_qpos",
+    "keypoint_pos": "expert_keypoint_pos_b",
+    "keypoint_ori": "expert_keypoint_ori_b",
+    "ee_pos": "expert_ee_pos_b",
+    "ee_ori": "expert_ee_ori_b",
+    "root_pos": "expert_anchor_pos_b",
+    "root_ori": "expert_anchor_ori_b",
+}
+
+COMMAND_COMPONENT_ALIASES: dict[str, str] = {
+    **{name: name for name in COMMAND_COMPONENT_ORDER},
+    "qpos_qvel": "joint_qpos_qvel",
+    "full_joint_state": "joint_qpos_qvel",
+    "qpos": "joint_qpos",
+    "keypoint_position": "keypoint_pos",
+    "keypoint_orientation": "keypoint_ori",
+    "ee_position": "ee_pos",
+    "ee_orientation": "ee_ori",
+    "root_position": "root_pos",
+    "root_orientation": "root_ori",
+}
+
+COMMAND_SPACE_COMPONENT_PRESETS: dict[str, tuple[str, ...]] = {
+    "single_frame_full_body": ("joint_qpos_qvel", "root_pos", "root_ori"),
+    "single_frame_ee": ("ee_pos", "ee_ori"),
+    "root_qpos": ("joint_qpos", "root_pos", "root_ori"),
+    "root_points5": ("keypoint_pos", "root_pos", "root_ori"),
+    "root_points5_pose": (
+        "keypoint_pos",
+        "keypoint_ori",
+        "root_pos",
+        "root_ori",
+    ),
+}
+
+
+def normalize_command_components(
+    command_components: list[str] | tuple[str, ...],
+) -> tuple[str, ...]:
+    """Validate and canonically order an explicit command component set."""
+    normalized: list[str] = []
+    for raw_name in command_components:
+        name = str(raw_name).strip().lower().replace("-", "_")
+        try:
+            normalized.append(COMMAND_COMPONENT_ALIASES[name])
+        except KeyError as err:
+            raise ValueError(
+                f"Unsupported command component {raw_name!r}. Expected a subset "
+                f"of {list(COMMAND_COMPONENT_ORDER)}."
+            ) from err
+    if not normalized:
+        raise ValueError("command_components must select at least one component.")
+    duplicates = sorted({name for name in normalized if normalized.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"command_components contains duplicates: {duplicates}.")
+    if {"joint_qpos_qvel", "joint_qpos"}.issubset(normalized):
+        raise ValueError(
+            "joint_qpos_qvel and joint_qpos are mutually exclusive command components."
+        )
+    selected = set(normalized)
+    return tuple(name for name in COMMAND_COMPONENT_ORDER if name in selected)
+
+
+def command_component_input_keys(
+    command_components: list[str] | tuple[str, ...],
+    *,
+    observation_group: str = "policy",
+) -> list[tuple[str, str]]:
+    """Build ordered observation keys for a composable explicit command."""
+    return [
+        (str(observation_group), COMMAND_COMPONENT_TERM_NAMES[name])
+        for name in normalize_command_components(command_components)
+    ]
+
+
+def command_space_components(command_space: str) -> tuple[str, ...] | None:
+    """Return the composable form of a legacy single-frame command preset."""
+    normalized = normalize_command_space(command_space)
+    return COMMAND_SPACE_COMPONENT_PRESETS.get(normalized)
+
 
 LATENT_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "latent_command"),
@@ -201,7 +310,14 @@ def normalize_command_space(command_space: str) -> str:
         ) from err
 
 
-def command_space_policy_input_keys(command_space: str) -> list[tuple[str, str]]:
+def command_space_policy_input_keys(
+    command_space: str,
+    command_components: list[str] | tuple[str, ...] | None = None,
+) -> list[tuple[str, str]]:
+    if command_components is not None:
+        return list(
+            command_component_input_keys(command_components) + PROPRIO_POLICY_INPUT_KEYS
+        )
     command_space = normalize_command_space(command_space)
     if command_space == "single_frame_full_body":
         return list(VANILLA_POLICY_INPUT_KEYS)
@@ -217,10 +333,22 @@ def command_space_policy_input_keys(command_space: str) -> list[tuple[str, str]]
         return list(ROOT_QPOS_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
     if command_space == "root_points5":
         return list(ROOT_POINTS5_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
+    if command_space == "root_points5_pose":
+        return list(ROOT_POINTS5_POSE_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
     raise AssertionError(f"Unhandled command space: {command_space}")
 
 
-def command_space_critic_input_keys(command_space: str) -> list[tuple[str, str]]:
+def command_space_critic_input_keys(
+    command_space: str,
+    command_components: list[str] | tuple[str, ...] | None = None,
+) -> list[tuple[str, str]]:
+    if command_components is not None:
+        # Actor and critic command entries have the same numerical values but
+        # remain separate observation groups; privileged state is critic-only.
+        return list(
+            command_component_input_keys(command_components, observation_group="critic")
+            + PRIVILEGED_CRITIC_STATE_KEYS
+        )
     command_space = normalize_command_space(command_space)
     if command_space == "single_frame_full_body":
         return list(VANILLA_CRITIC_INPUT_KEYS)
@@ -234,6 +362,8 @@ def command_space_critic_input_keys(command_space: str) -> list[tuple[str, str]]
         return list(ROOT_QPOS_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
     if command_space == "root_points5":
         return list(ROOT_POINTS5_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
+    if command_space == "root_points5_pose":
+        return list(ROOT_POINTS5_POSE_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
     raise AssertionError(f"Unhandled command space: {command_space}")
 
 
@@ -243,20 +373,40 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
 
     _default_use_latent_command: bool = False
     command_space: str = "single_frame_full_body"
+    # Optional atomic explicit-interface selection. When set, this is the actor
+    # command contract and ``command_space`` is retained only as a run label for
+    # backward-compatible metadata. Hydra can therefore express new ablations
+    # without adding an enum arm in Python.
+    command_components: list[str] | None = None
+    command_spec_name: str = ""
 
     def sync_input_keys(self) -> None:
         use_latent_command = bool(self.ipmd.use_latent_command)
-        self.command_space = normalize_command_space(self.command_space)
+        components: tuple[str, ...] | None = None
+        if self.command_components is None:
+            self.command_space = normalize_command_space(self.command_space)
+            if not self.command_spec_name:
+                self.command_spec_name = self.command_space
+        else:
+            if use_latent_command:
+                raise ValueError(
+                    "command_components configures an explicit tracker and cannot "
+                    "be combined with ipmd.use_latent_command=true."
+                )
+            components = normalize_command_components(self.command_components)
+            self.command_components = list(components)
+            if not self.command_spec_name:
+                self.command_spec_name = "composed__" + "__".join(components)
         self.policy.input_keys = (
             list(LATENT_POLICY_INPUT_KEYS)
             if use_latent_command
-            else command_space_policy_input_keys(self.command_space)
+            else command_space_policy_input_keys(self.command_space, components)
         )
         if self.value_function is not None:
             self.value_function.input_keys = (
                 list(LATENT_CRITIC_INPUT_KEYS)
                 if use_latent_command
-                else command_space_critic_input_keys(self.command_space)
+                else command_space_critic_input_keys(self.command_space, components)
             )
         self.ipmd.reward_input_keys = list(REWARD_INPUT_KEYS)
         self.ipmd.latent_learning.posterior_input_keys = list(
@@ -602,35 +752,56 @@ class G1ImitationLatentPerStepVQRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig
 
 
 @configclass
-class G1ImitationLatentSonicFSQRLOptIPMDConfig(
-    G1ImitationLatentPerStepVQRLOptIPMDConfig
+class G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig(
+    G1ImitationLatentSonicRLOptIPMDConfig
 ):
-    """SONIC-motivated per-step FSQ token interface.
+    """Official-window SONIC FSQ recipe adapted to this repo's RLOpt stack.
 
-    Same per-step, ten-token packet contract as the parent, with SONIC's own
-    parameter choices substituted for the as-built ones. Three differences, each
-    taken from ``gear_sonic``:
-
-    * ``quantizer='fsq'`` at 64 dims x 32 levels (~320 bits per command), i.e.
-      ``all_mlp_v1.yaml``'s tokens of shape ``(2, 32)`` at ``num_fsq_levels=32``.
-      The parent's ``vq_ema`` at ``codebook_size=512`` is only 9 bits, which the
-      latent-learning ablation plan already tags as a lower-capacity diagnostic
-      that "cannot support a capacity-matched conclusion".
-    * ``recon_coeff=0.01``. In SONIC the reconstruction decoder is an *auxiliary*
-      loss at 0.01 (``aux_losses/universal_token/g1_recon_and_all_latent.yaml``),
-      not the primary objective the parent's 1.0 makes it.
-    * ``train_posterior_through_policy=True``. SONIC's encoder *is* the actor
-      backbone and takes full policy gradient. This is the axis its paper asserts
-      but never ablates, and the one our 2026-07-22 hold isolation identified as
-      the reason a frozen encoder collapses under per-step renewal
-      (ep_len 2.76 vs 46.38 at 30M frames).
+    The entire current-plus-nine-future-frame reference window is encoded into
+    one 64-value FSQ command and recomputed every 50 Hz control step. This
+    replaces the removed cached-packet implementation, which encoded ten
+    independent per-step tokens and consumed them without renewing the window.
     """
+
+    sonic_release_optimizer: bool = True
+
+    def sync_input_keys(self) -> None:
+        super().sync_input_keys()
+        self.ipmd.latent_learning.posterior_input_keys = list(
+            FUTURE_CVAE_POSTERIOR_INPUT_KEYS
+        )
+        self.ipmd.latent_learning.prior_input_keys = []
 
     def __post_init__(self):
         super().__post_init__()
+        # Public SONIC normalizes only the critic input; its actor declares
+        # running_mean_std=false because the quantized token geometry is fixed.
+        self.policy.normalize_input = False
+        assert self.value_function is not None
+        self.value_function.normalize_input = True
+        self.ipmd.latent_dim = 64
+        self.ipmd.command_source = "posterior"
+        self.ipmd.latent_steps_min = 1
+        self.ipmd.latent_steps_max = 1
+        self.ipmd.latent_learning.method = "patch_vqvae"
         self.ipmd.latent_learning.quantizer = "fsq"
-        # 64 dims x 32 levels = 2**320; FSQQuantizer returns per-dim level
-        # indices because a flat code index would overflow int64.
+        # Public SONIC: max_num_tokens=2, fsq_level_list=32, hence 64 scalar
+        # coordinates with 32 levels each.
         self.ipmd.latent_learning.fsq_levels = [32] * 64
+        self.ipmd.latent_learning.fsq_normalize_codes = True
+        self.ipmd.latent_learning.code_latent_dim = 64
+        self.ipmd.latent_learning.command_phase_mode = "none"
+        self.ipmd.latent_learning.patch_past_steps = 0
+        self.ipmd.latent_learning.patch_future_steps = 9
+        self.ipmd.latent_learning.code_period = 1
+        self.ipmd.latent_learning.posterior_command_period = 1
+        self.ipmd.latent_learning.encoder_hidden_dims = [2048, 1024, 512, 512]
+        self.ipmd.latent_learning.encoder_activation = "silu"
+        self.ipmd.latent_learning.decoder_hidden_dims = [2048, 1024, 512, 512]
+        self.ipmd.latent_learning.decoder_activation = "silu"
+        self.ipmd.latent_learning.lr = 2.0e-5
+        self.ipmd.latent_learning.freeze_encoder = False
         self.ipmd.latent_learning.train_posterior_through_policy = True
         self.ipmd.latent_learning.recon_coeff = 0.01
+        self.ipmd.latent_learning.action_recon_coeff = 0.0
+        self.sync_input_keys()

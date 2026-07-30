@@ -48,6 +48,12 @@ INTERFACE_TERMS: dict[str, tuple[str, ...]] = {
         "expert_anchor_pos_b",
         "expert_anchor_ori_b",
     ),
+    "root_points5_pose": (
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+    ),
     "future_cvae": ("z",),
     "per_step_token_sequence": ("token_ids",),
 }
@@ -58,6 +64,7 @@ ROLLOUT_SAMPLE_TENSOR_KEYS = (
     "demonstration_target",
     "traj_rank",
     "episode_id",
+    "env_id",
     "control_step",
     "planner_step",
 )
@@ -390,7 +397,7 @@ def _sample_tensor(
         raise TypeError(
             f"Sample {sample_path} key {key!r} must be a tensor, got {type(value).__name__}."
         )
-    if key in {"traj_rank", "episode_id", "control_step", "planner_step"}:
+    if key in {"traj_rank", "episode_id", "env_id", "control_step", "planner_step"}:
         value = value.reshape(-1)
         return value.to(dtype=torch.long)
     if value.ndim == 1:

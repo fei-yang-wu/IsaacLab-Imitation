@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ICE container entrypoint for the LAFAN1 planner-capacity sweep.
+"""ICE container entrypoint for the LAFAN1 planner-capacity sweeps.
 
 A submitted ICE job runs exactly one python file via /isaac-sim/python.sh, so this
 thin entry wraps the bash orchestrators. Three stages, chained with afterok:
@@ -7,6 +7,7 @@ thin entry wraps the bash orchestrators. Three stages, chained with afterok:
   --stage oracle     : prepare_oracle_baselines.sh (6 Isaac runs, once)
   --stage cell       : run_capacity_point.sh for SLURM_ARRAY_TASK_ID (0-11)
   --stage aggregate  : per-seed + across-seed aggregation (pure python)
+  --stage enc380     : walk1 shared-tracker route diagnostic (12-cell grid)
 
 Inside the container pixi is unavailable, so ISAAC_PY/PLAIN_PY are pointed at
 /isaac-sim/python.sh. The frozen oracles are Newton-trained on a compute-only GPU,
@@ -23,8 +24,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+from enc380_capacity_grid import decode_cell
+
 CAMPAIGN_DIR = Path(__file__).resolve().parent
-REPO_ROOT = CAMPAIGN_DIR.parents[2]
+
+
+def _find_repo_root(start: Path) -> Path:
+    for candidate in (start, *start.parents):
+        if (candidate / "docker/cluster/cluster_interface.sh").is_file():
+            return candidate
+    raise RuntimeError(f"Could not locate repository root above {start}.")
+
+
+REPO_ROOT = _find_repo_root(CAMPAIGN_DIR)
 
 SIZES = ("tiny", "small", "medium", "large")
 # Seeds 0-2 are the original grid (array 0-11); 3-5 were added to firm up the
@@ -51,8 +63,10 @@ def _inject_cu130_runtime_libs(env: dict[str, str], runtime_root: Path) -> None:
         return
     env["ISAACLAB_CU130_SITE_PACKAGES"] = str(site)
     nvidia = site / "nvidia"
-    lib_dirs = sorted({str(p) for p in nvidia.glob("*/lib") if p.is_dir()} |
-                      {str(p) for p in nvidia.glob("*/*/lib") if p.is_dir()})
+    lib_dirs = sorted(
+        {str(p) for p in nvidia.glob("*/lib") if p.is_dir()}
+        | {str(p) for p in nvidia.glob("*/*/lib") if p.is_dir()}
+    )
     if lib_dirs:
         prev = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = ":".join(lib_dirs) + (f":{prev}" if prev else "")
@@ -87,7 +101,8 @@ def _runtime_env() -> dict[str, str]:
     pp = env.get("PYTHONPATH", "")
     if pp:
         kept = [
-            p for p in pp.split(os.pathsep)
+            p
+            for p in pp.split(os.pathsep)
             if not (
                 os.path.realpath(p or ".").startswith("/isaac-sim/kit/python")
                 and "site-packages" not in os.path.realpath(p or ".")
@@ -98,6 +113,7 @@ def _runtime_env() -> dict[str, str]:
     # Newton-trained oracles + corrected-tree data on the container bind.
     env["MANIFEST"] = env.get("MANIFEST", ICE_MANIFEST)
     env["LATENT_DATASET_PATH"] = env.get("LATENT_DATASET_PATH", ICE_LATENT_DATASET)
+    env["DATASET_PATH"] = env.get("DATASET_PATH", ICE_LATENT_DATASET)
     env["STUDY_ROOT"] = STUDY_ROOT
     env["ORACLE_ROOT"] = ORACLE_ROOT
     # EE needs the ee-chunk env adapter; restrict to the two working interfaces
@@ -160,8 +176,26 @@ def main() -> int:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=("oracle", "cell", "aggregate", "finetune_b"),
+        choices=("oracle", "cell", "aggregate", "finetune_b", "enc380"),
     )
+    parser.add_argument("--enc380-low-level-checkpoint", default="")
+    parser.add_argument("--enc380-skill-checkpoint", default="")
+    parser.add_argument("--enc380-completion-record", default="")
+    parser.add_argument(
+        "--enc380-mode",
+        choices=("qualify", "demo", "cell", "aggregate"),
+        default="qualify",
+    )
+    parser.add_argument(
+        "--enc380-stages",
+        default="qualify demo train eval aggregate",
+    )
+    parser.add_argument(
+        "--enc380-output-root",
+        default="logs/interface_baselines/lafan1_enc380_route_comparison",
+    )
+    parser.add_argument("--enc380-low-level-sha256", default="")
+    parser.add_argument("--enc380-skill-sha256", default="")
     args, _ = parser.parse_known_args()
     env = _runtime_env()
 
@@ -169,6 +203,58 @@ def main() -> int:
         return _bash("prepare_oracle_baselines.sh", env)
     if args.stage == "aggregate":
         return _aggregate(env)
+    if args.stage == "enc380":
+        if (
+            not args.enc380_low_level_checkpoint
+            or not args.enc380_skill_checkpoint
+            or not args.enc380_completion_record
+        ):
+            parser.error(
+                "--stage enc380 requires low-level, skill, and completion-record paths."
+            )
+        mode = args.enc380_mode
+        idx = int(
+            os.environ.get("SLURM_ARRAY_TASK_ID", os.environ.get("CELL_INDEX", "0"))
+        )
+        stages_by_mode = {
+            "qualify": "qualify",
+            "demo": "demo",
+            "cell": "train eval",
+            "aggregate": "aggregate",
+        }
+        env.update(
+            {
+                "LOW_LEVEL_CHECKPOINT": args.enc380_low_level_checkpoint,
+                "SKILL_CHECKPOINT": args.enc380_skill_checkpoint,
+                "TRACKER_COMPLETION_RECORD": args.enc380_completion_record,
+                "EXPECTED_LOW_LEVEL_SHA256": args.enc380_low_level_sha256,
+                "EXPECTED_SKILL_SHA256": args.enc380_skill_sha256,
+                "STAGES": stages_by_mode[mode],
+                "OUTPUT_ROOT": args.enc380_output_root,
+                "DRY_RUN": "0",
+                "ASSERT_KITLESS": "0",
+                "RENDER_VIDEO": "1",
+            }
+        )
+        if mode == "cell":
+            try:
+                motion, size, seed = decode_cell(idx)
+            except ValueError as error:
+                parser.error(str(error))
+            env.update(
+                {
+                    "MOTION_NAME": motion,
+                    "MODEL_SIZE": size,
+                    "SEED": str(seed),
+                }
+            )
+        print(
+            f"[entry] enc380 mode={mode} idx={idx} "
+            f"motion={env.get('MOTION_NAME', 'all40')} "
+            f"size={env.get('MODEL_SIZE', 'all')} seed={env.get('SEED', 'all')}",
+            flush=True,
+        )
+        return _bash("run_enc380_planner_route_comparison.sh", env)
     if args.stage == "finetune_b":
         # Finetune ablation: oracle-driven aggregation instead of DAgger.
         # One array index per planner seed; size/interface come from the env.

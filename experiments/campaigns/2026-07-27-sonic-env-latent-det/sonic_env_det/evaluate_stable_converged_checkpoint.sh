@@ -17,6 +17,8 @@ cd "${REPO_ROOT}"
 CHECKPOINT="${CHECKPOINT:-}"
 SKILL_CHECKPOINT="${SKILL_CHECKPOINT:-logs/downloaded_checkpoints/lafan1_stable_vs_strict_500m_20260729/skill_encoder/latest.pt}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-logs/interface_baselines/lafan1_stable_5b_converged_20260729}"
+PASS_MODE="${PASS_MODE:-both}"
+SOURCE_SNAPSHOT="${SOURCE_SNAPSHOT:-}"
 MANIFEST_PATH="${MANIFEST_PATH:-data/lafan1/manifests/g1_lafan1_manifest.json}"
 DATASET_PATH="${DATASET_PATH:-/tmp/iltools_g1_lafan1_tracking_corrected_8029acbce33a}"
 EXPECTED_MANIFEST_SHA256="d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8"
@@ -34,6 +36,10 @@ if [ ! -d "${DATASET_PATH}" ]; then
     echo "[ERROR] Corrected LAFAN1 cache missing: ${DATASET_PATH}" >&2
     exit 2
 fi
+if [ -n "${SOURCE_SNAPSHOT}" ] && [ ! -f "${SOURCE_SNAPSHOT}/scripts/rlopt/eval_skill_commander_closed_loop.py" ]; then
+    echo "[ERROR] Evaluator source snapshot is incomplete: ${SOURCE_SNAPSHOT}" >&2
+    exit 2
+fi
 manifest_sha="$(sha256sum "${MANIFEST_PATH}" | awk '{print $1}')"
 encoder_sha="$(sha256sum "${SKILL_CHECKPOINT}" | awk '{print $1}')"
 if [ "${manifest_sha}" != "${EXPECTED_MANIFEST_SHA256}" ]; then
@@ -44,14 +50,33 @@ if [ "${encoder_sha}" != "${EXPECTED_ENCODER_SHA256}" ]; then
     echo "[ERROR] Encoder hash mismatch: ${encoder_sha}" >&2
     exit 2
 fi
-if [ -e "${OUTPUT_ROOT}" ]; then
-    echo "[ERROR] Refusing existing OUTPUT_ROOT: ${OUTPUT_ROOT}" >&2
-    exit 2
-fi
-
 frame_label="$(basename "${CHECKPOINT}" .pt)"
 strict_dir="${OUTPUT_ROOT}/strict_terminations"
 full_dir="${OUTPUT_ROOT}/full_horizon_deterministic"
+case "${PASS_MODE}" in
+    both)
+        if [ -e "${OUTPUT_ROOT}" ]; then
+            echo "[ERROR] Refusing existing OUTPUT_ROOT: ${OUTPUT_ROOT}" >&2
+            exit 2
+        fi
+        ;;
+    strict)
+        if [ -e "${strict_dir}" ]; then
+            echo "[ERROR] Refusing existing strict output: ${strict_dir}" >&2
+            exit 2
+        fi
+        ;;
+    full)
+        if [ -e "${full_dir}" ]; then
+            echo "[ERROR] Refusing existing full-horizon output: ${full_dir}" >&2
+            exit 2
+        fi
+        ;;
+    *)
+        echo "[ERROR] PASS_MODE must be both, strict, or full; got ${PASS_MODE}." >&2
+        exit 2
+        ;;
+esac
 common=(
     --headless
     --assert-kitless
@@ -95,6 +120,20 @@ common=(
     env.sim.physics.solver_cfg.njmax=320
     env.sim.physics.solver_cfg.nconmax=40
 )
+if [ -n "${SOURCE_SNAPSHOT}" ]; then
+    snapshot_pythonpath="${SOURCE_SNAPSHOT}/source/isaaclab_imitation:${SOURCE_SNAPSHOT}/RLOpt:${SOURCE_SNAPSHOT}/ImitationLearningTools"
+    evaluator=(
+        env
+        "PYTHONPATH=${snapshot_pythonpath}"
+        "${REPO_ROOT}/.pixi/envs/isaaclab/bin/python"
+        "${SOURCE_SNAPSHOT}/scripts/rlopt/eval_skill_commander_closed_loop.py"
+    )
+else
+    evaluator=(
+        pixi run -e isaaclab python
+        scripts/rlopt/eval_skill_commander_closed_loop.py
+    )
+fi
 
 mkdir -p "${OUTPUT_ROOT}"
 {
@@ -106,24 +145,36 @@ mkdir -p "${OUTPUT_ROOT}"
     realpath "${SKILL_CHECKPOINT}"
     printf "skill_checkpoint_sha256=%s\n" "${encoder_sha}"
     printf "manifest_sha256=%s\n" "${manifest_sha}"
+    if [ -n "${SOURCE_SNAPSHOT}" ]; then
+        printf "source_snapshot="
+        realpath "${SOURCE_SNAPSHOT}"
+    fi
 } > "${OUTPUT_ROOT}/evaluation_provenance.txt"
 
-pixi run -e isaaclab python scripts/rlopt/eval_skill_commander_closed_loop.py \
-    "${common[@]}" \
-    --num_envs 100 \
-    --keep_early_terminations \
-    --output_dir "${strict_dir}" \
-    --label "stable_5b_${frame_label}_strict_terminations"
+if [ "${PASS_MODE}" = "both" ] || [ "${PASS_MODE}" = "strict" ]; then
+    "${evaluator[@]}" \
+        "${common[@]}" \
+        --num_envs 100 \
+        --keep_early_terminations \
+        --output_dir "${strict_dir}" \
+        --label "stable_5b_${frame_label}_strict_terminations"
+fi
 
-pixi run -e isaaclab python scripts/rlopt/eval_skill_commander_closed_loop.py \
-    "${common[@]}" \
-    --num_envs 40 \
-    --video \
-    --video_length 1000 \
-    --deterministic_tracking \
-    --output_dir "${full_dir}" \
-    --label "stable_5b_${frame_label}_full_horizon_deterministic"
+if [ "${PASS_MODE}" = "both" ] || [ "${PASS_MODE}" = "full" ]; then
+    "${evaluator[@]}" \
+        "${common[@]}" \
+        --num_envs 40 \
+        --video \
+        --video_length 1000 \
+        --deterministic_tracking \
+        --output_dir "${full_dir}" \
+        --label "stable_5b_${frame_label}_full_horizon_deterministic"
+fi
 
-echo "[RESULT] strict summary: $(realpath "${strict_dir}/summary.json")"
-echo "[RESULT] full-horizon summary: $(realpath "${full_dir}/summary.json")"
-echo "[RESULT] retained video: $(realpath "${full_dir}/videos/play/rl-video-step-0.mp4")"
+if [ -f "${strict_dir}/summary.json" ]; then
+    echo "[RESULT] strict summary: $(realpath "${strict_dir}/summary.json")"
+fi
+if [ -f "${full_dir}/summary.json" ]; then
+    echo "[RESULT] full-horizon summary: $(realpath "${full_dir}/summary.json")"
+    echo "[RESULT] retained video: $(realpath "${full_dir}/videos/play/rl-video-step-0.mp4")"
+fi

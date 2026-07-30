@@ -18,7 +18,8 @@ Two readouts (Study 1 of `wiki/ablation-experiment-plan.md`, restricted to one m
 - Planner seeds: `0 1 2`. Low-level trackers stay seed 0.
 - Planner input: causal `10 × 93` achieved-robot history + task index (one motion → trivial).
 - Publication: 5 Hz, held 10 steps (`planner_update_interval=10`), per-env renewal.
-- Eval: start at reference frame 0, ~700 control steps; M3 survival (`base_too_low`
+- Eval: 500 control steps from a reference start in `[0, 200]` (maximum
+  reachable reference cursor 700); M3 survival (`base_too_low`
   only) + full-horizon no-termination MPJPE pass. Demonstration-only and
   rollout-finetuned reported **separately**.
 - Metrics normalized by each interface's own converged frozen oracle
@@ -34,7 +35,7 @@ has its **own** low-level controller trained natively on that command space — 
 is not one tracker fed adapted commands, so nothing is reconstructed (a
 `root_qpos` controller simply never receives joint velocities).
 
-| Interface | Packet @ 5 Hz | Contents / frame | Frames | Qualified oracle | Training plateau |
+| Interface | Packet @ 5 Hz | Contents / frame | Frames | One-motion oracle floor | Training plateau |
 | --- | --- | --- | --- | --- | --- |
 | `full_body_trajectory` | 670 | 29 qpos + 29 qvel + root 9 | 5.000B | **23.8 mm** | 34.1 mm / 454 |
 | `root_qpos` | 380 | 29 qpos + root 9 (no qvel) | 4.600B | **23.6 mm** | — |
@@ -45,7 +46,16 @@ is not one tracker fed adapted commands, so nothing is reconstructed (a
 "Root 9" is `expert_anchor_pos_b` (3) + `expert_anchor_ori_b` (rot6d, 6) — a pose,
 **no velocity anywhere** in either reduced packet.
 
-> **Use the qualified column, never the training plateau.** The training metric is
+Explicit packets are now assembled from ordered `command_components` rather than
+hard-coded interface branches. The registered diagnostic `root_points5_pose`
+combines root pose with five keypoint positions and rot6d orientations: 54 values
+per frame, 540 per ten-frame packet. Configs can select that preset or compose the
+same components directly; it remains an ablation until it has its own qualified
+low-level controller.
+
+> **Use the oracle-floor column, never the training plateau.** These are
+> `walk1_subject1` frame-0 diagnostics, not all-40 strict qualification rates.
+> The training metric is
 > measured under random starts with terminations active, so episodes end before
 > drift accumulates. `ee_trajectory` reads a healthy 41.3 mm there while its true
 > frame-0/700-step floor is 405.2 mm — a 10× gap under the same metric name. The
@@ -66,7 +76,7 @@ The original "main" latent LAFAN1 tracker (job `5525664`) was destroyed in the
 short of the explicit arms — a gap that runs *against* the latent claim, so the
 result stands as a conservative lower bound.
 
-### `enc380` — the content-controlled latent arm (in flight, 2026-07-28)
+### `enc380` — content-controlled latent arm and planner-route capacity diagnostic
 
 The ladder above confounds two axes. `root_qpos` (380 explicit) reaches 23.6 mm
 and `latent_skill` (258) reaches 30.5 mm, but the latent encoder was fit on the
@@ -107,6 +117,99 @@ a 5,000-update encoder pretrain over the 380 macro state
 z effective rank 135/256) and a 40-iteration frozen-encoder tracker smoke on
 `Isaac-Imitation-G1-Latent-Strict-v0` (`logs/interface_baselines/enc380_tracker_smoke`).
 Neither is a performance result.
+
+ICE encoder job `5546946` completed. Tracker job `5546958` reached
+4,300,111,872 frames and wrote
+`model_step_4300111872.pt` (SHA-256
+`bce30069d8dc9085ee1bcb728ca3c4cef59c5bb296891d3da7a023077cd90b26`), but
+Slurm ended it with `TIMEOUT` before the intended 5B frames. Treat that checkpoint
+as preliminary unless it is resumed to the target. The frozen encoder SHA-256 is
+`1d530fcb5920112b84bc53dbaddf2b3eb3da13a32a379513d8ee8719bc57d546`.
+
+The first continuation submission, job `5549433`, failed during environment
+construction before collecting a frame because the submitted workspace lacked the
+new `expert_keypoint_ori_b` window term. That runtime builder was fixed and passed
+the actual SONIC one-update smoke. Corrected continuation job `5549446` then
+completed 699,973,632 frames cleanly, but the trainer only saved at periodic
+boundaries and had no unconditional shutdown save; its latest durable checkpoint
+was therefore `model_step_600145920.pt` (SHA-256
+`4afa14a13081680903dcabe2a147ac23b9bfd0c2cfbd50b02b635a817b9edef9`). Recovery
+job `5549907` resumed from that exact file for 99,827,712 frames and crossed an
+explicit final save boundary. The durable 5B tracker is
+`/data/resume_store/lafan1_enc380_rootqpos_h10_z256_seed0/model_5b.pt` (SHA-256
+`d33fa146f54222848da8b9a92eb5579f5acb8b3a46c484399c906b076c219260`), with
+5,000,085,504 batch-aligned credited frames and a read-only completion record next
+to it.
+
+Historical ICE job `5550527` reproduced the
+historical `Isaac-Imitation-G1-Latent-Strict-v0` environment used for tracker
+training. The saved training and evaluation configs have the same pelvis
+anchor, strict termination functions and thresholds, no curriculum, and legacy
+reset family; the only intervening config addition is an unused expert
+keypoint observation that is not an actor input.
+
+Its reported `0.35` strict success is retained as a historical stress result,
+not a valid qualification headline: it forced 1,000 control steps from frame 0,
+while training runs 500 control steps from a start in `[0, 200]` and therefore
+never advances beyond reference cursor 700. All 40 environments were
+fall-free; the 26 strict failures were tracking-limit violations
+(`foot_pos_xyz`: 17 environments, `ee_body_pos`: 11, `anchor_ori`: 2, with
+overlaps). The corrected non-terminating diagnostic covered all 40 motions for
+1,000 steps each: 102.76 mm root-relative MPJPE, 0.236 rad joint RMSE, and
+0.590 m EE position error over 40,000 transitions, with fall-free survival
+1.0. Its retained video is
+`/home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab/logs/interface_baselines/lafan1_enc380_route_capacity_5b_20260730_historical_strict_r3/qualification/full_horizon_oracle/videos/play/rl-video-step-0.mp4`
+(SHA-256 `fec18dab52cde69970f3ef93a9613994c8c989713325332cee340f96acb0262e`).
+The earlier job `5549958` found the same 0.35 result, while its separate
+four-motion diagnostic `5549977` was incomplete and is superseded by this
+all-40 pass.
+
+The original planner arrays were canceled without running. The replacement
+one-motion diagnostic gate uses the same old Strict-v0 task on 100 parallel
+`walk1_subject1` starts sampled in `[0, 200]`, exactly 500 control steps, strict
+terminations, and training disturbances. Its companion accuracy pass uses the
+same selected motion, starts, and horizon with disturbances and early
+terminations disabled. This scoped gate must pass before the diagnostic planner
+cells start. The all-40-motion result remains retained as a separate
+general-controller diagnostic; its environment-0 video showed
+`dance1_subject1`, not the selected planner-study motion.
+
+The matched route ablation is implemented by
+`run_enc380_planner_route_comparison.sh`: qualify and tensor-bind the shared
+tracker/encoder, collect paired oracle data once, train each route once,
+evaluate survival plus non-terminating full horizons, and aggregate
+latent-minus-root differences. There is no planner pretraining stage,
+learned-planner rollout collection, merge, or finetune. Both planners use the
+deployable causal `planner_state` (10 x 93); future-derived
+`expert_planner_state` is forbidden.
+
+One persistent Isaac session uses 100 environments to collect 100
+`walk1_subject1` `(env_id, episode_id)` segments in parallel. Environments
+still complete asynchronously: rows are buffered until a segment ends, so the
+final cutoff commits whole variable-length segments and discards any in-flight
+segments. The fixed 20% trajectory holdout leaves 80 optimizer-training
+trajectories.
+
+`walk1_subject1` is intentionally the same motion used by the previous
+one-motion planner study. This user-requested continuity choice is not an
+unbiased or representative motion sample. The capacity grid is four model sizes
+x three planner seeds = 12 ICE cells; each cell runs both the 380D `root_qpos ->
+frozen encoder -> tracker` and 256D `latent -> tracker` routes. Before every
+root-planner rollout, an expert-packet pin test proves that the 380D packet routed
+through the frozen encoder reproduces the oracle latent command. Planner latency
+uses the same root-forward-only timer for both routes.
+
+The guarded ICE launcher submits `qualify -> one oracle-collection job ->
+capacity[0-11] -> aggregate` with `afterok` dependencies and refuses an
+incomplete checkpoint hash or an existing output root:
+
+```bash
+DRY_RUN=1 experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_planner_route_ice.sh
+```
+
+The final 5B checkpoint and SHA-256 are pinned. Actual submission remains guarded
+by the completion-record audit, frozen-encoder tensor binding, and strict oracle
+qualification before demonstration or planner compute can start.
 
 ## Reproducing the whole study
 
