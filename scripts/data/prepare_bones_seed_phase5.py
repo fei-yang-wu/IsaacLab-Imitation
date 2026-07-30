@@ -36,7 +36,7 @@ def _default_batch_converter() -> Path:
 
 
 def _default_preflight() -> Path:
-    return Path(__file__).resolve().with_name("audit_bones_seed_phase5.py")
+    return Path(__file__).resolve().parent.parent / "audit" / "audit_bones_seed_phase5.py"
 
 
 def _parse_args() -> argparse.Namespace:

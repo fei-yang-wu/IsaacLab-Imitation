@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("prepare_bones_seed_phase5.py")
-PREFLIGHT = Path(__file__).with_name("audit_bones_seed_phase5.py")
+PREFLIGHT = Path(__file__).resolve().parent.parent / "audit" / "audit_bones_seed_phase5.py"
 
 
 def _write_inputs(root: Path, *, omit_language: str | None = None) -> tuple[Path, Path]:
