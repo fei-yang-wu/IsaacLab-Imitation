@@ -13,13 +13,6 @@ from typing import Any, Iterable
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CAMPAIGN_RUNNER = (
-    REPO_ROOT
-    / "experiments/campaigns/2026-07-23-lafan1-planner-capacity"
-    / "run_enc380_planner_route_comparison.sh"
-)
 from imitation_experiments.capacity.enc380_capacity_grid import (
     MODEL_SIZES,
     MOTIONS,
@@ -28,6 +21,14 @@ from imitation_experiments.capacity.enc380_capacity_grid import (
     PLANNER_SEEDS,
     PLANNER_UPDATES_BY_SIZE,
     planner_dir_name,
+)
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CAMPAIGN_RUNNER = (
+    REPO_ROOT
+    / "experiments/campaigns/2026-07-23-lafan1-planner-capacity"
+    / "run_enc380_planner_route_comparison.sh"
 )
 
 CELL_STAGES = ("train", "eval")
