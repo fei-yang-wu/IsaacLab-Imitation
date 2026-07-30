@@ -193,14 +193,19 @@ trajectories.
 `walk1_subject1` is intentionally the same motion used by the previous
 one-motion planner study. This user-requested continuity choice is not an
 unbiased or representative motion sample. The capacity grid is four model sizes
-x three planner seeds = 12 ICE cells; each cell runs both the 380D `root_qpos ->
-frozen encoder -> tracker` and 256D `latent -> tracker` routes. Before every
+x three planner seeds = 12 logical cells. ICE runs 24 independent route tasks so
+each long fit receives the full 16-hour job wall: one 380D `root_qpos -> frozen
+encoder -> tracker` task and one 256D `latent -> tracker` task per cell. Both
+routes use effective batch 1024. The capacity-aware update/microbatch schedule is
+`tiny=10k/1024`, `small=20k/512`, `medium=30k/256`, and
+`large=50k/128`; the evaluated checkpoint is the minimum held-out normalized
+target-RMSE checkpoint, not automatically the final update. Before every
 root-planner rollout, an expert-packet pin test proves that the 380D packet routed
 through the frozen encoder reproduces the oracle latent command. Planner latency
 uses the same root-forward-only timer for both routes.
 
 The guarded ICE launcher submits `qualify -> one oracle-collection job ->
-capacity[0-11] -> aggregate` with `afterok` dependencies and refuses an
+route-task[0-23] -> aggregate` with `afterok` dependencies and refuses an
 incomplete checkpoint hash or an existing output root:
 
 ```bash
@@ -210,6 +215,38 @@ DRY_RUN=1 experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380
 The final 5B checkpoint and SHA-256 are pinned. Actual submission remains guarded
 by the completion-record audit, frozen-encoder tensor binding, and strict oracle
 qualification before demonstration or planner compute can start.
+
+### H30 temporal-ensemble explicit diagnostic
+
+The main comparison remains the fixed H10 explicit packet versus the latent
+command. A separate strong-explicit diagnostic predicts H30 at each 5 Hz
+publication and evaluates the same checkpoint in two ways:
+
+1. execute slots 0-9 and discard slots 10-29 (the standard chunk-policy rule);
+2. blend current slots 0-9, previous slots 10-19, and two-publications-old slots
+   20-29 before the frozen H10 encoder.
+
+Old root predictions are re-expressed in the current robot pelvis frame before
+blending; orientations are averaged as rotations and projected back to SO(3).
+Histories are per environment and are cleared across asynchronous resets.
+
+No simulator recollection is needed. The current 4,864 collected causal rows
+contain enough information to recover their live robot pelvis anchor. The
+corrected Zarr then supplies frames 10-29 in that same anchor frame. The
+materializer preserves every causal input, `(env_id, episode_id)`, start, and
+trajectory split; its reconstructed H10 prefix must match the collected packet
+within tolerance (the local conversion measured maximum absolute error
+`1.062e-6`).
+
+The focused screen uses one medium seed-0 planner, 30k updates, effective batch
+1024, microbatch 256, and best held-out normalized-RMSE checkpoint. It reports
+H10, H30-first10, and H30-ensemble together. H30 publishes 1,140 values at 5 Hz
+(5,700 values/s), versus 380 at 5 Hz (1,900 values/s) for H10, so it is a
+higher-bandwidth diagnostic rather than a replacement main row.
+
+```bash
+DRY_RUN=1 experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_h30_temporal_ensemble_ice.sh
+```
 
 ## Reproducing the whole study
 

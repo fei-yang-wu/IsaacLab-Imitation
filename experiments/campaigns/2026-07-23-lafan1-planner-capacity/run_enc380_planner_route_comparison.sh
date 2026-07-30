@@ -32,6 +32,7 @@ DRY_RUN="${DRY_RUN:-0}"
 DEVICE="${DEVICE:-cuda:0}"
 SEED="${SEED:-0}"
 MODEL_SIZE="${MODEL_SIZE:-medium}"
+ROUTES="${ROUTES:-root_qpos latent_skill}"
 DEMO_TRAJECTORIES_PER_MOTION="${DEMO_TRAJECTORIES_PER_MOTION:-100}"
 COLLECT_ENVS="${COLLECT_ENVS:-100}"
 COLLECT_STEPS="${COLLECT_STEPS:-15000}"
@@ -235,7 +236,10 @@ run_eval() {
 
 
 run_packet_pin() {
-    local planner="$1" output="${POINT_ROOT}/root_qpos/packet_encoder_pin"
+    # v2 compares the two encoder outputs inside the exact publication call.
+    # The old rollout-level metric compared a held 5 Hz command to a target
+    # recomputed at 50 Hz and falsely rejected an otherwise exact pin.
+    local planner="$1" output="${POINT_ROOT}/root_qpos/packet_encoder_pin_v2"
     run_if_missing "${output}/summary.json" \
         "${ISAAC_PY_ARR[@]}" scripts/rlopt/eval_skill_commander_closed_loop.py \
         "${KITLESS_ARGS[@]}" --headless --device "${DEVICE}" --task "${TASK}" \
@@ -418,7 +422,11 @@ if has_stage demo; then
     done
 fi
 
-for route in root_qpos latent_skill; do
+for route in ${ROUTES}; do
+    if [[ "${route}" != "root_qpos" && "${route}" != "latent_skill" ]]; then
+        echo "[ERROR] Unknown enc380 planner route: ${route}." >&2
+        exit 2
+    fi
     route_root="${POINT_ROOT}/${route}"
     demos="${MOTION_ROOT}/demonstrations/${route}"
     planner="${route_root}/${PLANNER_DIR_NAME}"

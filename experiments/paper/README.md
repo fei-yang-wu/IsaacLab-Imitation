@@ -78,12 +78,16 @@ with [`conf/enc380_planner_route.yaml`](conf/enc380_planner_route.yaml) compares
 two decomposed routes into one frozen tracker: `root_qpos planner -> frozen
 encoder -> latent tracker` and `latent planner -> latent tracker`. It executes the
 guarded sequence `qualify -> one paired oracle collection -> 12
-capacity/seed cells -> aggregate`. One persistent ten-environment Isaac session
+capacity/seed cells -> aggregate`. One persistent 100-environment Isaac session
 asynchronously collects 100 complete variable-length `walk1_subject1` segments;
 partial live segments at the cutoff are discarded. Both routes are trained once
-from the same paired causal rows. There is no learned-planner rollout collection
-or finetune stage. This user-selected continuity motion is a preliminary
-diagnostic, not a representative paper motion sample.
+from the same paired causal rows. Planner sizes use 10k/20k/30k/50k updates,
+respectively, at effective batch 1024, with memory-adjusted microbatches and
+held-out best-checkpoint selection. ICE maps the 12 logical cells to 24
+single-route jobs so each long fit has a full 16-hour walltime. There is no
+learned-planner rollout collection or finetune stage. This user-selected
+continuity motion is a preliminary diagnostic, not a representative paper
+motion sample.
 
 ```bash
 # Resolve config, verify the intended commands, and touch nothing.

@@ -8,6 +8,7 @@ thin entry wraps the bash orchestrators. Three stages, chained with afterok:
   --stage cell       : run_capacity_point.sh for SLURM_ARRAY_TASK_ID (0-11)
   --stage aggregate  : per-seed + across-seed aggregation (pure python)
   --stage enc380     : walk1 shared-tracker route diagnostic (12-cell grid)
+  --stage enc380_h30 : reuse enc380 H10 rows for the H30 temporal diagnostic
 
 Inside the container pixi is unavailable, so ISAAC_PY/PLAIN_PY are pointed at
 /isaac-sim/python.sh. The frozen oracles are Newton-trained on a compute-only GPU,
@@ -32,7 +33,7 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from imitation_experiments.capacity.enc380_capacity_grid import decode_cell
+from imitation_experiments.capacity.enc380_capacity_grid import decode_route_task
 from imitation_experiments.paths import REPO_ROOT
 
 # The campaign-owned shell stages stay at their frozen campaign path.
@@ -178,14 +179,21 @@ def main() -> int:
     parser.add_argument(
         "--stage",
         required=True,
-        choices=("oracle", "cell", "aggregate", "finetune_b", "enc380"),
+        choices=(
+            "oracle",
+            "cell",
+            "aggregate",
+            "finetune_b",
+            "enc380",
+            "enc380_h30",
+        ),
     )
     parser.add_argument("--enc380-low-level-checkpoint", default="")
     parser.add_argument("--enc380-skill-checkpoint", default="")
     parser.add_argument("--enc380-completion-record", default="")
     parser.add_argument(
         "--enc380-mode",
-        choices=("qualify", "demo", "cell", "aggregate"),
+        choices=("qualify", "demo", "cell", "root_recovery", "aggregate"),
         default="qualify",
     )
     parser.add_argument(
@@ -198,6 +206,20 @@ def main() -> int:
     )
     parser.add_argument("--enc380-low-level-sha256", default="")
     parser.add_argument("--enc380-skill-sha256", default="")
+    parser.add_argument(
+        "--enc380-source-study-root",
+        default="",
+        help="Completed H10 study whose paired rows and H10 baseline are reused.",
+    )
+    parser.add_argument(
+        "--enc380-h30-output-root",
+        default="logs/interface_baselines/lafan1_enc380_h30_temporal_screen",
+    )
+    parser.add_argument(
+        "--enc380-h30-mode",
+        choices=("screen", "aggregate"),
+        default="screen",
+    )
     args, _ = parser.parse_known_args()
     env = _runtime_env()
 
@@ -205,6 +227,43 @@ def main() -> int:
         return _bash("prepare_oracle_baselines.sh", env)
     if args.stage == "aggregate":
         return _aggregate(env)
+    if args.stage == "enc380_h30":
+        if (
+            not args.enc380_low_level_checkpoint
+            or not args.enc380_skill_checkpoint
+            or not args.enc380_completion_record
+            or not args.enc380_source_study_root
+        ):
+            parser.error(
+                "--stage enc380_h30 requires low-level, skill, completion-record, "
+                "and source-study-root paths."
+            )
+        env.update(
+            {
+                "LOW_LEVEL_CHECKPOINT": args.enc380_low_level_checkpoint,
+                "SKILL_CHECKPOINT": args.enc380_skill_checkpoint,
+                "TRACKER_COMPLETION_RECORD": args.enc380_completion_record,
+                "EXPECTED_LOW_LEVEL_SHA256": args.enc380_low_level_sha256,
+                "EXPECTED_SKILL_SHA256": args.enc380_skill_sha256,
+                "SOURCE_STUDY_ROOT": args.enc380_source_study_root,
+                "OUTPUT_ROOT": args.enc380_h30_output_root,
+                "STAGES": (
+                    "materialize train eval"
+                    if args.enc380_h30_mode == "screen"
+                    else "aggregate"
+                ),
+                "DRY_RUN": "0",
+                "ASSERT_KITLESS": "0",
+                "RENDER_VIDEO": "1",
+            }
+        )
+        print(
+            f"[entry] enc380_h30 mode={args.enc380_h30_mode} "
+            f"source={args.enc380_source_study_root} "
+            f"output={args.enc380_h30_output_root}",
+            flush=True,
+        )
+        return _bash("run_enc380_h30_temporal_ensemble.sh", env)
     if args.stage == "enc380":
         if (
             not args.enc380_low_level_checkpoint
@@ -222,6 +281,7 @@ def main() -> int:
             "qualify": "qualify",
             "demo": "demo",
             "cell": "train eval",
+            "root_recovery": "train eval",
             "aggregate": "aggregate",
         }
         env.update(
@@ -238,9 +298,10 @@ def main() -> int:
                 "RENDER_VIDEO": "1",
             }
         )
-        if mode == "cell":
+        if mode in {"cell", "root_recovery"}:
+            route_task_index = idx if mode == "cell" else idx * 2
             try:
-                motion, size, seed = decode_cell(idx)
+                motion, size, seed, route = decode_route_task(route_task_index)
             except ValueError as error:
                 parser.error(str(error))
             env.update(
@@ -248,12 +309,14 @@ def main() -> int:
                     "MOTION_NAME": motion,
                     "MODEL_SIZE": size,
                     "SEED": str(seed),
+                    "ROUTES": route,
                 }
             )
         print(
             f"[entry] enc380 mode={mode} idx={idx} "
             f"motion={env.get('MOTION_NAME', 'all40')} "
-            f"size={env.get('MODEL_SIZE', 'all')} seed={env.get('SEED', 'all')}",
+            f"size={env.get('MODEL_SIZE', 'all')} seed={env.get('SEED', 'all')} "
+            f"route={env.get('ROUTES', 'both')}",
             flush=True,
         )
         return _bash("run_enc380_planner_route_comparison.sh", env)

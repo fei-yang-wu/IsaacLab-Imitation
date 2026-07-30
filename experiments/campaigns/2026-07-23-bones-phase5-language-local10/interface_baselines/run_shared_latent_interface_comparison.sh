@@ -89,8 +89,7 @@ sample_row_count() {
 import sys
 from pathlib import Path
 
-sys.path.append(str(Path("experiments/interface_baselines").resolve()))
-from interface_planner_common import load_rollout_samples
+from imitation_experiments.planner.interface_planner_common import load_rollout_samples
 
 data, _ = load_rollout_samples(Path(sys.argv[1]))
 print(int(data["causal_target"].shape[0]))

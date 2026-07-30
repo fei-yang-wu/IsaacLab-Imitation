@@ -14,7 +14,11 @@ from typing import Any, Iterable
 from imitation_experiments.capacity.enc380_capacity_grid import (
     MODEL_SIZES as DEFAULT_SIZES,
     MOTIONS as DEFAULT_MOTIONS,
+    PLANNER_BATCH_SIZE,
+    PLANNER_MICRO_BATCH_BY_SIZE,
     PLANNER_SEEDS as DEFAULT_SEEDS,
+    PLANNER_UPDATES_BY_SIZE,
+    planner_dir_name,
 )
 
 ROUTES = ("root_qpos", "latent_skill")
@@ -209,9 +213,9 @@ def _row(
     route_root = point_root / "matched" / route
     survival_path = route_root / f"eval_{stage}_survival/summary.json"
     full_path = route_root / f"eval_{stage}_full_horizon/summary.json"
-    planner_dir = route_root / "planner_oracle"
+    planner_dir = route_root / planner_dir_name(size)
     config_path = planner_dir / "config.json"
-    checkpoint_path = planner_dir / "checkpoints/latest.pt"
+    checkpoint_path = planner_dir / "checkpoints/best.pt"
     survival = _load(survival_path)
     full = _load(full_path)
     config = _load(config_path)
@@ -225,6 +229,34 @@ def _row(
         raise ValueError("Planner input is not the required causal 10 x 93 history.")
     if str(config.get("model_size")) != size:
         raise ValueError(f"Planner size does not match path size {size!r}.")
+    expected_updates = PLANNER_UPDATES_BY_SIZE[size]
+    expected_micro_batch = PLANNER_MICRO_BATCH_BY_SIZE[size]
+    if int(config.get("num_updates", -1)) != expected_updates:
+        raise ValueError(
+            f"{size} planner did not use its frozen {expected_updates}-update budget."
+        )
+    if int(config.get("batch_size", -1)) != PLANNER_BATCH_SIZE:
+        raise ValueError(
+            f"Planner effective batch is not the frozen {PLANNER_BATCH_SIZE}."
+        )
+    if int(config.get("micro_batch_size", -1)) != expected_micro_batch:
+        raise ValueError(
+            f"{size} planner microbatch is not the frozen {expected_micro_batch}."
+        )
+    if (
+        config.get("best_validation_metric_name")
+        != "val/normalized_target_rmse_mean"
+    ):
+        raise ValueError("Planner best checkpoint did not use held-out normalized RMSE.")
+    best_validation_metric = float(config.get("best_validation_metric", math.nan))
+    best_validation_update = int(config.get("best_validation_update", 0))
+    if not math.isfinite(best_validation_metric):
+        raise ValueError("Planner best validation metric is not finite.")
+    if not 1 <= best_validation_update <= expected_updates:
+        raise ValueError("Planner best validation update is outside its training budget.")
+    recorded_best = Path(str(config.get("best_checkpoint", ""))).resolve()
+    if recorded_best != checkpoint_path.resolve():
+        raise ValueError("Planner config does not bind the evaluated best checkpoint.")
     args = config.get("args", {})
     if config.get("training_stage") != "oracle":
         raise ValueError("Planner training_stage is not 'oracle'.")
@@ -275,6 +307,11 @@ def _row(
         "source_sample_count": int(config["source_sample_count"]),
         "selected_sample_count": int(config["selected_sample_count"]),
         "num_updates": int(config["num_updates"]),
+        "batch_size": int(config["batch_size"]),
+        "micro_batch_size": int(config["micro_batch_size"]),
+        "best_validation_metric_name": config["best_validation_metric_name"],
+        "best_validation_metric": best_validation_metric,
+        "best_validation_update": best_validation_update,
         "demonstration_rows": int(demonstration_audit["rows"]),
         "demonstration_trajectories": int(demonstration_audit["trajectories"]),
         "training_trajectories": int(trajectory_split["num_train_trajectories"]),
@@ -566,6 +603,12 @@ def aggregate(
                 "single oracle-supervised fit; no planner pretrain, learned-planner "
                 "rollout collection, or finetune"
             ),
+            "planner_optimizer_budget": {
+                "effective_batch_size": PLANNER_BATCH_SIZE,
+                "updates_by_size": PLANNER_UPDATES_BY_SIZE,
+                "micro_batch_by_size": PLANNER_MICRO_BATCH_BY_SIZE,
+                "checkpoint_selection": "minimum held-out normalized target RMSE",
+            },
             "oracle_collection": {
                 "summary": str(collection_path.resolve()),
                 "summary_sha256": _sha256(collection_path),
