@@ -152,7 +152,7 @@ if [[ "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" ]]; then
         "${EXPECTED_MANIFEST_SHA256}" \
         "${EXPECTED_LANGUAGE_SHA256}" \
         "${EXPECTED_PREPARATION_SHA256}" \
-        < "${SCRIPT_DIR}/validate_bones_seed_planner_submission.py"
+        < "${REPO_ROOT}/source/imitation_experiments/imitation_experiments/audit/validate_bones_seed_planner_submission.py"
 fi
 
 if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then

@@ -156,7 +156,7 @@ if [[ -n "${VANILLA_DATASET_PATH}" ]]; then
     VANILLA_DATASET_ARGS+=(--dataset_path "${VANILLA_DATASET_PATH}")
 fi
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_interface_run_provenance.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.provenance.write_interface_run_provenance \
     --label focused-causal-latent-vs-full-body-streamed-vanilla \
     --output_json "${OUTPUT_ROOT}/protocol_checks/run_provenance_${BUDGET_LABEL}.json" \
     --result_root "${OUTPUT_ROOT}"
@@ -164,7 +164,7 @@ run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-languag
 # Certify the adapter before collecting or training a planner. This exercises
 # all ten hold phases plus a deliberately desynchronized row.
 if [[ "${RUN_PROTOCOL_CHECKS}" == "1" ]]; then
-run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.lowlevel.evaluate_checkpoint \
     --headless \
     --task "${VANILLA_TASK}" \
     --algo "${ALGORITHM}" \
@@ -189,7 +189,7 @@ fi
 # This is intentionally outside PLANNER_ROWS_ROOT. It receives the fresh
 # reference frame at every 50 Hz control step and is never trained as a planner.
 if [[ "${RUN_CEILING}" == "1" ]]; then
-run_cmd "${ISAACLAB_PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/evaluate_checkpoint.py \
+run_cmd "${ISAACLAB_PYTHON_CMD[@]}" -m imitation_experiments.lowlevel.evaluate_checkpoint \
     --headless \
     --task "${VANILLA_TASK}" \
     --algo "${ALGORITHM}" \
@@ -280,7 +280,7 @@ fi
 latent_root="${LATENT_OUTPUT_ROOT}/latent_skill/transformer_${MODEL_SIZE}_${BUDGET_LABEL}"
 full_body_root="${FULL_BODY_OUTPUT_ROOT}/full_body_trajectory_streamed_vanilla/chunked_transformer_${MODEL_SIZE}_${BUDGET_LABEL}"
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/audit_focused_causal_interface_comparison.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.audit.audit_focused_causal_interface_comparison \
     --latent_checkpoint "${latent_root}/planner_finetune_planner_rollout/checkpoints/latest.pt" \
     --latent_merge_manifest "${latent_root}/demonstration_and_planner_rollout_samples/merge_manifest.json" \
     --latent_pretrained_summary "${latent_root}/eval_pretrained_closed_loop/summary.json" \

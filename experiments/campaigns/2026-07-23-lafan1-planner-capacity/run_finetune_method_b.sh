@@ -105,7 +105,7 @@ for interface in ${INTERFACES}; do
     #     planner_oracle) and the ORACLE drives. Random starts 0-200 match the
     #     DAgger collection, so the driver is the only difference.
     run_if_missing "${oracle_agg}/rollout_training_samples/sample_step_000000.pt" \
-        "${ISAAC_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/collect_interface_rollout_samples.py \
+        "${ISAAC_PY_ARR[@]}" -m imitation_experiments.data.collect_interface_rollout_samples \
         --task "${CHUNK_TASK}" --algorithm IPMD --checkpoint "${LOW_LEVEL}" \
         --interface "${interface}" --motion_name "${MOTION_NAME}" \
         --motion_manifest "${MANIFEST}" \
@@ -124,14 +124,14 @@ for interface in ${INTERFACES}; do
 
     # (2) Same merge as method A: demos + aggregation, equal per-source limits.
     run_if_missing "${merged}/merge_manifest.json" \
-        "${PLAIN_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/merge_planner_samples.py \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.data.merge_planner_samples \
         --source "${demos}" --source_limit "${DEMO_ROWS}" \
         --source "${oracle_agg}/rollout_training_samples" --source_limit "${DEMO_ROWS}" \
         --seed "${EVAL_SEED}" --output_dir "${merged}"
 
     # (3) Same optimizer budget, same starting checkpoint as method A.
     run_if_missing "${finetune}/checkpoints/latest.pt" \
-        "${PLAIN_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
         --samples_dir "${merged}" --output_dir "${finetune}" \
         --interface "${interface}" --planner_family flow --state_key planner_state \
         --device "${DEVICE}" --seed "${seed}" \
@@ -143,7 +143,7 @@ for interface in ${INTERFACES}; do
 
     # (4) Identical evaluation to the main sweep.
     run_if_missing "${root}/eval_finetuned_b/summary.json" \
-        "${ISAAC_PY_ARR[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_closed_loop.py \
+        "${ISAAC_PY_ARR[@]}" -m imitation_experiments.evaluation.eval_interface_planner_closed_loop \
         --headless --device "${DEVICE}" --task "${CHUNK_TASK}" --algorithm IPMD \
         --checkpoint "${LOW_LEVEL}" --low_level_command_mode streamed_vanilla \
         --planner_checkpoint "${finetune}/checkpoints/latest.pt" \

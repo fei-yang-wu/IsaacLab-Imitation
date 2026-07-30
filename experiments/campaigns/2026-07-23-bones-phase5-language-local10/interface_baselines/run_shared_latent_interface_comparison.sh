@@ -230,7 +230,7 @@ finetuned_offline_eval_dir="${run_root}/eval_finetuned_offline"
 finetuned_eval_dir="${run_root}/eval_finetuned_closed_loop"
 mkdir -p "${run_root}"
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_interface_run_provenance.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.provenance.write_interface_run_provenance \
     --label shared-latent-single-seed \
     --output_json "${OUTPUT_ROOT}/interface_comparison_run_provenance.json" \
     --result_root "${OUTPUT_ROOT}"
@@ -258,7 +258,7 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     existing_sample_count="$(sample_row_count "${demonstration_samples_dir}")"
 fi
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
     --samples_dir "${demonstration_samples_dir}" \
     --output_dir "${pretrain_dir}" \
     --interface latent_skill \
@@ -279,7 +279,7 @@ offline_filter_args=()
 if [[ "${MAX_SAMPLES}" -gt 0 && "${existing_sample_count}" -gt "${MAX_SAMPLES}" ]]; then
     offline_filter_args+=(--exclude_checkpoint_selected_indices)
 fi
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_offline.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_offline \
     --samples_dir "${demonstration_samples_dir}" \
     --planner_checkpoint "${pretrain_dir}/checkpoints/latest.pt" \
     --output_json "${pretrained_offline_eval_dir}/summary.json" \
@@ -304,7 +304,7 @@ run_latent_eval skill_commander "${pretrain_dir}/checkpoints/latest.pt" \
     "${TRAIN_MANIFEST}" "${planner_rollout_dir}" "${DAGGER_CONTROL_STEPS}" 1 1 \
     latent_skill_planner_rollout_collection
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/merge_planner_samples.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.data.merge_planner_samples \
     --source "${demonstration_samples_dir}" \
     --source_limit "${MAX_SAMPLES}" \
     --source "${planner_rollout_samples_dir}" \
@@ -316,7 +316,7 @@ normalization_args=()
 if [[ "${USE_CHECKPOINT_NORMALIZATION}" == "1" ]]; then
     normalization_args+=(--use_checkpoint_normalization)
 fi
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/train_chunked_transformer_planner.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
     --samples_dir "${merged_samples_dir}" \
     --output_dir "${finetune_dir}" \
     --interface latent_skill \
@@ -335,7 +335,7 @@ run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-languag
     --flow_inference_noise_std "${FLOW_NOISE_STD}" \
     "${normalization_args[@]}"
 
-run_cmd "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/eval_interface_planner_offline.py \
+run_cmd "${PYTHON_CMD[@]}" -m imitation_experiments.evaluation.eval_interface_planner_offline \
     --samples_dir "${merged_samples_dir}" \
     --planner_checkpoint "${finetune_dir}/checkpoints/latest.pt" \
     --output_json "${finetuned_offline_eval_dir}/summary.json" \

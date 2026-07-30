@@ -75,7 +75,7 @@ run_case() {  # $1=tag  $2=future_steps  $3=interval  $4..=extra args
     printf '[CMD] %s\n' "${tag}"
     [[ "${DRY_RUN}" == "1" ]] && return 0
     TERM=xterm PYTHONUNBUFFERED=1 pixi run -e isaaclab python \
-        experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/collect_interface_rollout_samples.py \
+        -m imitation_experiments.data.collect_interface_rollout_samples \
         --task "${CHUNK_TASK}" --algorithm IPMD --checkpoint "${CHECKPOINT}" \
         --interface "${INTERFACE}" --motion_name "${MOTION_NAME}" \
         --motion_manifest "${MANIFEST}" \

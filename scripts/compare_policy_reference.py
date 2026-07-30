@@ -233,25 +233,7 @@ import isaaclab_imitation.tasks  # noqa: F401
 # Reuse the trusted evaluator's exact domain-randomization disabling so the
 # comparison rollout is deterministic and independent of the reference-replay
 # lane (see --keep_domain_randomization).
-_INTERFACE_BASELINE_DIR = next(
-    (
-        p
-        for p in (
-            Path(__file__).resolve().parents[1]
-            / "experiments"
-            / "paper"
-            / "interface_baselines",
-            Path(__file__).resolve().parents[1]
-            / "experiments"
-            / "interface_baselines",
-        )
-        if p.is_dir()
-    ),
-    None,
-)
-if _INTERFACE_BASELINE_DIR is not None and str(_INTERFACE_BASELINE_DIR) not in sys.path:
-    sys.path.append(str(_INTERFACE_BASELINE_DIR))
-from paper_protocol_metadata import disable_domain_randomization  # noqa: E402
+from imitation_experiments.provenance.paper_protocol_metadata import disable_domain_randomization
 
 ALGORITHM_CLASS_MAP = {
     "PPO": PPO,

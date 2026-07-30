@@ -60,7 +60,7 @@ seed_inputs=()
 for seed in "${SEEDS[@]}"; do
     seed_root="${STUDY_ROOT}/scaling/seed${seed}"
     out="${seed_root}/capacity_summary"
-    "${PLAIN_PY_ARR[@]}" experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_scaling.py \
+    "${PLAIN_PY_ARR[@]}" -m imitation_experiments.capacity.aggregate_one_motion_capacity_scaling \
         --scaling_root "${seed_root}" --sizes "${SIZES[@]}" \
         "${oracle_args[@]}" \
         --output_dir "${out}" --overwrite
@@ -71,7 +71,7 @@ done
 final="${STUDY_ROOT}/capacity_seeds_summary"
 input_args=()
 for path in "${seed_inputs[@]}"; do input_args+=(--input "${path}"); done
-"${PLAIN_PY_ARR[@]}" experiments/campaigns/2026-07-23-lafan1-planner-capacity/interface_baselines/aggregate_one_motion_capacity_seeds.py \
+"${PLAIN_PY_ARR[@]}" -m imitation_experiments.capacity.aggregate_one_motion_capacity_seeds \
     "${input_args[@]}" --min_seeds "${#SEEDS[@]}" \
     --survival_target 1.0 --normalized_mpjpe_target 1.5 \
     --output_dir "${final}"

@@ -194,7 +194,7 @@ chunk_oracle() {
     local demos="${OUTPUT_ROOT}/${interface}/oracle_demonstrations"
     local collect=(
         "${ISAAC_PY_ARR[@]}"
-        experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/collect_interface_rollout_samples.py
+        -m imitation_experiments.data.collect_interface_rollout_samples
         --task "${CHUNK_TASK}" --algorithm IPMD --checkpoint "${checkpoint}"
         --interface "${interface}" --motion_name "${MOTION_NAME}"
         --motion_manifest "${MANIFEST}"

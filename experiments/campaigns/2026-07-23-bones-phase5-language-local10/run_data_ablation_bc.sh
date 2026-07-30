@@ -135,12 +135,12 @@ run_arm() {  # $1=arm_name  $2=merged_dir  (sources passed after)
     if [[ ! -f "${merged}/merge_manifest.json" ]]; then
         local margs=()
         for s in "$@"; do margs+=(--source "${s}" --source_limit 0); done
-        "${PYX[@]}" "${IMPL}/merge_planner_samples.py" --replace_incomplete "${margs[@]}" \
+        "${PYX[@]}" -m imitation_experiments.data.merge_planner_samples --replace_incomplete "${margs[@]}" \
             --seed "${SEED}" --output_dir "${merged}"
     fi
     # finetune (init from shared pretrained-large)
     if [[ ! -f "${ckpt}" ]]; then
-        "${PYX[@]}" "${IMPL}/train_chunked_transformer_planner.py" \
+        "${PYX[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
             --samples_dir "${merged}" --output_dir "${arm_root}/finetune" \
             --interface latent_skill --state_key planner_state --model_size "${MODEL_SIZE}" \
             --seed "${SEED}" --max_samples 0 --num_updates "${FINETUNE_UPDATES}" \

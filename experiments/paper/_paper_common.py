@@ -66,13 +66,14 @@ def find_repo_root(start: Path | None = None) -> Path:
 REPO_ROOT = find_repo_root()
 PAPER_DIR = REPO_ROOT / "experiments/paper"
 
-#: The campaign that owns the shared planner implementation. The planner modules
-#: import each other as bare siblings, so the coupled set must stay in one
-#: directory; the paper entrypoints reference it rather than copying it.
+#: The shared planner implementation now lives in the installable
+#: ``imitation_experiments`` package; the campaign directory keeps only the
+#: frozen shell launchers.
 INTERFACE_BASELINES = (
     REPO_ROOT
     / "experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines"
 )
+IMITATION_EXPERIMENTS_PKG = REPO_ROOT / "source/imitation_experiments/imitation_experiments"
 
 SCRIPTS_RLOPT = REPO_ROOT / "scripts/rlopt"
 

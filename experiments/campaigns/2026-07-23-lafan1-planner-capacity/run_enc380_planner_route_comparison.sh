@@ -251,7 +251,7 @@ run_packet_pin() {
         --kit_args=--/app/extensions/fsWatcherEnabled=false \
         agent.ipmd.command_source=hl_skill "${LATENT_CFG[@]}" "${ENV_CFG[@]}"
     run_if_missing "${output}/audit.json" \
-        "${PLAIN_PY_ARR[@]}" "${IFACE_DIR}/audit_packet_encoder_pin.py" \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.capacity.audit_packet_encoder_pin \
         --summary "${output}/summary.json" --planner_checkpoint "${planner}" \
         --low_level_checkpoint "${LOW_LEVEL_CHECKPOINT}" \
         --skill_checkpoint "${SKILL_CHECKPOINT}" --require_pass \
@@ -289,7 +289,7 @@ collect_oracle_trajectories() {
 train_planner() {
     local route="$1" samples="$2" output="$3"
     run_if_missing "${output}/checkpoints/best.pt" \
-        "${PLAIN_PY_ARR[@]}" "${SHARED_DIR}/train_chunked_transformer_planner.py" \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.planner.train_chunked_transformer_planner \
         --samples_dir "${samples}" --output_dir "${output}" --interface "${route}" \
         --planner_family flow --state_key planner_state --training_stage oracle \
         --device "${DEVICE}" --seed "${SEED}" --model_size "${MODEL_SIZE}" --batch_size "${BATCH_SIZE}" \
@@ -334,17 +334,17 @@ require_demonstrations() {
 
 if has_stage qualify; then
     run_if_missing "${QUAL_ROOT}/tracker_completion.json" \
-        "${PLAIN_PY_ARR[@]}" "${IFACE_DIR}/audit_enc380_tracker_completion.py" \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.capacity.audit_enc380_tracker_completion \
         --completion_record "${TRACKER_COMPLETION_RECORD}" \
         --low_level_checkpoint "${LOW_LEVEL_CHECKPOINT}" \
         --skill_checkpoint "${SKILL_CHECKPOINT}" \
         --output_json "${QUAL_ROOT}/tracker_completion.json"
     run_if_missing "${QUAL_ROOT}/motion_selection.json" \
-        "${PLAIN_PY_ARR[@]}" "${IFACE_DIR}/audit_enc380_motion_selection.py" \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.capacity.audit_enc380_motion_selection \
         --manifest "${MANIFEST}" \
         --output_json "${QUAL_ROOT}/motion_selection.json"
     run_if_missing "${QUAL_ROOT}/skill_binding.json" \
-        "${PLAIN_PY_ARR[@]}" "${SHARED_DIR}/validate_latent_skill_checkpoint_binding.py" \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.audit.validate_latent_skill_checkpoint_binding \
         --low_level_checkpoint "${LOW_LEVEL_CHECKPOINT}" \
         --skill_checkpoint "${SKILL_CHECKPOINT}" \
         --output_json "${QUAL_ROOT}/skill_binding.json"
@@ -374,7 +374,7 @@ if has_stage qualify; then
         --kit_args=--/app/extensions/fsWatcherEnabled=false \
         "${QUAL_FULL_ARGS[@]}" agent.ipmd.command_source=hl_skill "${LATENT_CFG[@]}" "${ENV_CFG[@]}"
     run_if_missing "${QUAL_ROOT}/latent_qualification_audit.json" \
-        "${PLAIN_PY_ARR[@]}" "${SHARED_DIR}/audit_diffsr_latent_qualification.py" \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.audit.audit_diffsr_latent_qualification \
         --summary "${QUAL_ROOT}/strict_oracle/summary.json" \
         --low_level_checkpoint "${LOW_LEVEL_CHECKPOINT}" \
         --skill_checkpoint "${SKILL_CHECKPOINT}" --manifest "${MANIFEST}" \
@@ -393,7 +393,7 @@ if has_stage demo; then
     collect_oracle_trajectories "${RAW_DEMO_ROOT}"
     materialize_args=(
         "${PLAIN_PY_ARR[@]}"
-        "${IFACE_DIR}/materialize_paired_interface_samples.py"
+        -m imitation_experiments.capacity.materialize_paired_interface_samples
         --samples_dir "${RAW_DEMOS}"
     )
     for motion in "${MOTIONS[@]}"; do
@@ -408,7 +408,7 @@ if has_stage demo; then
     for motion in "${MOTIONS[@]}"; do
         motion_demo_root="${OUTPUT_ROOT}/motions/${motion}/demonstrations"
         run_if_missing "${motion_demo_root}/paired_demonstration_audit.json" \
-            "${PLAIN_PY_ARR[@]}" "${IFACE_DIR}/audit_enc380_paired_demonstrations.py" \
+            "${PLAIN_PY_ARR[@]}" -m imitation_experiments.capacity.audit_enc380_paired_demonstrations \
             --root_qpos_dir "${motion_demo_root}/root_qpos" \
             --latent_skill_dir "${motion_demo_root}/latent_skill" \
             --expected_trajectories "${DEMO_TRAJECTORIES_PER_MOTION}" \
@@ -443,7 +443,7 @@ done
 
 if has_stage aggregate; then
     run_if_missing "${OUTPUT_ROOT}/aggregate/results.json" \
-        "${PLAIN_PY_ARR[@]}" "${IFACE_DIR}/aggregate_enc380_route_comparison.py" \
+        "${PLAIN_PY_ARR[@]}" -m imitation_experiments.capacity.aggregate_enc380_route_comparison \
         --study_root "${OUTPUT_ROOT}" --output_dir "${OUTPUT_ROOT}/aggregate"
 fi
 

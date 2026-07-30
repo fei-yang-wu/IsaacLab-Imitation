@@ -52,7 +52,7 @@ read -r -a SEED_LIST <<< "${SEEDS}"
 read -r -a BUDGET_LIST <<< "${SAMPLE_BUDGETS}"
 
 mapfile -t selection < <(
-    "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/phase4_no_language_matrix.py \
+    "${PYTHON_CMD[@]}" -m imitation_experiments.provenance.phase4_no_language_matrix \
         --manifest "${MANIFEST}" \
         --seeds "${SEED_LIST[@]}" \
         --sample_budgets "${BUDGET_LIST[@]}" \
@@ -82,7 +82,7 @@ single_manifest="${task_root}/input/manifest.json"
 mkdir -p "${task_root}/input" "${task_root}/protocol_checks"
 
 if [[ "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" ]]; then
-    "${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/validate_phase4_no_language_submission.py \
+    "${PYTHON_CMD[@]}" -m imitation_experiments.audit.validate_phase4_no_language_submission \
         "${MANIFEST}" \
         "${VANILLA_TRACKER_CHECKPOINT}" \
         "${LATENT_LOW_LEVEL_CHECKPOINT}" \
@@ -98,11 +98,11 @@ if [[ "${DRY_RUN}" != "1" && "${DRY_RUN}" != "true" ]]; then
         --output_json "${task_root}/input/submission_gate.json"
 fi
 
-"${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/write_single_motion_manifest.py \
+"${PYTHON_CMD[@]}" -m imitation_experiments.data.write_single_motion_manifest \
     --manifest "${MANIFEST}" \
     --motion_name "${motion_name}" \
     --output "${single_manifest}"
-"${PYTHON_CMD[@]}" experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/phase4_no_language_matrix.py \
+"${PYTHON_CMD[@]}" -m imitation_experiments.provenance.phase4_no_language_matrix \
     --manifest "${MANIFEST}" \
     --seeds "${SEED_LIST[@]}" \
     --sample_budgets "${BUDGET_LIST[@]}" \
