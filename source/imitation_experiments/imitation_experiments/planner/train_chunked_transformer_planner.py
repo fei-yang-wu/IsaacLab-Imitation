@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
