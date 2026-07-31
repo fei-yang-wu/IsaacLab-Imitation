@@ -4,7 +4,7 @@ import ast
 import importlib.util
 from pathlib import Path
 
-_PACKAGE_ROOT = Path(__file__).parent / "isaaclab_imitation"
+_PACKAGE_ROOT = Path(__file__).parent.parent / "isaaclab_imitation"
 _AGENT_CONFIG_PATH = (
     _PACKAGE_ROOT
     / "tasks"

@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 
 _MODULE_PATH = (
-    Path(__file__).parent
+    Path(__file__).parent.parent
     / "isaaclab_imitation"
     / "envs"
     / "causal_planner_observation.py"

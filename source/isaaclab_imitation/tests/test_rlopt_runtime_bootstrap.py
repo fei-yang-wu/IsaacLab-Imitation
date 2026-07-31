@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT_DIR = Path(__file__).resolve().parents[2] / "scripts" / "rlopt"
+SCRIPT_DIR = Path(__file__).resolve().parents[3] / "scripts" / "rlopt"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
