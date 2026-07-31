@@ -259,6 +259,26 @@ def train(
     if callable(sync_input_keys):
         sync_input_keys()
 
+    # The env's command_mode and the agent's latent-command switch describe the
+    # same contract from two sides; a mismatch trains the actor against a
+    # pruned (or never-published) command. Fail fast instead.
+    env_command_mode = getattr(env_cfg, "command_mode", None)
+    use_latent_command = getattr(
+        getattr(agent_cfg, "ipmd", None), "use_latent_command", None
+    )
+    if env_command_mode is not None and use_latent_command is not None:
+        if (str(env_command_mode).strip().lower() == "latent") != bool(
+            use_latent_command
+        ):
+            raise ValueError(
+                f"env.command_mode={env_command_mode!r} conflicts with "
+                f"agent.ipmd.use_latent_command={bool(use_latent_command)}. "
+                "Set env.command_mode=explicit with "
+                "agent.ipmd.use_latent_command=false (plus "
+                "agent.command_components/command_space), or "
+                "env.command_mode=latent with agent.ipmd.use_latent_command=true."
+            )
+
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
         args_cli.seed = random.randint(0, 10000)
