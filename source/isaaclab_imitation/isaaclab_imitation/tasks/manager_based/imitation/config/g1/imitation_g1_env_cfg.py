@@ -3,6 +3,31 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+"""Vanilla (explicit-command) G1 tracking env configs and shared machinery.
+
+Architecture: three recipes x pure command configuration. A *recipe* is the
+reward/termination/reset design and is the only axis with separate env
+classes; the latent-vs-explicit command choice is configuration
+(``command_mode`` + ``command_observation_terms`` on the env,
+``ipmd.use_latent_command`` / ``command_components`` on the agent).
+
+- **LafanTrack** (this file, ``ImitationG1LafanTrackEnvCfg``): the original
+  torso-anchored, loose-termination tracking recipe on the vanilla
+  observation surface.
+- **Strict** (``_apply_strict_recipe``): strict SONIC termination functions on
+  the legacy scaffolding (pelvis anchor, [0, 200] reset starts, no
+  curriculum). Pins: ``ImitationG1StrictTrackEnvCfg`` (explicit, this file)
+  and ``ImitationG1LatentStrictEnvCfg`` (latent).
+- **Stable**: the SONIC release recipe with this repo's legacy reset
+  distribution; lives in ``imitation_g1_latent_env_cfg.py``
+  (``ImitationG1LatentStableEnvCfg``, alias ``ImitationG1StableEnvCfg``).
+
+Shared machinery defined here: the pelvis-protocol block
+(``_apply_pelvis_protocol``), the table-driven anchor re-pointing
+(``_set_anchor_body`` on the base class), and command-term
+pruning/restoration for ``command_mode``.
+"""
+
 import copy
 from collections.abc import Mapping
 from pathlib import Path

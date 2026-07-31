@@ -3,6 +3,27 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+"""Latent-surface G1 tracking env configs (Stable and latent recipe pins).
+
+See ``imitation_g1_env_cfg.py`` for the three-recipe x command-config
+architecture. This file owns the latent observation surfaces
+(``G1LatentObservationCfg`` and its SONIC-history variant) and the latent-side
+recipe pins, chiefly:
+
+- **Stable** (``ImitationG1LatentStableEnvCfg``, alias
+  ``ImitationG1StableEnvCfg``): SONIC release recipe + this repo's legacy
+  reset distribution -- the current default (`Isaac-Imitation-G1-Latent-v0`).
+- **Strict x latent** (``ImitationG1LatentStrictEnvCfg``): shares
+  ``_apply_strict_recipe`` with the explicit pin.
+- Deprecated/frozen pins (Legacy, Sonic, SonicNoHist, OfficialFSQ, History,
+  Goal, FutureCVAE, PerStepVQ).
+
+The latent policy/critic groups also carry the explicit command superset
+(pruned to None in latent command mode), so any surface here can serve an
+explicit tracker via ``env.command_mode=explicit`` +
+``command_observation_terms`` without a new env class.
+"""
+
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.utils.configclass import configclass
