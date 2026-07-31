@@ -1,6 +1,0 @@
-export MOTION_NAME=dance1_subject1
-export MANIFEST=data/lafan1/manifests/g1_lafan1_manifest.json
-export LATENT_DATASET_PATH=data/lafan1/zarr/latent_dance1_subject1_corrected_8e95d557
-export STUDY_ROOT=logs/interface_baselines/lafan1_planner_capacity_dance1
-export INTERFACES="latent_skill full_body_trajectory"
-export RENDER_VIDEO=0
