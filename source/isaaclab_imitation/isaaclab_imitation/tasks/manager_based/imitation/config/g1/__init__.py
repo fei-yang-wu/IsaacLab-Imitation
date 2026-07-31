@@ -1,3 +1,22 @@
+"""G1 imitation task registrations: recipe x command-config pins.
+
+Recipe (reward/termination/reset design) is the only axis with separate env
+classes; the latent-vs-explicit command choice is pure configuration
+(``env.command_mode`` plus the agent entry point). Three recipes exist:
+
+- **Stable** (``ImitationG1LatentStableEnvCfg``, alias
+  ``ImitationG1StableEnvCfg``): SONIC release recipe with this repo's legacy
+  reset distribution -- the current default.
+- **Strict** (``_apply_strict_recipe``): strict SONIC termination functions on
+  the legacy scaffolding -- pins ``ImitationG1StrictTrackEnvCfg`` (explicit)
+  and ``ImitationG1LatentStrictEnvCfg`` (latent).
+- **LafanTrack** (``ImitationG1LafanTrackEnvCfg``): the original torso-anchored
+  loose-termination tracking recipe.
+
+Registrations below are grouped: current defaults first, then the Strict
+recipe pins, then deprecated/frozen pins kept for reproducibility.
+"""
+
 import gymnasium as gym
 
 from . import (
@@ -16,6 +35,11 @@ __all__ = [
     "agents",
 ]
 
+# ---------------------------------------------------------------------------
+# Command-config pins (task kwargs): env entry point + agent entry points.
+# ---------------------------------------------------------------------------
+
+# LafanTrack recipe x explicit full-body command (vanilla observation surface).
 _VANILLA_TASK_KWARGS = {
     "env_cfg_entry_point": f"{__name__}.imitation_g1_env_cfg:ImitationG1LafanTrackEnvCfg",
     "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1ImitationPPORunnerCfg",
@@ -29,12 +53,12 @@ _VANILLA_TASK_KWARGS = {
     "rlopt_amp_cfg_entry_point": f"{agents.__name__}.rlopt_amp_cfg:G1ImitationRLOptAMPConfig",
 }
 
-# Strict-protocol explicit-command surface (2026-07-21): the vanilla
-# observation/agent contract on the same protocol deltas as the strict latent
-# default (pelvis anchor, strict SONIC terminations, [0, 200] reset starts).
-# Built for the interface ablation so full-body-chunk / EE-chunk / single-frame
-# trackers (selected via `agent.command_space`) train on the same env protocol
-# as the latent tracker and differ only in the command space.
+# Strict recipe x explicit command (2026-07-21): the vanilla observation/agent
+# contract on the same protocol deltas as the strict latent pin (pelvis anchor,
+# strict SONIC terminations, [0, 200] reset starts). Built for the interface
+# ablation so full-body-chunk / EE-chunk / single-frame trackers (selected via
+# `agent.command_space`) train on the same env protocol as the latent tracker
+# and differ only in the command space.
 _VANILLA_STRICT_TASK_KWARGS = {
     **_VANILLA_TASK_KWARGS,
     "env_cfg_entry_point": (
@@ -47,7 +71,7 @@ _VANILLA_STRICT_TASK_KWARGS = {
 # starts). Kept only for pre-migration checkpoints and frozen paper-protocol
 # reproductions under `Isaac-Imitation-G1-Latent-Legacy-v0`. The pelvis-
 # anchored strict-terminations surface built on this base
-# (`_LATENT_STRICT_TASK_KWARGS` below) is the current default instead.
+# (`_LATENT_STRICT_TASK_KWARGS` below) superseded it as the default.
 _LATENT_LEGACY_TASK_KWARGS = {
     "env_cfg_entry_point": f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentEnvCfg",
     "rlopt_cfg_entry_point": f"{agents.__name__}.rlopt_ase_cfg:G1ImitationRLOptASEConfig",
@@ -64,7 +88,7 @@ _LATENT_LEGACY_TASK_KWARGS = {
 # default on 2026-07-20 on the theory that single-GPU ICE H100's ~10B-frame
 # budget (8192 envs x 12 steps x 100k iterations) matches the release's own
 # convergence criterion; reverted the same week once W&B run bn931wny
-# (the strict surface, now Latent-v0, + the legacy/local optimizer contract, same 8192x12x12288
+# (the strict surface + the legacy/local optimizer contract, same 8192x12x12288
 # scale) was found to reach episode/length=244 / episode/return=13.1 --
 # far above anything the SONIC release-optimizer contract produced at matched
 # scale in the concurrent VRAM ablation. Reachable only via the explicit
@@ -91,14 +115,15 @@ _LATENT_SONIC_TASK_KWARGS = {
     ),
 }
 
-# Default latent task surface (2026-07-21): pelvis-anchored legacy scaffolding
-# with annealed strict terminations, using the legacy/local optimizer contract
+# Strict recipe x latent command. Default latent task surface from 2026-07-21
+# to 2026-07-27: pelvis-anchored legacy scaffolding with strict-from-scratch
+# terminations, using the legacy/local optimizer contract
 # (`G1ImitationLatentRLOptIPMDConfig`: 512/256/128 ELU MLPs, actor lr 1e-3).
 # This is the config behind W&B run bn931wny (episode/length=244,
 # episode/return=13.1 at 8192 envs x 12 steps x minibatch 12288) -- the best
-# validated result to date, ahead of the SONIC release-optimizer contract at
-# matched scale. See `_LATENT_SONIC_TASK_KWARGS` above for the deprecation
-# history.
+# validated result of its period, ahead of the SONIC release-optimizer
+# contract at matched scale. See `_LATENT_SONIC_TASK_KWARGS` above for the
+# deprecation history.
 _LATENT_STRICT_TASK_KWARGS = {
     **_LATENT_LEGACY_TASK_KWARGS,
     "env_cfg_entry_point": (
@@ -106,8 +131,9 @@ _LATENT_STRICT_TASK_KWARGS = {
     ),
 }
 
-# Default latent task surface (2026-07-27): the full SONIC release recipe with
-# this repo's legacy reset distribution ([0, 200] starts,
+# Stable recipe x latent command (258-D skill code + phase). Default latent
+# task surface (2026-07-27): the full SONIC release recipe with this repo's
+# legacy reset distribution ([0, 200] starts,
 # `failure_rate_max_over_mean=50`) and strict-from-scratch terminations. The
 # 2026-07-27 reset-sampling screen showed SONIC's full-trajectory
 # adaptive-failure sampler, not its rewards or actuators, was what cost ~5.6x
@@ -184,7 +210,6 @@ _LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS = {
     ),
 }
 
-
 _LATENT_VQVAE_TASK_KWARGS = {
     "env_cfg_entry_point": (
         f"{__name__}.imitation_g1_latent_vqvae_env_cfg:ImitationG1LatentVQVAEEnvCfg"
@@ -220,30 +245,11 @@ _LATENT_ABLATION_TASK_KWARGS = {
     ),
 }
 
-gym.register(
-    id="Isaac-Imitation-G1-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
-    disable_env_checker=True,
-    kwargs=_VANILLA_TASK_KWARGS,
-)
+# ---------------------------------------------------------------------------
+# Current defaults.
+# ---------------------------------------------------------------------------
 
-gym.register(
-    id="Isaac-Imitation-G1-LafanTrack-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
-    disable_env_checker=True,
-    kwargs=_VANILLA_TASK_KWARGS,
-)
-
-# Strict-protocol explicit-command surface; see _VANILLA_STRICT_TASK_KWARGS.
-gym.register(
-    id="Isaac-Imitation-G1-Strict-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
-    disable_env_checker=True,
-    kwargs=_VANILLA_STRICT_TASK_KWARGS,
-)
-
-# Default latent task (2026-07-27): SONIC release recipe with this repo's
-# legacy reset distribution; see _LATENT_STABLE_TASK_KWARGS above.
+# Stable recipe x latent 258-D command -- the default latent task (2026-07-27).
 gym.register(
     id="Isaac-Imitation-G1-Latent-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -251,11 +257,39 @@ gym.register(
     kwargs=_LATENT_STABLE_TASK_KWARGS,
 )
 
-# The previous default (2026-07-21 to 2026-07-27). Everything recorded against
-# `Isaac-Imitation-G1-Latent-v0` before 2026-07-27 ran on this surface: Study B
-# DiffSR bottlenecks, the Study C grouped-VQ capacity arms, and the low-level
-# qualification artifacts. Use this explicit id for any continuation segment or
-# re-run of that work; the default id no longer reproduces it.
+# LafanTrack recipe x explicit full-body command -- the default vanilla task.
+gym.register(
+    id="Isaac-Imitation-G1-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_VANILLA_TASK_KWARGS,
+)
+
+# LafanTrack recipe x explicit full-body command -- explicit-name alias of G1-v0.
+gym.register(
+    id="Isaac-Imitation-G1-LafanTrack-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_VANILLA_TASK_KWARGS,
+)
+
+# ---------------------------------------------------------------------------
+# Strict recipe pins.
+# ---------------------------------------------------------------------------
+
+# Strict recipe x explicit command; see _VANILLA_STRICT_TASK_KWARGS.
+gym.register(
+    id="Isaac-Imitation-G1-Strict-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_VANILLA_STRICT_TASK_KWARGS,
+)
+
+# Strict recipe x latent command -- the 2026-07-21..27 default; frozen for all
+# pre-2026-07-27 `Isaac-Imitation-G1-Latent-v0` results (Study B DiffSR
+# bottlenecks, Study C grouped-VQ capacity arms, low-level qualification
+# artifacts). Use this explicit id for any continuation segment or re-run of
+# that work; the default id no longer reproduces it.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Strict-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -263,10 +297,62 @@ gym.register(
     kwargs=_LATENT_STRICT_TASK_KWARGS,
 )
 
-# History ablation (2026-07-21): the strict default surface with SONIC's
-# 10-step proprioceptive history observations and input keys, on the local
-# optimizer contract. Only the observation/history contract differs from
-# Isaac-Imitation-G1-Latent-v0.
+# ---------------------------------------------------------------------------
+# Deprecated / frozen pins (kept for reproducibility; see each kwargs note).
+# ---------------------------------------------------------------------------
+
+# DEPRECATED: pre-migration LafanTrack-recipe latent surface; see
+# _LATENT_LEGACY_TASK_KWARGS.
+gym.register(
+    id="Isaac-Imitation-G1-Latent-Legacy-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_LEGACY_TASK_KWARGS,
+)
+
+# Opt-in only (2026-07-21, no longer aliased as Isaac-Imitation-G1-Latent-v0):
+# the SONIC release surface x latent command; see _LATENT_SONIC_TASK_KWARGS.
+gym.register(
+    id="Isaac-Imitation-G1-Latent-Sonic-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_SONIC_TASK_KWARGS,
+)
+
+# SONIC release environment (rewards, adaptive strict terminations, threshold
+# curriculum, level0_4 randomization, SONIC actuators/robot, full-trajectory
+# adaptive-failure resets) x latent command with this repo's single-frame
+# observations instead of SONIC's 10-step proprioceptive histories -- the
+# 2026-07-21 isolated history ablation found those histories buy little at our
+# scale. Optimizer contract is the local/legacy one
+# (`sonic_release_optimizer=False`), so the only axis moving against
+# `Isaac-Imitation-G1-Latent-v0` is the environment.
+gym.register(
+    id="Isaac-Imitation-G1-Latent-Sonic-NoHist-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        **_LATENT_SONIC_TASK_KWARGS,
+        "env_cfg_entry_point": (
+            f"{__name__}.imitation_g1_latent_env_cfg:"
+            "ImitationG1LatentSonicNoHistoryEnvCfg"
+        ),
+    },
+)
+
+# SONIC env x renewed 10-frame 64-D FSQ window command; see
+# _LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS.
+gym.register(
+    id="Isaac-Imitation-G1-Latent-SonicOfficialFSQ-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS,
+)
+
+# History ablation (2026-07-21): the Strict recipe x latent command with
+# SONIC's 10-step proprioceptive history observations and input keys, on the
+# local optimizer contract. Only the observation/history contract differs from
+# the then-default strict surface.
 gym.register(
     id="Isaac-Imitation-G1-Latent-History-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -286,43 +372,7 @@ gym.register(
     },
 )
 
-# DEPRECATED: pre-migration latent surface; see _LATENT_LEGACY_TASK_KWARGS.
-gym.register(
-    id="Isaac-Imitation-G1-Latent-Legacy-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
-    disable_env_checker=True,
-    kwargs=_LATENT_LEGACY_TASK_KWARGS,
-)
-
-# Opt-in only (2026-07-21, no longer aliased as Isaac-Imitation-G1-Latent-v0):
-# the SONIC release surface; see _LATENT_SONIC_TASK_KWARGS above.
-gym.register(
-    id="Isaac-Imitation-G1-Latent-Sonic-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
-    disable_env_checker=True,
-    kwargs=_LATENT_SONIC_TASK_KWARGS,
-)
-
-# SONIC release environment (rewards, adaptive strict terminations, threshold
-# curriculum, level0_4 randomization, SONIC actuators/robot, full-trajectory
-# adaptive-failure resets) with this repo's single-frame observations instead
-# of SONIC's 10-step proprioceptive histories -- the 2026-07-21 isolated
-# history ablation found those histories buy little at our scale. Optimizer
-# contract is the local/legacy one (`sonic_release_optimizer=False`), so the
-# only axis moving against `Isaac-Imitation-G1-Latent-v0` is the environment.
-gym.register(
-    id="Isaac-Imitation-G1-Latent-Sonic-NoHist-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
-    disable_env_checker=True,
-    kwargs={
-        **_LATENT_SONIC_TASK_KWARGS,
-        "env_cfg_entry_point": (
-            f"{__name__}.imitation_g1_latent_env_cfg:"
-            "ImitationG1LatentSonicNoHistoryEnvCfg"
-        ),
-    },
-)
-
+# LafanTrack-lineage latent surface x held 128-D future-goal command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Goal-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -330,6 +380,7 @@ gym.register(
     kwargs=_LATENT_GOAL_TASK_KWARGS,
 )
 
+# LafanTrack-lineage latent surface x 256-D future-window CVAE command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-FutureCVAE-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -337,6 +388,7 @@ gym.register(
     kwargs=_LATENT_FUTURE_CVAE_TASK_KWARGS,
 )
 
+# LafanTrack-lineage latent surface x 64-D per-control-step VQ token packets.
 gym.register(
     id="Isaac-Imitation-G1-Latent-PerStepVQ-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -344,13 +396,7 @@ gym.register(
     kwargs=_LATENT_PER_STEP_VQ_TASK_KWARGS,
 )
 
-gym.register(
-    id="Isaac-Imitation-G1-Latent-SonicOfficialFSQ-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
-    disable_env_checker=True,
-    kwargs=_LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS,
-)
-
+# LafanTrack-lineage latent surface x causal 9-step-window VQ-VAE command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-VQVAE-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -358,6 +404,7 @@ gym.register(
     kwargs=_LATENT_VQVAE_TASK_KWARGS,
 )
 
+# Strict recipe x 66-D (64 code + 2 phase) reconstruction-ablation command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Ablation-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
