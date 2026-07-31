@@ -30,9 +30,7 @@ import gymnasium as gym
 GOLDEN_PATH = Path(__file__).with_name("g1_task_layout_golden.json")
 
 TASK_IDS = sorted(
-    spec_id
-    for spec_id in gym.registry
-    if spec_id.startswith("Isaac-Imitation-G1")
+    spec_id for spec_id in gym.registry if spec_id.startswith("Isaac-Imitation-G1")
 )
 
 
@@ -104,7 +102,11 @@ def test_registered_task_layouts_match_golden() -> None:
 ROOT_QPOS_TRIO = ("expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b")
 
 
-def test_stable_explicit_root_qpos_cli_override_layout() -> None:
+@pytest.mark.parametrize(
+    "task_id",
+    ["Isaac-Imitation-G1-Latent-v0", "Isaac-Imitation-G1-v1"],
+)
+def test_stable_explicit_root_qpos_cli_override_layout(task_id: str) -> None:
     """Stable recipe + explicit root_qpos trio through the real CLI path.
 
     Isaac Lab 3.0's ``register_task`` applies plain ``env.*``/``agent.*``
@@ -114,6 +116,11 @@ def test_stable_explicit_root_qpos_cli_override_layout() -> None:
     re-derives the pruned command-term set at construction via
     ``_refresh_command_observation_terms``; this test exercises that exact
     sequence without booting a simulation.
+
+    Parametrized over both ``-Latent-v0`` (the moving default) and the
+    permanent ``-G1-v1`` pin -- they share ``_LATENT_STABLE_TASK_KWARGS``, but
+    only this exercises that the override path (not just the golden layout)
+    behaves identically for the new id.
     """
     import sys
 
@@ -129,9 +136,7 @@ def test_stable_explicit_root_qpos_cli_override_layout() -> None:
     original_argv = sys.argv
     sys.argv = [original_argv[0]] + overrides
     try:
-        env_cfg, agent_cfg = resolve_task_config(
-            "Isaac-Imitation-G1-Latent-v0", "rlopt_ipmd_cfg_entry_point"
-        )
+        env_cfg, agent_cfg = resolve_task_config(task_id, "rlopt_ipmd_cfg_entry_point")
     finally:
         sys.argv = original_argv
 
