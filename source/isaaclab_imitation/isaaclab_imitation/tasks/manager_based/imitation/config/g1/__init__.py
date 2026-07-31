@@ -250,8 +250,27 @@ _LATENT_ABLATION_TASK_KWARGS = {
 # ---------------------------------------------------------------------------
 
 # Stable recipe x latent 258-D command -- the default latent task (2026-07-27).
+# Convenience alias for the *current* default; it has moved before (Strict
+# until 2026-07-27) and may move again. Protocols, gates, and paper commands
+# should cite the permanent pin `Isaac-Imitation-G1-v1` below instead.
 gym.register(
     id="Isaac-Imitation-G1-Latent-v0",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs=_LATENT_STABLE_TASK_KWARGS,
+)
+
+# Stable recipe, command space configured -- permanent pin (2026-07-31). No
+# `Latent` tag: under the recipe x command-config architecture the command
+# space is configuration, not identity. Defaults to the latent 258-D command
+# (the class default; same kwargs as `-Latent-v0` today, unlike explicit
+# `-G1-v0`); select vanilla with `env.command_mode=explicit` +
+# `env.command_observation_terms` + `agent.ipmd.use_latent_command=false` +
+# `agent.command_components`. This id is frozen to the Stable recipe: it must
+# never be re-pointed, so recorded commands and checkpoints citing it stay
+# reproducible even if the `-Latent-v0` default moves again.
+gym.register(
+    id="Isaac-Imitation-G1-v1",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
     kwargs=_LATENT_STABLE_TASK_KWARGS,
