@@ -19,9 +19,12 @@ from .imitation_g1_env_cfg import (
     G1ObservationCfg,
     ImitationG1LafanTrackEnvCfg,
     _apply_pelvis_protocol,
+    _apply_strict_recipe,
     _bind_lafan_track_from_dict,
     _g1_canonical_joint_obs_params,
     _g1_expert_anchor_obs_params,
+    _g1_expert_ee_obs_params,
+    _g1_expert_keypoint_obs_params,
     _g1_expert_motion_obs_params,
     _g1_tracked_body_obs_params,
 )
@@ -30,16 +33,29 @@ from .imitation_g1_env_cfg import (
 # Anchor-relative observation terms per group on the latent observation
 # surface. Unlike `_VANILLA_ANCHOR_TERM_NAMES_BY_GROUP`, the policy/critic
 # groups carry robot body-pose terms and there is an `expert_goal` group.
+# The explicit-command superset terms (EE/keypoint) follow the anchor here:
+# they are new on this surface, so no legacy checkpoint pins them to
+# torso_link the way the vanilla policy EE terms are pinned. In latent
+# command mode they are pruned to None before anchoring, so this is inert
+# for every latent task.
 _LATENT_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
     "policy": (
         "expert_anchor_pos_b",
         "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
         "body_pos",
         "body_ori",
     ),
     "critic": (
         "expert_anchor_pos_b",
         "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
         "body_pos",
         "body_ori",
     ),
@@ -78,6 +94,31 @@ class G1LatentObservationCfg:
             func=mdp.expert_anchor_ori_b,
             params=_g1_expert_anchor_obs_params(),
             noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+        # Explicit command superset (pruned to None in latent command mode):
+        # present so this same observation surface can serve an explicit
+        # tracker via `env.command_mode=explicit` + `command_observation_terms`
+        # without a separate env class. Func bindings mirror the vanilla
+        # policy group (`policy_*` variants honor chunk command adapters).
+        expert_motion_qpos = ObsTerm(
+            func=mdp.policy_expert_motion_qpos,
+            params=_g1_expert_motion_obs_params(),
+        )
+        expert_ee_pos_b = ObsTerm(
+            func=mdp.policy_expert_ee_pos_b,
+            params=_g1_expert_ee_obs_params(),
+        )
+        expert_ee_ori_b = ObsTerm(
+            func=mdp.policy_expert_ee_ori_b,
+            params=_g1_expert_ee_obs_params(),
+        )
+        expert_keypoint_pos_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_pos_b,
+            params=_g1_expert_keypoint_obs_params(),
+        )
+        expert_keypoint_ori_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_ori_b,
+            params=_g1_expert_keypoint_obs_params(),
         )
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
@@ -129,6 +170,28 @@ class G1LatentObservationCfg:
         expert_anchor_ori_b = ObsTerm(
             func=mdp.expert_anchor_ori_b,
             params=_g1_expert_anchor_obs_params(),
+        )
+        # Explicit command superset; see the policy-group comment. Pruned to
+        # None in latent command mode so existing critics are unchanged.
+        expert_motion_qpos = ObsTerm(
+            func=mdp.policy_expert_motion_qpos,
+            params=_g1_expert_motion_obs_params(),
+        )
+        expert_ee_pos_b = ObsTerm(
+            func=mdp.policy_expert_ee_pos_b,
+            params=_g1_expert_ee_obs_params(),
+        )
+        expert_ee_ori_b = ObsTerm(
+            func=mdp.policy_expert_ee_ori_b,
+            params=_g1_expert_ee_obs_params(),
+        )
+        expert_keypoint_pos_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_pos_b,
+            params=_g1_expert_keypoint_obs_params(),
+        )
+        expert_keypoint_ori_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_ori_b,
+            params=_g1_expert_keypoint_obs_params(),
         )
         body_pos = ObsTerm(
             func=mdp.robot_body_pos_b,
@@ -268,10 +331,27 @@ class ImitationG1LatentEnvCfg(ImitationG1LafanTrackEnvCfg):
     """Latent-conditioned G1 motion-tracking env driven by a LAFAN1 manifest."""
 
     observations = G1LatentObservationCfg()
+    # Latent surfaces default to the latent command; switch to an explicit
+    # tracker with `env.command_mode=explicit` plus a matching
+    # `command_observation_terms` / `agent.command_components` selection.
+    command_mode: str = "latent"
     # Default skill-command width: skill code z (256) + sin_cos phase (2) = 258
     # (wandb run dh8k313e recipe, minus z_phi). Override per run as needed.
     latent_command_dim: int = 258
     latent_goal_steps: int = 1
+
+    def _critic_prunable_command_term_names(self) -> tuple[str, ...]:
+        # The supplemental explicit terms the latent critic gained for
+        # explicit command mode; the historical latent critic terms
+        # (expert_motion + anchors) are part of the latent critic contract
+        # and are never pruned.
+        return (
+            "expert_motion_qpos",
+            "expert_ee_pos_b",
+            "expert_ee_ori_b",
+            "expert_keypoint_pos_b",
+            "expert_keypoint_ori_b",
+        )
 
     def __post_init__(self):
         super().__post_init__()
@@ -426,7 +506,11 @@ class ImitationG1LatentStableEnvCfg(ImitationG1LatentSonicNoHistoryEnvCfg):
 
 @configclass
 class ImitationG1LatentStrictEnvCfg(ImitationG1LatentEnvCfg):
-    """Pelvis-anchored legacy surface with strict-from-scratch terminations.
+    """Strict recipe x latent command pin (`Isaac-Imitation-G1-Latent-Strict-v0`).
+
+    Pelvis-anchored legacy surface with strict-from-scratch terminations;
+    the recipe itself is shared with the explicit pin
+    ``ImitationG1StrictTrackEnvCfg`` via ``_apply_strict_recipe``.
 
     The evidence-backed middle ground from the 2026-07-19/20 investigation:
     keep the scaffolding that trains at single-GPU/1B scale (legacy [0, 200]
@@ -450,7 +534,7 @@ class ImitationG1LatentStrictEnvCfg(ImitationG1LatentEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        _apply_pelvis_protocol(self)
+        _apply_strict_recipe(self)
 
 
 @configclass
@@ -521,6 +605,13 @@ class ImitationG1LatentSonicOfficialFSQEnvCfg(ImitationG1LatentSonicEnvCfg):
         # The agent-side code_period=1 independently renews the quantized code.
         self.command_hold_steps = 0
         self._sync_expert_window_observation_params()
+
+
+# Canonical-recipe alias: the Stable recipe is not latent-specific -- the
+# command choice is pure configuration (`command_mode`) -- but the historical
+# class name is pinned by the golden layout contract and by existing
+# checkpoints/serialized configs, so the latent-named class stays canonical.
+ImitationG1StableEnvCfg = ImitationG1LatentStableEnvCfg
 
 
 _bind_lafan_track_from_dict(

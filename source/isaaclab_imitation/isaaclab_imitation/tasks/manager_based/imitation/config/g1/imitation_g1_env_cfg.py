@@ -1187,6 +1187,16 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # observation noise, so removing them consumes no RNG and the retained terms
     # are byte-identical.
     command_observation_terms: list[str] | None = None
+    # Which command family feeds the actor: this is pure configuration, not a
+    # recipe axis. "explicit" prunes the agent-published `latent_command` term
+    # (where the observation surface has one) and keeps the explicit command
+    # terms selected by `command_observation_terms` (all of them when None).
+    # "latent" keeps `latent_command` plus, by default, the historical explicit
+    # baseline terms (expert_motion + anchors) that latent surfaces expose for
+    # posterior-mode baselines; `command_observation_terms` overrides that set.
+    # Pair with the matching agent config: `agent.ipmd.use_latent_command`
+    # must agree with this mode (validated at training entry).
+    command_mode: str = "explicit"
     # Expert-window terms making up one DiffSR macro-state frame. None keeps the
     # full-body default (expert_motion 58 + anchor_pos 3 + anchor_ori 6 = 67 ->
     # 670 per 10-frame window, byte-identical to the full-body packet). Set to
@@ -1576,30 +1586,114 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
         self._resolve_manifest_config()
         self._prune_command_observation_terms()
 
-    def _prune_command_observation_terms(self) -> None:
-        """Drop policy-group command terms outside ``command_observation_terms``.
+    def _critic_prunable_command_term_names(self) -> tuple[str, ...]:
+        """Critic-group command terms that command pruning may drop.
 
-        No-op when the field is None, which is the default, so this cannot change
-        an existing run. See the field's comment for why it exists.
+        Empty on the vanilla surface: its critic has always carried every
+        explicit command term regardless of the policy selection, and that
+        contract stays untouched. Latent surfaces override this with the
+        supplemental explicit terms their critic gained for explicit
+        command mode.
         """
+        return ()
+
+    def _normalized_command_mode(self) -> str:
+        mode = str(self.command_mode).strip().lower()
+        if mode not in {"latent", "explicit"}:
+            raise ValueError(
+                f"Unsupported command_mode={self.command_mode!r}; expected "
+                "'latent' or 'explicit'."
+            )
+        return mode
+
+    def _prune_command_observation_terms(self) -> None:
+        """Select the active command-term set for ``command_mode``.
+
+        - ``explicit``: prune ``latent_command`` (where the surface has one)
+          and keep the policy command terms selected by
+          ``command_observation_terms`` (all of them when None -- the
+          historical vanilla default, so this cannot change an existing run).
+          Command-side expert noise is disabled on the kept terms.
+        - ``latent``: keep ``latent_command`` plus the selected explicit
+          baseline terms (``expert_motion`` + anchors when None -- the
+          historical latent default).
+        """
+        mode = self._normalized_command_mode()
+        self.command_mode = mode
+        policy = self.observations.policy
+        critic = getattr(self.observations, "critic", None)
+        if mode == "latent" and not hasattr(policy, "latent_command"):
+            raise ValueError(
+                "command_mode='latent' requires an observation surface with a "
+                f"latent_command policy term; {type(self.observations).__name__} "
+                "has none."
+            )
         if self.command_observation_terms is None:
-            return
-        keep = {str(name) for name in self.command_observation_terms}
-        unknown = keep - set(_PRUNABLE_COMMAND_TERM_NAMES)
-        if unknown:
-            raise ValueError(
-                "command_observation_terms names terms that are not policy "
-                f"command terms: {sorted(unknown)}. Expected a subset of "
-                f"{sorted(_PRUNABLE_COMMAND_TERM_NAMES)}."
+            keep = (
+                set(_PRUNABLE_COMMAND_TERM_NAMES)
+                if mode == "explicit"
+                else set(_LATENT_MODE_DEFAULT_COMMAND_TERM_NAMES)
             )
-        if not keep:
-            raise ValueError(
-                "command_observation_terms is empty; the actor would receive no "
-                "command at all. Leave it None to keep every term."
-            )
+        else:
+            keep = {str(name) for name in self.command_observation_terms}
+            unknown = keep - set(_PRUNABLE_COMMAND_TERM_NAMES)
+            if unknown:
+                raise ValueError(
+                    "command_observation_terms names terms that are not policy "
+                    f"command terms: {sorted(unknown)}. Expected a subset of "
+                    f"{sorted(_PRUNABLE_COMMAND_TERM_NAMES)}."
+                )
+            if not keep:
+                raise ValueError(
+                    "command_observation_terms is empty; the actor would receive "
+                    "no command at all. Leave it None to keep every term."
+                )
         for term_name in _PRUNABLE_COMMAND_TERM_NAMES:
-            if term_name not in keep:
-                setattr(self.observations.policy, term_name, None)
+            if term_name not in keep and hasattr(policy, term_name):
+                setattr(policy, term_name, None)
+        if critic is not None:
+            for term_name in self._critic_prunable_command_term_names():
+                if term_name not in keep and hasattr(critic, term_name):
+                    setattr(critic, term_name, None)
+        if mode == "explicit":
+            for group in (policy, critic):
+                if (
+                    group is not None
+                    and getattr(group, "latent_command", None) is not None
+                ):
+                    group.latent_command = None
+            # Command-side expert noise stays disabled on explicit trackers
+            # (frozen protocol); the vanilla terms declare none, so this only
+            # affects latent surfaces switched to explicit commands.
+            for term_name in keep:
+                term = getattr(policy, term_name, None)
+                if term is not None:
+                    term.noise = None
+
+    def _restore_pruned_command_observation_terms(self) -> None:
+        """Re-instate pruned command terms from the group-class declarations.
+
+        ``from_dict`` may change ``command_mode`` or
+        ``command_observation_terms`` after ``__post_init__`` already pruned
+        with the class defaults, and pruning is destructive. Restored terms
+        carry declaration-time params, so callers must re-apply
+        ``_set_anchor_body`` before pruning again.
+        """
+        for group_name in ("policy", "critic"):
+            group = getattr(self.observations, group_name, None)
+            if group is None:
+                continue
+            defaults = None
+            for term_name in _PRUNABLE_COMMAND_TERM_NAMES + ("latent_command",):
+                if not hasattr(group, term_name):
+                    continue
+                if getattr(group, term_name) is not None:
+                    continue
+                if defaults is None:
+                    defaults = type(group)()
+                default_term = getattr(defaults, term_name, None)
+                if default_term is not None:
+                    setattr(group, term_name, default_term)
 
 
 # Policy-group command terms that `command_observation_terms` may retain. Only
@@ -1614,6 +1708,15 @@ _PRUNABLE_COMMAND_TERM_NAMES: tuple[str, ...] = (
     "expert_ee_ori_b",
     "expert_keypoint_pos_b",
     "expert_keypoint_ori_b",
+)
+
+# Explicit command terms latent surfaces keep by default in latent mode: the
+# historical "baseline test" terms exposed for posterior-mode baselines
+# (the agent's input_keys decide what actually feeds each network).
+_LATENT_MODE_DEFAULT_COMMAND_TERM_NAMES: tuple[str, ...] = (
+    "expert_motion",
+    "expert_anchor_pos_b",
+    "expert_anchor_ori_b",
 )
 
 
@@ -1683,23 +1786,37 @@ def _apply_pelvis_protocol(
         cfg._set_reward_anchor_body("pelvis")
 
 
+def _apply_strict_recipe(cfg: ImitationG1BaseTrackingEnvCfg) -> None:
+    """The Strict recipe, shared by its explicit and latent command pins.
+
+    Strict SONIC termination functions on the legacy scaffolding: pelvis
+    anchor, [0, 200] reset starts, no full-trajectory resets, no curriculum.
+    The pin classes (``ImitationG1StrictTrackEnvCfg`` and
+    ``ImitationG1LatentStrictEnvCfg``) contribute only the observation surface
+    and command configuration; the recipe itself lives here.
+    """
+    _apply_pelvis_protocol(cfg)
+
+
 @configclass
 class ImitationG1StrictTrackEnvCfg(ImitationG1LafanTrackEnvCfg):
-    """Explicit-command G1 tracking on the strict/pelvis protocol surface.
+    """Strict recipe x explicit command pin (`Isaac-Imitation-G1-Strict-v0`).
 
-    Mirrors ``ImitationG1LatentStrictEnvCfg``'s environment deltas (pelvis
-    anchor, strict SONIC termination functions, [0, 200] reset starts, no
-    curriculum) without the latent command, so explicit-interface trackers
-    (single-frame full-body, full-body chunk, EE chunk via
+    The same Strict recipe as ``ImitationG1LatentStrictEnvCfg`` (see
+    ``_apply_strict_recipe``: pelvis anchor, strict SONIC termination
+    functions, [0, 200] reset starts, no curriculum) on the vanilla
+    observation surface without a latent command, so explicit-interface
+    trackers (single-frame full-body, full-body chunk, EE chunk via
     ``agent.command_space``) train on the same protocol as the latent tracker
     and differ only in the command space.
     """
 
     terminations = G1SonicTerminationsCfg()  # type: ignore
+    curriculum = None
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        _apply_pelvis_protocol(self)
+        _apply_strict_recipe(self)
 
 
 # Backward-compatible aliases.
@@ -1732,8 +1849,13 @@ def _g1_lafan_track_env_cfg_from_dict(
         motions_explicit=motions_explicit,
         timing_explicit=timing_explicit,
     )
-    # Hydra-set `command_observation_terms` must prune on this path too, not
-    # only in `__post_init__`, or the override silently no-ops.
+    # Hydra-set `command_mode` / `command_observation_terms` must apply on this
+    # path too, not only in `__post_init__`, or the override silently no-ops.
+    # `__post_init__` already pruned with the class defaults and pruning is
+    # destructive, so restore the declared terms and re-anchor them to the
+    # surface's expert anchor before pruning with the overridden fields.
+    self._restore_pruned_command_observation_terms()
+    self._set_anchor_body(self.expert_anchor_body_name)
     self._prune_command_observation_terms()
 
 
