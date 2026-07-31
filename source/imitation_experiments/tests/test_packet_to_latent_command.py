@@ -14,6 +14,7 @@ from imitation_experiments.capacity.materialize_paired_interface_samples import 
 from imitation_experiments.capacity.packet_to_latent_command import (
     OverlappingPacketEnsembler,
     PacketLayout,
+    convert_root_qpos_torso_to_pelvis,
     first_packet_window,
     frames_to_term_major,
     split_packet_for_encoder,
@@ -107,7 +108,7 @@ def test_temporal_ensemble_aligns_overlaps_and_clears_on_reset() -> None:
         ).unsqueeze(0)
         return frames_to_term_major(frames, layout)
 
-    identity_quat = torch.tensor([[0.0, 0.0, 0.0, 1.0]])
+    identity_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
     first = ensemble.update(
         env_ids=torch.tensor([0]),
         packet=packet(0, 0.0),
@@ -140,6 +141,83 @@ def test_temporal_ensemble_aligns_overlaps_and_clears_on_reset() -> None:
     reset_frames = term_major_to_frames(after_reset, execution_layout)
     assert torch.allclose(reset_frames[0, :, 0], torch.arange(100.0, 110.0))
     assert ensemble.stats()["temporal_ensemble_history_resets"] == 2
+
+
+def test_torso_to_pelvis_conversion_uses_predicted_waist_fk() -> None:
+    layout = PacketLayout(ROOT_QPOS_TERM_WIDTHS, packet_frames=2)
+    joint_names = list(TARGET_JOINT_NAMES)
+    qpos = torch.zeros(1, 2, 29)
+    qpos[0, 1, joint_names.index("waist_yaw_joint")] = torch.pi / 2
+    qpos[0, 1, joint_names.index("waist_roll_joint")] = 0.2
+    qpos[0, 1, joint_names.index("waist_pitch_joint")] = -0.1
+
+    # Actual pelvis is world identity. The actual torso uses a different waist
+    # configuration and an arbitrary pelvis-frame pose. The desired torso pose
+    # is constructed from a known desired pelvis pose and the predicted waist
+    # FK; converting it must recover that desired pelvis pose exactly.
+    actual_pelvis_pos = torch.tensor([[0.3, -0.2, 0.8]])
+    actual_pelvis_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    actual_torso_pos = actual_pelvis_pos + torch.tensor([[0.01, 0.02, 0.05]])
+    actual_torso_quat = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    desired_pelvis_pos_in_actual_pelvis = torch.tensor(
+        [[[0.5, -0.1, 0.2], [0.6, 0.2, 0.25]]]
+    )
+    desired_pelvis_rot_in_actual_pelvis = torch.eye(3).reshape(1, 1, 3, 3).repeat(
+        1, 2, 1, 1
+    )
+
+    def axis(angle: torch.Tensor, name: str) -> torch.Tensor:
+        c, s = torch.cos(angle), torch.sin(angle)
+        z, o = torch.zeros_like(angle), torch.ones_like(angle)
+        if name == "x":
+            values = (o, z, z, z, c, -s, z, s, c)
+        elif name == "y":
+            values = (c, z, s, z, o, z, -s, z, c)
+        else:
+            values = (c, -s, z, s, c, z, z, z, o)
+        return torch.stack(values, dim=-1).reshape(*angle.shape, 3, 3)
+
+    desired_pelvis_to_torso_rot = (
+        axis(qpos[..., joint_names.index("waist_yaw_joint")], "z")
+        @ axis(qpos[..., joint_names.index("waist_roll_joint")], "x")
+        @ axis(qpos[..., joint_names.index("waist_pitch_joint")], "y")
+    )
+    offset = torch.tensor([-0.0039635, 0.0, 0.044])
+    desired_pelvis_to_torso_pos = torch.einsum(
+        "...ij,j->...i",
+        axis(qpos[..., joint_names.index("waist_yaw_joint")], "z"),
+        offset,
+    )
+    actual_pelvis_to_torso_pos = actual_torso_pos - actual_pelvis_pos
+    torso_pos = (
+        desired_pelvis_pos_in_actual_pelvis
+        + desired_pelvis_to_torso_pos
+        - actual_pelvis_to_torso_pos[:, None]
+    )
+    torso_rot = desired_pelvis_rot_in_actual_pelvis @ desired_pelvis_to_torso_rot
+    torso_rot6d = torso_rot[..., :, :2].reshape(1, 2, 6)
+    packet = frames_to_term_major(
+        torch.cat((qpos, torso_pos, torso_rot6d), dim=-1), layout
+    )
+
+    converted = convert_root_qpos_torso_to_pelvis(
+        packet,
+        layout=layout,
+        actual_torso_pos_w=actual_torso_pos,
+        actual_torso_quat_w=actual_torso_quat,
+        actual_pelvis_pos_w=actual_pelvis_pos,
+        actual_pelvis_quat_w=actual_pelvis_quat,
+        joint_names=joint_names,
+    )
+    converted_frames = term_major_to_frames(converted, layout)
+    assert torch.allclose(
+        converted_frames[..., 29:32],
+        desired_pelvis_pos_in_actual_pelvis,
+        atol=1.0e-6,
+    )
+    assert torch.allclose(
+        converted_frames[..., 32:], _identity_rot6d(2).reshape(1, 2, 6), atol=1e-6
+    )
 
 
 def test_long_horizon_materialization_reuses_exact_source_rows() -> None:

@@ -244,9 +244,49 @@ H10, H30-first10, and H30-ensemble together. H30 publishes 1,140 values at 5 Hz
 (5,700 values/s), versus 380 at 5 Hz (1,900 values/s) for H10, so it is a
 higher-bandwidth diagnostic rather than a replacement main row.
 
+The later frame-0 capacity comparison extends that H30 route to seed-0
+tiny/small/medium/large planners. It preserves the same 4,864 causal rows and
+uses the shared progressive 10k/20k/30k/50k update budgets, effective batch
+1024, and microbatches 1024/512/256/128. Both first-H10/discard and exponential
+temporal-ensemble evaluation rows are reported at every size.
+
 ```bash
 DRY_RUN=1 experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_h30_temporal_ensemble_ice.sh
 ```
+
+### Frame-0 randomized fall-truncated diagnostic (2026-07-30)
+
+The user-requested diagnostic starts all 100 environments at reference frame 0,
+keeps the training-time physical randomization and interval pushes, runs 500
+control steps with evaluation seed 0, and permits only `base_too_low` to end an
+episode early. The fall detector is the repository-standard torso height below
+0.40 m. MPJPE is accumulated only over valid transitions before each
+environment terminates; summaries retain both the MPJPE count and fall count.
+This diagnostic does not replace the paper protocol above.
+
+`run_frame0_dr_baseonly_evaluation.sh` evaluates available seed-0 enc380
+checkpoints. In addition to the H10 root and latent routes, it evaluates the
+same H30 checkpoint with both first-H10/discard and exponential temporal
+ensembling. These two H30 rows must use this matched local protocol; the older
+cluster-side 10-environment/random-start passes are training-job diagnostics,
+not entries in the frame-0 comparison. `aggregate_frame0_dr_baseonly_results.py`
+rejects a summary unless it proves 100 frame-0 starts, the fixed
+seed/horizon/threshold, enabled pushes, disabled tracking and timeout
+terminations, and pre-termination metric accounting. It keeps unavailable H30,
+large, and direct-root rows blank until their planners finish and the matched
+local evaluation exists.
+
+The third route, `root_qpos planner -> frozen root_qpos tracker`, reuses the
+existing direct-tracker oracle dataset: 5,000 rows from 101 completed trajectory
+segments (SHA-256
+`1374eb44647098e1e0a1da21e89ad1edab02fd58195a434a2dc1a6b3b809a3b0`).
+The original medium seed-0 submission remains valid. The capacity extension
+adds tiny/small/large at the same progressive budgets and effective batch 1024;
+no new simulator collection is needed. The missing H30 and pure-root cells are
+submitted together with `submit_auxiliary_capacity_seed0_ice.sh`.
+The old packet-mode label is normalized only to its exact renamed runtime alias,
+`explicit_chunk_current_slot`, while tracker checkpoint/input provenance remains
+strict.
 
 ## Reproducing the whole study
 

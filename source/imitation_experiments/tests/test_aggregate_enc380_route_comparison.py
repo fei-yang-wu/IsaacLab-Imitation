@@ -195,6 +195,27 @@ def test_aggregate_accepts_full_single_cell_contract(tmp_path: Path) -> None:
     )
 
 
+def test_aggregate_accepts_cluster_to_local_checkpoint_relocation(
+    tmp_path: Path,
+) -> None:
+    root = _study(tmp_path)
+    for route in ("root_qpos", "latent_skill"):
+        config_path = root / (
+            "motions/motion_a/capacity/medium/seed0/matched/"
+            f"{route}/{planner_dir_name('medium')}/config.json"
+        )
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        local_checkpoint = Path(payload["best_checkpoint"])
+        suffix = local_checkpoint.parts[local_checkpoint.parts.index("motions") :]
+        payload["best_checkpoint"] = str(Path("/workspace/IsaacLab/project") / Path(*suffix))
+        _write(config_path, payload)
+
+    result = aggregate(
+        root, motions=("motion_a",), sizes=("medium",), seeds=(0,)
+    )
+    assert len(result["rows"]) == 2
+
+
 def test_aggregate_rejects_latent_route_using_packet_encoder(tmp_path: Path) -> None:
     root = _study(tmp_path)
     path = (

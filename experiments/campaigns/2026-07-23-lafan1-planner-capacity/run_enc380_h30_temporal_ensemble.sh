@@ -31,9 +31,8 @@ DEVICE="${DEVICE:-cuda:0}"
 TASK="${TASK:-Isaac-Imitation-G1-Latent-Strict-v0}"
 MOTION_NAME="walk1_subject1"
 SEED=0
-TRAIN_UPDATES=30000
 BATCH_SIZE=1024
-MICRO_BATCH_SIZE=256
+MODEL_SIZE="${MODEL_SIZE:-medium}"
 FLOW_STEPS=16
 EVAL_STEPS="${EVAL_STEPS:-500}"
 EVAL_ENVS="${EVAL_ENVS:-10}"
@@ -53,7 +52,32 @@ SOURCE_H10="${SOURCE_MOTION_ROOT}/demonstrations/root_qpos"
 SOURCE_DEMO_AUDIT="${SOURCE_MOTION_ROOT}/demonstrations/paired_demonstration_audit.json"
 SOURCE_QUAL_AUDIT="${SOURCE_STUDY_ROOT}/qualification/latent_qualification_audit.json"
 H30_DEMOS="${OUTPUT_ROOT}/demonstrations/root_qpos_h30"
-PLANNER="${OUTPUT_ROOT}/planner/medium/seed0/planner_oracle_u30000_b1024"
+
+case "${MODEL_SIZE}" in
+    tiny)
+        default_updates=10000
+        default_micro_batch=1024
+        ;;
+    small)
+        default_updates=20000
+        default_micro_batch=512
+        ;;
+    medium)
+        default_updates=30000
+        default_micro_batch=256
+        ;;
+    large)
+        default_updates=50000
+        default_micro_batch=128
+        ;;
+    *)
+        echo "[ERROR] Unknown model size: ${MODEL_SIZE}" >&2
+        exit 2
+        ;;
+esac
+TRAIN_UPDATES="${TRAIN_UPDATES:-${default_updates}}"
+MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-${default_micro_batch}}"
+PLANNER="${OUTPUT_ROOT}/planner/${MODEL_SIZE}/seed0/planner_oracle_u${TRAIN_UPDATES}_b${BATCH_SIZE}"
 
 case "${DRY_RUN}" in
     1|true|TRUE|yes|YES) DRY_RUN=1 ;;
@@ -161,7 +185,7 @@ if has_stage train; then
         --samples_dir "${H30_DEMOS}" --output_dir "${PLANNER}" \
         --interface root_qpos --planner_family flow --state_key planner_state \
         --training_stage oracle --device "${DEVICE}" --seed "${SEED}" \
-        --model_size medium --batch_size "${BATCH_SIZE}" \
+        --model_size "${MODEL_SIZE}" --batch_size "${BATCH_SIZE}" \
         --micro_batch_size "${MICRO_BATCH_SIZE}" --num_updates "${TRAIN_UPDATES}" \
         --max_samples 0 --lr 0.0001 --weight_decay 0.0001 \
         --flow_num_inference_steps "${FLOW_STEPS}" \
@@ -170,7 +194,7 @@ fi
 
 run_eval() {
     local mode="$1" pass="$2"
-    local ensemble="none" output="${OUTPUT_ROOT}/evaluation/${mode}/${pass}"
+    local ensemble="none" output="${OUTPUT_ROOT}/evaluation/${MODEL_SIZE}/${mode}/${pass}"
     [[ "${mode}" == "temporal_exponential" ]] && ensemble="exponential"
     local pass_args=()
     if [[ "${pass}" == "survival" ]]; then
@@ -191,7 +215,8 @@ run_eval() {
         --packet_prediction_horizon_steps 30 \
         --packet_temporal_ensemble "${ensemble}" \
         --packet_temporal_ensemble_decay "${TEMPORAL_DECAY}" \
-        --output_dir "${output}" --label "enc380_h30_${mode}_${pass}" \
+        --output_dir "${output}" \
+        --label "enc380_h30_${MODEL_SIZE}_${mode}_${pass}" \
         --num_envs "${EVAL_ENVS}" --max_steps "${EVAL_STEPS}" --seed "${SEED}" \
         --metric_interval 10 --motion_name "${MOTION_NAME}" \
         --allow_random_reset --keep_time_out --disable_reward_clipping \

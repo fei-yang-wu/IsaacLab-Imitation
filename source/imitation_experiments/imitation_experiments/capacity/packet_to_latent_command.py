@@ -157,9 +157,10 @@ def frames_to_term_major(
     return torch.cat(blocks, dim=-1)
 
 
-def _quat_xyzw_to_matrix(quat: torch.Tensor) -> torch.Tensor:
+def _quat_wxyz_to_matrix(quat: torch.Tensor) -> torch.Tensor:
+    """Convert Isaac Lab scalar-first quaternions to rotation matrices."""
     quat = torch.nn.functional.normalize(quat, dim=-1)
-    x, y, z, w = quat.unbind(dim=-1)
+    w, x, y, z = quat.unbind(dim=-1)
     return torch.stack(
         (
             1 - 2 * (y * y + z * z),
@@ -174,6 +175,120 @@ def _quat_xyzw_to_matrix(quat: torch.Tensor) -> torch.Tensor:
         ),
         dim=-1,
     ).reshape(*quat.shape[:-1], 3, 3)
+
+
+def _axis_angle_rotation(
+    angle: torch.Tensor, *, axis: str
+) -> torch.Tensor:
+    """Return batched rotation matrices for one canonical axis."""
+    cosine = torch.cos(angle)
+    sine = torch.sin(angle)
+    zero = torch.zeros_like(angle)
+    one = torch.ones_like(angle)
+    if axis == "x":
+        values = (one, zero, zero, zero, cosine, -sine, zero, sine, cosine)
+    elif axis == "y":
+        values = (cosine, zero, sine, zero, one, zero, -sine, zero, cosine)
+    elif axis == "z":
+        values = (cosine, -sine, zero, sine, cosine, zero, zero, zero, one)
+    else:
+        raise ValueError(f"Unsupported rotation axis {axis!r}.")
+    return torch.stack(values, dim=-1).reshape(*angle.shape, 3, 3)
+
+
+def convert_root_qpos_torso_to_pelvis(
+    packet: torch.Tensor,
+    *,
+    layout: PacketLayout,
+    actual_torso_pos_w: torch.Tensor,
+    actual_torso_quat_w: torch.Tensor,
+    actual_pelvis_pos_w: torch.Tensor,
+    actual_pelvis_quat_w: torch.Tensor,
+    joint_names: tuple[str, ...] | list[str],
+) -> torch.Tensor:
+    """Convert a torso-relative root+qpos packet to the pelvis contract.
+
+    The predicted waist qpos defines the desired pelvis-to-torso transform, so
+    this is a deterministic change of coordinates and does not consult the
+    reference trajectory. Quaternions follow Isaac Lab's WXYZ convention.
+    """
+    required_terms = {
+        "expert_motion_qpos": 29,
+        "expert_anchor_pos_b": 3,
+        "expert_anchor_ori_b": 6,
+    }
+    widths = dict(layout.term_widths)
+    if any(widths.get(name) != width for name, width in required_terms.items()):
+        raise ValueError(
+            "Torso-to-pelvis conversion requires the 29+3+6 root_qpos layout; "
+            f"got {layout.term_widths}."
+        )
+    names = tuple(str(name) for name in joint_names)
+    if len(names) != 29 or len(set(names)) != 29:
+        raise ValueError("joint_names must contain 29 unique packet-order names.")
+    try:
+        yaw_id = names.index("waist_yaw_joint")
+        roll_id = names.index("waist_roll_joint")
+        pitch_id = names.index("waist_pitch_joint")
+    except ValueError as error:
+        raise ValueError(
+            "joint_names is missing the G1 waist yaw/roll/pitch chain."
+        ) from error
+
+    frames = term_major_to_frames(packet, layout)
+    cursor = 0
+    slices: dict[str, slice] = {}
+    for name, width in layout.term_widths:
+        slices[name] = slice(cursor, cursor + int(width))
+        cursor += int(width)
+    qpos = frames[..., slices["expert_motion_qpos"]]
+    torso_pos = frames[..., slices["expert_anchor_pos_b"]]
+    torso_rot = _rot6d_to_matrix(frames[..., slices["expert_anchor_ori_b"]])
+
+    actual_pelvis_rot_w = _quat_wxyz_to_matrix(actual_pelvis_quat_w)
+    actual_torso_rot_w = _quat_wxyz_to_matrix(actual_torso_quat_w)
+    pelvis_to_actual_torso_rot = (
+        actual_pelvis_rot_w.transpose(-1, -2) @ actual_torso_rot_w
+    )
+    pelvis_to_actual_torso_pos = torch.einsum(
+        "bij,bj->bi",
+        actual_pelvis_rot_w.transpose(-1, -2),
+        actual_torso_pos_w - actual_pelvis_pos_w,
+    )
+
+    yaw_rot = _axis_angle_rotation(qpos[..., yaw_id], axis="z")
+    roll_rot = _axis_angle_rotation(qpos[..., roll_id], axis="x")
+    pitch_rot = _axis_angle_rotation(qpos[..., pitch_id], axis="y")
+    desired_pelvis_to_torso_rot = yaw_rot @ roll_rot @ pitch_rot
+    waist_offset = packet.new_tensor((-0.0039635, 0.0, 0.044))
+    desired_pelvis_to_torso_pos = torch.einsum(
+        "...ij,j->...i", yaw_rot, waist_offset
+    )
+
+    # T_At_Dp = T_At_Dt @ inverse(T_Dp_Dt), followed by
+    # T_Ap_Dp = T_Ap_At @ T_At_Dp.
+    actual_torso_to_desired_pelvis_rot = (
+        torso_rot @ desired_pelvis_to_torso_rot.transpose(-1, -2)
+    )
+    actual_torso_to_desired_pelvis_pos = torso_pos - torch.einsum(
+        "...ij,...j->...i",
+        actual_torso_to_desired_pelvis_rot,
+        desired_pelvis_to_torso_pos,
+    )
+    pelvis_rot = (
+        pelvis_to_actual_torso_rot[:, None]
+        @ actual_torso_to_desired_pelvis_rot
+    )
+    pelvis_pos = pelvis_to_actual_torso_pos[:, None] + torch.einsum(
+        "bij,btj->bti",
+        pelvis_to_actual_torso_rot,
+        actual_torso_to_desired_pelvis_pos,
+    )
+
+    converted = frames.clone()
+    converted[..., slices["expert_anchor_pos_b"]] = pelvis_pos
+    converted[..., slices["expert_anchor_ori_b"]] = _matrix_to_rot6d(pelvis_rot)
+    return frames_to_term_major(converted, layout)
 
 
 def _rot6d_to_matrix(rot6d: torch.Tensor) -> torch.Tensor:
@@ -266,7 +381,7 @@ class OverlappingPacketEnsembler:
         self._anchor_quat = torch.zeros(
             int(num_envs), self.overlap, 4, device=self.device, dtype=dtype
         )
-        self._anchor_quat[..., 3] = 1.0
+        self._anchor_quat[..., 0] = 1.0
         self._valid = torch.zeros(
             int(num_envs), self.overlap, device=self.device, dtype=torch.bool
         )
@@ -293,8 +408,8 @@ class OverlappingPacketEnsembler:
         current_quat: torch.Tensor,
     ) -> torch.Tensor:
         result = frames.clone()
-        current_rot = _quat_xyzw_to_matrix(current_quat)
-        publication_rot = _quat_xyzw_to_matrix(publication_quat)
+        current_rot = _quat_wxyz_to_matrix(current_quat)
+        publication_rot = _quat_wxyz_to_matrix(publication_quat)
         delta_rot = current_rot.transpose(-1, -2) @ publication_rot
         delta_pos = torch.einsum(
             "bij,bj->bi",

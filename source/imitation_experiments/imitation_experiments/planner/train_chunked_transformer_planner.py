@@ -128,6 +128,17 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num_updates", type=int, default=2000)
     parser.add_argument("--log_interval", type=int, default=100)
+    parser.add_argument(
+        "--milestone_interval",
+        type=int,
+        default=0,
+        help=(
+            "Additionally keep an optimizer-free snapshot at every this-many "
+            "updates (checkpoints/update_XXXXXXX.pt) so a training-budget curve "
+            "can be evaluated closed-loop after the fact. Must be a multiple of "
+            "--log_interval so milestones land on logging updates; <=0 disables."
+        ),
+    )
     parser.add_argument("--eval_batch_size", type=int, default=512)
     parser.add_argument(
         "--eval_max_samples",
@@ -675,6 +686,13 @@ def main() -> None:
         )
 
     num_samples = int(train_state.shape[0])
+    milestone_interval = int(args.milestone_interval)
+    if milestone_interval > 0 and milestone_interval % int(args.log_interval) != 0:
+        raise SystemExit(
+            "--milestone_interval must be a positive multiple of --log_interval "
+            f"(got {milestone_interval} vs log_interval={args.log_interval}); "
+            "otherwise milestone updates never coincide with a save point."
+        )
     best_validation_metric = float("inf")
     best_validation_update = 0
     best_validation_metric_name = "val/normalized_target_rmse_mean"
@@ -832,6 +850,16 @@ def main() -> None:
                     optimizer=optimizer,
                     target_spec=target_spec,
                     metadata=checkpoint_metadata,
+                )
+            if milestone_interval > 0 and update % milestone_interval == 0:
+                # Optimizer-free: milestones are eval-only artifacts, and the
+                # optimizer state would triple their size on disk.
+                save_planner_checkpoint(
+                    run_dir / "checkpoints" / f"update_{update:07d}.pt",
+                    planner=planner,
+                    optimizer=None,
+                    target_spec=target_spec,
+                    metadata=checkpoint_metadata | {"milestone_update": update},
                 )
 
     metadata.update(

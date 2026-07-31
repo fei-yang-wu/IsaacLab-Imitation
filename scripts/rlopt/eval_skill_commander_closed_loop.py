@@ -348,6 +348,25 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--base_only_termination",
+    action="store_true",
+    default=False,
+    help=(
+        "Keep only the base-too-low fall termination (plus reference end). "
+        "All tracking-error and timeout terms are disabled, so reported "
+        "tracking metrics are truncated only by a physical fall."
+    ),
+)
+parser.add_argument(
+    "--fall_height_m",
+    type=float,
+    default=0.4,
+    help=(
+        "Absolute torso height used by --base_only_termination. The default "
+        "matches the repository's standard G1 base_too_low detector."
+    ),
+)
+parser.add_argument(
     "--disable_reward_clipping",
     action="store_true",
     default=False,
@@ -976,6 +995,8 @@ def _trajectory_metadata(raw_env: Any) -> dict[str, Any]:
 
 def _trainer_config_from_checkpoint(
     checkpoint: dict[str, Any],
+    *,
+    device: str,
 ) -> SkillCommanderConfig:
     if "planner_config" in checkpoint and "planner_state_dict" in checkpoint:
         planner_config = checkpoint.get("planner_config", {})
@@ -1025,7 +1046,7 @@ def _trainer_config_from_checkpoint(
             num_updates=1,
             eval_batches=1,
             eval_batch_size=1,
-            device="cpu",
+            device=str(device),
         )
     values = dict(checkpoint.get("config", {}))
     values.setdefault(
@@ -1060,6 +1081,11 @@ def _trainer_config_from_checkpoint(
         values["diffusion_inference_noise_std"] = float(
             args_cli.diffusion_inference_noise_std
         )
+    # Evaluation must place the planner on the same accelerator as its inputs.
+    # Checkpoints often retain device="cpu" from a portable training/config
+    # serialization; honoring that here makes only the direct latent route run
+    # on CPU while packet planners are explicitly moved to the simulator GPU.
+    values["device"] = str(device)
     values["batch_size"] = 1
     values["num_updates"] = 1
     values["eval_batches"] = 1
@@ -1091,12 +1117,53 @@ def _disable_tracking_terminations(terminations: Any) -> list[str]:
 
 def _disable_non_reference_terminations(terminations: Any) -> None:
     names = set(getattr(terminations, "__dict__", {}).keys())
-    names.update(("anchor_pos", "anchor_ori", "ee_body_pos", "base_too_low"))
+    names.update(
+        (
+            "time_out",
+            "reference_finished",
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "foot_pos_xyz",
+            "base_too_low",
+        )
+    )
     for name in sorted(names):
         if name.startswith("_") or name == "reference_finished":
             continue
         if hasattr(terminations, name):
             setattr(terminations, name, None)
+
+
+def _configure_base_only_termination(
+    terminations: Any, *, minimum_height: float
+) -> list[str]:
+    if minimum_height <= 0.0:
+        raise ValueError("--fall_height_m must be positive.")
+    base_term = G1TerminationsCfg().base_too_low
+    base_term.params["minimum_height"] = float(minimum_height)
+    terminations.base_too_low = base_term
+
+    names = set(getattr(terminations, "__dict__", {}).keys())
+    names.update(
+        (
+            "time_out",
+            "reference_finished",
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "foot_pos_xyz",
+            "base_too_low",
+        )
+    )
+    disabled: list[str] = []
+    for name in sorted(names):
+        if name.startswith("_") or name in {"reference_finished", "base_too_low"}:
+            continue
+        if hasattr(terminations, name) and getattr(terminations, name) is not None:
+            setattr(terminations, name, None)
+            disabled.append(name)
+    return disabled
 
 
 def _planner_state(batch: Any, state_history_steps: int) -> Tensor:
@@ -1377,6 +1444,11 @@ def main(
         )
     if int(args_cli.sample_rows_per_file) <= 0:
         raise ValueError("--sample_rows_per_file must be positive.")
+    if args_cli.base_only_termination and args_cli.disable_tracking_terminations:
+        raise ValueError(
+            "--base_only_termination and --disable_tracking_terminations are "
+            "mutually exclusive."
+        )
     if args_cli.balanced_motion_names and not (
         int(args_cli.balanced_rows_per_motion) > 0
         or int(args_cli.balanced_trajectories_per_motion) > 0
@@ -1445,7 +1517,22 @@ def main(
     if args_cli.deterministic_tracking:
         deterministic_tracking_record = disable_domain_randomization(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
-    if args_cli.disable_tracking_terminations:
+    if args_cli.base_only_termination:
+        if terminations is None:
+            raise ValueError(
+                "--base_only_termination requires an environment termination "
+                "configuration."
+            )
+        disabled_tracking_termination_terms = _configure_base_only_termination(
+            terminations, minimum_height=float(args_cli.fall_height_m)
+        )
+        print(
+            "[INFO] Base-only evaluation: torso height "
+            f"< {float(args_cli.fall_height_m):.2f} m terminates; disabled "
+            f"{disabled_tracking_termination_terms}.",
+            flush=True,
+        )
+    elif args_cli.disable_tracking_terminations:
         if terminations is None:
             raise ValueError(
                 "--disable_tracking_terminations requires an environment "
@@ -1563,8 +1650,10 @@ def main(
             args_cli.extend_episode_length_for_max_steps
         ),
         "keep_early_terminations": bool(args_cli.keep_early_terminations),
+        "base_only_termination": bool(args_cli.base_only_termination),
+        "fall_height_m": float(args_cli.fall_height_m),
         "tracking_terminations_enabled": not bool(
-            args_cli.disable_tracking_terminations
+            args_cli.disable_tracking_terminations or args_cli.base_only_termination
         ),
         "disabled_tracking_termination_terms": disabled_tracking_termination_terms,
         "survival_definition": "no_base_too_low_termination",
@@ -1697,7 +1786,9 @@ def main(
             map_location="cpu",
             weights_only=False,
         )
-        trainer_config = _trainer_config_from_checkpoint(planner_checkpoint)
+        trainer_config = _trainer_config_from_checkpoint(
+            planner_checkpoint, device=str(env_cfg.sim.device)
+        )
     trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
     if "planner_config" in planner_checkpoint:
         assert planner_checkpoint_path is not None
@@ -1763,6 +1854,9 @@ def main(
     # the oracle sampler, because that is the one holding the encoder.
     packet_encoder_stats: Any = None
     packet_encoder_provenance: dict[str, Any] | None = None
+    packet_planner_metadata: dict[str, Any] | None = None
+    packet_planner_target_dim: int | None = None
+    packet_planner_path: Path | None = None
     planner_latency_timer: PlannerForwardTimer | None = None
     if args_cli.packet_planner_checkpoint is not None:
         if command_source != "hl_skill":
@@ -1785,6 +1879,11 @@ def main(
         # normalization buffers must be moved explicitly or the first forward
         # dies on a cuda/cpu addmm mismatch.
         packet_planner = packet_planner.to(device=env_cfg.sim.device)
+        packet_planner_metadata = {
+            **(_packet_meta if isinstance(_packet_meta, dict) else {}),
+            **_parameter_counts(packet_planner),
+        }
+        packet_planner_target_dim = int(packet_spec.target_dim)
         if str(args_cli.packet_source) == "planner":
             # Use the same root-module CUDA hook as the direct latent route.
             # The timer therefore includes only packet_planner.forward and
@@ -2016,10 +2115,14 @@ def main(
             "early_terminations_enabled": bool(
                 args_cli.keep_early_terminations
                 or args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
             "tracking_terminations_enabled": not bool(
                 args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
+            "base_only_termination": bool(args_cli.base_only_termination),
+            "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
@@ -2467,10 +2570,14 @@ def main(
             f"{DETERMINISTIC_METRIC_PREFIX}{name}": value
             for name, value in rollout_metrics.items()
         }
-    planner_metadata = _skill_commander_planner_metadata(
-        planner_checkpoint,
-        generator=trainer.generator,
-        trainer_config=trainer_config,
+    planner_metadata = (
+        packet_planner_metadata
+        if packet_planner_metadata is not None
+        else _skill_commander_planner_metadata(
+            planner_checkpoint,
+            generator=trainer.generator,
+            trainer_config=trainer_config,
+        )
     )
     summary = {
         **config_payload,
@@ -2492,12 +2599,24 @@ def main(
                 }
             ),
             "planner_checkpoint": (
-                str(planner_checkpoint_path)
-                if planner_checkpoint_path is not None
-                else None
+                str(packet_planner_path)
+                if packet_planner_path is not None
+                else (
+                    str(planner_checkpoint_path)
+                    if planner_checkpoint_path is not None
+                    else None
+                )
             ),
-            "interface": "latent_skill",
-            "planner_target_dim": int(trainer.z_dim),
+            "interface": (
+                str(args_cli.packet_interface)
+                if packet_planner_path is not None
+                else "latent_skill"
+            ),
+            "planner_target_dim": (
+                int(packet_planner_target_dim)
+                if packet_planner_target_dim is not None
+                else int(trainer.z_dim)
+            ),
             "planner_metadata": planner_metadata,
             "num_envs": int(num_envs),
             "seed": int(agent_cfg.seed),
@@ -2521,10 +2640,14 @@ def main(
             "early_terminations_enabled": bool(
                 args_cli.keep_early_terminations
                 or args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
             "tracking_terminations_enabled": not bool(
                 args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
+            "base_only_termination": bool(args_cli.base_only_termination),
+            "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
