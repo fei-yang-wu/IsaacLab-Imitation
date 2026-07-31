@@ -206,7 +206,7 @@ metadata should record the physics backend.
 - The Newton-vs-PhysX training comparison in
   `wiki/isaaclab3-cu130-runtime-migration.md:266-283` (Newton reward 0.0324 vs
   PhysX 0.0543) was very likely measuring this leak, not the solver.
-- `source/isaaclab_imitation/test_g1_backend_joint_contract.py` asserts
+- `source/isaaclab_imitation/tests/test_g1_backend_joint_contract.py` asserts
   `preserve_order=True` for the action term and `joint_pos_rel`/`joint_vel_rel`
   only, which is why this survived. Extend it to every command term.
 - Fixing the leak changes the semantic layout of `expert_motion` and the action

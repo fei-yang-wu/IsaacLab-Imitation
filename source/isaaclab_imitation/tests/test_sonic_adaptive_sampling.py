@@ -6,7 +6,10 @@ from pathlib import Path
 import torch
 
 _MODULE_PATH = (
-    Path(__file__).parent / "isaaclab_imitation" / "envs" / "sonic_adaptive_sampling.py"
+    Path(__file__).parent.parent
+    / "isaaclab_imitation"
+    / "envs"
+    / "sonic_adaptive_sampling.py"
 )
 _MODULE_SPEC = importlib.util.spec_from_file_location(
     "sonic_adaptive_sampling", _MODULE_PATH
