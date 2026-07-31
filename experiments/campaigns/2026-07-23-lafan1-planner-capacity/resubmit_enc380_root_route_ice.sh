@@ -37,7 +37,7 @@ fi
 
 export CLUSTER_LOGIN="${CLUSTER_LOGIN:-login-ice.pace.gatech.edu}"
 export CLUSTER_SLURM_SUBMIT_SCRIPT="${CLUSTER_SLURM_SUBMIT_SCRIPT:-pace}"
-export CLUSTER_PYTHON_EXECUTABLE=-m imitation_experiments.capacity.run_capacity_entry
+export CLUSTER_PYTHON_EXECUTABLE=source/imitation_experiments/imitation_experiments/capacity/run_capacity_entry.py
 export CLUSTER_APPEND_DEFAULT_G1_MANIFEST=0
 export CLUSTER_SLURM_PARTITION="${CLUSTER_SLURM_PARTITION:-ice-gpu}"
 export CLUSTER_SLURM_QOS="${CLUSTER_SLURM_QOS:-coe-ice}"

@@ -113,6 +113,58 @@ used the former Strict environment.
 
 The remaining broader convergence diagnostic is the all-40 corrected-motion,
 1,000-step deterministic pass plus its strict secondary pass.
+<<<<<<< reorg
+=======
+
+## Stable latent reset/phase follow-ups submitted (2026-07-30)
+
+Two H200 follow-ups were submitted on ICE from the exact original Stable-run
+workspace archive (SHA-256
+`560a780d23e7e4c0a1e1ea0594776bbad010601c0c70bb1b93d062a277a52be6`).
+Both use `Isaac-Imitation-G1-Latent-v0`, corrected LAFAN1, the same frozen h10
+DiffSR encoder, 16,384 environments x 12 rollout steps, minibatch 24,576,
+seed 0, Newton/MJWarp, and 25,431 PPO updates = 4,999,938,048 new frames.
+They log to the existing `g1-sonic-env-latent-det-ice` W&B project.
+
+- Job `5551147`, group `stable-fulltraj-continuation`, resumes the intact
+  4,487,577,600-credited-frame checkpoint and trains for another
+  4,999,938,048 frames (about 9.488B credited total). The command remains the
+  258D z256+sin/cos phase vector held for ten control steps. Relative to the
+  source checkpoint's training contract, only reset sampling changes:
+  `random_reset_full_trajectory=true`, reset bounds `0/0`, and adaptive-failure
+  max/mean ratio `200`. Episode length remains 500 control steps, so the result
+  is a full-trajectory-reset continuation/domain-adaptation experiment rather
+  than a clean from-scratch environment comparison.
+- Job `5551148`, group `stable-phase-ablation`, trains from scratch for
+  4,999,938,048 frames. It removes only the two appended sin/cos phase values:
+  command width `258 -> 256` and `command_phase_mode=sin_cos -> none`.
+  Encoder, z256 code, horizon/hold/code period 10, reset sampler, environment,
+  geometry, optimizer, seed, and data remain matched to the previous Stable
+  run. A one-update local Isaac/Newton smoke passed with the expected 256D
+  latent observation and actor/critic widths before submission.
+
+At submission both jobs were pending on `ice-gpu` for H200 capacity. A
+scheduler preflight showed that `coe-gpu` accepts the same `coe-ice` QOS, has
+the same 16-hour limit, and offered a materially earlier H200 opportunity, so
+both still-unstarted jobs were moved in place to `coe-gpu` on 2026-07-30. No
+training state was lost in the partition move.
+
+The first submissions (`5551147` and `5551148`) subsequently received H200s but
+failed before entering the container or creating W&B runs. The staged wrapper
+inherited the repository's legacy `ice_runtime.tar` default, while this
+campaign uses the verified shared immutable SIF; that tar archive does not
+exist. No frames or checkpoints were produced. Corrected replacements
+`5551339` (full-trajectory continuation) and `5551340` (no phase) explicitly
+pin `CLUSTER_USE_SHARED_SIF=1`, the 14 GB
+`isaaclab-runtime-3.0.0b2-cu130.sif`, the immutable CU130 runtime root, and
+cache-copy suppression. They were pending on `coe-gpu` for priority immediately
+after resubmission.
+
+Persistent staging and logs are under
+`/home/hice1/fwu91/scratch/Research/IsaacLab/`
+`isaaclab_stable_followups_20260730/`. The staging archive, encoder, and resume
+checkpoint hashes were reverified before `sbatch`.
+>>>>>>> main-commit
 
 ## LAFAN1 Stable-vs-Strict 500M inference diagnostic (2026-07-29)
 

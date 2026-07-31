@@ -121,6 +121,18 @@ def _assert_same(label: str, values: list[Any]) -> Any:
     return first
 
 
+def _same_relocated_artifact(recorded: Path, actual: Path) -> bool:
+    """Allow an immutable artifact tree to move between cluster and local roots."""
+
+    anchor = "motions"
+    try:
+        recorded_suffix = recorded.parts[recorded.parts.index(anchor) :]
+        actual_suffix = actual.parts[actual.parts.index(anchor) :]
+    except ValueError:
+        return False
+    return recorded_suffix == actual_suffix
+
+
 def _validate_pass_contract(
     survival: dict[str, Any], full: dict[str, Any]
 ) -> list[dict[str, str]]:
@@ -255,7 +267,10 @@ def _row(
     if not 1 <= best_validation_update <= expected_updates:
         raise ValueError("Planner best validation update is outside its training budget.")
     recorded_best = Path(str(config.get("best_checkpoint", ""))).resolve()
-    if recorded_best != checkpoint_path.resolve():
+    resolved_checkpoint = checkpoint_path.resolve()
+    if recorded_best != resolved_checkpoint and not _same_relocated_artifact(
+        recorded_best, resolved_checkpoint
+    ):
         raise ValueError("Planner config does not bind the evaluated best checkpoint.")
     args = config.get("args", {})
     if config.get("training_stage") != "oracle":
@@ -664,10 +679,16 @@ def aggregate(
 
 
 def _markdown(payload: dict[str, Any]) -> str:
+    sizes = ", ".join(payload["protocol"]["sizes"])
+    seeds = ", ".join(str(seed) for seed in payload["protocol"]["seeds"])
     lines = [
         "# enc380 shared-tracker planner-route capacity comparison",
         "",
-        "walk1_subject1 × four capacities × three planner seeds. Values are mean ± population SD across three seed cells.",
+        (
+            "walk1_subject1 partial grid: "
+            f"capacities [{sizes}], planner seeds [{seeds}]. "
+            "Values are mean ± population SD across the included seed cells."
+        ),
         "",
         "| stage | size | route | n | params | survival | MPJPE (mm) | root (m) | joint (rad) | EE (m) | latency (ms) |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",

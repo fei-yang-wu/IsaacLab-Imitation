@@ -204,3 +204,15 @@ test now enforces that every `experiments/` script is classified.
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/resubmit_enc380_root_route_ice.sh` | guarded launcher | Resubmits the enc380 root+qpos route cells after a partial run. |
 | `experiments/campaigns/2026-07-30-det-latent-e2e/run.sh` | front door | Dated pin of the deterministic-latent end-to-end chain; wraps `imitation_experiments.pipeline.run_latent_e2e` with the campaign config. |
 | `source/imitation_experiments/imitation_experiments/pipeline/run_latent_e2e.py` | workflow | Config-driven conductor for the latent chain: pretrain, low-level, binding gate, collect, merge, planner training, offline and closed-loop eval. |
+| `source/imitation_experiments/imitation_experiments/capacity/aggregate_frame0_dr_baseonly_results.py` | audit/report | Aggregates the frame0 domain-randomization base-only evaluation results. |
+| `source/imitation_experiments/imitation_experiments/capacity/aggregate_planner_budget_curve.py` | audit/report | Aggregates planner sample-budget curves across budget points and seeds. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_fb670_budget_curve.sh` | supporting study | Runs the FB670 explicit-packet planner sample-budget curve. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_fb670_via_latent_tracker_curve.sh` | supporting study | Runs the FB670 budget curve executed through the latent tracker route. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_latent_budget_curve.sh` | supporting study | Runs the latent-interface planner sample-budget curve. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_frame0_dr_baseonly_evaluation.sh` | supporting study | Frame0 evaluation isolating domain randomization to the base only. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_pure_root_qpos_planner.sh` | supporting study | Trains/evaluates the pure root+qpos planner variant. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_fb670_budget_curve_ice.sh` | guarded launcher | Submits the FB670 budget curve to ICE. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_fb670_via_latent_tracker_ice.sh` | guarded launcher | Submits the FB670-via-latent-tracker curve to ICE. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_latent_budget_curve_ice.sh` | guarded launcher | Submits the latent budget curve to ICE. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_pure_root_qpos_planner_ice.sh` | guarded launcher | Submits the pure root+qpos planner variant to ICE. |
+| `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_auxiliary_capacity_seed0_ice.sh` | guarded launcher | Submits the auxiliary seed-0 capacity cells to ICE. |

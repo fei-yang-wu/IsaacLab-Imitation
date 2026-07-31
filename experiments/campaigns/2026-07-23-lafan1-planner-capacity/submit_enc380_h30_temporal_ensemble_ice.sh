@@ -45,7 +45,7 @@ fi
 
 export CLUSTER_LOGIN="${CLUSTER_LOGIN:-login-ice.pace.gatech.edu}"
 export CLUSTER_SLURM_SUBMIT_SCRIPT="${CLUSTER_SLURM_SUBMIT_SCRIPT:-pace}"
-export CLUSTER_PYTHON_EXECUTABLE=-m imitation_experiments.capacity.run_capacity_entry
+export CLUSTER_PYTHON_EXECUTABLE=source/imitation_experiments/imitation_experiments/capacity/run_capacity_entry.py
 export CLUSTER_APPEND_DEFAULT_G1_MANIFEST=0
 export CLUSTER_SLURM_PARTITION="${CLUSTER_SLURM_PARTITION:-ice-gpu}"
 export CLUSTER_SLURM_QOS="${CLUSTER_SLURM_QOS:-coe-ice}"
@@ -82,16 +82,16 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 
 workflow_sources=(
-    -m imitation_experiments.capacity.run_capacity_entry
+    source/imitation_experiments/imitation_experiments/capacity/run_capacity_entry.py
     experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_enc380_h30_temporal_ensemble.sh
-    -m imitation_experiments.capacity.materialize_long_horizon_root_qpos
-    -m imitation_experiments.capacity.packet_to_latent_command
-    -m imitation_experiments.capacity.aggregate_h30_temporal_ensemble
-    -m imitation_experiments.planner.interface_planner_common
-    -m imitation_experiments.lowlevel.low_level_tracker
-    -m imitation_experiments.planner.planner_latency
-    -m imitation_experiments.data.planner_sample_schema
-    -m imitation_experiments.planner.train_chunked_transformer_planner
+    source/imitation_experiments/imitation_experiments/capacity/materialize_long_horizon_root_qpos.py
+    source/imitation_experiments/imitation_experiments/capacity/packet_to_latent_command.py
+    source/imitation_experiments/imitation_experiments/capacity/aggregate_h30_temporal_ensemble.py
+    source/imitation_experiments/imitation_experiments/planner/interface_planner_common.py
+    source/imitation_experiments/imitation_experiments/lowlevel/low_level_tracker.py
+    source/imitation_experiments/imitation_experiments/planner/planner_latency.py
+    source/imitation_experiments/imitation_experiments/data/planner_sample_schema.py
+    source/imitation_experiments/imitation_experiments/planner/train_chunked_transformer_planner.py
     scripts/rlopt/eval_skill_commander_closed_loop.py
 )
 workflow_source_sha="$(sha256sum "${workflow_sources[@]}" | sha256sum | awk '{print $1}')"

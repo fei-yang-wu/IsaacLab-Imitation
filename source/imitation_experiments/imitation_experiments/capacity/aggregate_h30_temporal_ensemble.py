@@ -130,7 +130,7 @@ def _validate_passes(
 
 
 def _h30_row(output_root: Path, mode: str, checkpoint: Path) -> dict[str, Any]:
-    eval_root = output_root / "evaluation" / mode
+    eval_root = output_root / "evaluation" / "medium" / mode
     survival = _load(eval_root / "survival/summary.json")
     full = _load(eval_root / "full_horizon/summary.json")
     expected_mode = "none" if mode == "execute_first10" else "exponential"

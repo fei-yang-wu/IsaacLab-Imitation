@@ -9,6 +9,8 @@ thin entry wraps the bash orchestrators. Three stages, chained with afterok:
   --stage aggregate  : per-seed + across-seed aggregation (pure python)
   --stage enc380     : walk1 shared-tracker route diagnostic (12-cell grid)
   --stage enc380_h30 : reuse enc380 H10 rows for the H30 temporal diagnostic
+  --stage pure_root_planner : train the direct root_qpos-tracker planner
+  --stage auxiliary_capacity : train missing H30/pure-root seed-0 size cells
 
 Inside the container pixi is unavailable, so ISAAC_PY/PLAIN_PY are pointed at
 /isaac-sim/python.sh. The frozen oracles are Newton-trained on a compute-only GPU,
@@ -186,6 +188,11 @@ def main() -> int:
             "finetune_b",
             "enc380",
             "enc380_h30",
+            "pure_root_planner",
+            "auxiliary_capacity",
+            "fb670_curve",
+            "latent_curve",
+            "fb670_via_latent_tracker",
         ),
     )
     parser.add_argument("--enc380-low-level-checkpoint", default="")
@@ -220,13 +227,246 @@ def main() -> int:
         choices=("screen", "aggregate"),
         default="screen",
     )
+    parser.add_argument("--pure-root-samples-dir", default="")
+    parser.add_argument("--pure-root-output-dir", default="")
+    parser.add_argument(
+        "--pure-root-output-root",
+        default=(
+            "logs/interface_baselines/"
+            "lafan1_enc380_route_capacity_5b_oracle100_progressive_b1024_20260730/"
+            "pure_root_qpos_tracker"
+        ),
+    )
+    parser.add_argument("--pure-root-sample-sha256", default="")
+    parser.add_argument(
+        "--fb670-mode",
+        choices=("collect", "train", "eval", "aggregate"),
+        default="collect",
+    )
+    parser.add_argument(
+        "--fb670-output-root",
+        default="logs/interface_baselines/lafan1_fb670_budget_curve_20260730",
+    )
+    parser.add_argument(
+        "--fb670-checkpoint",
+        default=(
+            "logs/downloaded_checkpoints/lafan1_fbchunk_5b_seed0/"
+            "model_step_5000085504.pt"
+        ),
+    )
+    parser.add_argument("--fb670-checkpoint-sha256", default="")
+    parser.add_argument(
+        "--latent-curve-mode",
+        choices=("collect", "train", "eval", "aggregate"),
+        default="collect",
+    )
+    parser.add_argument(
+        "--latent-curve-output-root",
+        default="logs/interface_baselines/lafan1_latent_budget_curve_20260730",
+    )
+    parser.add_argument(
+        "--latent-curve-checkpoint",
+        default=(
+            "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/"
+            "model_step_4525129728.pt"
+        ),
+    )
+    parser.add_argument(
+        "--latent-curve-skill-checkpoint",
+        default=(
+            "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/"
+            "skill_encoder/latest.pt"
+        ),
+    )
+    parser.add_argument("--latent-curve-checkpoint-sha256", default="")
+    parser.add_argument("--latent-curve-skill-sha256", default="")
+    parser.add_argument(
+        "--fb670-route-mode",
+        choices=("pin", "eval", "aggregate"),
+        default="pin",
+    )
+    parser.add_argument(
+        "--fb670-route-output-root",
+        default="logs/interface_baselines/lafan1_fb670_via_latent_tracker_20260730",
+    )
+    parser.add_argument(
+        "--fb670-route-train-root",
+        default="logs/interface_baselines/lafan1_fb670_budget_curve_20260730",
+    )
+    parser.add_argument(
+        "--fb670-route-latent-checkpoint",
+        default=(
+            "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/"
+            "model_step_4525129728.pt"
+        ),
+    )
+    parser.add_argument(
+        "--fb670-route-skill-checkpoint",
+        default=(
+            "logs/downloaded_checkpoints/lafan1_latent_deterministic_5b_seed0/"
+            "skill_encoder/latest.pt"
+        ),
+    )
     args, _ = parser.parse_known_args()
     env = _runtime_env()
+
+    if args.stage == "fb670_via_latent_tracker":
+        env["STUDY_ROOT"] = args.fb670_route_output_root
+        env["FB670_STUDY_ROOT"] = args.fb670_route_train_root
+        env["LATENT_LOW_LEVEL_CHECKPOINT"] = args.fb670_route_latent_checkpoint
+        env["LATENT_SKILL_CHECKPOINT"] = args.fb670_route_skill_checkpoint
+        if args.fb670_route_mode in ("pin", "eval"):
+            idx = int(
+                os.environ.get(
+                    "SLURM_ARRAY_TASK_ID", os.environ.get("CELL_INDEX", "0")
+                )
+            )
+            sizes = ("medium", "large")
+            if not 0 <= idx < len(sizes):
+                parser.error("fb670_via_latent_tracker pin/eval index must be 0-1.")
+            env["MODEL_SIZE"] = sizes[idx]
+        env["STAGES"] = args.fb670_route_mode
+        print(
+            f"[entry] fb670_via_latent_tracker mode={args.fb670_route_mode} "
+            f"size={env.get('MODEL_SIZE', '-')} "
+            f"root={args.fb670_route_output_root}",
+            flush=True,
+        )
+        return _bash("run_fb670_via_latent_tracker_curve.sh", env)
+
+    if args.stage == "latent_curve":
+        env["STUDY_ROOT"] = args.latent_curve_output_root
+        env["LATENT_LOW_LEVEL_CHECKPOINT"] = args.latent_curve_checkpoint
+        env["LATENT_SKILL_CHECKPOINT"] = args.latent_curve_skill_checkpoint
+        if args.latent_curve_checkpoint_sha256:
+            env["EXPECTED_LATENT_SHA256"] = args.latent_curve_checkpoint_sha256
+        if args.latent_curve_skill_sha256:
+            env["EXPECTED_SKILL_SHA256"] = args.latent_curve_skill_sha256
+        if args.latent_curve_mode in ("train", "eval"):
+            idx = int(
+                os.environ.get(
+                    "SLURM_ARRAY_TASK_ID", os.environ.get("CELL_INDEX", "0")
+                )
+            )
+            sizes = ("medium", "large")
+            if not 0 <= idx < len(sizes):
+                parser.error("latent_curve train/eval array index must be 0-1.")
+            env["MODEL_SIZE"] = sizes[idx]
+        env["STAGES"] = args.latent_curve_mode
+        print(
+            f"[entry] latent_curve mode={args.latent_curve_mode} "
+            f"size={env.get('MODEL_SIZE', '-')} "
+            f"root={args.latent_curve_output_root}",
+            flush=True,
+        )
+        return _bash("run_latent_budget_curve.sh", env)
+
+    if args.stage == "fb670_curve":
+        env["STUDY_ROOT"] = args.fb670_output_root
+        env["FB_LOW_LEVEL_CHECKPOINT"] = args.fb670_checkpoint
+        if args.fb670_checkpoint_sha256:
+            env["EXPECTED_FB_SHA256"] = args.fb670_checkpoint_sha256
+        if args.fb670_mode in ("train", "eval"):
+            idx = int(
+                os.environ.get(
+                    "SLURM_ARRAY_TASK_ID", os.environ.get("CELL_INDEX", "0")
+                )
+            )
+            sizes = ("medium", "large")
+            if not 0 <= idx < len(sizes):
+                parser.error("fb670_curve train/eval array index must be 0-1.")
+            env["MODEL_SIZE"] = sizes[idx]
+        env["STAGES"] = args.fb670_mode
+        print(
+            f"[entry] fb670_curve mode={args.fb670_mode} "
+            f"size={env.get('MODEL_SIZE', '-')} root={args.fb670_output_root}",
+            flush=True,
+        )
+        return _bash("run_fb670_budget_curve.sh", env)
+
+    if args.stage == "auxiliary_capacity":
+        idx = int(
+            os.environ.get("SLURM_ARRAY_TASK_ID", os.environ.get("CELL_INDEX", "0"))
+        )
+        sizes = ("tiny", "small", "large")
+        if not 0 <= idx < 2 * len(sizes):
+            parser.error("auxiliary_capacity index must be in 0-5.")
+        route_index, size_index = divmod(idx, len(sizes))
+        size = sizes[size_index]
+        updates = {"tiny": 10_000, "small": 20_000, "large": 50_000}[size]
+        env["MODEL_SIZE"] = size
+        if route_index == 0:
+            if (
+                not args.enc380_low_level_checkpoint
+                or not args.enc380_skill_checkpoint
+                or not args.enc380_completion_record
+                or not args.enc380_source_study_root
+            ):
+                parser.error(
+                    "H30 auxiliary capacity requires low-level, skill, "
+                    "completion-record, and source-study-root paths."
+                )
+            env.update(
+                {
+                    "LOW_LEVEL_CHECKPOINT": args.enc380_low_level_checkpoint,
+                    "SKILL_CHECKPOINT": args.enc380_skill_checkpoint,
+                    "TRACKER_COMPLETION_RECORD": args.enc380_completion_record,
+                    "EXPECTED_LOW_LEVEL_SHA256": args.enc380_low_level_sha256,
+                    "EXPECTED_SKILL_SHA256": args.enc380_skill_sha256,
+                    "SOURCE_STUDY_ROOT": args.enc380_source_study_root,
+                    "OUTPUT_ROOT": args.enc380_h30_output_root,
+                    "STAGES": "train",
+                    "DRY_RUN": "0",
+                    "ASSERT_KITLESS": "0",
+                    "RENDER_VIDEO": "0",
+                }
+            )
+            print(
+                f"[entry] auxiliary_capacity route=h30 size={size} "
+                f"updates={updates} output={args.enc380_h30_output_root}",
+                flush=True,
+            )
+            return _bash("run_enc380_h30_temporal_ensemble.sh", env)
+        if not args.pure_root_samples_dir:
+            parser.error(
+                "Pure-root auxiliary capacity requires --pure-root-samples-dir."
+            )
+        output_dir = (
+            f"{args.pure_root_output_root}/{size}/seed0/"
+            f"planner_oracle_u{updates}_b1024"
+        )
+        env.update(
+            {
+                "SAMPLES_DIR": args.pure_root_samples_dir,
+                "OUTPUT_DIR": output_dir,
+                "EXPECTED_SAMPLE_SHA256": args.pure_root_sample_sha256,
+            }
+        )
+        print(
+            f"[entry] auxiliary_capacity route=pure_root size={size} "
+            f"updates={updates} output={output_dir}",
+            flush=True,
+        )
+        return _bash("run_pure_root_qpos_planner.sh", env)
 
     if args.stage == "oracle":
         return _bash("prepare_oracle_baselines.sh", env)
     if args.stage == "aggregate":
         return _aggregate(env)
+    if args.stage == "pure_root_planner":
+        if not args.pure_root_samples_dir or not args.pure_root_output_dir:
+            parser.error(
+                "--stage pure_root_planner requires --pure-root-samples-dir and "
+                "--pure-root-output-dir."
+            )
+        env.update(
+            {
+                "SAMPLES_DIR": args.pure_root_samples_dir,
+                "OUTPUT_DIR": args.pure_root_output_dir,
+                "EXPECTED_SAMPLE_SHA256": args.pure_root_sample_sha256,
+            }
+        )
+        return _bash("run_pure_root_qpos_planner.sh", env)
     if args.stage == "enc380_h30":
         if (
             not args.enc380_low_level_checkpoint
