@@ -1,6 +1,12 @@
 # Base configuration for imitation_experiments.pipeline.run_latent_e2e.
-# Defaults render a dry run of the full chain. Campaigns pin a variant by
-# shipping their own YAML and running with
+#
+# Defaults reproduce the qualified enc380 route-study recipe (2026-07,
+# campaigns/2026-07-23-lafan1-planner-capacity): deterministic z256 encoder
+# over the 10-frame root_qpos macro window, latent tracker on the Strict task,
+# oracle-driven balanced collection, a medium flow planner at the
+# capacity-aware budget, and packet-route closed-loop evaluation.
+#
+# Campaigns pin a variant with their own YAML:
 #   --config-dir experiments/campaigns/<campaign>/conf --config-name <pin>
 
 defaults:
@@ -13,17 +19,23 @@ hydra:
     chdir: false
 
 name: latent_e2e
-output_root: ${oc.env:PWD}/logs/latent_e2e/${name}_seed${seed}
+output_root: ${oc.env:PWD}/logs/latent_e2e/${name}_${route}_seed${seed}
 seed: 0
 dry_run: true
 resume: false
+
+# The planner target space. root_qpos publishes a 380-value packet that runs
+# through the frozen encoder at publication (the enc380 winning route);
+# latent_skill has the planner predict the latent directly.
+route: root_qpos
+motion: walk1_subject1
 
 stages:
   - pretrain
   - low_level
   - binding
   - collect
-  - merge
+  - materialize
   - train_planner
   - eval_offline
   - eval_closed_loop
@@ -32,10 +44,32 @@ python:
   plain: [pixi, run, python]
   isaac: [pixi, run, -e, isaaclab, python]
 
+task: Isaac-Imitation-G1-Latent-Strict-v0
+
+# Content-bound pair: replace manifest and cache together, never separately.
+dataset:
+  manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
+  dataset_path: ${oc.env:PWD}/data/lafan1/zarr/g1_hl_diffsr
+
+# Frozen latent geometry shared by every Isaac-side stage (h10 hold, z256 code
+# plus sin/cos phase -> 258-wide command), from the enc380 study.
+latent_cfg:
+  - env.latent_command_dim=258
+  - agent.ipmd.latent_dim=258
+  - agent.ipmd.hl_skill_horizon_steps=10
+  - agent.ipmd.hl_skill_command_mode=z
+  - agent.ipmd.latent_steps_min=10
+  - agent.ipmd.latent_steps_max=10
+  - agent.ipmd.latent_learning.command_phase_mode=sin_cos
+  - agent.ipmd.latent_learning.code_latent_dim=256
+  - agent.ipmd.latent_learning.code_period=10
+
 # Stage 1a/1b are the Hydra paper stages; entries here are raw Hydra overrides
-# appended to their own configs (experiments/paper/conf/{pretrain,low_level}.yaml).
-# output_dir, seed, dry_run, and the encoder-checkpoint handoff are wired by
-# the orchestrator — never set those here.
+# appended to their configs (experiments/paper/conf/{pretrain,low_level}.yaml,
+# whose defaults already carry the enc380 encoder recipe: deterministic z256,
+# horizon 10, hidden 1024/512/512, 50k updates at batch 8192). output_dir,
+# seed, dry_run, and the encoder-checkpoint handoff are wired by the
+# orchestrator — never set those here.
 pretrain:
   overrides:
     - latent.mode=deterministic
@@ -44,39 +78,81 @@ low_level:
   encoder_checkpoint: null   # override to reuse a previously trained encoder
   overrides:
     - latent_arm=deterministic
+    - task=${task}
+    - hold.steps=10
 
-# Downstream stages are argparse modules; args render directly as --flags.
-# The tracker checkpoint, output dirs, and seed are wired by the orchestrator.
+# Oracle-driven balanced trajectory collection (enc380 demo stage). The
+# tracker/encoder checkpoints, seed, output_dir, route, and dataset binding
+# are wired by the orchestrator.
 collect:
   checkpoint: null           # override to reuse a previously qualified tracker
   args:
-    task: Isaac-Imitation-G1-Latent-v0
-    motion_manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
-    num_envs: 10
-    steps: 500
+    headless: true
+    device: cuda:0
+    task: ${task}
     state_history_steps: 9
-    command_future_steps: 9
-    planner_interval_steps: 10
-    reset_schedule: random
-    reference_start_frame: 0
+    label: latent_e2e_oracle_trajectory_collection
+    num_envs: 100
+    max_steps: 15000
+    metric_interval: 10
+    motion_names: ["${motion}"]
+    balanced_motion_names: ["${motion}"]
+    balanced_trajectories_per_motion: 100
+    save_rollout_training_samples: true
+    sample_rows_per_file: 1000
+    continue_after_reset: true
+    allow_random_reset: true
+    keep_time_out: true
+    disable_tracking_terminations: true
+    disable_reward_clipping: true
+    flow_num_inference_steps: 16
+    flow_inference_noise_std: 0.0
+    kit_args: --/app/extensions/fsWatcherEnabled=false
 
-merge:
-  args: {}
-
+# Capacity-aware medium budget from the enc380 grid (effective batch matched
+# across sizes; only the accumulation microbatch changes for memory).
 train_planner:
   args:
-    num_updates: 2000
+    planner_family: flow
+    state_key: planner_state
+    training_stage: oracle
+    model_size: medium
     batch_size: 1024
+    micro_batch_size: 256
+    num_updates: 30000
+    max_samples: 0
+    lr: 0.0001
+    weight_decay: 0.0001
+    flow_num_inference_steps: 16
+    endpoint_num_inference_steps: 4
+    flow_inference_noise_std: 0.0
     device: cuda:0
 
 eval:
   planner_checkpoint_name: best.pt   # best.pt | latest.pt
   offline_args:
-    setting: held_out
+    setting: oracle_trained
+    flow_num_inference_steps: 16
+    flow_inference_noise_std: 0.0
+  # Survival pass of the enc380 eval protocol. For the full-horizon diagnostic
+  # pass, override: eval.closed_loop_args.keep_early_terminations=false
+  # eval.closed_loop_args.disable_tracking_terminations=false
+  # eval.closed_loop_args.extend_episode_length_for_max_steps=true (+ video).
   closed_loop_args:
-    task: Isaac-Imitation-G1-Latent-v0
-    motion_manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
-    num_envs: 10
-    steps: 500
+    headless: true
+    device: cuda:0
+    task: ${task}
     state_history_steps: 9
-    command_future_steps: 9
+    label: latent_e2e_closed_loop_survival
+    num_envs: 10
+    max_steps: 500
+    metric_interval: 10
+    motion_name: ${motion}
+    allow_random_reset: true
+    keep_time_out: true
+    keep_early_terminations: true
+    disable_tracking_terminations: true
+    disable_reward_clipping: true
+    flow_num_inference_steps: 16
+    flow_inference_noise_std: 0.0
+    kit_args: --/app/extensions/fsWatcherEnabled=false

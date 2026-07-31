@@ -19,8 +19,8 @@ dry_run: true
 deterministic: true
 seed: 0
 
-task: Isaac-Imitation-G1-Latent-v0
-num_envs: 4096
+task: Isaac-Imitation-G1-Latent-Strict-v0
+num_envs: 16
 assert_kitless: true
 physics: newton_mjwarp
 resume_checkpoint: null
@@ -36,11 +36,14 @@ dataset:
   latent_dataset_path: ${oc.env:PWD}/data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557
   refresh_zarr: false
 
+# Defaults follow the qualified enc380 recipe (2026-07 root_qpos route study):
+# deterministic z256 over the 10-frame root_qpos macro window
+# (29 qpos + anchor pos 3 + anchor rot6d 6 = 38/frame -> 380 total).
 encoder:
-  horizon_steps: 25
+  horizon_steps: 10
   window_mode: full        # full | intermediate
-  hidden_dims: null        # null -> entrypoint config default
-  macro_state_terms: null  # null -> env default expert macro state
+  hidden_dims: [1024, 512, 512]
+  macro_state_terms: [expert_motion_qpos, expert_anchor_pos_b, expert_anchor_ori_b]
 
 # The strategy ablation axis. Only the selected mode's hyperparameter group is
 # rendered into the command (see pretrain_latent_encoder.build_command).
@@ -72,7 +75,7 @@ diffsr:
 
 optim:
   batch_size: 8192
-  num_updates: 2000
+  num_updates: 50000
   log_interval: 100
   grad_clip_norm: 1.0
 
