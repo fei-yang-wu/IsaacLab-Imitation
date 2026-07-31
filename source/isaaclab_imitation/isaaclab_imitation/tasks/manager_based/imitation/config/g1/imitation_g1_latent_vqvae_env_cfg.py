@@ -13,7 +13,7 @@ events) is inherited unchanged.
 
 from isaaclab.utils.configclass import configclass
 
-from .imitation_g1_env_cfg import _g1_lafan_track_env_cfg_from_dict
+from .imitation_g1_env_cfg import _bind_lafan_track_from_dict
 from .imitation_g1_latent_env_cfg import ImitationG1LatentEnvCfg
 
 
@@ -30,4 +30,4 @@ class ImitationG1LatentVQVAEEnvCfg(ImitationG1LatentEnvCfg):
         self._sync_expert_window_observation_params()
 
 
-ImitationG1LatentVQVAEEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+_bind_lafan_track_from_dict(ImitationG1LatentVQVAEEnvCfg)

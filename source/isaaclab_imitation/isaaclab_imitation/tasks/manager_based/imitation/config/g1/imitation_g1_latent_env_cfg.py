@@ -18,12 +18,41 @@ from .imitation_g1_env_cfg import (
     G1SonicTerminationsCfg,
     G1ObservationCfg,
     ImitationG1LafanTrackEnvCfg,
+    _apply_pelvis_protocol,
+    _bind_lafan_track_from_dict,
     _g1_canonical_joint_obs_params,
-    _g1_lafan_track_env_cfg_from_dict,
     _g1_expert_anchor_obs_params,
     _g1_expert_motion_obs_params,
     _g1_tracked_body_obs_params,
 )
+
+
+# Anchor-relative observation terms per group on the latent observation
+# surface. Unlike `_VANILLA_ANCHOR_TERM_NAMES_BY_GROUP`, the policy/critic
+# groups carry robot body-pose terms and there is an `expert_goal` group.
+_LATENT_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
+    "policy": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+    ),
+    "critic": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+    ),
+    "expert_state": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+    "expert_window": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+    ),
+    "expert_goal": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+    "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+}
 
 
 @configclass
@@ -239,7 +268,6 @@ class ImitationG1LatentEnvCfg(ImitationG1LafanTrackEnvCfg):
     """Latent-conditioned G1 motion-tracking env driven by a LAFAN1 manifest."""
 
     observations = G1LatentObservationCfg()
-    enable_latent_command: bool = True
     # Default skill-command width: skill code z (256) + sin_cos phase (2) = 258
     # (wandb run dh8k313e recipe, minus z_phi). Override per run as needed.
     latent_command_dim: int = 258
@@ -270,51 +298,8 @@ class ImitationG1LatentEnvCfg(ImitationG1LafanTrackEnvCfg):
         ):
             term.params["goal_steps"] = goal_steps
 
-    def _set_anchor_body(self, anchor_body_name: str) -> None:
-        """Point every anchor-relative observation term at one body."""
-        groups_and_terms = {
-            "policy": (
-                "expert_anchor_pos_b",
-                "expert_anchor_ori_b",
-                "body_pos",
-                "body_ori",
-            ),
-            "critic": (
-                "expert_anchor_pos_b",
-                "expert_anchor_ori_b",
-                "body_pos",
-                "body_ori",
-            ),
-            "expert_state": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
-            "expert_window": (
-                "expert_anchor_pos_b",
-                "expert_anchor_ori_b",
-                "expert_ee_pos_b",
-                "expert_ee_ori_b",
-            ),
-            "expert_goal": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
-            "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
-        }
-        for group_name, term_names in groups_and_terms.items():
-            group = getattr(self.observations, group_name)
-            for term_name in term_names:
-                term = getattr(group, term_name)
-                if term is None:
-                    continue
-                if "anchor_body_name" in term.params:
-                    term.params["anchor_body_name"] = anchor_body_name
-
-    def _set_reward_anchor_body(self, anchor_body_name: str) -> None:
-        """Point the anchor-relative reward terms at one body."""
-        for term_name in (
-            "motion_global_anchor_pos",
-            "motion_global_anchor_ori",
-            "motion_body_pos",
-            "motion_body_ori",
-        ):
-            getattr(self.rewards, term_name).params["anchor_body_name"] = (
-                anchor_body_name
-            )
+    def _anchor_term_names_by_group(self) -> dict[str, tuple[str, ...]]:
+        return _LATENT_ANCHOR_TERM_NAMES_BY_GROUP
 
 
 @configclass
@@ -349,14 +334,12 @@ class ImitationG1LatentSonicEnvCfg(ImitationG1LatentEnvCfg):
         # SONIC's motion library samples over the complete trajectory, with
         # adaptive failure weighting and a uniform component. The parent latent
         # task intentionally limits starts to [0, 200], so undo that only here.
-        self.random_reset_step_min = 0
-        self.random_reset_step_max = 0
-        self.random_reset_full_trajectory = True
-        self.adaptive_failure_reset_failure_rate_max_over_mean = 200.0
-        self.expert_anchor_body_name = "pelvis"
-
-        self._set_anchor_body("pelvis")
-        self._set_reward_anchor_body("pelvis")
+        _apply_pelvis_protocol(
+            self,
+            reset_step_max=0,
+            random_reset_full_trajectory=True,
+            failure_rate_max_over_mean=200.0,
+        )
 
 
 @configclass
@@ -435,10 +418,10 @@ class ImitationG1LatentStableEnvCfg(ImitationG1LatentSonicNoHistoryEnvCfg):
         super().__post_init__()
         # Undo `ImitationG1LatentSonicEnvCfg`'s full-trajectory adaptive-failure
         # sampler; this is the one axis this surface takes back from SONIC.
-        self.random_reset_step_min = 0
-        self.random_reset_step_max = 200
-        self.random_reset_full_trajectory = False
-        self.adaptive_failure_reset_failure_rate_max_over_mean = 50.0
+        # (The parent already anchored the surface at the pelvis.)
+        _apply_pelvis_protocol(
+            self, failure_rate_max_over_mean=50.0, set_anchor=False
+        )
 
 
 @configclass
@@ -467,9 +450,7 @@ class ImitationG1LatentStrictEnvCfg(ImitationG1LatentEnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.expert_anchor_body_name = "pelvis"
-        self._set_anchor_body("pelvis")
-        self._set_reward_anchor_body("pelvis")
+        _apply_pelvis_protocol(self)
 
 
 @configclass
@@ -532,23 +513,25 @@ class ImitationG1LatentSonicOfficialFSQEnvCfg(ImitationG1LatentSonicEnvCfg):
         self.latent_patch_future_steps = 9
         # Keep the sample-efficient reset sampler established by the Stable
         # reset screen; full-trajectory adaptive-failure starts need far more
-        # data at our single-GPU scale.
-        self.random_reset_step_min = 0
-        self.random_reset_step_max = 200
-        self.random_reset_full_trajectory = False
-        self.adaptive_failure_reset_failure_rate_max_over_mean = 50.0
+        # data at our single-GPU scale. (Anchoring came from the SONIC parent.)
+        _apply_pelvis_protocol(
+            self, failure_rate_max_over_mean=50.0, set_anchor=False
+        )
         # Zero means the observation window advances with the live reference.
         # The agent-side code_period=1 independently renews the quantized code.
         self.command_hold_steps = 0
         self._sync_expert_window_observation_params()
 
 
-ImitationG1LatentEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentSonicEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentSonicNoHistoryEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentStableEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentStrictEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentGoalEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentFutureCVAEEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentPerStepVQEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentSonicOfficialFSQEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+_bind_lafan_track_from_dict(
+    ImitationG1LatentEnvCfg,
+    ImitationG1LatentSonicEnvCfg,
+    ImitationG1LatentSonicNoHistoryEnvCfg,
+    ImitationG1LatentStableEnvCfg,
+    ImitationG1LatentStrictEnvCfg,
+    ImitationG1LatentStrictHistoryEnvCfg,
+    ImitationG1LatentGoalEnvCfg,
+    ImitationG1LatentFutureCVAEEnvCfg,
+    ImitationG1LatentPerStepVQEnvCfg,
+    ImitationG1LatentSonicOfficialFSQEnvCfg,
+)

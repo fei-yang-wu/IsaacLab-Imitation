@@ -1110,7 +1110,6 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     replay_reference: bool = False
     replay_only: bool = False
     reference_start_frame: int = 0
-    enable_latent_command: bool = False
     latent_command_dim: int = 64
     latent_patch_past_steps: int = 0
     latent_patch_future_steps: int = 0
@@ -1196,6 +1195,39 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # byte-identical to the root_qpos packet. The skill encoder's input width
     # follows from this, so changing it invalidates any existing encoder.
     expert_macro_state_terms: list[str] | None = None
+
+    def _anchor_term_names_by_group(self) -> dict[str, tuple[str, ...]]:
+        """Anchor-relative observation terms per group for this surface.
+
+        Recipe/observation variants override this to return their own table;
+        the re-anchoring mechanism itself is shared (see ``_set_anchor_body``).
+        """
+        return _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP
+
+    def _set_anchor_body(self, anchor_body_name: str) -> None:
+        """Point every anchor-relative observation term at one body."""
+        for group_name, term_names in self._anchor_term_names_by_group().items():
+            group = getattr(self.observations, group_name, None)
+            if group is None:
+                continue
+            for term_name in term_names:
+                term = getattr(group, term_name)
+                if term is None:
+                    continue
+                if "anchor_body_name" in term.params:
+                    term.params["anchor_body_name"] = anchor_body_name
+
+    def _set_reward_anchor_body(self, anchor_body_name: str) -> None:
+        """Point the anchor-relative reward terms at one body."""
+        for term_name in (
+            "motion_global_anchor_pos",
+            "motion_global_anchor_ori",
+            "motion_body_pos",
+            "motion_body_ori",
+        ):
+            getattr(self.rewards, term_name).params["anchor_body_name"] = (
+                anchor_body_name
+            )
 
     def _sync_expert_window_observation_params(self) -> None:
         past_steps = int(self.latent_patch_past_steps)
@@ -1621,6 +1653,36 @@ _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
 }
 
 
+def _apply_pelvis_protocol(
+    cfg: ImitationG1BaseTrackingEnvCfg,
+    *,
+    reset_step_min: int = 0,
+    reset_step_max: int = 200,
+    random_reset_full_trajectory: bool = False,
+    failure_rate_max_over_mean: float | None = None,
+    set_anchor: bool = True,
+) -> None:
+    """Apply the shared strict/pelvis protocol block to a G1 tracking cfg.
+
+    One authority for the copy-pasted protocol deltas: reset-start bounds,
+    full-trajectory reset toggle, optional adaptive-failure
+    ``failure_rate_max_over_mean``, and (unless ``set_anchor=False`` because a
+    parent class already anchored the surface) the pelvis expert anchor plus
+    the observation/reward re-anchoring that must follow it.
+    """
+    cfg.random_reset_step_min = reset_step_min
+    cfg.random_reset_step_max = reset_step_max
+    cfg.random_reset_full_trajectory = random_reset_full_trajectory
+    if failure_rate_max_over_mean is not None:
+        cfg.adaptive_failure_reset_failure_rate_max_over_mean = (
+            failure_rate_max_over_mean
+        )
+    if set_anchor:
+        cfg.expert_anchor_body_name = "pelvis"
+        cfg._set_anchor_body("pelvis")
+        cfg._set_reward_anchor_body("pelvis")
+
+
 @configclass
 class ImitationG1StrictTrackEnvCfg(ImitationG1LafanTrackEnvCfg):
     """Explicit-command G1 tracking on the strict/pelvis protocol surface.
@@ -1635,37 +1697,9 @@ class ImitationG1StrictTrackEnvCfg(ImitationG1LafanTrackEnvCfg):
 
     terminations = G1SonicTerminationsCfg()  # type: ignore
 
-    def _set_anchor_body(self, anchor_body_name: str) -> None:
-        """Point every anchor-relative observation term at one body."""
-        for group_name, term_names in _VANILLA_ANCHOR_TERM_NAMES_BY_GROUP.items():
-            group = getattr(self.observations, group_name)
-            for term_name in term_names:
-                term = getattr(group, term_name)
-                if term is None:
-                    continue
-                if "anchor_body_name" in term.params:
-                    term.params["anchor_body_name"] = anchor_body_name
-
-    def _set_reward_anchor_body(self, anchor_body_name: str) -> None:
-        """Point the anchor-relative reward terms at one body."""
-        for term_name in (
-            "motion_global_anchor_pos",
-            "motion_global_anchor_ori",
-            "motion_body_pos",
-            "motion_body_ori",
-        ):
-            getattr(self.rewards, term_name).params["anchor_body_name"] = (
-                anchor_body_name
-            )
-
     def __post_init__(self) -> None:
         super().__post_init__()
-        self.random_reset_step_min = 0
-        self.random_reset_step_max = 200
-        self.random_reset_full_trajectory = False
-        self.expert_anchor_body_name = "pelvis"
-        self._set_anchor_body("pelvis")
-        self._set_reward_anchor_body("pelvis")
+        _apply_pelvis_protocol(self)
 
 
 # Backward-compatible aliases.
@@ -1698,7 +1732,18 @@ def _g1_lafan_track_env_cfg_from_dict(
         motions_explicit=motions_explicit,
         timing_explicit=timing_explicit,
     )
+    # Hydra-set `command_observation_terms` must prune on this path too, not
+    # only in `__post_init__`, or the override silently no-ops.
+    self._prune_command_observation_terms()
 
 
-ImitationG1LafanTrackEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1StrictTrackEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+def _bind_lafan_track_from_dict(*cfg_classes: type) -> None:
+    """Rebind ``from_dict`` so Hydra overrides go through the LAFAN1 resolver."""
+    for cfg_class in cfg_classes:
+        cfg_class.from_dict = _g1_lafan_track_env_cfg_from_dict
+
+
+_bind_lafan_track_from_dict(
+    ImitationG1LafanTrackEnvCfg,
+    ImitationG1StrictTrackEnvCfg,
+)
