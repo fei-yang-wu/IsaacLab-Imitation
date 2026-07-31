@@ -99,3 +99,95 @@ def test_registered_task_layouts_match_golden() -> None:
             f"{task_id}: layout or protocol drift vs golden. If intentional "
             "(checkpoint-breaking!), regenerate the golden file."
         )
+
+
+ROOT_QPOS_TRIO = ("expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b")
+
+
+def test_stable_explicit_root_qpos_cli_override_layout() -> None:
+    """Stable recipe + explicit root_qpos trio through the real CLI path.
+
+    Isaac Lab 3.0's ``register_task`` applies plain ``env.*``/``agent.*``
+    overrides with a direct ``setattr`` on the configs (no ``from_dict``
+    round-trip) whenever no other Hydra args remain, so config-time pruning
+    from ``__post_init__`` runs before the overrides land. ``ImitationRLEnv``
+    re-derives the pruned command-term set at construction via
+    ``_refresh_command_observation_terms``; this test exercises that exact
+    sequence without booting a simulation.
+    """
+    import sys
+
+    from isaaclab_tasks.utils import resolve_task_config
+
+    overrides = [
+        "env.command_mode=explicit",
+        "env.command_observation_terms="
+        "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]",
+        "agent.ipmd.use_latent_command=false",
+        "agent.command_components=[joint_qpos,root_pos,root_ori]",
+    ]
+    original_argv = sys.argv
+    sys.argv = [original_argv[0]] + overrides
+    try:
+        env_cfg, agent_cfg = resolve_task_config(
+            "Isaac-Imitation-G1-Latent-v0", "rlopt_ipmd_cfg_entry_point"
+        )
+    finally:
+        sys.argv = original_argv
+
+    # What ImitationRLEnv.__init__ does before any manager reads the config.
+    refresh = getattr(env_cfg, "_refresh_command_observation_terms", None)
+    assert callable(refresh)
+    refresh()
+
+    policy_terms = _group_terms(env_cfg.observations.policy)
+    critic_terms = _group_terms(env_cfg.observations.critic)
+    assert "latent_command" not in policy_terms
+    assert "latent_command" not in critic_terms
+    for name in ROOT_QPOS_TRIO:
+        assert name in policy_terms, policy_terms
+        assert name in critic_terms, critic_terms
+    assert "expert_motion" not in policy_terms, policy_terms
+    # Kept explicit command terms carry no observation noise (frozen protocol).
+    for name in ROOT_QPOS_TRIO:
+        assert getattr(env_cfg.observations.policy, name).noise is None
+
+    # The agent contract selected by the same overrides must resolve against
+    # the pruned groups (this is where the original failure surfaced as a
+    # KeyError from the actor's input-key lookup).
+    agent_cfg.sync_input_keys()
+    for group_name, key in agent_cfg.policy.input_keys:
+        assert group_name == "policy" and key in policy_terms, (group_name, key)
+    for group_name, key in agent_cfg.value_function.input_keys:
+        assert group_name == "critic" and key in critic_terms, (group_name, key)
+
+    # The from_dict path (real Hydra runs with extra non-dotted args) must
+    # produce the identical layout, including the raw "[a,b,c]" string form.
+    cfg2 = type(env_cfg)()
+    cfg2.from_dict(
+        {
+            "command_mode": "explicit",
+            "command_observation_terms": (
+                "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+            ),
+        }
+    )
+    assert _group_terms(cfg2.observations.policy) == policy_terms
+    assert _group_terms(cfg2.observations.critic) == critic_terms
+
+
+def test_refresh_is_identity_for_default_tasks() -> None:
+    """The env-construction refresh must not move any registered default."""
+    for task_id in TASK_IDS:
+        cfg = _load_env_cfg(task_id)
+        refresh = getattr(cfg, "_refresh_command_observation_terms", None)
+        if not callable(refresh):
+            continue
+        before = _layout(task_id)["groups"]
+        refresh()
+        after = {
+            field.name: _group_terms(getattr(cfg.observations, field.name))
+            for field in dataclasses.fields(cfg.observations)
+            if getattr(cfg.observations, field.name) is not None
+        }
+        assert after == before, task_id
