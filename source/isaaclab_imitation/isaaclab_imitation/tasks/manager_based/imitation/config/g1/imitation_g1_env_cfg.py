@@ -1447,6 +1447,22 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
             else:
                 raise ValueError("motions must be a list of motion names or null.")
 
+        if "command_observation_terms" in remaining:
+            # Optional None-default field: Isaac's strict updater rejects the
+            # `None -> str` transition for the raw "[a,b,c]" Hydra CLI string.
+            # Store it as-is; `_prune_command_observation_terms` parses both
+            # forms.
+            value = remaining.pop("command_observation_terms")
+            if value is None or isinstance(value, str):
+                self.command_observation_terms = value
+            elif isinstance(value, (list, tuple)):
+                self.command_observation_terms = [str(item) for item in value]
+            else:
+                raise ValueError(
+                    "command_observation_terms must be a list of term names, "
+                    "an '[a,b,c]' string, or null."
+                )
+
         if "trajectories" in remaining:
             value = remaining.pop("trajectories")
             if value is None:
@@ -1704,6 +1720,22 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
                 if term is not None:
                     term.noise = None
 
+    def _refresh_command_observation_terms(self) -> None:
+        """Re-derive the pruned command-term set from the current field values.
+
+        Isaac Lab 3.0's ``register_task`` applies plain ``env.*`` CLI
+        overrides with a direct ``setattr`` on the config and only routes
+        through ``from_dict`` when non-dotted Hydra args remain, so
+        ``command_mode`` / ``command_observation_terms`` overrides can arrive
+        after ``__post_init__`` already pruned with the class defaults.
+        ``ImitationRLEnv`` calls this at construction (and ``from_dict`` calls
+        it after applying a dict) so the final field values always win.
+        Idempotent: restore + re-anchor + prune is a fixed point.
+        """
+        self._restore_pruned_command_observation_terms()
+        self._set_anchor_body(self.expert_anchor_body_name)
+        self._prune_command_observation_terms()
+
     def _restore_pruned_command_observation_terms(self) -> None:
         """Re-instate pruned command terms from the group-class declarations.
 
@@ -1888,9 +1920,7 @@ def _g1_lafan_track_env_cfg_from_dict(
     # `__post_init__` already pruned with the class defaults and pruning is
     # destructive, so restore the declared terms and re-anchor them to the
     # surface's expert anchor before pruning with the overridden fields.
-    self._restore_pruned_command_observation_terms()
-    self._set_anchor_body(self.expert_anchor_body_name)
-    self._prune_command_observation_terms()
+    self._refresh_command_observation_terms()
 
 
 def _bind_lafan_track_from_dict(*cfg_classes: type) -> None:

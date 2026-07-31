@@ -258,6 +258,18 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     motions_explicit=getattr(cfg, "motions", None) is not None,
                 )
 
+        # Same plain-setattr gotcha for the command configuration:
+        # `env.command_mode=...` / `env.command_observation_terms=[...]` can
+        # arrive as direct field writes after `__post_init__` already pruned
+        # the observation groups with the class defaults. Re-derive the
+        # pruned command-term set from the final field values before any
+        # manager reads the observation config. Idempotent for defaults.
+        refresh_command_terms = getattr(
+            cfg, "_refresh_command_observation_terms", None
+        )
+        if callable(refresh_command_terms):
+            refresh_command_terms()
+
         # Get dataset path and determine if we need to create it
         dataset_path = getattr(cfg, "dataset_path", None)
         loader_type = getattr(cfg, "loader_type", None)
