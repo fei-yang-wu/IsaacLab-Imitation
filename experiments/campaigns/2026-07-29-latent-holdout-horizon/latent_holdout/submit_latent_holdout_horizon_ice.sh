@@ -35,8 +35,12 @@ set -euo pipefail
 # command width; this campaign removes that confound. A collapse here is a
 # legitimate, citable negative result, not a bug to tune away.
 #
-# Default DRY_RUN=1. One 16h segment per arm, no resume chain (user-decided
-# 2026-07-29): whatever frames the segment reaches is the result.
+# Default DRY_RUN=1. One 16h segment per arm. Originally no resume chain
+# (user-decided 2026-07-29); resume support was added the same day after both
+# arms' first segments died on a checkpoint write (ICE scratch quota, not a
+# training bug) so the 5B run could be finished across segments. Set
+# TRAIN_CHECKPOINT / COMPLETED_FRAMES to resume one arm at a time (ARMS must
+# be a single value in that case).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
@@ -45,6 +49,13 @@ cd "${REPO_ROOT}"
 DRY_RUN="${DRY_RUN:-1}"
 ARMS="${ARMS:-5 1}"
 SEED="${SEED:-0}"
+TRAIN_CHECKPOINT="${TRAIN_CHECKPOINT:-}"
+COMPLETED_FRAMES="${COMPLETED_FRAMES:-0}"
+
+if [[ -n "${TRAIN_CHECKPOINT}" && "${ARMS}" == *" "* ]]; then
+    echo "[ERROR] Resume one arm at a time: set ARMS to a single value with TRAIN_CHECKPOINT." >&2
+    exit 2
+fi
 
 # --- Geometry: identical to the 5525664 control (e12288_r12_nj320_nc40) -------
 TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-12288}"
@@ -142,9 +153,21 @@ submit_arm() {
     local run_tag="lafan1_holdout${hold}_h${HORIZON_STEPS}enc_z${Z_DIM}_seed${SEED}_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}_nj${NJMAX}_nc${NCONMAX}"
     local log_dir="/data/holdout_store/${run_tag}/rlopt_train"
 
-    local max_iterations=$(( (FRAME_CAP + FRAMES_PER_BATCH - 1) / FRAMES_PER_BATCH ))
+    local remaining_frames=$((FRAME_CAP - COMPLETED_FRAMES))
+    if (( remaining_frames <= 0 )); then
+        echo "[INFO] ${run_tag} already reached FRAME_CAP=${FRAME_CAP} (COMPLETED_FRAMES=${COMPLETED_FRAMES}). Not submitting."
+        return 0
+    fi
+    local max_iterations=$(( (remaining_frames + FRAMES_PER_BATCH - 1) / FRAMES_PER_BATCH ))
     if (( max_iterations > SEGMENT_MAX_ITERATIONS )); then
+        echo "[INFO] Capping this segment at ${SEGMENT_MAX_ITERATIONS} iterations so it finishes before the ${CLUSTER_SLURM_TIME_LIMIT:-15:59:00} wall; re-run with an updated COMPLETED_FRAMES/TRAIN_CHECKPOINT for the next segment."
         max_iterations="${SEGMENT_MAX_ITERATIONS}"
+    fi
+
+    local checkpoint_args=()
+    if [[ -n "${TRAIN_CHECKPOINT}" ]]; then
+        checkpoint_args=(--checkpoint "${TRAIN_CHECKPOINT}")
+        echo "[INFO] Resuming ${run_tag} from ${TRAIN_CHECKPOINT} (${COMPLETED_FRAMES}/${FRAME_CAP} cumulative frames done; ${max_iterations} iterations remaining)."
     fi
 
     export CLUSTER_LOGIN="${CLUSTER_LOGIN:-login-ice.pace.gatech.edu}"
@@ -172,6 +195,7 @@ submit_arm() {
         --seed "${SEED}"
         --max_iterations "${max_iterations}"
         --kit_args=--/app/extensions/fsWatcherEnabled=false
+        "${checkpoint_args[@]}"
         physics=newton_mjwarp
         "env.sim.physics.solver_cfg.njmax=${NJMAX}"
         "env.sim.physics.solver_cfg.nconmax=${NCONMAX}"

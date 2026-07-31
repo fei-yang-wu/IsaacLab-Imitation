@@ -95,7 +95,16 @@ def _parse_args() -> argparse.Namespace:
         "--state_key",
         choices=("expert_planner_state", "planner_state"),
         default="planner_state",
-        help="Use expert states for offline pretrain or achieved states for rollout finetune.",
+        help="Planner input tensor. Paper-facing deployable planners use causal planner_state.",
+    )
+    parser.add_argument(
+        "--training_stage",
+        choices=("auto", "pretrain", "oracle", "finetune"),
+        default="auto",
+        help=(
+            "Artifact provenance label. auto treats a fresh model as pretrain and "
+            "--checkpoint initialization as finetune."
+        ),
     )
     parser.add_argument(
         "--checkpoint",
@@ -123,6 +132,17 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num_updates", type=int, default=2000)
     parser.add_argument("--log_interval", type=int, default=100)
+    parser.add_argument(
+        "--milestone_interval",
+        type=int,
+        default=0,
+        help=(
+            "Additionally keep an optimizer-free snapshot at every this-many "
+            "updates (checkpoints/update_XXXXXXX.pt) so a training-budget curve "
+            "can be evaluated closed-loop after the fact. Must be a multiple of "
+            "--log_interval so milestones land on logging updates; <=0 disables."
+        ),
+    )
     parser.add_argument("--eval_batch_size", type=int, default=512)
     parser.add_argument(
         "--eval_max_samples",
@@ -455,6 +475,7 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = run_dir / "metrics.jsonl"
     checkpoint_path = run_dir / "checkpoints" / "latest.pt"
+    best_checkpoint_path = run_dir / "checkpoints" / "best.pt"
 
     # Split BEFORE anything is derived from the data. Normalization statistics
     # computed over all rows would leak validation into the model.
@@ -569,7 +590,11 @@ def main() -> None:
         pretrain_num_updates = checkpoint_metadata.get(
             "pretrain_num_updates", checkpoint_metadata.get("num_updates")
         )
-    is_finetune_stage = str(args.state_key) == "planner_state"
+    training_stage = str(args.training_stage)
+    if training_stage == "auto":
+        training_stage = "finetune" if args.checkpoint is not None else "pretrain"
+    is_finetune_stage = training_stage == "finetune"
+    is_oracle_stage = training_stage == "oracle"
     selected_sample_count = int(state.shape[0])
     micro_batch_size = (
         int(args.batch_size)
@@ -591,6 +616,7 @@ def main() -> None:
         "planner_type": str(planner.config_dict()["planner_type"]),
         "planner_family": str(args.planner_family),
         "state_key": args.state_key,
+        "training_stage": training_stage,
         "samples_dir": str(args.samples_dir.expanduser().resolve()),
         "source_sample_count": source_sample_count,
         "num_samples": selected_sample_count,
@@ -612,7 +638,8 @@ def main() -> None:
         "num_updates": int(args.num_updates),
         "pretrain_num_updates": pretrain_num_updates
         if pretrain_num_updates not in (None, "")
-        else (None if is_finetune_stage else int(args.num_updates)),
+        else (None if is_finetune_stage or is_oracle_stage else int(args.num_updates)),
+        "oracle_num_updates": int(args.num_updates) if is_oracle_stage else None,
         "finetune_num_updates": int(args.num_updates) if is_finetune_stage else None,
         "lr": float(args.lr),
         "weight_decay": float(args.weight_decay),
@@ -663,6 +690,16 @@ def main() -> None:
         )
 
     num_samples = int(train_state.shape[0])
+    milestone_interval = int(args.milestone_interval)
+    if milestone_interval > 0 and milestone_interval % int(args.log_interval) != 0:
+        raise SystemExit(
+            "--milestone_interval must be a positive multiple of --log_interval "
+            f"(got {milestone_interval} vs log_interval={args.log_interval}); "
+            "otherwise milestone updates never coincide with a save point."
+        )
+    best_validation_metric = float("inf")
+    best_validation_update = 0
+    best_validation_metric_name = "val/normalized_target_rmse_mean"
     for update in range(1, int(args.num_updates) + 1):
         indices = torch.randint(
             low=0,
@@ -787,15 +824,67 @@ def main() -> None:
                 f"eval_cos={row['eval/target_cosine']:.6f}",
                 flush=True,
             )
+            validation_metric = float(
+                row.get(
+                    best_validation_metric_name,
+                    row["eval/normalized_target_rmse_mean"],
+                )
+            )
+            is_new_best = validation_metric < best_validation_metric
+            if is_new_best:
+                best_validation_metric = validation_metric
+                best_validation_update = update
+            checkpoint_metadata = metadata | {
+                "last_metrics": row,
+                "best_validation_metric_name": best_validation_metric_name,
+                "best_validation_metric": best_validation_metric,
+                "best_validation_update": best_validation_update,
+            }
             save_planner_checkpoint(
                 checkpoint_path,
                 planner=planner,
                 optimizer=optimizer,
                 target_spec=target_spec,
-                metadata=metadata | {"last_metrics": row},
+                metadata=checkpoint_metadata,
             )
+            if is_new_best:
+                save_planner_checkpoint(
+                    best_checkpoint_path,
+                    planner=planner,
+                    optimizer=optimizer,
+                    target_spec=target_spec,
+                    metadata=checkpoint_metadata,
+                )
+            if milestone_interval > 0 and update % milestone_interval == 0:
+                # Optimizer-free: milestones are eval-only artifacts, and the
+                # optimizer state would triple their size on disk.
+                save_planner_checkpoint(
+                    run_dir / "checkpoints" / f"update_{update:07d}.pt",
+                    planner=planner,
+                    optimizer=None,
+                    target_spec=target_spec,
+                    metadata=checkpoint_metadata | {"milestone_update": update},
+                )
 
-    print(f"[INFO] Wrote planner checkpoint: {checkpoint_path}", flush=True)
+    metadata.update(
+        {
+            "best_validation_metric_name": best_validation_metric_name,
+            "best_validation_metric": best_validation_metric,
+            "best_validation_update": best_validation_update,
+            "best_checkpoint": str(best_checkpoint_path.resolve()),
+            "latest_checkpoint": str(checkpoint_path.resolve()),
+        }
+    )
+    (run_dir / "config.json").write_text(
+        json.dumps(metadata, indent=2, default=str) + "\n", encoding="utf-8"
+    )
+    print(f"[INFO] Wrote latest planner checkpoint: {checkpoint_path}", flush=True)
+    print(
+        "[INFO] Best held-out checkpoint: "
+        f"{best_checkpoint_path} at update {best_validation_update} "
+        f"({best_validation_metric_name}={best_validation_metric:.6f})",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

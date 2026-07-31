@@ -166,23 +166,26 @@ _LATENT_PER_STEP_VQ_TASK_KWARGS = {
     ),
 }
 
-# SONIC-motivated per-step FSQ token interface. Built on the *strict* bundle,
-# not the legacy one `_LATENT_PER_STEP_VQ_TASK_KWARGS` inherits through
-# `ImitationG1LatentFutureCVAEEnvCfg`: the qualified LAFAN1 oracles and the
-# Study B/C arms all ran on the strict surface, so only this lineage is
-# comparable with them.
-_LATENT_SONIC_FSQ_TASK_KWARGS = {
-    **_LATENT_STRICT_TASK_KWARGS,
+# Official-window SONIC adaptation: the complete 10-frame future window is
+# compressed into one 64-D FSQ command and recomputed every control step. This
+# combines the SONIC environment/history and release optimizer contract, unlike
+# the removed strict-lineage cached-packet implementation.
+_LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS = {
+    **_LATENT_SONIC_TASK_KWARGS,
     "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentSonicFSQEnvCfg"
+        f"{__name__}.imitation_g1_latent_env_cfg:"
+        "ImitationG1LatentSonicOfficialFSQEnvCfg"
     ),
     "rlopt_cfg_entry_point": (
-        f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicFSQRLOptIPMDConfig"
+        f"{agents.__name__}.rlopt_ipmd_cfg:"
+        "G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig"
     ),
     "rlopt_ipmd_cfg_entry_point": (
-        f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicFSQRLOptIPMDConfig"
+        f"{agents.__name__}.rlopt_ipmd_cfg:"
+        "G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig"
     ),
 }
+
 
 _LATENT_VQVAE_TASK_KWARGS = {
     "env_cfg_entry_point": (
@@ -343,14 +346,11 @@ gym.register(
     kwargs=_LATENT_PER_STEP_VQ_TASK_KWARGS,
 )
 
-# SONIC method replication (2026-07-28): per-step FSQ tokens, co-trained
-# encoder, strict lineage. See the campaign under
-# experiments/campaigns/2026-07-28-sonic-method-replication/.
 gym.register(
-    id="Isaac-Imitation-G1-Latent-SonicFSQ-v0",
+    id="Isaac-Imitation-G1-Latent-SonicOfficialFSQ-v0",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
-    kwargs=_LATENT_SONIC_FSQ_TASK_KWARGS,
+    kwargs=_LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS,
 )
 
 gym.register(

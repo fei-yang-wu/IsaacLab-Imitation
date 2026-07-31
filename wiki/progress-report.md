@@ -12,7 +12,7 @@ job chronology, and incident history stay in
 documents. Update this page whenever a campaign produces or invalidates a
 result, and stamp the section with the verification date.
 
-Last updated: 2026-07-29.
+Last updated: 2026-07-30.
 
 ---
 
@@ -88,16 +88,19 @@ disabled:
 
 | Recipe | Root-relative MPJPE | Joint RMSE | Velocity | Acceleration | Action change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Stable/SONIC | 111.17 mm | 0.303 rad | 0.654 m/s | 11.884 m/s2 | 1.692 |
+| Stable/SONIC, `4096 x 24` | 111.17 mm | 0.303 rad | 0.654 m/s | 11.884 m/s2 | 1.692 |
+| Stable/SONIC, `16384 x 12` | 112.00 mm | 0.295 rad | 0.627 m/s | 10.787 m/s2 | 1.428 |
 | Strict | 129.84 mm | 0.275 rad | 0.576 m/s | 8.009 m/s2 | 1.085 |
 
-Stable's MPJPE is 18.67 mm (`14.38%`) lower, while its joint and temporal
-metrics are worse. This is a diagnostic trend rather than a claim: it is just
-below the roughly 15% resolution threshold suggested by earlier repeated
-inference, and the two ICE runs used different training geometry
-(`4096 x 24` versus `16384 x 12`). The strict-termination pass favored Stable
-on truncated MPJPE (33.32 vs 40.79 mm) but favored Strict on success
-(0.24 vs 0.19), reinforcing why the equal full-horizon comparison is primary.
+The same-geometry Stable row is only 0.74% above the original Stable result,
+so training geometry was not driving the observed MPJPE difference. It remains
+13.74% below Strict, while joint and temporal metrics are worse. This is still
+a diagnostic trend rather than a claim because it is below the roughly 15%
+resolution threshold suggested by earlier repeated inference. The new
+strict-termination pass measured 33.26 mm and 0.23 success; as before, that
+MPJPE is computed only over valid transitions before/through unequal
+terminations, reinforcing why the 40,000-sample full-horizon comparison is
+primary.
 
 ### Status and next step
 
@@ -140,7 +143,7 @@ shared oracle evaluator
 
 ## 2. Interface design experiments
 
-Verified: 2026-07-23.
+Verified: 2026-07-30.
 
 ### Question
 
@@ -177,6 +180,14 @@ tracker is the low-level ceiling, not a row.
 - **Phase 4 (LAFAN1, no language):** planner grid still blocked on the paired
   low-level oracle audits; low-level prerequisites were re-launched after the
   joint-order fix forced retraining.
+- **Enc380 content-controlled diagnostic:** the durable 5B root+qpos-content
+  latent tracker is underqualified on the same historical Strict-v0 environment
+  used for training. Its all-40 strict oracle success is 0.35 against the fixed
+  0.80 gate despite 1.0 fall-free survival; the corrected all-40,
+  non-terminating pass measures 102.76 mm MPJPE over 40,000 transitions. No
+  planner stage ran. This rules out comparative planner claims from this
+  checkpoint unless a new low-level training budget or recipe is explicitly
+  approved.
 - **Phase 5 (BONES-SEED, language):** first three-seed planner chains failed
   in preparation (compute-local disk exhaustion + four motions below the
   1,000-row target); the revised default budget is 150 demo + 150 rollout

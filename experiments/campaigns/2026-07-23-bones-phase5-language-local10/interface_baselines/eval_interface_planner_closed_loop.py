@@ -141,6 +141,41 @@ parser.add_argument("--state_history_steps", type=int, default=9)
 parser.add_argument("--command_past_steps", type=int, default=0)
 parser.add_argument("--command_future_steps", type=int, default=25)
 parser.add_argument(
+    "--packet_prediction_horizon_steps",
+    type=int,
+    default=0,
+    help=(
+        "Planner packet prediction horizon. Zero uses the execution window. "
+        "For a long-horizon explicit planner, the packet is reduced to the "
+        "execution window by first-window slicing or temporal ensembling."
+    ),
+)
+parser.add_argument(
+    "--packet_temporal_ensemble",
+    choices=("none", "exponential"),
+    default="none",
+    help=(
+        "Reduce a long-horizon explicit packet to the execution window by "
+        "discarding future slots or by anchor-aware exponential overlap "
+        "ensembling."
+    ),
+)
+parser.add_argument(
+    "--packet_temporal_ensemble_decay",
+    type=float,
+    default=0.5,
+    help="Age decay for --packet_temporal_ensemble=exponential.",
+)
+parser.add_argument(
+    "--packet_anchor_conversion",
+    choices=("none", "torso_to_pelvis"),
+    default="none",
+    help=(
+        "Convert a torso-relative root_qpos packet into the pelvis-relative "
+        "Strict tracker contract using predicted waist-qpos forward kinematics."
+    ),
+)
+parser.add_argument(
     "--planner_update_interval",
     type=int,
     default=1,
@@ -258,6 +293,17 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--allow_cross_tracker_planner",
+    action="store_true",
+    default=False,
+    help=(
+        "Diagnostic only: deploy an explicit packet planner whose collection "
+        "provenance names a different frozen tracker. Interface, causal-input, "
+        "horizon, seed, and publication-rate checks remain strict; every waived "
+        "tracker-contract field is recorded in the summary."
+    ),
+)
+parser.add_argument(
     "--fall_height_m",
     type=float,
     default=0.4,
@@ -308,6 +354,15 @@ parser.add_argument(
         "Treat anchor position/orientation and end-effector tracking errors as "
         "metrics instead of termination conditions. The base-too-low fall "
         "termination remains active."
+    ),
+)
+parser.add_argument(
+    "--base_only_termination",
+    action="store_true",
+    default=False,
+    help=(
+        "Keep only base_too_low (plus reference end), disabling tracking-error "
+        "and timeout terms. Metrics therefore contain only pre-fall transitions."
     ),
 )
 parser.add_argument(
@@ -399,6 +454,47 @@ def _disable_tracking_terminations(terminations: Any) -> list[str]:
     return disabled
 
 
+def _configure_base_only_termination(
+    terminations: Any, *, minimum_height: float
+) -> list[str]:
+    if minimum_height <= 0.0:
+        raise ValueError("--fall_height_m must be positive.")
+
+    from isaaclab.managers import SceneEntityCfg
+    from isaaclab.managers import TerminationTermCfg as _DoneTerm
+    from isaaclab_imitation.tasks.manager_based.imitation import mdp as _imitation_mdp
+
+    terminations.base_too_low = _DoneTerm(
+        func=_imitation_mdp.root_height_below_minimum,
+        params={
+            "minimum_height": float(minimum_height),
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=FALL_TERMINATION_BODY_NAME
+            ),
+        },
+    )
+    names = set(getattr(terminations, "__dict__", {}).keys())
+    names.update(
+        (
+            "time_out",
+            "reference_finished",
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "foot_pos_xyz",
+            "base_too_low",
+        )
+    )
+    disabled: list[str] = []
+    for name in sorted(names):
+        if name.startswith("_") or name in {"reference_finished", "base_too_low"}:
+            continue
+        if hasattr(terminations, name) and getattr(terminations, name) is not None:
+            setattr(terminations, name, None)
+            disabled.append(name)
+    return disabled
+
+
 from command_publisher import (  # noqa: E402
     ChunkCommandPublisher,
     renewal_env_ids as publisher_renewal_env_ids,
@@ -408,12 +504,19 @@ from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 from closed_loop_metrics import FallTracker  # noqa: E402
 from interface_planner_common import (  # noqa: E402
     INTERFACE_TERMS,
+    InterfaceTargetSpec,
     flatten_command_terms,
     load_language_goal_embedding,
     load_planner_checkpoint,
     planner_state_from_batch,
     rmse_per_row,
     unflatten_command_target,
+)
+from packet_to_latent_command import (  # noqa: E402
+    OverlappingPacketEnsembler,
+    PacketLayout,
+    convert_root_qpos_torso_to_pelvis,
+    first_packet_window,
 )
 from planner_sample_schema import (  # noqa: E402
     PlannerSampleWriter,
@@ -762,7 +865,7 @@ def _command_reference_kwargs(
     """
     if interface == "ee_trajectory":
         return {"reference_body_names": tuple(ee_body_names)}
-    if interface == "root_points5":
+    if interface in {"root_points5", "root_points5_pose"}:
         return {
             "reference_body_names": tuple(
                 keypoint_body_names or G1_KEYPOINT5_BODY_NAMES
@@ -830,7 +933,9 @@ def resolve_pinned_command_joint_ids(base_env: ImitationRLEnv) -> torch.Tensor:
 # Reduced explicit interfaces: single-frame policy-group command spaces whose
 # name IS the command space, unlike full_body_trajectory / ee_trajectory which
 # map onto a separate "single_frame_*" alias.
-_REDUCED_EXPLICIT_INTERFACES = frozenset({"root_qpos", "root_points5"})
+_REDUCED_EXPLICIT_INTERFACES = frozenset(
+    {"root_qpos", "root_points5", "root_points5_pose"}
+)
 
 # Interface -> the command space its frozen tracker was trained on.
 _INTERFACE_COMMAND_SPACE: dict[str, str] = {
@@ -838,6 +943,7 @@ _INTERFACE_COMMAND_SPACE: dict[str, str] = {
     "ee_trajectory": "single_frame_ee",
     "root_qpos": "root_qpos",
     "root_points5": "root_points5",
+    "root_points5_pose": "root_points5_pose",
 }
 
 # Proprioception appears in every command space and is not part of the packet.
@@ -1087,14 +1193,29 @@ def _current_reference_command_terms(
     interface: str,
     ee_body_names: list[str],
     env_ids: torch.Tensor | None = None,
+    past_steps: int | None = None,
+    future_steps: int | None = None,
+    anchor_body_name: str | None = None,
 ) -> dict[str, torch.Tensor]:
     ref_kwargs = _command_reference_kwargs(interface, ee_body_names=ee_body_names)
+    if anchor_body_name is not None:
+        ref_kwargs["anchor_body_name"] = str(anchor_body_name)
     term_names = _interface_command_term_names(interface)
+    resolved_past_steps = (
+        int(args_cli.command_past_steps)
+        if past_steps is None
+        else int(past_steps)
+    )
+    resolved_future_steps = (
+        int(args_cli.command_future_steps)
+        if future_steps is None
+        else int(future_steps)
+    )
     return {
         term_name: base_env.get_current_expert_window_term(
             term_name=term_name,
-            past_steps=int(args_cli.command_past_steps),
-            future_steps=int(args_cli.command_future_steps),
+            past_steps=resolved_past_steps,
+            future_steps=resolved_future_steps,
             env_ids=env_ids,
             **ref_kwargs,
         )
@@ -1192,6 +1313,8 @@ def _require_streamed_tracker_checkpoint_contract(
     planner_interval_steps: int,
     seed: int,
     allow_shorter_planner_interval: bool = False,
+    allow_cross_tracker_planner: bool = False,
+    long_horizon_prediction_steps: int | None = None,
 ) -> dict[str, Any]:
     """Reject planners trained for a different explicit low-level interface.
 
@@ -1243,6 +1366,62 @@ def _require_streamed_tracker_checkpoint_contract(
                 "checkpoint": source_tracker.get(key),
                 "runtime": tracker_provenance.get(key),
             }
+    waived: dict[str, Any] = {}
+    # `explicit_chunk_current_slot` is the descriptive replacement for the
+    # historical generic name. Both names dispatch to the same env adapter.
+    # Preserve provenance from already-collected reduced-interface samples
+    # without rewriting their tensors or pretending this was a runtime change.
+    if (
+        interface in _REDUCED_EXPLICIT_INTERFACES
+        and "policy_command_mode" in mismatches
+        and mismatches["policy_command_mode"]
+        == {
+            "checkpoint": "full_body_chunk_current_slot",
+            "runtime": "explicit_chunk_current_slot",
+        }
+    ):
+        mismatches.pop("policy_command_mode")
+        print(
+            "[INFO] Normalized historical full_body_chunk_current_slot metadata "
+            "to its exact explicit_chunk_current_slot alias.",
+            flush=True,
+        )
+
+    # A long-horizon explicit planner is trained to predict (for example) H30,
+    # while the streamed tracker still consumes one H10 execution window at
+    # each 5 Hz renewal. This is an explicit, recorded deployment reduction:
+    # the planner target horizon must match the checkpoint, but the runtime
+    # command window is intentionally shorter and is produced by the packet
+    # reducer/temporal ensembler.
+    if (
+        long_horizon_prediction_steps is not None
+        and int(long_horizon_prediction_steps) > int(command_future_steps) + 1
+        and "command_future_steps" in mismatches
+    ):
+        entry = mismatches["command_future_steps"]
+        checkpoint_future_steps = entry.get("checkpoint")
+        expected_checkpoint_future_steps = int(long_horizon_prediction_steps) - 1
+        if checkpoint_future_steps == expected_checkpoint_future_steps:
+            waived["command_future_steps"] = mismatches.pop("command_future_steps")
+
+    if allow_cross_tracker_planner:
+        cross_tracker_keys = {
+            "low_level_command_mode",
+            "low_level_command_space",
+            "policy_command_mode",
+            "low_level_tracker.checkpoint_sha256",
+            "low_level_tracker.policy_input_keys",
+            "low_level_tracker.strict_policy_restore",
+            "low_level_tracker.policy_frozen",
+        }
+        cross_tracker = {
+            key: mismatches.pop(key)
+            for key in tuple(mismatches)
+            if key in cross_tracker_keys
+        }
+        if cross_tracker:
+            waived["cross_tracker_plug_in"] = cross_tracker
+
     # C3 freshness studies deliberately republish more often than the planner
     # was trained to (interval 2 or 5 against a 10-frame packet), consuming only
     # the freshest slots. That IS a train/deploy deviation and the guard is right
@@ -1252,7 +1431,6 @@ def _require_streamed_tracker_checkpoint_contract(
     # shorter (using fewer, fresher slots of a packet the planner did produce).
     # A longer interval would consume slots past the trained horizon, which is a
     # genuine contract violation and stays refused.
-    waived: dict[str, Any] = {}
     if allow_shorter_planner_interval and "planner_interval_steps" in mismatches:
         entry = mismatches["planner_interval_steps"]
         checkpoint_interval = entry.get("checkpoint")
@@ -1270,15 +1448,14 @@ def _require_streamed_tracker_checkpoint_contract(
             + (
                 ""
                 if not waived
-                else f" (waived under --allow_shorter_planner_interval: {waived})"
+                else f" (recorded diagnostic waivers: {waived})"
             )
         )
     if waived:
         print(
-            "[WARN] Contract deviation permitted for a freshness study: "
-            f"{waived}. Only the freshest slots of each packet are consumed; "
-            "this result is NOT matched-contract and must not be compared "
-            "against one without saying so.",
+            "[WARN] Explicit streamed contract deviation permitted: "
+            f"{waived}. This result is a cross-contract diagnostic and must not "
+            "be presented as a matched training/deployment row.",
             flush=True,
         )
     return waived
@@ -1366,6 +1543,50 @@ def main(
             "State-only planner checkpoint does not accept language input."
         )
     interface = target_spec.interface
+    execution_frames = (
+        int(args_cli.command_past_steps) + 1 + int(args_cli.command_future_steps)
+    )
+    packet_prediction_frames = int(args_cli.packet_prediction_horizon_steps)
+    if packet_prediction_frames <= 0:
+        packet_prediction_frames = execution_frames
+    if packet_prediction_frames < execution_frames:
+        raise ValueError(
+            "--packet_prediction_horizon_steps cannot be shorter than the "
+            f"execution window ({packet_prediction_frames} < {execution_frames})."
+        )
+    packet_layout = PacketLayout.from_target_spec(
+        target_spec, packet_frames=packet_prediction_frames
+    )
+    packet_anchor_conversion = str(args_cli.packet_anchor_conversion)
+    if packet_anchor_conversion != "none" and interface != "root_qpos":
+        raise ValueError(
+            "--packet_anchor_conversion is defined only for root_qpos packets; "
+            f"got interface={interface!r}."
+        )
+    if args_cli.packet_temporal_ensemble != "none" and interface != "root_qpos":
+        raise ValueError(
+            "Packet temporal ensembling in the direct streamed evaluator is "
+            "currently defined for root_qpos packets only."
+        )
+    if (
+        args_cli.packet_temporal_ensemble == "exponential"
+        and packet_prediction_frames == execution_frames
+    ):
+        raise ValueError(
+            "Temporal ensembling requires a prediction horizon longer than the "
+            "execution window."
+        )
+    execution_layout = PacketLayout(
+        packet_layout.term_widths, packet_frames=execution_frames
+    )
+    execution_target_spec = InterfaceTargetSpec(
+        interface=target_spec.interface,
+        term_names=target_spec.term_names,
+        term_widths=tuple(
+            int(width) // packet_prediction_frames * execution_frames
+            for width in target_spec.term_widths
+        ),
+    )
     pin_mode = str(args_cli.pin_command_joint_order)
     # Pinning applies to any packet carrying a joint half, not to one named
     # interface: root_qpos publishes 29 joint targets and needs it exactly as
@@ -1385,6 +1606,10 @@ def main(
     in_step_publication = bool(args_cli.in_step_publication) and (
         interface == "full_body_trajectory"
     )
+    if packet_anchor_conversion != "none" and in_step_publication:
+        raise ValueError(
+            "Packet anchor conversion currently requires outer-loop publication."
+        )
     if in_step_publication and bool(args_cli.save_rollout_training_samples):
         raise ValueError(
             "--in_step_publication bypasses the outer loop's rollout-sample "
@@ -1424,7 +1649,7 @@ def main(
             # chunk-slot adapter (see _POLICY_COMMAND_MODES on why the mode name
             # is historical rather than per-space).
             low_level_command_space = interface
-            env_cfg.policy_command_mode = "full_body_chunk_current_slot"
+            env_cfg.policy_command_mode = "explicit_chunk_current_slot"
         else:
             raise ValueError(
                 "streamed_vanilla supports explicit command interfaces "
@@ -1447,6 +1672,11 @@ def main(
     if planner_update_interval > 1 and int(args_cli.command_past_steps) != 0:
         raise ValueError(
             "--planner_update_interval > 1 requires --command_past_steps 0."
+        )
+    if args_cli.base_only_termination and args_cli.disable_tracking_terminations:
+        raise ValueError(
+            "--base_only_termination and --disable_tracking_terminations are "
+            "mutually exclusive."
         )
     if low_level_command_mode == "streamed_vanilla":
         if int(args_cli.command_past_steps) != 0:
@@ -1495,7 +1725,23 @@ def main(
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
-    if args_cli.disable_tracking_terminations:
+    if args_cli.base_only_termination:
+        terminations = getattr(env_cfg, "terminations", None)
+        if terminations is None:
+            raise ValueError(
+                "--base_only_termination requires an environment termination "
+                "configuration."
+            )
+        disabled_tracking_termination_terms = _configure_base_only_termination(
+            terminations, minimum_height=float(args_cli.fall_height_m)
+        )
+        print(
+            "[INFO] Base-only evaluation: torso height "
+            f"< {float(args_cli.fall_height_m):.2f} m terminates; disabled "
+            f"{disabled_tracking_termination_terms}.",
+            flush=True,
+        )
+    elif args_cli.disable_tracking_terminations:
         if not hasattr(env_cfg, "random_reset_step_min") or not hasattr(
             env_cfg, "random_reset_step_max"
         ):
@@ -1617,6 +1863,34 @@ def main(
         base_env=env, transform=Compose(RewardSum(), StepCounter(args_cli.steps + 2))
     )
     base_env = _unwrap_imitation_env(env)
+    command_anchor_body_name = (
+        "pelvis"
+        if packet_anchor_conversion == "torso_to_pelvis"
+        else str(getattr(base_env, "_expert_anchor_body_name", "torso_link"))
+    )
+    packet_joint_names = tuple(str(name) for name in base_env.robot.joint_names)
+    anchor_conversion_stats: dict[str, Any] = {
+        "mode": packet_anchor_conversion,
+        "source_anchor": (
+            "torso_link" if packet_anchor_conversion == "torso_to_pelvis" else None
+        ),
+        "target_anchor": (
+            "pelvis" if packet_anchor_conversion == "torso_to_pelvis" else None
+        ),
+        "oracle_validation_max_abs": None,
+        "oracle_validation_passed": None,
+        "converted_publications": 0,
+    }
+    packet_ensembler: OverlappingPacketEnsembler | None = None
+    if args_cli.packet_temporal_ensemble == "exponential":
+        packet_ensembler = OverlappingPacketEnsembler(
+            num_envs=int(base_env.num_envs),
+            prediction_layout=packet_layout,
+            execution_frames=execution_frames,
+            decay=float(args_cli.packet_temporal_ensemble_decay),
+            device=base_env.device,
+            dtype=torch.float32,
+        )
     pinned_command_joint_ids = (
         resolve_pinned_command_joint_ids(base_env) if pin_command_joints else None
     )
@@ -1684,6 +1958,17 @@ def main(
             "state_history_steps": int(args_cli.state_history_steps),
             "command_past_steps": int(args_cli.command_past_steps),
             "command_future_steps": int(args_cli.command_future_steps),
+            "execution_window_steps": int(execution_frames),
+            "packet_prediction_horizon_steps": int(packet_prediction_frames),
+            "packet_temporal_ensemble": str(args_cli.packet_temporal_ensemble),
+            "packet_temporal_ensemble_decay": float(
+                args_cli.packet_temporal_ensemble_decay
+            ),
+            "packet_anchor_conversion": packet_anchor_conversion,
+            "command_anchor_body_name": command_anchor_body_name,
+            "cross_tracker_planner_diagnostic": bool(
+                args_cli.allow_cross_tracker_planner
+            ),
             "task": args_cli.task,
             "algorithm": args_cli.algorithm,
             "seed": int(env_cfg.seed),
@@ -1712,12 +1997,18 @@ def main(
             "early_terminations_enabled": True,
             "tracking_terminations_enabled": not bool(
                 args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
+            "base_only_termination": bool(args_cli.base_only_termination),
+            "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
             "survival_definition": "no_base_too_low_termination",
-            "time_out_enabled": True,
+            "time_out_enabled": bool(
+                getattr(getattr(env_cfg, "terminations", None), "time_out", None)
+                is not None
+            ),
             "episode_length_extension_enabled": episode_length_extension_enabled,
             "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
             "reward_clipping_enabled": False,
@@ -1755,6 +2046,82 @@ def main(
         list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
     )
 
+    def _convert_packet_anchor_if_requested(
+        packet: torch.Tensor, env_ids: torch.Tensor
+    ) -> torch.Tensor:
+        if packet_anchor_conversion == "none":
+            return packet
+        torso_pos_w, torso_quat_w = base_env._get_robot_anchor_state_w_fast(
+            "torso_link"
+        )
+        pelvis_pos_w, pelvis_quat_w = base_env._get_robot_anchor_state_w_fast("pelvis")
+        selected = env_ids.to(device=torso_pos_w.device, dtype=torch.long)
+        kwargs = {
+            "layout": packet_layout,
+            "actual_torso_pos_w": torso_pos_w.index_select(0, selected),
+            "actual_torso_quat_w": torso_quat_w.index_select(0, selected),
+            "actual_pelvis_pos_w": pelvis_pos_w.index_select(0, selected),
+            "actual_pelvis_quat_w": pelvis_quat_w.index_select(0, selected),
+            "joint_names": packet_joint_names,
+        }
+        converted = convert_root_qpos_torso_to_pelvis(packet, **kwargs)
+        anchor_conversion_stats["converted_publications"] += int(env_ids.numel())
+
+        if anchor_conversion_stats["oracle_validation_passed"] is None:
+            source_terms = _current_reference_command_terms(
+                base_env,
+                interface=interface,
+                ee_body_names=ee_body_names,
+                env_ids=env_ids,
+                past_steps=0,
+                future_steps=packet_prediction_frames - 1,
+                anchor_body_name="torso_link",
+            )
+            target_terms = _current_reference_command_terms(
+                base_env,
+                interface=interface,
+                ee_body_names=ee_body_names,
+                env_ids=env_ids,
+                past_steps=0,
+                future_steps=packet_prediction_frames - 1,
+                anchor_body_name="pelvis",
+            )
+            source_target, _ = flatten_command_terms(interface, source_terms)
+            target_target, _ = flatten_command_terms(interface, target_terms)
+            converted_oracle = convert_root_qpos_torso_to_pelvis(
+                source_target.to(device=packet.device, dtype=packet.dtype), **kwargs
+            )
+            absolute_error = (
+                converted_oracle - target_target.to(converted_oracle)
+            ).abs()
+            max_abs = float(absolute_error.max())
+            term_errors: dict[str, float] = {}
+            cursor = 0
+            for term_name, term_width in zip(
+                target_spec.term_names, target_spec.term_widths
+            ):
+                term_errors[str(term_name)] = float(
+                    absolute_error[:, cursor : cursor + int(term_width)].max()
+                )
+                cursor += int(term_width)
+            tolerance = 2.0e-5
+            anchor_conversion_stats["oracle_validation_max_abs"] = max_abs
+            anchor_conversion_stats["oracle_validation_term_max_abs"] = term_errors
+            anchor_conversion_stats["oracle_validation_tolerance"] = tolerance
+            anchor_conversion_stats["oracle_validation_passed"] = max_abs <= tolerance
+            if max_abs > tolerance:
+                raise RuntimeError(
+                    "Torso-to-pelvis FK conversion failed its oracle equivalence "
+                    f"gate: max_abs={max_abs:.9g} > {tolerance:.9g}; "
+                    f"term_max_abs={term_errors}."
+                )
+            print(
+                "[COMMAND] torso->pelvis FK oracle equivalence passed: "
+                f"max_abs={max_abs:.3e}.",
+                flush=True,
+            )
+        return converted
+
     agent = ALGORITHM_CLASS_MAP[args_cli.algorithm](env=env, config=agent_cfg)
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
     tracker_provenance: dict[str, Any] | None = None
@@ -1787,6 +2154,12 @@ def main(
             seed=int(env_cfg.seed),
             allow_shorter_planner_interval=bool(
                 args_cli.allow_shorter_planner_interval
+            ),
+            allow_cross_tracker_planner=bool(args_cli.allow_cross_tracker_planner),
+            long_horizon_prediction_steps=(
+                int(packet_prediction_frames)
+                if int(packet_prediction_frames) > int(execution_frames)
+                else None
             ),
         )
     else:
@@ -1981,10 +2354,39 @@ def main(
                     inference_noise_std=float(args_cli.flow_inference_noise_std),
                     language=language,
                 )
-            command_terms = unflatten_command_target(
-                predicted_target.to(device=base_env.device),
-                target_spec,
+            predicted_target = predicted_target.to(device=base_env.device)
+            execution_prediction = _convert_packet_anchor_if_requested(
+                predicted_target, renew_env_ids
             )
+            if int(packet_prediction_frames) > int(execution_frames):
+                if packet_ensembler is None:
+                    reduced_target, _ = first_packet_window(
+                        execution_prediction,
+                        prediction_layout=packet_layout,
+                        execution_frames=execution_frames,
+                    )
+                else:
+                    anchor_pos, anchor_quat = base_env._get_robot_anchor_state_w_fast(
+                        command_anchor_body_name
+                    )
+                    reduced_target = packet_ensembler.update(
+                        env_ids=renew_env_ids,
+                        packet=execution_prediction,
+                        anchor_pos=anchor_pos.index_select(0, renew_env_ids),
+                        anchor_quat=anchor_quat.index_select(0, renew_env_ids),
+                        episode_steps=base_env.episode_length_buf.index_select(
+                            0, renew_env_ids
+                        ),
+                    )
+                command_terms = unflatten_command_target(
+                    reduced_target,
+                    execution_target_spec,
+                )
+            else:
+                command_terms = unflatten_command_target(
+                    execution_prediction,
+                    target_spec,
+                )
             # The expert window for exactly the frames this packet covers. It is
             # needed for the planner_target_rmse metric below, and -- under the
             # diagnostic oracle-substitution mask -- as the replacement source.
@@ -1993,6 +2395,17 @@ def main(
                 interface=interface,
                 ee_body_names=ee_body_names,
                 env_ids=renew_env_ids,
+            )
+            prediction_reference_terms = (
+                reference_terms
+                if int(packet_prediction_frames) == int(execution_frames)
+                else _current_reference_command_terms(
+                    base_env,
+                    interface=interface,
+                    ee_body_names=ee_body_names,
+                    env_ids=renew_env_ids,
+                    future_steps=int(packet_prediction_frames) - 1,
+                )
             )
             if oracle_substitution_groups:
                 command_terms = apply_oracle_substitution(
@@ -2042,12 +2455,15 @@ def main(
             # against a stale anchor.
             if atomic_command_anchor:
                 base_env.capture_held_command_anchor(
-                    anchor_body_name="torso_link",
+                    anchor_body_name=command_anchor_body_name,
                     env_ids=renew_env_ids,
                 )
             planner_publish_count += int(renew_env_ids.numel())
 
             reference_target, _ = flatten_command_terms(interface, reference_terms)
+            prediction_reference_target, _ = flatten_command_terms(
+                interface, prediction_reference_terms
+            )
             if _os.environ.get("ISAACLAB_TARGET_PROBE") and len(_target_probe) < 20:
                 # Diagnostic: the planner is trained to regress reference_target,
                 # so a perfect planner would emit exactly this. Dump both at the
@@ -2163,8 +2579,8 @@ def main(
                 sample_writer.add(sample)
                 saved_sample_rows += int(sample_reference_target.shape[0])
             target_rmse = rmse_per_row(
-                predicted_target.to(reference_target.device),
-                reference_target,
+                predicted_target.to(prediction_reference_target.device),
+                prediction_reference_target,
             )
             _accumulate_metric(
                 metric_stats,
@@ -2439,6 +2855,17 @@ def main(
             "flow_num_inference_steps": int(args_cli.flow_num_inference_steps),
             "flow_inference_noise_std": float(args_cli.flow_inference_noise_std),
             "planner_target_dim": int(target_spec.target_dim),
+            "execution_window_steps": int(execution_frames),
+            "packet_prediction_horizon_steps": int(packet_prediction_frames),
+            "packet_temporal_ensemble": str(args_cli.packet_temporal_ensemble),
+            "packet_temporal_ensemble_decay": float(
+                args_cli.packet_temporal_ensemble_decay
+            ),
+            "packet_anchor_conversion": packet_anchor_conversion,
+            "command_anchor_body_name": command_anchor_body_name,
+            "cross_tracker_planner_diagnostic": bool(
+                args_cli.allow_cross_tracker_planner
+            ),
             "planner_metadata": planner_metadata,
             "planner_observation_spec": runtime_planner_observation_spec,
             "low_level_tracker": tracker_provenance,
@@ -2473,12 +2900,18 @@ def main(
             "early_terminations_enabled": True,
             "tracking_terminations_enabled": not bool(
                 args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
+            "base_only_termination": bool(args_cli.base_only_termination),
+            "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
             "survival_definition": "no_base_too_low_termination",
-            "time_out_enabled": True,
+            "time_out_enabled": bool(
+                getattr(getattr(env_cfg, "terminations", None), "time_out", None)
+                is not None
+            ),
             "episode_length_extension_enabled": episode_length_extension_enabled,
             "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
             "reward_clipping_enabled": False,
@@ -2505,6 +2938,10 @@ def main(
         "atomic_command_anchor": bool(atomic_command_anchor),
         "use_command_publisher": bool(command_publisher is not None),
         "in_step_publication": bool(in_step_publication),
+        "packet_temporal_ensemble_stats": (
+            packet_ensembler.stats() if packet_ensembler is not None else None
+        ),
+        "packet_anchor_conversion_stats": anchor_conversion_stats,
         "video_dir": str(video_dir) if video_dir is not None else None,
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),
         "samples_output_dir": str(samples_dir)

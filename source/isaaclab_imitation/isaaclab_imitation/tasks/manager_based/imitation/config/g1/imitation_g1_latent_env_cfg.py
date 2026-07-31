@@ -521,29 +521,24 @@ class ImitationG1LatentPerStepVQEnvCfg(ImitationG1LatentFutureCVAEEnvCfg):
 
 
 @configclass
-class ImitationG1LatentSonicFSQEnvCfg(ImitationG1LatentStrictEnvCfg):
-    """Strict-lineage surface for the SONIC-motivated FSQ token interface.
-
-    Publishes one 64-value FSQ token per control step with no phase clock -- the
-    packet slot a planner regresses ten of, matching SONIC's contract where the
-    tokenizer output goes straight into the tracker observation.
-
-    Deliberately derived from :class:`ImitationG1LatentStrictEnvCfg` rather than
-    from :class:`ImitationG1LatentFutureCVAEEnvCfg` the way
-    :class:`ImitationG1LatentPerStepVQEnvCfg` is. That one sits on the
-    :class:`ImitationG1LatentEnvCfg` legacy lineage (registered as
-    ``Isaac-Imitation-G1-Latent-Legacy-v0`` and deprecated), so results on it are
-    not comparable with the qualified LAFAN1 oracles or the Study B/C arms --
-    every one of which ran on the strict surface.
-    """
+class ImitationG1LatentSonicOfficialFSQEnvCfg(ImitationG1LatentSonicEnvCfg):
+    """SONIC release environment with a renewed 10-frame FSQ window command."""
 
     latent_command_dim: int = 64
 
     def __post_init__(self):
         super().__post_init__()
-        # Current plus nine future reference frames, renewed every control step.
         self.latent_patch_past_steps = 0
         self.latent_patch_future_steps = 9
+        # Keep the sample-efficient reset sampler established by the Stable
+        # reset screen; full-trajectory adaptive-failure starts need far more
+        # data at our single-GPU scale.
+        self.random_reset_step_min = 0
+        self.random_reset_step_max = 200
+        self.random_reset_full_trajectory = False
+        self.adaptive_failure_reset_failure_rate_max_over_mean = 50.0
+        # Zero means the observation window advances with the live reference.
+        # The agent-side code_period=1 independently renews the quantized code.
         self.command_hold_steps = 0
         self._sync_expert_window_observation_params()
 
@@ -556,4 +551,4 @@ ImitationG1LatentStrictEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentGoalEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentFutureCVAEEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
 ImitationG1LatentPerStepVQEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
-ImitationG1LatentSonicFSQEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict
+ImitationG1LatentSonicOfficialFSQEnvCfg.from_dict = _g1_lafan_track_env_cfg_from_dict

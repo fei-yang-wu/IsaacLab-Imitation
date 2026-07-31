@@ -8,6 +8,7 @@ import torch
 
 from interface_planner_common import load_rollout_samples
 from planner_sample_schema import (
+    CompletedTrajectorySampleWriter,
     PlannerSampleWriter,
     add_sample_format_metadata,
     build_planner_sample,
@@ -114,6 +115,77 @@ def test_sample_writer_chunks_rows_without_changing_values(tmp_path: Path) -> No
     )
     assert saved["motion_name"] == ["a", "b", "c"]
     assert torch.equal(saved["causal_target"], joined["causal_target"])
+
+
+def test_completed_trajectory_writer_keeps_variable_lengths_and_exact_budget(
+    tmp_path: Path,
+) -> None:
+    metadata = add_sample_format_metadata(
+        {
+            "interface": "latent_skill",
+            "planner_observation_spec": {
+                "history_frames": 2,
+                "frame_dim": 3,
+                "flat_dim": 6,
+            },
+        },
+        collection_stage="demonstration",
+        planner_interval_steps=10,
+    )
+
+    def sample(
+        env_ids: list[int],
+        episode_ids: list[int],
+        motions: list[str],
+        value: float,
+    ) -> dict:
+        rows = len(env_ids)
+        return build_planner_sample(
+            causal_state_history=torch.full((rows, 2, 3), value),
+            demonstration_state_history=torch.full((rows, 2, 3), value),
+            causal_target=torch.full((rows, 2), value),
+            demonstration_target=torch.full((rows, 2), value),
+            trajectory_rank=torch.arange(rows),
+            episode_id=torch.tensor(episode_ids),
+            env_id=torch.tensor(env_ids),
+            control_step=torch.zeros(rows, dtype=torch.long),
+            planner_step=torch.zeros(rows, dtype=torch.long),
+            motion_names=motions,
+            metadata=metadata,
+        )
+
+    writer = CompletedTrajectorySampleWriter(
+        tmp_path / "samples",
+        motion_names=("a", "b"),
+        trajectories_per_motion=1,
+        rows_per_file=10,
+    )
+    writer.add(sample([0, 1], [0, 0], ["a", "b"], 1.0))
+    writer.add(sample([0, 1], [0, 0], ["a", "b"], 2.0))
+    writer.complete(env_ids=[0], episode_ids=[0], motion_names=["a"])
+    writer.add(sample([0, 1], [1, 0], ["a", "b"], 3.0))
+    writer.complete(
+        env_ids=[0, 1],
+        episode_ids=[1, 0],
+        motion_names=["a", "b"],
+    )
+    # This unfinished segment must not leak through the global cutoff.
+    writer.add(sample([2], [0], ["a"], 4.0))
+    writer.flush()
+
+    assert writer.complete_budget
+    assert writer.counts() == {"a": 1, "b": 1}
+    assert writer.completed_trajectory_count == 2
+    assert writer.buffered_trajectory_count == 1
+    assert writer.row_count == 5
+    saved = torch.load(
+        tmp_path / "samples/sample_step_000000.pt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    keys = torch.stack([saved["env_id"], saved["episode_id"]], dim=1)
+    assert torch.equal(torch.unique(keys, dim=0), torch.tensor([[0, 0], [1, 0]]))
+    assert saved["motion_name"] == ["a", "a", "b", "b", "b"]
 
 
 def test_common_sample_rejects_wrong_history_width() -> None:
@@ -277,3 +349,29 @@ def test_language_samples_merge_across_explicit_goals(tmp_path: Path) -> None:
     torch.save(incompatible, samples_dir / "sample_step_000001.pt")
     with pytest.raises(ValueError, match="metadata does not match"):
         load_rollout_samples(samples_dir)
+
+
+def test_loader_preserves_env_id_for_trajectory_split(tmp_path: Path) -> None:
+    metadata = _metadata()
+    metadata["target_spec"] = {
+        "interface": "latent_skill",
+        "term_names": ["z"],
+        "term_widths": [2],
+        "target_dim": 2,
+    }
+    sample = build_planner_sample(
+        causal_state_history=torch.zeros(2, 10, 93),
+        demonstration_state_history=torch.zeros(2, 10, 93),
+        causal_target=torch.zeros(2, 2),
+        demonstration_target=torch.zeros(2, 2),
+        trajectory_rank=torch.zeros(2, dtype=torch.long),
+        episode_id=torch.tensor([0, 0]),
+        env_id=torch.tensor([4, 9]),
+        control_step=torch.tensor([0, 0]),
+        planner_step=torch.tensor([0, 0]),
+        motion_names=["a", "a"],
+        metadata=metadata,
+    )
+    torch.save(sample, tmp_path / "sample_step_000000.pt")
+    loaded, _ = load_rollout_samples(tmp_path)
+    assert torch.equal(loaded["env_id"], torch.tensor([4, 9]))
