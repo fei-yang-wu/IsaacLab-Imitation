@@ -113,8 +113,6 @@ used the former Strict environment.
 
 The remaining broader convergence diagnostic is the all-40 corrected-motion,
 1,000-step deterministic pass plus its strict secondary pass.
-<<<<<<< reorg
-=======
 
 ## Stable latent reset/phase follow-ups submitted (2026-07-30)
 
@@ -164,7 +162,6 @@ Persistent staging and logs are under
 `/home/hice1/fwu91/scratch/Research/IsaacLab/`
 `isaaclab_stable_followups_20260730/`. The staging archive, encoder, and resume
 checkpoint hashes were reverified before `sbatch`.
->>>>>>> main-commit
 
 ## LAFAN1 Stable-vs-Strict 500M inference diagnostic (2026-07-29)
 
