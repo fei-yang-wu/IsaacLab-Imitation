@@ -172,9 +172,10 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   implementation details. Ask the user to confirm the proposed group name
   before launching the run.
 - For IPMD/Bilinear representation-learning work, use the latent task surface
-  `Isaac-Imitation-G1-Latent-v0` unless the user explicitly requests vanilla.
-  Do not submit `IPMD_BILINEAR` comparison jobs on `Isaac-Imitation-G1-v0`; the
-  vanilla bilinear path is debug-only.
+  `Isaac-Imitation-G1-v1` (the default; `Isaac-Imitation-G1-Latent-v0` is the
+  same config, kept as an ordinary back-compat alias) unless the user
+  explicitly requests vanilla. Do not submit `IPMD_BILINEAR` comparison jobs
+  on `Isaac-Imitation-G1-v0`; the vanilla bilinear path is debug-only.
 - Unless the user specifies another budget, cluster training jobs should target
   about 1B environment frames per task/run and a two-day SLURM walltime.
 - Prefer Skynet for large training and paper-scale batch evaluation. Prefer the

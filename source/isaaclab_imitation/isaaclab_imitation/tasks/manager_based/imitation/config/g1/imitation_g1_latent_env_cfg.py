@@ -630,7 +630,7 @@ class ImitationG1LatentSonicOfficialFSQEnvCfg(ImitationG1LatentSonicEnvCfg):
 
 # Canonical-recipe alias: the Stable recipe is not latent-specific -- the
 # command choice is pure configuration (`command_mode`) -- but the historical
-# class name is pinned by the golden layout contract and by existing
+# class name is pinned by the default layout contract and by existing
 # checkpoints/serialized configs, so the latent-named class stays canonical.
 ImitationG1StableEnvCfg = ImitationG1LatentStableEnvCfg
 

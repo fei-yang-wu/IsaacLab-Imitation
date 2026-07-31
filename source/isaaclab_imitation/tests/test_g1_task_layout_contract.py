@@ -1,4 +1,4 @@
-"""Golden observation-layout contract for every registered G1 imitation task.
+"""Default observation-layout contract for every registered G1 imitation task.
 
 The ordered term list of each observation group IS the checkpoint input
 contract: reordering, adding, or removing a term silently changes the actor's
@@ -6,10 +6,11 @@ input layout and invalidates every checkpoint trained against it. The env
 consolidation refactor (recipe x command-config) must therefore reproduce
 these layouts exactly for every task id that predates it.
 
-Regenerate the golden file only when a layout change is intentional:
+Regenerate the recorded default layout only when a layout change is
+intentional:
 
-    REGENERATE_G1_TASK_LAYOUT_GOLDEN=1 pixi run -e isaaclab pytest -q \
-        source/isaaclab_imitation/test_g1_task_layout_contract.py
+    REGENERATE_G1_TASK_LAYOUT_DEFAULT=1 pixi run -e isaaclab pytest -q \
+        source/isaaclab_imitation/tests/test_g1_task_layout_contract.py
 
 and say so in the commit message.
 """
@@ -27,7 +28,7 @@ import pytest
 import isaaclab_imitation.tasks  # noqa: F401  (registers the gym tasks)
 import gymnasium as gym
 
-GOLDEN_PATH = Path(__file__).with_name("g1_task_layout_golden.json")
+DEFAULT_LAYOUT_PATH = Path(__file__).with_name("g1_task_layout_default.json")
 
 TASK_IDS = sorted(
     spec_id for spec_id in gym.registry if spec_id.startswith("Isaac-Imitation-G1")
@@ -79,23 +80,26 @@ def _layout(task_id: str) -> dict:
     }
 
 
-def test_registered_task_layouts_match_golden() -> None:
+def test_registered_task_layouts_match_default() -> None:
     current = {task_id: _layout(task_id) for task_id in TASK_IDS}
-    if os.environ.get("REGENERATE_G1_TASK_LAYOUT_GOLDEN") == "1":
-        GOLDEN_PATH.write_text(json.dumps(current, indent=2, sort_keys=True) + "\n")
-        pytest.skip(f"regenerated {GOLDEN_PATH.name}")
-    assert GOLDEN_PATH.is_file(), (
-        f"{GOLDEN_PATH} missing; regenerate with REGENERATE_G1_TASK_LAYOUT_GOLDEN=1"
+    if os.environ.get("REGENERATE_G1_TASK_LAYOUT_DEFAULT") == "1":
+        DEFAULT_LAYOUT_PATH.write_text(
+            json.dumps(current, indent=2, sort_keys=True) + "\n"
+        )
+        pytest.skip(f"regenerated {DEFAULT_LAYOUT_PATH.name}")
+    assert DEFAULT_LAYOUT_PATH.is_file(), (
+        f"{DEFAULT_LAYOUT_PATH} missing; regenerate with "
+        "REGENERATE_G1_TASK_LAYOUT_DEFAULT=1"
     )
-    golden = json.loads(GOLDEN_PATH.read_text())
-    assert sorted(current) == sorted(golden), (
-        "Task-id set changed. If intentional, regenerate the golden file and "
-        "record the reason in the commit message."
+    recorded = json.loads(DEFAULT_LAYOUT_PATH.read_text())
+    assert sorted(current) == sorted(recorded), (
+        "Task-id set changed. If intentional, regenerate the recorded default "
+        "layout and record the reason in the commit message."
     )
     for task_id in TASK_IDS:
-        assert current[task_id] == golden[task_id], (
-            f"{task_id}: layout or protocol drift vs golden. If intentional "
-            "(checkpoint-breaking!), regenerate the golden file."
+        assert current[task_id] == recorded[task_id], (
+            f"{task_id}: layout or protocol drift vs the recorded default. If "
+            "intentional (checkpoint-breaking!), regenerate it."
         )
 
 
@@ -104,7 +108,7 @@ ROOT_QPOS_TRIO = ("expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_or
 
 @pytest.mark.parametrize(
     "task_id",
-    ["Isaac-Imitation-G1-Latent-v0", "Isaac-Imitation-G1-v1"],
+    ["Isaac-Imitation-G1-v1", "Isaac-Imitation-G1-Latent-v0"],
 )
 def test_stable_explicit_root_qpos_cli_override_layout(task_id: str) -> None:
     """Stable recipe + explicit root_qpos trio through the real CLI path.
@@ -117,10 +121,10 @@ def test_stable_explicit_root_qpos_cli_override_layout(task_id: str) -> None:
     ``_refresh_command_observation_terms``; this test exercises that exact
     sequence without booting a simulation.
 
-    Parametrized over both ``-Latent-v0`` (the moving default) and the
-    permanent ``-G1-v1`` pin -- they share ``_LATENT_STABLE_TASK_KWARGS``, but
-    only this exercises that the override path (not just the golden layout)
-    behaves identically for the new id.
+    Parametrized over both ``-G1-v1`` (the default) and ``-Latent-v0`` (kept
+    for back-compat) -- they share ``_LATENT_STABLE_TASK_KWARGS``, but only
+    this exercises that the override path (not just the recorded layout)
+    behaves identically for both ids.
     """
     import sys
 
