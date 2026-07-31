@@ -174,9 +174,21 @@ COMMAND_SPACE_COMPONENT_PRESETS: dict[str, tuple[str, ...]] = {
 
 
 def normalize_command_components(
-    command_components: list[str] | tuple[str, ...],
+    command_components: list[str] | tuple[str, ...] | str,
 ) -> tuple[str, ...]:
-    """Validate and canonically order an explicit command component set."""
+    """Validate and canonically order an explicit command component set.
+
+    Accepts a ``"[a,b,c]"``/``"a,b,c"`` string form as well: Isaac Lab's
+    strict config updater passes a Hydra CLI override for a ``None``-default
+    field through as the raw string (same gotcha as
+    ``env.expert_macro_state_terms``).
+    """
+    if isinstance(command_components, str):
+        command_components = [
+            part
+            for part in command_components.strip().strip("[]").split(",")
+            if part.strip()
+        ]
     normalized: list[str] = []
     for raw_name in command_components:
         name = str(raw_name).strip().lower().replace("-", "_")
@@ -415,6 +427,17 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
         self.ipmd.latent_learning.prior_input_keys = list(LATENT_PRIOR_INPUT_KEYS)
         self.ipmd.latent_key = ("policy", "latent_command")
         self.ipmd.use_latent_command = use_latent_command
+        if not use_latent_command and str(self.ipmd.command_source) in (
+            "hl_skill",
+            "skill_commander",
+        ):
+            # Explicit command mode consumes no latent command, but latent
+            # task defaults still carry command_source='hl_skill', whose
+            # validation demands an encoder checkpoint that an explicit
+            # tracker does not have. Downgrade to the inert source unless the
+            # user explicitly wired a checkpoint (e.g. packet-encoder eval).
+            if not str(getattr(self.ipmd, "hl_skill_checkpoint_path", "") or ""):
+                self.ipmd.command_source = "random"
         # If running input normalization is enabled on either network, the
         # pretrained latent command (skill code z + sin/cos phase) must pass
         # through untouched: its scale and geometry are part of the

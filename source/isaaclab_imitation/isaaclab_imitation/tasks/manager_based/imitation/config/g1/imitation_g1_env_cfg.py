@@ -1653,6 +1653,15 @@ class ImitationG1LafanTrackEnvCfg(ImitationG1BaseTrackingEnvCfg):
                 f"latent_command policy term; {type(self.observations).__name__} "
                 "has none."
             )
+        if isinstance(self.command_observation_terms, str):
+            # Isaac Lab's strict updater passes a Hydra CLI override for this
+            # None-default field through as the raw "[a,b,c]" string (same
+            # gotcha as expert_macro_state_terms).
+            self.command_observation_terms = [
+                part
+                for part in self.command_observation_terms.strip().strip("[]").split(",")
+                if part.strip()
+            ]
         if self.command_observation_terms is None:
             keep = (
                 set(_PRUNABLE_COMMAND_TERM_NAMES)
