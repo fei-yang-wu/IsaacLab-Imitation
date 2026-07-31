@@ -1,16 +1,24 @@
 """End-to-end latent-interface pipeline: encoder → tracker → data → planner → eval.
 
 This is the project's core loop as one Hydra-driven conductor, so a variant is
-a config override instead of a hand-edited shell chain:
+a config override instead of a hand-edited shell chain. The default stage
+semantics reproduce the qualified enc380 route study (2026-07,
+`experiments/campaigns/2026-07-23-lafan1-planner-capacity/`): a deterministic
+z256 encoder pretrained over the 10-frame root_qpos macro window, a latent
+tracker holding its command for 10 steps, oracle-driven balanced trajectory
+collection, paired-sample materialization, a flow planner at a capacity-aware
+budget, and packet-route closed-loop evaluation.
 
     pretrain          stage 1a: offline DiffSR latent encoder (paper stage)
     low_level         stage 1b: latent-command tracker bound to that encoder
     binding           tensor-identity gate: encoder in tracker == skill ckpt
-    collect           planner training rollouts from the frozen tracker
-    merge             merge/dedup collected sample files
-    train_planner     chunked-transformer planner on the merged samples
+    collect           oracle rollouts via the skill-commander evaluator
+                      (balanced trajectories, saved planner training samples)
+    materialize       promote raw rows into the selected route's target set
+    train_planner     chunked-transformer planner on the materialized samples
     eval_offline      open-loop planner metrics
     eval_closed_loop  Isaac closed-loop evaluation with the frozen tracker
+                      (packet route through the frozen encoder by default)
 
 Design rules, in order of importance:
 
@@ -56,13 +64,21 @@ STAGE_ORDER = (
     "low_level",
     "binding",
     "collect",
-    "merge",
+    "materialize",
     "train_planner",
     "eval_offline",
     "eval_closed_loop",
 )
 
+ROUTES = ("root_qpos", "latent_skill")
+MATERIALIZE_TARGET_KEY = {
+    "root_qpos": "encoder_input_packet_target",
+    "latent_skill": "latent_skill_target",
+}
+
 RECORD_NAME = "e2e_stage.json"
+
+SKILL_COMMANDER_EVAL = "scripts/rlopt/eval_skill_commander_closed_loop.py"
 
 
 class PipelineError(RuntimeError):
@@ -129,9 +145,17 @@ def _flags(args: Any) -> list[str]:
                 rendered.append(flag)
         elif isinstance(value, (list, tuple)):
             rendered += [flag, *[str(v) for v in value]]
+        elif isinstance(value, str) and value.startswith("-"):
+            # argparse would read a leading-dash value as the next flag.
+            rendered.append(f"{flag}={value}")
         else:
             rendered += [flag, str(value)]
     return rendered
+
+
+def _extras(node: Any) -> list[str]:
+    """Verbatim extra argv entries (Hydra-style env/agent overrides)."""
+    return [str(item) for item in (OmegaConf.to_container(node, resolve=True) or [])]
 
 
 class Runner:
@@ -230,6 +254,11 @@ def main_impl(cfg: DictConfig) -> None:
         )
     stages = [s for s in STAGE_ORDER if s in requested]
 
+    route = str(cfg.route)
+    if route not in ROUTES:
+        raise PipelineError(f"Unknown route {route!r}; valid routes: {list(ROUTES)}")
+    motion = str(cfg.motion)
+
     run_root = Path(str(cfg.output_root)).expanduser().resolve()
     if run_root.exists() and not bool(cfg.resume) and any(run_root.iterdir()):
         raise PipelineError(
@@ -240,6 +269,17 @@ def main_impl(cfg: DictConfig) -> None:
     runner = Runner(cfg, run_root)
 
     seed = str(int(cfg.seed))
+    # Shared Isaac-side environment/agent overrides (dataset binding + frozen
+    # encoder path are wired below because they depend on stage handoffs).
+    env_overrides = [
+        "agent.logger.backend=",
+        "agent.ipmd.hl_skill_finetune_enabled=false",
+        f"env.lafan1_manifest_path={cfg.dataset.manifest}",
+        f"env.dataset_path={cfg.dataset.dataset_path}",
+        "env.refresh_zarr_dataset=false",
+        *_extras(cfg.latent_cfg),
+    ]
+
     # Handoff paths. Stages overwrite these with recorded artifacts as they run.
     pretrain_dir = runner.stage_dir("pretrain")
     low_level_dir = runner.stage_dir("low_level")
@@ -255,10 +295,28 @@ def main_impl(cfg: DictConfig) -> None:
     )
     if cfg.collect.get("checkpoint"):
         tracker_ckpt = Path(str(cfg.collect.checkpoint))
-    samples_dir = runner.stage_dir("collect") / "samples"
-    merged_dir = runner.stage_dir("merge") / "samples"
+    collect_dir = runner.stage_dir("collect")
+    raw_samples = collect_dir / "rollout_training_samples"
+    samples_dir = runner.stage_dir("materialize") / route
     planner_dir = runner.stage_dir("train_planner")
     planner_ckpt = planner_dir / "checkpoints" / str(cfg.eval.planner_checkpoint_name)
+
+    def skill_bound_eval_command(output_dir: Path, args_node: Any) -> list[str]:
+        return [
+            *runner.isaac,
+            str(REPO_ROOT / SKILL_COMMANDER_EVAL),
+            "--algorithm",
+            "IPMD",
+            "--checkpoint",
+            str(tracker_ckpt),
+            "--skill_checkpoint",
+            str(encoder_ckpt),
+            "--output_dir",
+            str(output_dir),
+            "--seed",
+            seed,
+            *_flags(args_node),
+        ]
 
     for stage in stages:
         if runner.already_complete(stage):
@@ -326,42 +384,39 @@ def main_impl(cfg: DictConfig) -> None:
             )
 
         elif stage == "collect":
+            # Oracle-driven balanced trajectory collection with saved planner
+            # training samples, exactly as the enc380 demo stage runs it.
             command = [
-                *runner.isaac,
-                "-m",
-                "imitation_experiments.data.collect_interface_rollout_samples",
-                "--interface",
-                "latent_skill",
-                "--checkpoint",
-                str(tracker_ckpt),
-                "--output_dir",
-                str(samples_dir),
-                "--seed",
-                seed,
-                *_flags(cfg.collect.args),
+                *skill_bound_eval_command(collect_dir, cfg.collect.args),
+                "--sample_target_interface",
+                route,
+                f"agent.ipmd.hl_skill_checkpoint_path={encoder_ckpt}",
+                "agent.ipmd.command_source=hl_skill",
+                *env_overrides,
             ]
             runner.run_stage(
                 stage,
                 command,
-                inputs={"tracker_checkpoint": tracker_ckpt},
-                outputs={"samples_dir": str(samples_dir)},
+                inputs={
+                    "tracker_checkpoint": tracker_ckpt,
+                    "encoder_checkpoint": encoder_ckpt,
+                },
+                outputs={"raw_samples": str(raw_samples)},
             )
 
-        elif stage == "merge":
+        elif stage == "materialize":
+            target_key = MATERIALIZE_TARGET_KEY[route]
             command = [
                 *runner.plain,
                 "-m",
-                "imitation_experiments.data.merge_planner_samples",
-                "--source",
-                str(samples_dir),
-                "--output_dir",
-                str(merged_dir),
-                "--seed",
-                seed,
-                *_flags(cfg.merge.args),
+                "imitation_experiments.capacity.materialize_paired_interface_samples",
+                "--samples_dir",
+                str(raw_samples),
+                "--target",
+                f"{target_key}:{motion}={samples_dir}",
             ]
             runner.run_stage(
-                stage, command, inputs={}, outputs={"samples_dir": str(merged_dir)}
+                stage, command, inputs={}, outputs={"samples_dir": str(samples_dir)}
             )
 
         elif stage == "train_planner":
@@ -370,9 +425,11 @@ def main_impl(cfg: DictConfig) -> None:
                 "-m",
                 "imitation_experiments.planner.train_chunked_transformer_planner",
                 "--samples_dir",
-                str(merged_dir),
+                str(samples_dir),
                 "--output_dir",
                 str(planner_dir),
+                "--interface",
+                route,
                 "--seed",
                 seed,
                 *_flags(cfg.train_planner.args),
@@ -388,7 +445,7 @@ def main_impl(cfg: DictConfig) -> None:
                 "-m",
                 "imitation_experiments.evaluation.eval_interface_planner_offline",
                 "--samples_dir",
-                str(merged_dir),
+                str(samples_dir),
                 "--planner_checkpoint",
                 str(planner_ckpt),
                 "--output_json",
@@ -405,20 +462,30 @@ def main_impl(cfg: DictConfig) -> None:
             )
 
         elif stage == "eval_closed_loop":
-            out_json = runner.stage_dir(stage) / "closed_loop_metrics.json"
+            out_dir = runner.stage_dir(stage)
+            if route == "root_qpos":
+                route_args = [
+                    "--packet_planner_checkpoint",
+                    str(planner_ckpt),
+                    "--packet_interface",
+                    route,
+                    "--packet_source",
+                    "planner",
+                    "agent.ipmd.command_source=hl_skill",
+                ]
+            else:
+                route_args = [
+                    "--planner_checkpoint",
+                    str(planner_ckpt),
+                    "agent.ipmd.command_source=skill_commander",
+                    f"agent.ipmd.skill_commander_checkpoint_path={planner_ckpt}",
+                    "agent.ipmd.skill_commander_use_achieved_state=true",
+                ]
             command = [
-                *runner.isaac,
-                "-m",
-                "imitation_experiments.evaluation.eval_interface_planner_closed_loop",
-                "--checkpoint",
-                str(tracker_ckpt),
-                "--planner_checkpoint",
-                str(planner_ckpt),
-                "--output_json",
-                str(out_json),
-                "--seed",
-                seed,
-                *_flags(cfg.eval.closed_loop_args),
+                *skill_bound_eval_command(out_dir, cfg.eval.closed_loop_args),
+                *route_args,
+                f"agent.ipmd.hl_skill_checkpoint_path={encoder_ckpt}",
+                *env_overrides,
             ]
             runner.run_stage(
                 stage,
@@ -427,11 +494,8 @@ def main_impl(cfg: DictConfig) -> None:
                     "tracker_checkpoint": tracker_ckpt,
                     "planner_checkpoint": planner_ckpt,
                 },
-                outputs={"metrics": str(out_json)},
+                outputs={"summary": str(out_dir / "summary.json")},
             )
-
-        elif runner.already_complete(stage):  # pragma: no cover - defensive
-            continue
 
     mode = "dry run rendered" if runner.dry_run else "completed"
     print(f"[INFO] latent e2e pipeline {mode}: {', '.join(stages)}")
