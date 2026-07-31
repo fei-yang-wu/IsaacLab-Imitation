@@ -1,8 +1,9 @@
 # IsaacLab-Imitation
 
 IsaacLab-Imitation is a multi-repo workspace for humanoid imitation learning on top of Isaac Lab. This repository
-contains the Isaac Lab extension code for the imitation environments and pins the active `IsaacLab`, `RLOpt`, and
-`ImitationLearningTools` dependency checkouts as git submodules.
+contains the Isaac Lab extension code for the imitation environments and pins the active `RLOpt` and
+`ImitationLearningTools` dependency checkouts as git submodules. Isaac Lab itself is pinned as a regular Pixi/PyPI
+dependency (`isaaclab==3.0.0b2.post1` from NVIDIA's index), not a submodule.
 
 The current focus is manager-based imitation environments for the Unitree G1 robot, with training flows built around
 RLOpt and RSL-RL.
@@ -14,7 +15,7 @@ RLOpt and RSL-RL.
 - `scripts/rsl_rl`: training entrypoints for RSL-RL
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test environment runners
 - `experiments/`: current-campaign navigation, reusable experiment tooling, and the staged paper-facing entrypoint
-- `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/`: required submodule checkouts
+- `RLOpt/`, `ImitationLearningTools/`: required submodule checkouts
 - `source/isaaclab_imitation/isaaclab_imitation/assets/unitree`: vendored Unitree G1 URDF, meshes, and robot config
 - `docker/cluster`: cluster submission utilities
 
@@ -40,7 +41,7 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-This workspace expects `IsaacLab`, `RLOpt`, and `ImitationLearningTools` to live under this repo as submodules. G1 robot
+This workspace expects `RLOpt` and `ImitationLearningTools` to live under this repo as submodules. G1 robot
 configuration and the required URDF/mesh assets are vendored in this repo under `source/isaaclab_imitation`, so
 `unitree_rl_lab` is no longer required for training. `loco-mujoco` is optional and only needed when explicitly selecting
 the `loco_mujoco` loader.

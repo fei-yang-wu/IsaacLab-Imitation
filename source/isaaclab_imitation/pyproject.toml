@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 # Prefer in-repo submodules. Optional loaders should resolve through the active
 # environment or explicit local overrides instead of default type-check paths.
+#
+# Isaac Lab itself is not a submodule (pixi.toml pins it as a pip package in
+# the `isaaclab` feature environment instead), so it resolves through that
+# environment's installed site-packages rather than an in-repo source path.
 [tool.pyrefly]
 search-path = [
     "isaaclab_imitation",
-    "../../IsaacLab/source/isaaclab",
-    "../../IsaacLab/source/isaaclab_tasks",
-    "../../IsaacLab/source/isaaclab_assets",
-    "../../IsaacLab/source/isaaclab_mimic",
-    "../../IsaacLab/source/isaaclab_rl",
+    "../../.pixi/envs/isaaclab/lib/python3.12/site-packages",
     "../../RLOpt",
     "../../ImitationLearningTools",
 ]

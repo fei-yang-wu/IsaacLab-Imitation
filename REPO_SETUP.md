@@ -2,11 +2,13 @@
 
 This repo now tracks its dependent repos as submodules:
 
-- `IsaacLab/`
 - `RLOpt/`
 - `ImitationLearningTools/`
 
-`IsaacLab-Imitation` itself remains the top-level repo.
+`IsaacLab-Imitation` itself remains the top-level repo. Isaac Lab itself is
+not a submodule here: `pixi.toml` pins it as a regular PyPI dependency
+(`isaaclab==3.0.0b2.post1` from NVIDIA's index) in the `isaaclab` Pixi
+environment.
 
 Optional local checkouts:
 
@@ -32,7 +34,6 @@ Run:
 
 ```bash
 git remote -v
-git -C IsaacLab remote -v
 git -C RLOpt remote -v
 git -C ImitationLearningTools remote -v
 ```
@@ -40,7 +41,6 @@ git -C ImitationLearningTools remote -v
 Expected default remotes:
 
 - `IsaacLab-Imitation`: `origin -> git@github.com:GTLIDAR/IsaacLab-Imitation.git`
-- `IsaacLab`: `origin -> git@github.com:GTLIDAR/IsaacLab.git`
 - `RLOpt`: `origin -> git@github.com:fei-yang-wu/RLOpt.git`
 - `ImitationLearningTools`: `origin -> git@github.com:GTLIDAR/ImitationLearningTools.git`
 - optional `loco-mujoco`: configured by your local checkout when using that loader
@@ -60,7 +60,6 @@ git clone https://github.com/robfiras/loco-mujoco.git
 Optional extra remotes used in this workspace:
 
 ```bash
-git -C IsaacLab remote add upstream git@github.com:isaac-sim/IsaacLab.git
 git -C RLOpt remote add gatech https://github.gatech.edu/GeorgiaTechLIDARGroup/RLOpt.git
 ```
 
@@ -74,7 +73,7 @@ To move submodules to newer commits from their configured tracking branches:
 
 ```bash
 git submodule update --remote --recursive
-git add IsaacLab RLOpt ImitationLearningTools
+git add RLOpt ImitationLearningTools
 git commit -m "Update submodule pins"
 ```
 
@@ -117,13 +116,16 @@ The helper defaults to `ice-gpu`, `gpu:l40s:1`, `coe-ice`, and 32G RAM; override
 those with `CLUSTER_SLURM_PARTITION`, `CLUSTER_SLURM_GPU_GRES`,
 `CLUSTER_SLURM_QOS`, or `CLUSTER_SLURM_MEM` if the active allocation differs.
 
-By default, cluster jobs use the submodule states pinned by this top-level repo.
+By default, cluster jobs use the submodule states pinned by this top-level repo
+(`RLOpt` and `ImitationLearningTools`) plus the pip-pinned `isaaclab` package.
 Only set path overrides in `docker/cluster/.env.cluster` when a task explicitly
 needs an unpinned local checkout outside this repo:
 
 ```bash
 CLUSTER_RLOPT_LOCAL_PATH=/absolute/path/to/RLOpt
-# Optional:
+# Optional: syncs an arbitrary local Isaac Lab source checkout as an overlay.
+# Isaac Lab is not a submodule of this repo, so there is no default path to
+# fall back to -- set this only when testing unreleased Isaac Lab patches.
 # CLUSTER_ISAACLAB_LOCAL_PATH=/absolute/path/to/IsaacLab
 # CLUSTER_IMITATION_TOOLS_LOCAL_PATH=/absolute/path/to/ImitationLearningTools
 ```
