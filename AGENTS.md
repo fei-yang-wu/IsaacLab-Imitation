@@ -176,6 +176,14 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   same config, kept as an ordinary back-compat alias) unless the user
   explicitly requests vanilla. Do not submit `IPMD_BILINEAR` comparison jobs
   on `Isaac-Imitation-G1-v0`; the vanilla bilinear path is debug-only.
+- G1 latent task versioning (2026-07-31 onward): "the default" is always the
+  highest-numbered `Isaac-Imitation-G1-vN` id. When the Stable recipe's
+  config needs a breaking change, register a new `-G1-vN+1` with the new
+  kwargs instead of mutating the existing vN; once superseded, a vN stays
+  registered with its exact old kwargs forever (for reproducibility) and
+  simply stops being cited as the default. Update the versioning-convention
+  comment in `config/g1/__init__.py`'s "Current defaults" section and this
+  line when the default moves.
 - Unless the user specifies another budget, cluster training jobs should target
   about 1B environment frames per task/run and a two-day SLURM walltime.
 - Prefer Skynet for large training and paper-scale batch evaluation. Prefer the

@@ -247,17 +247,25 @@ _LATENT_ABLATION_TASK_KWARGS = {
 
 # ---------------------------------------------------------------------------
 # Current defaults.
+#
+# Versioning convention (2026-07-31 onward): "the default" is always the
+# highest-numbered `-G1-vN` latent id below. Bumping the config is bumping
+# the number, never mutating an existing vN's kwargs -- once a vN is
+# superseded by vN+1, it is frozen forever (still registered, still exactly
+# reproducible) and simply stops being cited as the default. Do not reuse
+# `-Latent-v0`'s "moving alias" pattern again; it predates this convention
+# and is kept only for its own back-compat reasons (see its comment below).
 # ---------------------------------------------------------------------------
 
 # Stable recipe, command space configured -- the default latent task
-# (2026-07-31). No `Latent` tag: under the recipe x command-config
-# architecture the command space is configuration, not identity. Defaults to
-# the latent 258-D command (the class default; unlike explicit `-G1-v0`);
-# select vanilla with `env.command_mode=explicit` +
-# `env.command_observation_terms` + `agent.ipmd.use_latent_command=false` +
-# `agent.command_components`. Frozen to the Stable recipe: cite this id in
-# protocols, gates, and paper commands so recorded runs and checkpoints stay
-# reproducible.
+# (2026-07-31 onward, until superseded by a future -G1-v2+). No `Latent` tag:
+# under the recipe x command-config architecture the command space is
+# configuration, not identity. Defaults to the latent 258-D command (the
+# class default; unlike explicit `-G1-v0`); select vanilla with
+# `env.command_mode=explicit` + `env.command_observation_terms` +
+# `agent.ipmd.use_latent_command=false` + `agent.command_components`. Cite
+# this id in protocols, gates, and paper commands so recorded runs and
+# checkpoints stay reproducible even after a newer vN becomes the default.
 gym.register(
     id="Isaac-Imitation-G1-v1",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
