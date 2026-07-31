@@ -612,6 +612,11 @@ class G1ImitationLatentSonicRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
 
     def sync_input_keys(self) -> None:
         super().sync_input_keys()
+        if not bool(self.ipmd.use_latent_command):
+            # Explicit command mode (env.command_mode=explicit): keep the base
+            # class's command_space / command_components key selection instead
+            # of forcing the SONIC latent contract. Latent runs are unchanged.
+            return
         self.policy.input_keys = list(SONIC_LATENT_POLICY_INPUT_KEYS)
         if self.value_function is not None:
             self.value_function.input_keys = list(SONIC_LATENT_CRITIC_INPUT_KEYS)
