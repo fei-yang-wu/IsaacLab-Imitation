@@ -44,7 +44,12 @@ _COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracl
 # identically. ``ee_chunk_current_slot`` is retained for the abandoned EE
 # tracker's recorded contract.
 _POLICY_COMMAND_MODES = frozenset(
-    {"reference", "full_body_chunk_current_slot", "ee_chunk_current_slot"}
+    {
+        "reference",
+        "explicit_chunk_current_slot",
+        "full_body_chunk_current_slot",
+        "ee_chunk_current_slot",
+    }
 )
 _CAUSAL_PLANNER_HISTORY_STEPS = 9
 # Tracking maths stays in metres; MPJPE is reported in millimetres because that
@@ -1739,6 +1744,28 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mdp_reference_body_id_cache[cache_key] = body_ids
         return body_ids
 
+    def _get_robot_body_ids_by_name_fast(
+        self, body_names: Sequence[str]
+    ) -> torch.Tensor:
+        """Resolve live robot body names with the dataset-tolerant name rules."""
+        self._ensure_mdp_fast_paths()
+        body_ids: list[int] = []
+        for name in body_names:
+            body_id = self._mdp_body_name_to_id.get(name)
+            if body_id is None:
+                body_id = self._mdp_body_name_to_id_lower.get(name.lower())
+            if body_id is None:
+                body_id = self._mdp_body_name_to_id_normalized.get(
+                    self._normalize_body_name_for_matching(name)
+                )
+            if body_id is None:
+                raise KeyError(f"Robot body {name!r} not found in live articulation.")
+            body_ids.append(int(body_id))
+        resolved = self._get_body_ids_tensor_fast(body_ids)
+        if isinstance(resolved, slice):
+            raise RuntimeError("Named robot body lookup unexpectedly returned a slice.")
+        return resolved
+
     def _get_reference_body_pose_w_fast(
         self, reference_body_names: Sequence[str]
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1970,9 +1997,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             "expert_anchor_ori_b": zeros(window_steps * 6),
             "expert_ee_pos_b": zeros(window_steps * int(num_ee_bodies) * 3),
             "expert_ee_ori_b": zeros(window_steps * int(num_ee_bodies) * 6),
-            # root_points5: positions only, and a body set of its own so its
-            # packet slot never collides with the EE interface's.
+            # Keypoint positions and orientations share a body set of their
+            # own so their packet slots never collide with the EE interface's.
             "expert_keypoint_pos_b": zeros(window_steps * int(num_keypoint_bodies) * 3),
+            "expert_keypoint_ori_b": zeros(window_steps * int(num_keypoint_bodies) * 6),
         }
 
     def _ensure_agent_trajectory_command_terms(self) -> None:
@@ -2363,6 +2391,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         67-D command contract expected by the vanilla 50 Hz tracker.
         """
         if self._policy_command_mode not in (
+            "explicit_chunk_current_slot",
             "full_body_chunk_current_slot",
             "ee_chunk_current_slot",
         ):
@@ -2432,9 +2461,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             expected_frame_width = n_bodies * (
                 3 if term_name == "expert_ee_pos_b" else 6
             )
-        elif term_name == "expert_keypoint_pos_b":
-            # One 3-vector per keypoint; no orientation half.
-            expected_frame_width = max(int(len(reference_body_names)), 1) * 3
+        elif term_name in ("expert_keypoint_pos_b", "expert_keypoint_ori_b"):
+            # Position and orientation are independent components, so a config
+            # may select point targets or complete keypoint poses.
+            n_bodies = max(int(len(reference_body_names)), 1)
+            expected_frame_width = n_bodies * (
+                3 if term_name == "expert_keypoint_pos_b" else 6
+            )
         else:
             raise KeyError(f"Unsupported chunk tracker command term {term_name!r}.")
         if frame_width != expected_frame_width:
@@ -4282,15 +4315,15 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if body_terms_enabled:
             body_pos_flat = body_pos_b.reshape(batch_size, -1)
             terms["expert_ee_pos_b"] = body_pos_flat
-            terms["expert_ee_ori_b"] = compiled.quat_to_rot6d_flat(body_ori_b).reshape(
+            body_ori_flat = compiled.quat_to_rot6d_flat(body_ori_b).reshape(
                 batch_size, -1
             )
-            # root_points5 wants the same anchor-frame body positions without the
-            # orientation half. Exposing them under a second name lets the two
-            # interfaces request different body sets: the cache key upstream
-            # already includes reference_body_names, so a keypoint request builds
-            # its own entry rather than reusing the EE one.
+            terms["expert_ee_ori_b"] = body_ori_flat
+            # Keypoint terms use the same anchor-frame pose calculation under a
+            # separately keyed body-set cache. Exposing position and orientation
+            # independently lets configs select point targets or complete poses.
             terms["expert_keypoint_pos_b"] = body_pos_flat
+            terms["expert_keypoint_ori_b"] = body_ori_flat
         return terms
 
     def _expert_macro_feature_term_order(self) -> tuple[str, ...]:
@@ -4386,6 +4419,53 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             slices[term_name] = (cursor, cursor + width)
             cursor += width
         return slices
+
+    def _build_expert_macro_window_terms(
+        self,
+        expert_window: TensorDict,
+        env_ids: torch.Tensor,
+        *,
+        context: str,
+        past_steps: int,
+        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
+        anchor_body_name: str = "torso_link",
+    ) -> dict[str, torch.Tensor]:
+        """Build independently selectable joint, EE, and keypoint macro terms."""
+        selected = set(self._expert_macro_feature_term_order())
+        terms = self._build_expert_window_terms(
+            expert_window,
+            env_ids,
+            context=context,
+            past_steps=past_steps,
+            joint_ids=joint_ids,
+            anchor_body_name=anchor_body_name,
+        )
+        body_groups = (
+            (
+                {"expert_ee_pos_b", "expert_ee_ori_b"},
+                self._command_ee_body_names,
+            ),
+            (
+                {"expert_keypoint_pos_b", "expert_keypoint_ori_b"},
+                self._command_keypoint_body_names,
+            ),
+        )
+        for term_names, reference_body_names in body_groups:
+            requested = selected.intersection(term_names)
+            if not requested:
+                continue
+            body_terms = self._build_expert_window_terms(
+                expert_window,
+                env_ids,
+                context=context,
+                past_steps=past_steps,
+                joint_ids=joint_ids,
+                anchor_body_name=anchor_body_name,
+                reference_body_names=reference_body_names,
+            )
+            for term_name in requested:
+                terms[term_name] = body_terms[term_name]
+        return terms
 
     def _get_current_expert_window_terms(
         self,
@@ -4554,7 +4634,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     return None
                 if term_name in {"expert_ee_pos_b", "expert_ee_ori_b"}:
                     reference_body_names = self._command_ee_body_names
-                elif term_name == "expert_keypoint_pos_b":
+                elif term_name in {
+                    "expert_keypoint_pos_b",
+                    "expert_keypoint_ori_b",
+                }:
                     reference_body_names = self._command_keypoint_body_names
                 else:
                     reference_body_names = ()
@@ -4924,7 +5007,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     past_steps=state_history_steps,
                     future_steps=horizon_steps,
                 )
-        window_terms = self._build_expert_window_terms(
+        window_terms = self._build_expert_macro_window_terms(
             expert_window,
             env_ids,
             context="expert",
@@ -5094,7 +5177,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             past_steps=state_history_steps,
             future_steps=horizon_steps,
         )
-        window_terms = self._build_expert_window_terms(
+        window_terms = self._build_expert_macro_window_terms(
             expert_window,
             env_ids_t,
             context="rollout",
@@ -5190,10 +5273,20 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if batch_size <= 0:
             raise ValueError("env_ids must select at least one environment.")
 
-        terms = self.current_offline_demo_command_terms(
+        local_steps = self._current_local_steps(env_ids_t)
+        expert_window = self._sample_expert_window_slice(
+            env_ids_t,
+            local_steps,
             past_steps=0,
             future_steps=horizon_steps,
-            env_ids=env_ids_t,
+        )
+        terms = self._build_expert_macro_window_terms(
+            expert_window,
+            env_ids_t,
+            context="expert",
+            past_steps=0,
+            joint_ids=slice(None),
+            anchor_body_name=self._expert_anchor_body_name,
         )
         window_steps = horizon_steps + 1
         sequence = self._expert_macro_state_sequence_from_terms(
@@ -5208,7 +5301,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 window_steps=window_steps,
             )
         )
-        local_steps = self._current_local_steps(env_ids_t)
         tm = self.trajectory_manager
         traj_rank = tm.env_traj_rank.index_select(
             0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
@@ -5243,14 +5335,12 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         env_ids: torch.Tensor | Sequence[int] | None = None,
         state_history_steps: int = 0,
     ) -> TensorDict:
-        """Macro transitions whose current ``state`` uses the robot's ACHIEVED motion.
+        """Return macro transitions with selected command terms achieved by the robot.
 
-        Identical to ``current_expert_macro_transition_batch`` except the
-        ``expert_motion`` slice of the current ``state`` is replaced by the
-        robot's actual joint positions/velocities (the rollout-context anchor
-        terms already encode the robot-relative offset). The future window and
-        target stay expert-derived, so a skill commander can regress the expert
-        skill ``z`` from the robot's achieved state (full-M3 closed-loop input).
+        Joint-state, EE, and sparse-keypoint components are replaced independently,
+        so the same path supports root+qpos, root+five-keypoint pose, and composed
+        ablations. Rollout-context anchor terms remain expert-relative-to-robot and
+        the future window/target remain expert-derived.
         """
         horizon_steps = int(horizon_steps)
         batch = self.current_expert_macro_transition_batch(
@@ -5266,31 +5356,82 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             env_ids_t = torch.as_tensor(
                 env_ids, device=self.device, dtype=torch.long
             ).reshape(-1)
+
         slices = self.expert_macro_feature_slices(horizon_steps)
-        if "expert_motion" not in slices:
-            raise RuntimeError(
-                "expert_motion feature slice unavailable for achieved macro state."
-            )
-        start, end = slices["expert_motion"]
-        joint_pos = self.robot.data.joint_pos.torch.index_select(0, env_ids_t)
-        joint_vel = self.robot.data.joint_vel.torch.index_select(0, env_ids_t)
-        achieved_motion = torch.cat([joint_pos, joint_vel], dim=-1).to(
+        selected = set(slices)
+        joint_pos = self.robot.data.joint_pos.torch.index_select(0, env_ids_t).to(
             device=self.device, dtype=torch.float32
         )
-        expected_width = int(end) - int(start)
-        if int(achieved_motion.shape[-1]) != expected_width:
-            raise ValueError(
-                "Achieved motion width mismatch: expected "
-                f"{expected_width} (expert_motion slice), got "
-                f"{int(achieved_motion.shape[-1])} from robot joint state."
+        joint_vel = self.robot.data.joint_vel.torch.index_select(0, env_ids_t).to(
+            device=self.device, dtype=torch.float32
+        )
+        achieved_terms: dict[str, torch.Tensor] = {
+            "expert_motion": torch.cat([joint_pos, joint_vel], dim=-1),
+            "expert_motion_qpos": joint_pos,
+        }
+
+        body_groups = (
+            (
+                "expert_ee_pos_b",
+                "expert_ee_ori_b",
+                self._command_ee_body_names,
+            ),
+            (
+                "expert_keypoint_pos_b",
+                "expert_keypoint_ori_b",
+                self._command_keypoint_body_names,
+            ),
+        )
+        for pos_term, ori_term, body_names in body_groups:
+            if not selected.intersection({pos_term, ori_term}):
+                continue
+            if not body_names:
+                raise ValueError(
+                    f"Macro interface selected {pos_term!r}/{ori_term!r}, but its "
+                    "configured robot body set is empty."
+                )
+            body_ids = self._get_robot_body_ids_by_name_fast(body_names)
+            body_pos_b, body_quat_b = self._get_robot_body_state_in_anchor_frame_fast(
+                body_ids,
+                self._expert_anchor_body_name,
+            )
+            body_pos_b = body_pos_b.index_select(0, env_ids_t)
+            body_quat_b = body_quat_b.index_select(0, env_ids_t)
+            achieved_terms[pos_term] = body_pos_b.reshape(len(env_ids_t), -1).to(
+                device=self.device, dtype=torch.float32
+            )
+            achieved_terms[ori_term] = (
+                _get_mdp_compiled_module()
+                .quat_to_rot6d_flat(body_quat_b)
+                .reshape(len(env_ids_t), -1)
+                .to(device=self.device, dtype=torch.float32)
+            )
+
+        replacements = [name for name in slices if name in achieved_terms]
+        if not replacements:
+            raise RuntimeError(
+                "Configured expert_macro_state_terms contain no achieved robot "
+                "component; select joint, EE, or keypoint terms in addition to anchors."
             )
         state = batch.get(("hl", "state")).clone()
-        state[:, int(start) : int(end)] = achieved_motion
-        batch.set(("hl", "state"), state)
         state_history = batch.get(("hl", "state_history"))
         if state_history is not None:
             state_history = state_history.clone()
-            state_history[:, -1, int(start) : int(end)] = achieved_motion
+        for term_name in replacements:
+            start_idx, end_idx = slices[term_name]
+            achieved = achieved_terms[term_name]
+            expected_width = int(end_idx) - int(start_idx)
+            if tuple(achieved.shape) != (int(env_ids_t.numel()), expected_width):
+                raise ValueError(
+                    f"Achieved {term_name} shape mismatch: expected "
+                    f"({int(env_ids_t.numel())}, {expected_width}), got "
+                    f"{tuple(achieved.shape)}."
+                )
+            state[:, int(start_idx) : int(end_idx)] = achieved
+            if state_history is not None:
+                state_history[:, -1, int(start_idx) : int(end_idx)] = achieved
+        batch.set(("hl", "state"), state)
+        if state_history is not None:
             batch.set(("hl", "state_history"), state_history)
         return batch
 

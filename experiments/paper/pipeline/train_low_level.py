@@ -118,9 +118,21 @@ def _latent_command_dim(cfg: DictConfig) -> int:
     return int(cfg.encoder.z_dim) + phase_dim
 
 
+def resolve_interface_spec(cfg: DictConfig):
+    """Resolve a named preset or a config-composed explicit interface."""
+    interface_cfg = cfg.interface
+    components = to_container(interface_cfg.get("components"))
+    if components is None:
+        return get_interface(str(interface_cfg.name))
+    return get_interface(
+        str(interface_cfg.name),
+        command_components=tuple(str(value) for value in components),
+        tracker_binding=str(interface_cfg.get("tracker_binding", "native")),
+    )
+
+
 def build_command(cfg: DictConfig, log_dir: Path) -> list[str]:
     """Render the argv for the RLOpt training entrypoint."""
-    interface_name = str(cfg.interface.name)
     entrypoint, assert_kitless = resolve_entrypoint(cfg)
 
     latent_arm = opt_str(cfg.get("latent_arm"))
@@ -133,7 +145,7 @@ def build_command(cfg: DictConfig, log_dir: Path) -> list[str]:
     if online_mode is not None:
         task = opt_str(cfg.get("task")) or online_mode.task
     else:
-        task = opt_str(cfg.get("task")) or get_interface(interface_name).default_task
+        task = opt_str(cfg.get("task")) or resolve_interface_spec(cfg).default_task
     if task is None:
         raise PipelineError("task could not be resolved and was not set explicitly.")
 
@@ -190,14 +202,18 @@ def build_command(cfg: DictConfig, log_dir: Path) -> list[str]:
     if physics:
         cmd.append(f"physics={physics}")
         if physics == "newton_mjwarp":
-            cmd.append(hydra_override("env.sim.physics.solver_cfg.njmax", int(cfg.njmax)))
+            cmd.append(
+                hydra_override("env.sim.physics.solver_cfg.njmax", int(cfg.njmax))
+            )
             cmd.append(
                 hydra_override("env.sim.physics.solver_cfg.nconmax", int(cfg.nconmax))
             )
 
     cmd.append(hydra_override("env.lafan1_manifest_path", manifest))
     cmd.append(hydra_override("env.dataset_path", dataset_path))
-    cmd.append(hydra_override("env.refresh_zarr_dataset", bool(cfg.dataset.refresh_zarr)))
+    cmd.append(
+        hydra_override("env.refresh_zarr_dataset", bool(cfg.dataset.refresh_zarr))
+    )
 
     motions = to_container(cfg.dataset.get("motions"))
     if motions:
@@ -227,7 +243,7 @@ def build_command(cfg: DictConfig, log_dir: Path) -> list[str]:
             )
         )
 
-    interface = get_interface(interface_name)
+    interface = resolve_interface_spec(cfg)
     hold_steps = int(cfg.hold.steps)
 
     if interface.kind == "latent":
@@ -278,7 +294,8 @@ def build_command(cfg: DictConfig, log_dir: Path) -> list[str]:
         )
         cmd.append(
             hydra_override(
-                "agent.ipmd.latent_learning.command_phase_mode", str(cfg.hold.phase_mode)
+                "agent.ipmd.latent_learning.command_phase_mode",
+                str(cfg.hold.phase_mode),
             )
         )
         cmd.append(hydra_override("env.latent_command_dim", latent_dim))
@@ -288,6 +305,13 @@ def build_command(cfg: DictConfig, log_dir: Path) -> list[str]:
         # command window held for the publication interval.
         cmd.append(hydra_override("agent.ipmd.use_latent_command", False))
         cmd.append(hydra_override("agent.command_space", interface.command_space))
+        if interface.tracker_binding == "native" and interface.command_components:
+            cmd.append(
+                hydra_override(
+                    "agent.command_components", list(interface.command_components)
+                )
+            )
+            cmd.append(hydra_override("agent.command_spec_name", interface.name))
         cmd.append(hydra_override("env.command_hold_steps", hold_steps))
         cmd.append(
             hydra_override(
@@ -366,7 +390,7 @@ def main(cfg: DictConfig) -> None:
         print(f"[INFO] low-level checkpoint: {policy}", flush=True)
 
     encoder_input = None
-    if get_interface(str(cfg.interface.name)).kind == "latent":
+    if resolve_interface_spec(cfg).kind == "latent":
         encoder_input = opt_path(cfg.encoder.get("checkpoint"))
 
     write_stage_record(

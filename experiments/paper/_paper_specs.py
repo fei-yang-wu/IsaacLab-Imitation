@@ -29,6 +29,69 @@ G1_NUM_KEYPOINT_BODIES = 5
 #: Anchor pose is a 3-vector position plus a 6D rotation representation.
 _ANCHOR_WIDTH = 3 + 6
 
+EXPLICIT_COMPONENT_ORDER: tuple[str, ...] = (
+    "joint_qpos_qvel",
+    "joint_qpos",
+    "keypoint_pos",
+    "keypoint_ori",
+    "ee_pos",
+    "ee_ori",
+    "root_pos",
+    "root_ori",
+)
+
+EXPLICIT_COMPONENT_TERMS: dict[str, str] = {
+    "joint_qpos_qvel": "expert_motion",
+    "joint_qpos": "expert_motion_qpos",
+    "keypoint_pos": "expert_keypoint_pos_b",
+    "keypoint_ori": "expert_keypoint_ori_b",
+    "ee_pos": "expert_ee_pos_b",
+    "ee_ori": "expert_ee_ori_b",
+    "root_pos": "expert_anchor_pos_b",
+    "root_ori": "expert_anchor_ori_b",
+}
+
+
+def normalize_explicit_components(components: tuple[str, ...]) -> tuple[str, ...]:
+    """Return one deterministic packet ordering for a selected component set."""
+    values = tuple(str(value).strip().lower().replace("-", "_") for value in components)
+    unknown = sorted(set(values) - set(EXPLICIT_COMPONENT_ORDER))
+    if unknown:
+        raise ValueError(
+            f"Unknown explicit command components {unknown}; expected a subset "
+            f"of {list(EXPLICIT_COMPONENT_ORDER)}."
+        )
+    if not values:
+        raise ValueError("An explicit interface must select at least one component.")
+    if len(set(values)) != len(values):
+        raise ValueError(f"Explicit command components contain duplicates: {values}.")
+    if {"joint_qpos_qvel", "joint_qpos"}.issubset(values):
+        raise ValueError("joint_qpos_qvel and joint_qpos are mutually exclusive.")
+    selected = set(values)
+    return tuple(name for name in EXPLICIT_COMPONENT_ORDER if name in selected)
+
+
+def explicit_component_width(component: str) -> int:
+    widths = {
+        "joint_qpos_qvel": 2 * G1_NUM_JOINTS,
+        "joint_qpos": G1_NUM_JOINTS,
+        "keypoint_pos": 3 * G1_NUM_KEYPOINT_BODIES,
+        "keypoint_ori": 6 * G1_NUM_KEYPOINT_BODIES,
+        "ee_pos": 3 * G1_NUM_EE_BODIES,
+        "ee_ori": 6 * G1_NUM_EE_BODIES,
+        "root_pos": 3,
+        "root_ori": 6,
+    }
+    return widths[component]
+
+
+def explicit_layout(components: tuple[str, ...]) -> tuple[tuple[str, ...], int]:
+    ordered = normalize_explicit_components(components)
+    return (
+        tuple(EXPLICIT_COMPONENT_TERMS[name] for name in ordered),
+        sum(explicit_component_width(name) for name in ordered),
+    )
+
 
 @dataclass(frozen=True)
 class InterfaceSpec:
@@ -47,7 +110,24 @@ class InterfaceSpec:
     policy_command_mode: str | None = None
     #: Command observation terms to keep when training the low-level controller.
     command_observation_terms: tuple[str, ...] = ()
+    command_components: tuple[str, ...] = ()
+    tracker_binding: str = "native"
     notes: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind != "explicit":
+            return
+        terms, width = explicit_layout(self.command_components)
+        if terms != self.command_terms:
+            raise ValueError(
+                f"Interface {self.name!r} command terms {self.command_terms} do not "
+                f"match components {self.command_components}: {terms}."
+            )
+        if self.per_frame_values != width:
+            raise ValueError(
+                f"Interface {self.name!r} declares {self.per_frame_values} values/frame, "
+                f"but its components define {width}."
+            )
 
     def packet_values(self, *, horizon_steps: int, latent_dim: int = 0) -> int:
         """Total values published per planner decision."""
@@ -66,13 +146,15 @@ EXPLICIT_INTERFACES: dict[str, InterfaceSpec] = {
         command_terms=("expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b"),
         default_task="Isaac-Imitation-G1-Strict-v0",
         collector="interface_rollout",
-        command_space="full_body_trajectory",
+        command_space="single_frame_full_body",
         policy_command_mode="full_body_chunk_current_slot",
+        command_components=("joint_qpos_qvel", "root_pos", "root_ori"),
         command_observation_terms=(
             "expert_motion",
             "expert_anchor_pos_b",
             "expert_anchor_ori_b",
         ),
+        tracker_binding="shared_vanilla",
         notes="The paper's explicit row: 670 values at 5 Hz, consumed one slot per step.",
     ),
     "root_qpos": InterfaceSpec(
@@ -88,6 +170,7 @@ EXPLICIT_INTERFACES: dict[str, InterfaceSpec] = {
         collector="interface_rollout",
         command_space="root_qpos",
         policy_command_mode="full_body_chunk_current_slot",
+        command_components=("joint_qpos", "root_pos", "root_ori"),
         command_observation_terms=(
             "expert_motion_qpos",
             "expert_anchor_pos_b",
@@ -108,12 +191,41 @@ EXPLICIT_INTERFACES: dict[str, InterfaceSpec] = {
         collector="interface_rollout",
         command_space="root_points5",
         policy_command_mode="full_body_chunk_current_slot",
+        command_components=("keypoint_pos", "root_pos", "root_ori"),
         command_observation_terms=(
             "expert_keypoint_pos_b",
             "expert_anchor_pos_b",
             "expert_anchor_ori_b",
         ),
         notes="Sparse keypoint positions plus root.",
+    ),
+    "root_points5_pose": InterfaceSpec(
+        name="root_points5_pose",
+        kind="explicit",
+        per_frame_values=(3 + 6) * G1_NUM_KEYPOINT_BODIES + _ANCHOR_WIDTH,
+        command_terms=(
+            "expert_keypoint_pos_b",
+            "expert_keypoint_ori_b",
+            "expert_anchor_pos_b",
+            "expert_anchor_ori_b",
+        ),
+        default_task="Isaac-Imitation-G1-Strict-v0",
+        collector="interface_rollout",
+        command_space="root_points5_pose",
+        policy_command_mode="explicit_chunk_current_slot",
+        command_components=(
+            "keypoint_pos",
+            "keypoint_ori",
+            "root_pos",
+            "root_ori",
+        ),
+        command_observation_terms=(
+            "expert_keypoint_pos_b",
+            "expert_keypoint_ori_b",
+            "expert_anchor_pos_b",
+            "expert_anchor_ori_b",
+        ),
+        notes="Five keypoint positions and orientations plus root pose.",
     ),
     "ee_trajectory": InterfaceSpec(
         name="ee_trajectory",
@@ -124,6 +236,7 @@ EXPLICIT_INTERFACES: dict[str, InterfaceSpec] = {
         collector="interface_rollout",
         command_space="ee_trajectory",
         policy_command_mode="ee_chunk_current_slot",
+        command_components=("ee_pos", "ee_ori"),
         command_observation_terms=("expert_ee_pos_b", "expert_ee_ori_b"),
         notes=(
             "Rootless control. End-effector poses in the anchor frame never say "
@@ -152,7 +265,58 @@ INTERFACES: dict[str, InterfaceSpec] = {
 }
 
 
-def get_interface(name: str) -> InterfaceSpec:
+def build_explicit_interface(
+    name: str,
+    command_components: tuple[str, ...],
+    *,
+    tracker_binding: str = "native",
+    default_task: str = "Isaac-Imitation-G1-Strict-v0",
+) -> InterfaceSpec:
+    """Build a validated explicit interface directly from Hydra components."""
+    ordered = normalize_explicit_components(command_components)
+    terms, width = explicit_layout(ordered)
+    if tracker_binding not in {"native", "shared_vanilla"}:
+        raise ValueError(
+            f"Unsupported tracker_binding={tracker_binding!r}; expected native or "
+            "shared_vanilla."
+        )
+    if tracker_binding == "shared_vanilla" and ordered != (
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori",
+    ):
+        raise ValueError(
+            "shared_vanilla is locked to the full 67D per-frame vanilla actor "
+            "contract; reduced component sets require a native tracker."
+        )
+    return InterfaceSpec(
+        name=str(name),
+        kind="explicit",
+        per_frame_values=width,
+        command_terms=terms,
+        default_task=str(default_task),
+        collector="interface_rollout",
+        command_space="single_frame_full_body"
+        if tracker_binding == "shared_vanilla"
+        else "composed",
+        policy_command_mode="explicit_chunk_current_slot",
+        command_observation_terms=terms,
+        command_components=ordered,
+        tracker_binding=tracker_binding,
+        notes="Config-composed explicit command interface.",
+    )
+
+
+def get_interface(
+    name: str,
+    *,
+    command_components: tuple[str, ...] | None = None,
+    tracker_binding: str = "native",
+) -> InterfaceSpec:
+    if command_components is not None:
+        return build_explicit_interface(
+            name, command_components, tracker_binding=tracker_binding
+        )
     try:
         return INTERFACES[name]
     except KeyError:

@@ -75,8 +75,8 @@ if [ -n "$exclude_nodes" ]; then
     exclude_directive="#SBATCH --exclude=${exclude_nodes}"
 fi
 if [ -n "$dependency" ]; then
-    if [[ ! "$dependency" =~ ^afterok:[0-9]+(:[0-9]+)*$ ]]; then
-        echo "[ERROR] CLUSTER_SLURM_DEPENDENCY must use afterok:<job>[:<job>...]." >&2
+    if [[ ! "$dependency" =~ ^(afterok|afterany):[0-9]+(:[0-9]+)*$ ]]; then
+        echo "[ERROR] CLUSTER_SLURM_DEPENDENCY must use afterok or afterany with numeric job IDs." >&2
         exit 2
     fi
     dependency_directive="#SBATCH --dependency=${dependency}"

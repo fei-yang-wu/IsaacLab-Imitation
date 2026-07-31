@@ -338,6 +338,35 @@ def policy_expert_keypoint_pos_b(
     )
 
 
+def policy_expert_keypoint_ori_b(
+    env: ImitationRLEnv,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor sparse-keypoint orientation command, direct or streamed.
+
+    Orientations use the same anchor frame and rot6d representation as the
+    end-effector orientation term. Keeping position and orientation as separate
+    observation terms lets an explicit interface select either point targets
+    or full keypoint poses without another hard-coded command space.
+    """
+    del asset_cfg
+    if env.policy_command_mode == "reference":
+        return expert_window_keypoint_ori_b(
+            env,
+            past_steps=0,
+            future_steps=0,
+            reference_body_names=reference_body_names,
+            anchor_body_name=anchor_body_name,
+        )
+    return env.current_full_body_tracker_command_term(
+        "expert_keypoint_ori_b",
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
 def expert_window_keypoint_pos_b(
     env: ImitationRLEnv,
     past_steps: int = 1,
@@ -349,6 +378,25 @@ def expert_window_keypoint_pos_b(
     del asset_cfg
     return env.get_current_command_window_term(
         term_name="expert_keypoint_pos_b",
+        past_steps=past_steps,
+        future_steps=future_steps,
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def expert_window_keypoint_ori_b(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Window of sparse-keypoint rot6d orientations in the anchor frame."""
+    del asset_cfg
+    return env.get_current_command_window_term(
+        term_name="expert_keypoint_ori_b",
         past_steps=past_steps,
         future_steps=future_steps,
         anchor_body_name=anchor_body_name,

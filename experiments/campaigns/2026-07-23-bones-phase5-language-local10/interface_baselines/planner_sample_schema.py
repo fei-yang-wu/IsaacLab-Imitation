@@ -101,6 +101,181 @@ class PlannerSampleWriter:
         self._pending_rows = 0
 
 
+def _select_sample_row(
+    sample: Mapping[str, Any], *, index: int, rows: int
+) -> dict[str, Any]:
+    """Select one row while preserving batch-invariant sample metadata."""
+    result: dict[str, Any] = {}
+    for key, value in sample.items():
+        if (
+            isinstance(value, torch.Tensor)
+            and value.ndim > 0
+            and int(value.shape[0]) == rows
+        ):
+            result[key] = value[index : index + 1]
+        elif isinstance(value, list) and len(value) == rows:
+            result[key] = [value[index]]
+        else:
+            result[key] = value
+    return result
+
+
+class CompletedTrajectorySampleWriter:
+    """Commit only complete, variable-length trajectory segments.
+
+    Samples arrive at planner-publication time, before the environment reports
+    whether the current control step ended an episode. Rows are therefore held
+    by ``(env_id, episode_id)`` until :meth:`complete` is called. This prevents
+    a global collection cutoff from leaking partially observed trajectories
+    into the training set.
+    """
+
+    def __init__(
+        self,
+        output_dir: Path,
+        *,
+        motion_names: Sequence[str],
+        trajectories_per_motion: int,
+        rows_per_file: int = 1,
+    ) -> None:
+        names = tuple(str(name).strip() for name in motion_names)
+        if not names or any(not name for name in names):
+            raise ValueError("motion_names must contain non-empty names.")
+        if len(names) != len(set(names)):
+            raise ValueError("motion_names must be unique.")
+        if int(trajectories_per_motion) <= 0:
+            raise ValueError("trajectories_per_motion must be positive.")
+        self.motion_names = names
+        self.trajectories_per_motion = int(trajectories_per_motion)
+        self._writer = PlannerSampleWriter(output_dir, rows_per_file=int(rows_per_file))
+        self._buffers: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        self._motion_by_key: dict[tuple[int, int], str] = {}
+        self._closed_keys: set[tuple[int, int]] = set()
+        self._counts = {name: 0 for name in names}
+        self._records: list[dict[str, Any]] = []
+
+    @property
+    def output_dir(self) -> Path:
+        return self._writer.output_dir
+
+    @property
+    def file_count(self) -> int:
+        return self._writer.file_count
+
+    @property
+    def row_count(self) -> int:
+        return self._writer.row_count
+
+    @property
+    def complete_budget(self) -> bool:
+        return all(
+            count == self.trajectories_per_motion for count in self._counts.values()
+        )
+
+    @property
+    def completed_trajectory_count(self) -> int:
+        return sum(self._counts.values())
+
+    @property
+    def buffered_trajectory_count(self) -> int:
+        return len(self._buffers)
+
+    def counts(self) -> dict[str, int]:
+        return dict(self._counts)
+
+    def missing(self) -> dict[str, int]:
+        return {
+            name: self.trajectories_per_motion - count
+            for name, count in self._counts.items()
+            if count < self.trajectories_per_motion
+        }
+
+    def records(self) -> list[dict[str, Any]]:
+        return [dict(record) for record in self._records]
+
+    def add(self, sample: Mapping[str, Any]) -> None:
+        rows = _sample_row_count(sample)
+        env_ids = sample.get("env_id")
+        episode_ids = sample.get("episode_id")
+        motion_names = sample.get("motion_name")
+        if (
+            not isinstance(env_ids, torch.Tensor)
+            or not isinstance(episode_ids, torch.Tensor)
+            or not isinstance(motion_names, list)
+            or len(motion_names) != rows
+        ):
+            raise ValueError(
+                "Completed-trajectory collection requires row-aligned env_id, "
+                "episode_id, and motion_name fields."
+            )
+        env_values = env_ids.detach().cpu().reshape(-1).tolist()
+        episode_values = episode_ids.detach().cpu().reshape(-1).tolist()
+        if len(env_values) != rows or len(episode_values) != rows:
+            raise ValueError("Trajectory identity tensors are not row-aligned.")
+        for index, (env_id, episode_id, raw_motion) in enumerate(
+            zip(env_values, episode_values, motion_names, strict=True)
+        ):
+            key = (int(env_id), int(episode_id))
+            motion = str(raw_motion)
+            if key in self._closed_keys:
+                raise ValueError(f"Received a row for already closed trajectory {key}.")
+            previous_motion = self._motion_by_key.setdefault(key, motion)
+            if previous_motion != motion:
+                raise ValueError(
+                    f"Trajectory {key} changed motion from {previous_motion!r} "
+                    f"to {motion!r}."
+                )
+            self._buffers.setdefault(key, []).append(
+                _select_sample_row(sample, index=index, rows=rows)
+            )
+
+    def complete(
+        self,
+        *,
+        env_ids: Sequence[int],
+        episode_ids: Sequence[int],
+        motion_names: Sequence[str],
+    ) -> None:
+        """Close segments and commit only those still inside the exact budget."""
+        if not (len(env_ids) == len(episode_ids) == len(motion_names)):
+            raise ValueError("Completed trajectory fields must have equal lengths.")
+        for raw_env, raw_episode, raw_motion in zip(
+            env_ids, episode_ids, motion_names, strict=True
+        ):
+            key = (int(raw_env), int(raw_episode))
+            motion = str(raw_motion)
+            if key in self._closed_keys:
+                raise ValueError(f"Trajectory {key} was completed more than once.")
+            rows = self._buffers.pop(key, [])
+            buffered_motion = self._motion_by_key.pop(key, motion)
+            if buffered_motion != motion:
+                raise ValueError(
+                    f"Completed trajectory {key} reports motion {motion!r}, "
+                    f"but buffered rows use {buffered_motion!r}."
+                )
+            self._closed_keys.add(key)
+            count = self._counts.get(motion)
+            if count is None or count >= self.trajectories_per_motion:
+                continue
+            if not rows:
+                raise ValueError(f"Completed trajectory {key} has no planner rows.")
+            for sample in rows:
+                self._writer.add(sample)
+            self._counts[motion] = count + 1
+            self._records.append(
+                {
+                    "env_id": key[0],
+                    "episode_id": key[1],
+                    "motion_name": motion,
+                    "rows": len(rows),
+                }
+            )
+
+    def flush(self) -> None:
+        """Flush accepted trajectories; incomplete buffers remain discarded."""
+        self._writer.flush()
+
+
 def add_sample_format_metadata(
     metadata: Mapping[str, Any],
     *,

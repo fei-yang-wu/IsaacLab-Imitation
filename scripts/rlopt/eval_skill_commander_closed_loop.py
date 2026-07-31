@@ -207,6 +207,17 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--balanced_trajectories_per_motion",
+    type=int,
+    default=0,
+    help=(
+        "When positive, collect exactly this many completed variable-length "
+        "trajectory segments for every balanced motion. Rows from an episode "
+        "are buffered until reset, so the final cutoff contains no partial "
+        "trajectories."
+    ),
+)
+parser.add_argument(
     "--balanced_motion_names",
     nargs="+",
     default=None,
@@ -274,6 +285,30 @@ parser.add_argument(
     help="Interface the --packet_planner_checkpoint must declare.",
 )
 parser.add_argument(
+    "--packet_prediction_horizon_steps",
+    type=int,
+    default=0,
+    help=(
+        "Explicit planner prediction horizon. Zero uses the frozen encoder's "
+        "native H10 input. Longer horizons still execute H10 per renewal."
+    ),
+)
+parser.add_argument(
+    "--packet_temporal_ensemble",
+    choices=("none", "exponential"),
+    default="none",
+    help=(
+        "For a prediction horizon longer than H10, either execute the first ten "
+        "and discard the rest, or ensemble aligned overlapping predictions."
+    ),
+)
+parser.add_argument(
+    "--packet_temporal_ensemble_decay",
+    type=float,
+    default=0.5,
+    help="Non-negative exponential age decay for overlapping packet predictions.",
+)
+parser.add_argument(
     "--allow_random_reset",
     action="store_true",
     default=False,
@@ -313,6 +348,25 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--base_only_termination",
+    action="store_true",
+    default=False,
+    help=(
+        "Keep only the base-too-low fall termination (plus reference end). "
+        "All tracking-error and timeout terms are disabled, so reported "
+        "tracking metrics are truncated only by a physical fall."
+    ),
+)
+parser.add_argument(
+    "--fall_height_m",
+    type=float,
+    default=0.4,
+    help=(
+        "Absolute torso height used by --base_only_termination. The default "
+        "matches the repository's standard G1 base_too_low detector."
+    ),
+)
+parser.add_argument(
     "--disable_reward_clipping",
     action="store_true",
     default=False,
@@ -332,6 +386,15 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Save achieved-state planner inputs and target z tensors for finetuning.",
+)
+parser.add_argument(
+    "--sample_target_interface",
+    type=str,
+    default="latent_skill",
+    help=(
+        "Target written with saved rows. latent_skill writes z; any other name "
+        "writes active expert_macro_state_terms as a term-major packet."
+    ),
 )
 parser.add_argument(
     "--sample_rows_per_file",
@@ -480,10 +543,10 @@ sys.path.append(  # noqa: E402
     )
 )
 from packet_to_latent_command import (  # noqa: E402
-    FRAME_WIDTH,
     build_noise_reference,
-    PACKET_FRAMES,
+    frames_to_term_major,
     install_packet_encoder_command_source,
+    PacketLayout,
 )
 from low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
 from paper_protocol_metadata import (  # noqa: E402
@@ -499,6 +562,7 @@ DETERMINISTIC_METRIC_PREFIX = "deterministic_tracking/"
 from planner_latency import PlannerForwardTimer  # noqa: E402
 from planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 from planner_sample_schema import (  # noqa: E402
+    CompletedTrajectorySampleWriter,
     PlannerSampleWriter,
     add_sample_format_metadata,
     build_planner_sample,
@@ -636,9 +700,10 @@ def _skill_commander_planner_metadata(
                 metadata.setdefault("finetune_num_updates", finetune_num_updates)
 
     checkpoint_update = checkpoint.get("update")
-    if metadata.get("pretrain_num_updates") in (None, "") and checkpoint_update not in (
-        None,
-        "",
+    if (
+        metadata.get("training_stage") != "oracle"
+        and metadata.get("pretrain_num_updates") in (None, "")
+        and checkpoint_update not in (None, "")
     ):
         pretrain_update = int(checkpoint_update)
         if finetune_num_updates is not None:
@@ -952,6 +1017,8 @@ def _trajectory_metadata(raw_env: Any) -> dict[str, Any]:
 
 def _trainer_config_from_checkpoint(
     checkpoint: dict[str, Any],
+    *,
+    device: str,
 ) -> SkillCommanderConfig:
     if "planner_config" in checkpoint and "planner_state_dict" in checkpoint:
         planner_config = checkpoint.get("planner_config", {})
@@ -1001,7 +1068,7 @@ def _trainer_config_from_checkpoint(
             num_updates=1,
             eval_batches=1,
             eval_batch_size=1,
-            device="cpu",
+            device=str(device),
         )
     values = dict(checkpoint.get("config", {}))
     values.setdefault(
@@ -1036,6 +1103,11 @@ def _trainer_config_from_checkpoint(
         values["diffusion_inference_noise_std"] = float(
             args_cli.diffusion_inference_noise_std
         )
+    # Evaluation must place the planner on the same accelerator as its inputs.
+    # Checkpoints often retain device="cpu" from a portable training/config
+    # serialization; honoring that here makes only the direct latent route run
+    # on CPU while packet planners are explicitly moved to the simulator GPU.
+    values["device"] = str(device)
     values["batch_size"] = 1
     values["num_updates"] = 1
     values["eval_batches"] = 1
@@ -1067,12 +1139,53 @@ def _disable_tracking_terminations(terminations: Any) -> list[str]:
 
 def _disable_non_reference_terminations(terminations: Any) -> None:
     names = set(getattr(terminations, "__dict__", {}).keys())
-    names.update(("anchor_pos", "anchor_ori", "ee_body_pos", "base_too_low"))
+    names.update(
+        (
+            "time_out",
+            "reference_finished",
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "foot_pos_xyz",
+            "base_too_low",
+        )
+    )
     for name in sorted(names):
         if name.startswith("_") or name == "reference_finished":
             continue
         if hasattr(terminations, name):
             setattr(terminations, name, None)
+
+
+def _configure_base_only_termination(
+    terminations: Any, *, minimum_height: float
+) -> list[str]:
+    if minimum_height <= 0.0:
+        raise ValueError("--fall_height_m must be positive.")
+    base_term = G1TerminationsCfg().base_too_low
+    base_term.params["minimum_height"] = float(minimum_height)
+    terminations.base_too_low = base_term
+
+    names = set(getattr(terminations, "__dict__", {}).keys())
+    names.update(
+        (
+            "time_out",
+            "reference_finished",
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "foot_pos_xyz",
+            "base_too_low",
+        )
+    )
+    disabled: list[str] = []
+    for name in sorted(names):
+        if name.startswith("_") or name in {"reference_finished", "base_too_low"}:
+            continue
+        if hasattr(terminations, name) and getattr(terminations, name) is not None:
+            setattr(terminations, name, None)
+            disabled.append(name)
+    return disabled
 
 
 def _planner_state(batch: Any, state_history_steps: int) -> Tensor:
@@ -1105,6 +1218,30 @@ def _diff_stats(prefix: str, lhs: Tensor, rhs: Tensor) -> dict[str, float]:
     }
 
 
+def _macro_packet_layout(
+    wrapped_env: IsaacLabWrapper, *, horizon_steps: int
+) -> PacketLayout:
+    """Derive a term-major packet layout from the active encoder macro terms."""
+    raw_slices = wrapped_env.expert_macro_feature_slices(
+        horizon_steps=int(horizon_steps)
+    )
+    ordered = sorted(
+        ((str(name), int(span[0]), int(span[1])) for name, span in raw_slices.items()),
+        key=lambda item: item[1],
+    )
+    cursor = 0
+    term_widths: list[tuple[str, int]] = []
+    for name, start, stop in ordered:
+        if start != cursor or stop <= start:
+            raise ValueError(
+                f"Invalid expert macro feature slice {name!r}=[{start}, {stop}); "
+                f"expected a contiguous slice beginning at {cursor}."
+            )
+        term_widths.append((name, stop - start))
+        cursor = stop
+    return PacketLayout(tuple(term_widths), packet_frames=int(horizon_steps))
+
+
 @torch.no_grad()
 def _measure_commander(
     *,
@@ -1117,6 +1254,7 @@ def _measure_commander(
     sample_metadata: dict[str, Any] | None = None,
     episode_ids: Tensor | None = None,
     sample_motion_names: list[str] | None = None,
+    sample_target_interface: str = "latent_skill",
     compute_metrics: bool = True,
 ) -> dict[str, float]:
     if sample_path is not None and sample_writer is not None:
@@ -1156,6 +1294,20 @@ def _measure_commander(
     ).to(device=trainer.device, dtype=torch.float32)
 
     z_target = trainer._target_z(expert_state, future_window)
+    packet_layout = _macro_packet_layout(wrapped_env, horizon_steps=horizon_steps)
+    required_future = packet_layout.packet_frames - 1
+    if int(future_window.shape[1]) < required_future:
+        raise ValueError(
+            f"Expert future window has {int(future_window.shape[1])} frames; "
+            f"packet target {sample_target_interface!r} needs {required_future}."
+        )
+    packet_frames = torch.cat(
+        [expert_state.unsqueeze(1), future_window[:, :required_future]], dim=1
+    )
+    packet_target = frames_to_term_major(packet_frames, packet_layout)
+    sample_target = (
+        z_target if str(sample_target_interface) == "latent_skill" else packet_target
+    )
     lang = trainer._lang_for_ranks(traj_rank)
 
     if sample_path is not None or sample_writer is not None:
@@ -1173,23 +1325,27 @@ def _measure_commander(
         sample = build_planner_sample(
             causal_state_history=achieved_planner_state,
             demonstration_state_history=expert_planner_state,
-            causal_target=z_target,
-            demonstration_target=z_target,
+            causal_target=sample_target,
+            demonstration_target=sample_target,
             trajectory_rank=traj_rank,
             episode_id=episode_ids,
-            # Rows here are the full env batch in order, so the env index is the
-            # row index. Needed with episode_id to identify a trajectory: the
-            # counter is per-env, so env 0 episode 1 and env 3 episode 1 are
-            # different rollouts sharing a number.
-            env_id=torch.arange(int(episode_ids.reshape(-1).numel())),
+            # `env_ids` may be a balanced subset of the live vectorized envs.
+            # Preserve the actual simulator IDs: together with the per-env
+            # episode counter they uniquely identify a trajectory segment.
+            env_id=env_ids.detach().cpu().reshape(-1),
             control_step=local_step,
             planner_step=torch.div(local_step, horizon_steps, rounding_mode="floor"),
             motion_names=sample_motion_names,
             metadata=sample_metadata,
             language_embedding=lang if trainer.condition_on_language else None,
         )
+        # Both planner routes receive targets from the exact same simulator rows.
+        sample["latent_skill_target"] = z_target.detach().cpu().float().contiguous()
+        sample["encoder_input_packet_target"] = (
+            packet_target.detach().cpu().float().contiguous()
+        )
         # Keep the old latent target alias during migration of analysis tools.
-        sample["z_target"] = sample["demonstration_target"]
+        sample["z_target"] = sample["latent_skill_target"]
         sample["step"] = None if sample_step is None else int(sample_step)
         if sample_writer is not None:
             sample_writer.add(sample)
@@ -1298,17 +1454,37 @@ def main(
         raise ValueError("--motion_names must contain non-empty names.")
     if int(args_cli.balanced_rows_per_motion) < 0:
         raise ValueError("--balanced_rows_per_motion must be >= 0.")
-    if int(args_cli.sample_rows_per_file) <= 0:
-        raise ValueError("--sample_rows_per_file must be positive.")
-    if args_cli.balanced_motion_names and int(args_cli.balanced_rows_per_motion) <= 0:
-        raise ValueError(
-            "--balanced_motion_names requires positive --balanced_rows_per_motion."
-        )
-    if int(args_cli.balanced_rows_per_motion) > 0 and not bool(
-        args_cli.save_rollout_training_samples
+    if int(args_cli.balanced_trajectories_per_motion) < 0:
+        raise ValueError("--balanced_trajectories_per_motion must be >= 0.")
+    if (
+        int(args_cli.balanced_rows_per_motion) > 0
+        and int(args_cli.balanced_trajectories_per_motion) > 0
     ):
         raise ValueError(
-            "Balanced row collection requires --save_rollout_training_samples."
+            "Row-balanced and completed-trajectory-balanced collection are "
+            "mutually exclusive."
+        )
+    if int(args_cli.sample_rows_per_file) <= 0:
+        raise ValueError("--sample_rows_per_file must be positive.")
+    if args_cli.base_only_termination and args_cli.disable_tracking_terminations:
+        raise ValueError(
+            "--base_only_termination and --disable_tracking_terminations are "
+            "mutually exclusive."
+        )
+    if args_cli.balanced_motion_names and not (
+        int(args_cli.balanced_rows_per_motion) > 0
+        or int(args_cli.balanced_trajectories_per_motion) > 0
+    ):
+        raise ValueError(
+            "--balanced_motion_names requires a positive balanced row or "
+            "trajectory budget."
+        )
+    if (
+        int(args_cli.balanced_rows_per_motion) > 0
+        or int(args_cli.balanced_trajectories_per_motion) > 0
+    ) and not bool(args_cli.save_rollout_training_samples):
+        raise ValueError(
+            "Balanced collection requires --save_rollout_training_samples."
         )
     if args_cli.num_envs is not None:
         env_cfg.scene.num_envs = int(args_cli.num_envs)
@@ -1363,7 +1539,22 @@ def main(
     if args_cli.deterministic_tracking:
         deterministic_tracking_record = disable_domain_randomization(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
-    if args_cli.disable_tracking_terminations:
+    if args_cli.base_only_termination:
+        if terminations is None:
+            raise ValueError(
+                "--base_only_termination requires an environment termination "
+                "configuration."
+            )
+        disabled_tracking_termination_terms = _configure_base_only_termination(
+            terminations, minimum_height=float(args_cli.fall_height_m)
+        )
+        print(
+            "[INFO] Base-only evaluation: torso height "
+            f"< {float(args_cli.fall_height_m):.2f} m terminates; disabled "
+            f"{disabled_tracking_termination_terms}.",
+            flush=True,
+        )
+    elif args_cli.disable_tracking_terminations:
         if terminations is None:
             raise ValueError(
                 "--disable_tracking_terminations requires an environment "
@@ -1468,6 +1659,9 @@ def main(
         "motion_names": selected_motion_names,
         "goal_motion_match_required": bool(args_cli.require_goal_motion_match),
         "balanced_rows_per_motion": int(args_cli.balanced_rows_per_motion),
+        "balanced_trajectories_per_motion": int(
+            args_cli.balanced_trajectories_per_motion
+        ),
         "balanced_motion_names": args_cli.balanced_motion_names,
         "trajectory_name": args_cli.trajectory_name,
         "allow_random_reset": bool(args_cli.allow_random_reset),
@@ -1478,8 +1672,10 @@ def main(
             args_cli.extend_episode_length_for_max_steps
         ),
         "keep_early_terminations": bool(args_cli.keep_early_terminations),
+        "base_only_termination": bool(args_cli.base_only_termination),
+        "fall_height_m": float(args_cli.fall_height_m),
         "tracking_terminations_enabled": not bool(
-            args_cli.disable_tracking_terminations
+            args_cli.disable_tracking_terminations or args_cli.base_only_termination
         ),
         "disabled_tracking_termination_terms": disabled_tracking_termination_terms,
         "survival_definition": "no_base_too_low_termination",
@@ -1542,6 +1738,7 @@ def main(
         str(name) for name in base_env.expert_trajectory_motion_names()
     ]
     balanced_selector: BalancedMotionRowSelector | None = None
+    balanced_trajectory_motion_names: list[str] | None = None
     if int(args_cli.balanced_rows_per_motion) > 0:
         balanced_motion_names = (
             [str(name).strip() for name in args_cli.balanced_motion_names]
@@ -1564,6 +1761,24 @@ def main(
             balanced_motion_names,
             rows_per_motion=int(args_cli.balanced_rows_per_motion),
         )
+    elif int(args_cli.balanced_trajectories_per_motion) > 0:
+        balanced_trajectory_motion_names = (
+            [str(name).strip() for name in args_cli.balanced_motion_names]
+            if args_cli.balanced_motion_names is not None
+            else (
+                selected_motion_names
+                if selected_motion_names is not None
+                else list(loaded_motion_names)
+            )
+        )
+        missing_motion_names = sorted(
+            set(balanced_trajectory_motion_names).difference(loaded_motion_names)
+        )
+        if missing_motion_names:
+            raise ValueError(
+                "Balanced trajectory motions are not loaded by the environment: "
+                f"{missing_motion_names}."
+            )
     tracked_body_names = _resolve_existing_body_names(
         base_env, list(G1_TRACKED_BODY_NAMES)
     )
@@ -1593,7 +1808,9 @@ def main(
             map_location="cpu",
             weights_only=False,
         )
-        trainer_config = _trainer_config_from_checkpoint(planner_checkpoint)
+        trainer_config = _trainer_config_from_checkpoint(
+            planner_checkpoint, device=str(env_cfg.sim.device)
+        )
     trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
     if "planner_config" in planner_checkpoint:
         assert planner_checkpoint_path is not None
@@ -1659,6 +1876,10 @@ def main(
     # the oracle sampler, because that is the one holding the encoder.
     packet_encoder_stats: Any = None
     packet_encoder_provenance: dict[str, Any] | None = None
+    packet_planner_metadata: dict[str, Any] | None = None
+    packet_planner_target_dim: int | None = None
+    packet_planner_path: Path | None = None
+    planner_latency_timer: PlannerForwardTimer | None = None
     if args_cli.packet_planner_checkpoint is not None:
         if command_source != "hl_skill":
             raise ValueError(
@@ -1680,11 +1901,28 @@ def main(
         # normalization buffers must be moved explicitly or the first forward
         # dies on a cuda/cpu addmm mismatch.
         packet_planner = packet_planner.to(device=env_cfg.sim.device)
+        packet_planner_metadata = {
+            **(_packet_meta if isinstance(_packet_meta, dict) else {}),
+            **_parameter_counts(packet_planner),
+        }
+        packet_planner_target_dim = int(packet_spec.target_dim)
+        if str(args_cli.packet_source) == "planner":
+            # Use the same root-module CUDA hook as the direct latent route.
+            # The timer therefore includes only packet_planner.forward and
+            # excludes packet conversion, the frozen encoder, tracker, and sim.
+            planner_latency_timer = PlannerForwardTimer(packet_planner)
         if str(packet_spec.interface) != str(args_cli.packet_interface):
             raise ValueError(
                 f"Packet planner targets {packet_spec.interface!r} but "
                 f"--packet_interface is {args_cli.packet_interface!r}."
             )
+        packet_prediction_horizon = int(args_cli.packet_prediction_horizon_steps)
+        if packet_prediction_horizon <= 0:
+            packet_prediction_horizon = int(trainer.horizon_steps)
+        packet_layout = PacketLayout.from_target_spec(
+            packet_spec,
+            packet_frames=packet_prediction_horizon,
+        )
 
         def _packet_causal_state(env_ids: Tensor) -> Tensor:
             return _planner_state(
@@ -1712,13 +1950,14 @@ def main(
             )
             key = "causal_target" if "causal_target" in ref else "demonstration_target"
             packet_noise_reference = build_noise_reference(
-                packet_sampler.skill_encoder, ref[key]
+                packet_sampler.skill_encoder, ref[key], packet_layout=packet_layout
             )
         packet_encoder_stats = install_packet_encoder_command_source(
             packet_sampler,
             planner=packet_planner,
             causal_state_provider=_packet_causal_state,
             env=raw_isaac_env,
+            packet_layout=packet_layout,
             flow_num_inference_steps=int(args_cli.flow_num_inference_steps),
             flow_inference_noise_std=float(args_cli.flow_inference_noise_std),
             packet_source=str(args_cli.packet_source),
@@ -1726,6 +1965,8 @@ def main(
             z_noise_alpha=float(args_cli.z_noise_alpha),
             noise_seed=int(args_cli.noise_seed),
             noise_reference=packet_noise_reference,
+            temporal_ensemble_mode=str(args_cli.packet_temporal_ensemble),
+            temporal_ensemble_decay=float(args_cli.packet_temporal_ensemble_decay),
         )
         packet_encoder_provenance = {
             "packet_source": str(args_cli.packet_source),
@@ -1733,7 +1974,16 @@ def main(
             "packet_planner_sha256": _file_sha256(packet_planner_path),
             "packet_interface": str(packet_spec.interface),
             "packet_target_dim": int(packet_spec.target_dim),
-            "encoder_input_width": int(FRAME_WIDTH * PACKET_FRAMES),
+            "encoder_input_width": int(trainer.horizon_steps)
+            * packet_layout.frame_width,
+            "packet_frames": int(trainer.horizon_steps),
+            "planner_prediction_frames": packet_layout.packet_frames,
+            "planner_prediction_width": packet_layout.packet_width,
+            "packet_term_widths": list(packet_layout.term_widths),
+            "packet_temporal_ensemble": str(args_cli.packet_temporal_ensemble),
+            "packet_temporal_ensemble_decay": float(
+                args_cli.packet_temporal_ensemble_decay
+            ),
         }
         print(
             f"[INFO] BB1: {packet_spec.interface} planner "
@@ -1741,7 +1991,6 @@ def main(
             "tracker.",
             flush=True,
         )
-    planner_latency_timer: PlannerForwardTimer | None = None
     if command_source == "skill_commander":
         command_sampler = getattr(agent, "_hl_skill_command_sampler", None)
         deployed_generator = getattr(command_sampler, "generator", None)
@@ -1764,7 +2013,9 @@ def main(
             )
         planner_observation_spec = {}
     collection_stage = (
-        "planner_rollout" if command_source == "skill_commander" else "oracle_rollout"
+        "planner_rollout"
+        if command_source == "skill_commander" or args_cli.packet_planner_checkpoint
+        else "oracle_rollout"
     )
     language_metadata: dict[str, Any] = {
         "enabled": bool(trainer.condition_on_language),
@@ -1798,18 +2049,64 @@ def main(
                         language_metadata["goal_phrase"] = phrases[goal_index]
             elif goal_rank >= 0:
                 language_metadata["goal_rank"] = goal_rank
+    sample_target_interface = str(args_cli.sample_target_interface).strip()
+    if not sample_target_interface:
+        raise ValueError("--sample_target_interface must not be empty.")
+    if sample_target_interface == "latent_skill":
+        sample_target_spec = {
+            "interface": "latent_skill",
+            "term_names": ["z"],
+            "term_widths": [int(trainer.z_dim)],
+            "target_dim": int(trainer.z_dim),
+        }
+        sample_command_future_steps = int(trainer.horizon_steps)
+    else:
+        sample_packet_layout = _macro_packet_layout(
+            wrapped_env, horizon_steps=int(trainer.horizon_steps)
+        )
+        sample_target_spec = {
+            "interface": sample_target_interface,
+            "term_names": [name for name, _ in sample_packet_layout.term_widths],
+            "term_widths": [
+                width * sample_packet_layout.packet_frames
+                for _, width in sample_packet_layout.term_widths
+            ],
+            "target_dim": sample_packet_layout.packet_width,
+        }
+        sample_command_future_steps = sample_packet_layout.packet_frames - 1
+    latent_target_spec = {
+        "interface": "latent_skill",
+        "term_names": ["z"],
+        "term_widths": [int(trainer.z_dim)],
+        "target_dim": int(trainer.z_dim),
+    }
+    if sample_target_interface == "latent_skill":
+        sample_packet_layout = _macro_packet_layout(
+            wrapped_env, horizon_steps=int(trainer.horizon_steps)
+        )
+        packet_target_spec = {
+            "interface": "encoder_input_packet",
+            "term_names": [name for name, _ in sample_packet_layout.term_widths],
+            "term_widths": [
+                width * sample_packet_layout.packet_frames
+                for _, width in sample_packet_layout.term_widths
+            ],
+            "target_dim": sample_packet_layout.packet_width,
+        }
+    else:
+        packet_target_spec = dict(sample_target_spec)
+
     sample_metadata = add_sample_format_metadata(
         {
-            "interface": "latent_skill",
-            "target_spec": {
-                "interface": "latent_skill",
-                "term_names": ["z"],
-                "term_widths": [int(trainer.z_dim)],
-                "target_dim": int(trainer.z_dim),
+            "interface": sample_target_interface,
+            "target_spec": sample_target_spec,
+            "paired_interface_target_specs": {
+                "latent_skill_target": latent_target_spec,
+                "encoder_input_packet_target": packet_target_spec,
             },
             "state_history_steps": int(trainer.config.state_history_steps),
             "command_past_steps": 0,
-            "command_future_steps": int(trainer.horizon_steps),
+            "command_future_steps": sample_command_future_steps,
             "task": args_cli.task,
             "algorithm": args_cli.algorithm,
             "seed": int(agent_cfg.seed),
@@ -1840,10 +2137,14 @@ def main(
             "early_terminations_enabled": bool(
                 args_cli.keep_early_terminations
                 or args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
             "tracking_terminations_enabled": not bool(
                 args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
+            "base_only_termination": bool(args_cli.base_only_termination),
+            "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
@@ -1940,14 +2241,27 @@ def main(
     valid_transition_count = 0
     rows: list[dict[str, Any]] = []
     samples_dir = log_dir / "rollout_training_samples"
-    sample_writer = PlannerSampleWriter(
-        samples_dir,
-        rows_per_file=int(args_cli.sample_rows_per_file),
-    )
+    trajectory_sample_writer: CompletedTrajectorySampleWriter | None = None
+    if balanced_trajectory_motion_names is not None:
+        trajectory_sample_writer = CompletedTrajectorySampleWriter(
+            samples_dir,
+            motion_names=balanced_trajectory_motion_names,
+            trajectories_per_motion=int(args_cli.balanced_trajectories_per_motion),
+            rows_per_file=int(args_cli.sample_rows_per_file),
+        )
+        sample_writer: PlannerSampleWriter | CompletedTrajectorySampleWriter = (
+            trajectory_sample_writer
+        )
+    else:
+        sample_writer = PlannerSampleWriter(
+            samples_dir,
+            rows_per_file=int(args_cli.sample_rows_per_file),
+        )
     saved_sample_files = 0
     saved_sample_rows = 0
     timestep = 0
     stop_reason = "max_steps"
+    trajectory_budget_complete = False
     if int(args_cli.metric_interval) <= 0:
         raise ValueError("--metric_interval must be > 0.")
     while timestep < max_steps:
@@ -1970,14 +2284,20 @@ def main(
                 ]
             sample_env_ids = renew_env_ids
             sample_motion_names: list[str] = []
+            current_motion_names: list[str] = (
+                _trajectory_metadata(raw_isaac_env)["motion_names"]
+                if trajectory_sample_writer is not None
+                else []
+            )
             if (
                 bool(args_cli.save_rollout_training_samples)
                 and int(renew_env_ids.numel()) > 0
             ):
                 renew_env_ids_cpu = renew_env_ids.detach().cpu()
-                current_motion_names = _trajectory_metadata(raw_isaac_env)[
-                    "motion_names"
-                ]
+                if not current_motion_names:
+                    current_motion_names = _trajectory_metadata(raw_isaac_env)[
+                        "motion_names"
+                    ]
                 candidate_motion_names = [
                     current_motion_names[int(index)]
                     for index in renew_env_ids_cpu.tolist()
@@ -2056,6 +2376,7 @@ def main(
                     sample_metadata=sample_metadata,
                     episode_ids=episode_ids.index_select(0, sample_env_ids_cpu),
                     sample_motion_names=sample_motion_names,
+                    sample_target_interface=sample_target_interface,
                     compute_metrics=False,
                 )
             if should_measure:
@@ -2105,6 +2426,17 @@ def main(
             for term_name in strict_failure_term_names:
                 strict_failure |= current_termination_terms[term_name]
             strict_tracking_failure_events += (strict_failure & step_active).float()
+            if trajectory_sample_writer is not None and bool(done_any.any()):
+                done_env_ids = done_any.nonzero(as_tuple=True)[0]
+                trajectory_sample_writer.complete(
+                    env_ids=done_env_ids.tolist(),
+                    episode_ids=episode_ids.index_select(0, done_env_ids).tolist(),
+                    motion_names=[
+                        current_motion_names[int(env_id)]
+                        for env_id in done_env_ids.tolist()
+                    ],
+                )
+                trajectory_budget_complete = trajectory_sample_writer.complete_budget
             episode_ids += done_any.to(dtype=torch.long)
             return_sum += rewards.float() * step_active.float()
             survival_steps += step_active.float()
@@ -2164,6 +2496,9 @@ def main(
             )
 
         timestep += 1
+        if trajectory_budget_complete:
+            stop_reason = "balanced_trajectories_complete"
+            break
         if not args_cli.continue_after_reset and not bool(active.any()):
             stop_reason = "all_envs_done"
             print(f"[INFO] Stopping at step {timestep}: all environments are done.")
@@ -2174,6 +2509,8 @@ def main(
                 time.sleep(sleep_time)
     sample_writer.flush()
     saved_sample_files = sample_writer.file_count
+    if trajectory_sample_writer is not None:
+        saved_sample_rows = sample_writer.row_count
     if saved_sample_rows != sample_writer.row_count:
         raise RuntimeError(
             "Planner sample writer row accounting differs from collection: "
@@ -2255,10 +2592,14 @@ def main(
             f"{DETERMINISTIC_METRIC_PREFIX}{name}": value
             for name, value in rollout_metrics.items()
         }
-    planner_metadata = _skill_commander_planner_metadata(
-        planner_checkpoint,
-        generator=trainer.generator,
-        trainer_config=trainer_config,
+    planner_metadata = (
+        packet_planner_metadata
+        if packet_planner_metadata is not None
+        else _skill_commander_planner_metadata(
+            planner_checkpoint,
+            generator=trainer.generator,
+            trainer_config=trainer_config,
+        )
     )
     summary = {
         **config_payload,
@@ -2280,12 +2621,24 @@ def main(
                 }
             ),
             "planner_checkpoint": (
-                str(planner_checkpoint_path)
-                if planner_checkpoint_path is not None
-                else None
+                str(packet_planner_path)
+                if packet_planner_path is not None
+                else (
+                    str(planner_checkpoint_path)
+                    if planner_checkpoint_path is not None
+                    else None
+                )
             ),
-            "interface": "latent_skill",
-            "planner_target_dim": int(trainer.z_dim),
+            "interface": (
+                str(args_cli.packet_interface)
+                if packet_planner_path is not None
+                else "latent_skill"
+            ),
+            "planner_target_dim": (
+                int(packet_planner_target_dim)
+                if packet_planner_target_dim is not None
+                else int(trainer.z_dim)
+            ),
             "planner_metadata": planner_metadata,
             "num_envs": int(num_envs),
             "seed": int(agent_cfg.seed),
@@ -2309,10 +2662,14 @@ def main(
             "early_terminations_enabled": bool(
                 args_cli.keep_early_terminations
                 or args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
             "tracking_terminations_enabled": not bool(
                 args_cli.disable_tracking_terminations
+                or args_cli.base_only_termination
             ),
+            "base_only_termination": bool(args_cli.base_only_termination),
+            "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
@@ -2363,6 +2720,26 @@ def main(
             if balanced_selector is not None
             else None
         ),
+        "balanced_trajectory_collection": (
+            {
+                "motion_names": list(trajectory_sample_writer.motion_names),
+                "trajectories_per_motion": (
+                    trajectory_sample_writer.trajectories_per_motion
+                ),
+                "counts": trajectory_sample_writer.counts(),
+                "completed_trajectory_count": (
+                    trajectory_sample_writer.completed_trajectory_count
+                ),
+                "records": trajectory_sample_writer.records(),
+                "complete": trajectory_sample_writer.complete_budget,
+                "missing": trajectory_sample_writer.missing(),
+                "discarded_incomplete_trajectory_count": (
+                    trajectory_sample_writer.buffered_trajectory_count
+                ),
+            }
+            if trajectory_sample_writer is not None
+            else None
+        ),
         "per_environment": [
             {
                 "env_id": env_id,
@@ -2397,6 +2774,14 @@ def main(
         raise RuntimeError(
             "Balanced collection ended before every motion reached its row budget: "
             f"{balanced_selector.missing()}."
+        )
+    if (
+        trajectory_sample_writer is not None
+        and not trajectory_sample_writer.complete_budget
+    ):
+        raise RuntimeError(
+            "Balanced collection ended before every motion reached its completed "
+            f"trajectory budget: {trajectory_sample_writer.missing()}."
         )
 
 

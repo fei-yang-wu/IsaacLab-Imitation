@@ -67,13 +67,19 @@ cd "${REPO_ROOT}"
 DRY_RUN="${DRY_RUN:-1}"
 STAGE="${STAGE:-auto}"
 SEED="${SEED:-0}"
-FRAME_CAP=5000000000
+FRAME_CAP="${FRAME_CAP:-5000000000}"
 TRAIN_NUM_ENVS=12288
 ROLLOUT_STEPS=12
 MINIBATCH_SIZE=18432
 NJMAX=320
 NCONMAX=40
 FRAMES_PER_BATCH=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
+SAVE_INTERVAL="${SAVE_INTERVAL:-100000000}"
+
+if [[ ! "${FRAME_CAP}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] FRAME_CAP must be a positive integer; got '${FRAME_CAP}'." >&2
+    exit 2
+fi
 
 # Matched to the frozen latent oracle's encoder recipe.
 Z_DIM=256
@@ -334,7 +340,7 @@ REMOTE_EOF
         --train-num-envs "${TRAIN_NUM_ENVS}"
         --train-max-iterations "${max_iterations}"
         --no-train-video
-        --save-interval 100000000
+        --save-interval "${SAVE_INTERVAL}"
         --logger-backend wandb
         --wandb-project "${WANDB_PROJECT}"
         --wandb-group "${WANDB_GROUP}"
@@ -359,7 +365,7 @@ REMOTE_EOF
         --train-override "env.expert_macro_state_terms=${MACRO_TERMS}"
     )
 
-    echo "[INFO] Stage train: task='${TASK_NAME}' run_tag='${RUN_TAG}' max_iterations='${max_iterations}' frames_per_batch='${FRAMES_PER_BATCH}'"
+    echo "[INFO] Stage train: task='${TASK_NAME}' run_tag='${RUN_TAG}' max_iterations='${max_iterations}' frames_per_batch='${FRAMES_PER_BATCH}' save_interval='${SAVE_INTERVAL}'"
     echo "[INFO] Frozen encoder: ${ENCODER_CKPT_CONTAINER}"
     run_or_print "${cmd[@]}"
 }

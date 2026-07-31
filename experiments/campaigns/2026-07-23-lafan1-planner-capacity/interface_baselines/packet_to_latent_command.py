@@ -48,11 +48,12 @@ requires no change inside RLOpt.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import torch
 
-# Per-frame term widths, in the order the environment concatenates them.
+# Historical full-body defaults remain public for existing diagnostics.
 TERM_WIDTHS: tuple[tuple[str, int], ...] = (
     ("expert_motion", 58),
     ("expert_anchor_pos_b", 3),
@@ -62,50 +63,503 @@ FRAME_WIDTH = sum(width for _, width in TERM_WIDTHS)
 PACKET_FRAMES = 10
 
 
-def term_major_to_frames(packet: torch.Tensor) -> torch.Tensor:
-    """``[B, 670]`` term-major -> ``[B, 10, 67]`` frame-interleaved."""
-    expected = PACKET_FRAMES * FRAME_WIDTH
-    if packet.ndim != 2 or int(packet.shape[-1]) != expected:
+@dataclass(frozen=True)
+class PacketLayout:
+    """Term-major packet layout accepted by one frozen skill encoder."""
+
+    term_widths: tuple[tuple[str, int], ...]
+    packet_frames: int = PACKET_FRAMES
+
+    def __post_init__(self) -> None:
+        if int(self.packet_frames) <= 0:
+            raise ValueError("packet_frames must be positive.")
+        if not self.term_widths:
+            raise ValueError("term_widths must not be empty.")
+        if any(int(width) <= 0 for _, width in self.term_widths):
+            raise ValueError(
+                f"Every per-frame term width must be positive: {self.term_widths}."
+            )
+
+    @property
+    def frame_width(self) -> int:
+        return sum(int(width) for _, width in self.term_widths)
+
+    @property
+    def packet_width(self) -> int:
+        return int(self.packet_frames) * self.frame_width
+
+    @classmethod
+    def from_target_spec(cls, spec: Any, *, packet_frames: int) -> "PacketLayout":
+        """Derive per-frame widths from an ``InterfaceTargetSpec`` packet."""
+        frames = int(packet_frames)
+        names = tuple(str(name) for name in spec.term_names)
+        packet_widths = tuple(int(width) for width in spec.term_widths)
+        if len(names) != len(packet_widths):
+            raise ValueError("Target spec has different term-name and width counts.")
+        invalid = [
+            (name, width)
+            for name, width in zip(names, packet_widths)
+            if width % frames != 0
+        ]
+        if invalid:
+            raise ValueError(
+                f"Target widths are not divisible by packet_frames={frames}: {invalid}."
+            )
+        return cls(
+            term_widths=tuple(
+                (name, width // frames) for name, width in zip(names, packet_widths)
+            ),
+            packet_frames=frames,
+        )
+
+
+DEFAULT_PACKET_LAYOUT = PacketLayout(TERM_WIDTHS, PACKET_FRAMES)
+
+
+def term_major_to_frames(
+    packet: torch.Tensor, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
+) -> torch.Tensor:
+    """Convert a term-major packet to frame-interleaved encoder input."""
+    if packet.ndim != 2 or int(packet.shape[-1]) != layout.packet_width:
         raise ValueError(
-            f"Expected a rank-2 packet of width {expected}, got {tuple(packet.shape)}."
+            f"Expected a rank-2 packet of width {layout.packet_width}, got "
+            f"{tuple(packet.shape)}."
         )
     batch = int(packet.shape[0])
     blocks: list[torch.Tensor] = []
     cursor = 0
-    for _, width in TERM_WIDTHS:
-        span = PACKET_FRAMES * width
+    for _, width in layout.term_widths:
+        span = layout.packet_frames * width
         blocks.append(
-            packet[:, cursor : cursor + span].reshape(batch, PACKET_FRAMES, width)
+            packet[:, cursor : cursor + span].reshape(
+                batch, layout.packet_frames, width
+            )
         )
         cursor += span
     return torch.cat(blocks, dim=-1)
 
 
-def frames_to_term_major(frames: torch.Tensor) -> torch.Tensor:
+def frames_to_term_major(
+    frames: torch.Tensor, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
+) -> torch.Tensor:
     """Inverse of :func:`term_major_to_frames`. Used by the round-trip gate."""
-    if frames.ndim != 3 or tuple(frames.shape[1:]) != (PACKET_FRAMES, FRAME_WIDTH):
+    expected = (layout.packet_frames, layout.frame_width)
+    if frames.ndim != 3 or tuple(frames.shape[1:]) != expected:
         raise ValueError(
-            f"Expected [B, {PACKET_FRAMES}, {FRAME_WIDTH}], got {tuple(frames.shape)}."
+            f"Expected [B, {expected[0]}, {expected[1]}], got {tuple(frames.shape)}."
         )
     batch = int(frames.shape[0])
     blocks: list[torch.Tensor] = []
     cursor = 0
-    for _, width in TERM_WIDTHS:
+    for _, width in layout.term_widths:
         blocks.append(frames[:, :, cursor : cursor + width].reshape(batch, -1))
         cursor += width
     return torch.cat(blocks, dim=-1)
 
 
-def split_packet_for_encoder(
+def _quat_wxyz_to_matrix(quat: torch.Tensor) -> torch.Tensor:
+    """Convert Isaac Lab scalar-first quaternions to rotation matrices."""
+    quat = torch.nn.functional.normalize(quat, dim=-1)
+    w, x, y, z = quat.unbind(dim=-1)
+    return torch.stack(
+        (
+            1 - 2 * (y * y + z * z),
+            2 * (x * y - z * w),
+            2 * (x * z + y * w),
+            2 * (x * y + z * w),
+            1 - 2 * (x * x + z * z),
+            2 * (y * z - x * w),
+            2 * (x * z - y * w),
+            2 * (y * z + x * w),
+            1 - 2 * (x * x + y * y),
+        ),
+        dim=-1,
+    ).reshape(*quat.shape[:-1], 3, 3)
+
+
+def _axis_angle_rotation(
+    angle: torch.Tensor, *, axis: str
+) -> torch.Tensor:
+    """Return batched rotation matrices for one canonical axis."""
+    cosine = torch.cos(angle)
+    sine = torch.sin(angle)
+    zero = torch.zeros_like(angle)
+    one = torch.ones_like(angle)
+    if axis == "x":
+        values = (one, zero, zero, zero, cosine, -sine, zero, sine, cosine)
+    elif axis == "y":
+        values = (cosine, zero, sine, zero, one, zero, -sine, zero, cosine)
+    elif axis == "z":
+        values = (cosine, -sine, zero, sine, cosine, zero, zero, zero, one)
+    else:
+        raise ValueError(f"Unsupported rotation axis {axis!r}.")
+    return torch.stack(values, dim=-1).reshape(*angle.shape, 3, 3)
+
+
+def convert_root_qpos_torso_to_pelvis(
     packet: torch.Tensor,
+    *,
+    layout: PacketLayout,
+    actual_torso_pos_w: torch.Tensor,
+    actual_torso_quat_w: torch.Tensor,
+    actual_pelvis_pos_w: torch.Tensor,
+    actual_pelvis_quat_w: torch.Tensor,
+    joint_names: tuple[str, ...] | list[str],
+) -> torch.Tensor:
+    """Convert a torso-relative root+qpos packet to the pelvis contract.
+
+    The predicted waist qpos defines the desired pelvis-to-torso transform, so
+    this is a deterministic change of coordinates and does not consult the
+    reference trajectory. Quaternions follow Isaac Lab's WXYZ convention.
+    """
+    required_terms = {
+        "expert_motion_qpos": 29,
+        "expert_anchor_pos_b": 3,
+        "expert_anchor_ori_b": 6,
+    }
+    widths = dict(layout.term_widths)
+    if any(widths.get(name) != width for name, width in required_terms.items()):
+        raise ValueError(
+            "Torso-to-pelvis conversion requires the 29+3+6 root_qpos layout; "
+            f"got {layout.term_widths}."
+        )
+    names = tuple(str(name) for name in joint_names)
+    if len(names) != 29 or len(set(names)) != 29:
+        raise ValueError("joint_names must contain 29 unique packet-order names.")
+    try:
+        yaw_id = names.index("waist_yaw_joint")
+        roll_id = names.index("waist_roll_joint")
+        pitch_id = names.index("waist_pitch_joint")
+    except ValueError as error:
+        raise ValueError(
+            "joint_names is missing the G1 waist yaw/roll/pitch chain."
+        ) from error
+
+    frames = term_major_to_frames(packet, layout)
+    cursor = 0
+    slices: dict[str, slice] = {}
+    for name, width in layout.term_widths:
+        slices[name] = slice(cursor, cursor + int(width))
+        cursor += int(width)
+    qpos = frames[..., slices["expert_motion_qpos"]]
+    torso_pos = frames[..., slices["expert_anchor_pos_b"]]
+    torso_rot = _rot6d_to_matrix(frames[..., slices["expert_anchor_ori_b"]])
+
+    actual_pelvis_rot_w = _quat_wxyz_to_matrix(actual_pelvis_quat_w)
+    actual_torso_rot_w = _quat_wxyz_to_matrix(actual_torso_quat_w)
+    pelvis_to_actual_torso_rot = (
+        actual_pelvis_rot_w.transpose(-1, -2) @ actual_torso_rot_w
+    )
+    pelvis_to_actual_torso_pos = torch.einsum(
+        "bij,bj->bi",
+        actual_pelvis_rot_w.transpose(-1, -2),
+        actual_torso_pos_w - actual_pelvis_pos_w,
+    )
+
+    yaw_rot = _axis_angle_rotation(qpos[..., yaw_id], axis="z")
+    roll_rot = _axis_angle_rotation(qpos[..., roll_id], axis="x")
+    pitch_rot = _axis_angle_rotation(qpos[..., pitch_id], axis="y")
+    desired_pelvis_to_torso_rot = yaw_rot @ roll_rot @ pitch_rot
+    waist_offset = packet.new_tensor((-0.0039635, 0.0, 0.044))
+    desired_pelvis_to_torso_pos = torch.einsum(
+        "...ij,j->...i", yaw_rot, waist_offset
+    )
+
+    # T_At_Dp = T_At_Dt @ inverse(T_Dp_Dt), followed by
+    # T_Ap_Dp = T_Ap_At @ T_At_Dp.
+    actual_torso_to_desired_pelvis_rot = (
+        torso_rot @ desired_pelvis_to_torso_rot.transpose(-1, -2)
+    )
+    actual_torso_to_desired_pelvis_pos = torso_pos - torch.einsum(
+        "...ij,...j->...i",
+        actual_torso_to_desired_pelvis_rot,
+        desired_pelvis_to_torso_pos,
+    )
+    pelvis_rot = (
+        pelvis_to_actual_torso_rot[:, None]
+        @ actual_torso_to_desired_pelvis_rot
+    )
+    pelvis_pos = pelvis_to_actual_torso_pos[:, None] + torch.einsum(
+        "bij,btj->bti",
+        pelvis_to_actual_torso_rot,
+        actual_torso_to_desired_pelvis_pos,
+    )
+
+    converted = frames.clone()
+    converted[..., slices["expert_anchor_pos_b"]] = pelvis_pos
+    converted[..., slices["expert_anchor_ori_b"]] = _matrix_to_rot6d(pelvis_rot)
+    return frames_to_term_major(converted, layout)
+
+
+def _rot6d_to_matrix(rot6d: torch.Tensor) -> torch.Tensor:
+    columns = rot6d.reshape(*rot6d.shape[:-1], 3, 2)
+    first = torch.nn.functional.normalize(columns[..., :, 0], dim=-1)
+    second = columns[..., :, 1]
+    second = second - first * (first * second).sum(dim=-1, keepdim=True)
+    second = torch.nn.functional.normalize(second, dim=-1)
+    third = torch.linalg.cross(first, second, dim=-1)
+    return torch.stack((first, second, third), dim=-1)
+
+
+def _matrix_to_rot6d(matrix: torch.Tensor) -> torch.Tensor:
+    return matrix[..., :, :2].reshape(*matrix.shape[:-2], 6)
+
+
+def first_packet_window(
+    packet: torch.Tensor,
+    *,
+    prediction_layout: PacketLayout,
+    execution_frames: int,
+) -> tuple[torch.Tensor, PacketLayout]:
+    """Execute the first sub-window and discard the unused VLA prediction."""
+    execution_layout = PacketLayout(
+        prediction_layout.term_widths, packet_frames=int(execution_frames)
+    )
+    if prediction_layout.packet_frames < execution_layout.packet_frames:
+        raise ValueError(
+            f"Prediction H{prediction_layout.packet_frames} is shorter than "
+            f"execution H{execution_layout.packet_frames}."
+        )
+    frames = term_major_to_frames(packet, prediction_layout)
+    return (
+        frames_to_term_major(
+            frames[:, : execution_layout.packet_frames].contiguous(),
+            execution_layout,
+        ),
+        execution_layout,
+    )
+
+
+class OverlappingPacketEnsembler:
+    """ACT-style ensemble over aligned receding-horizon explicit packets.
+
+    Packets are published every ``execution_frames``. At a renewal, the next
+    execution window is covered by the current packet at slots 0:K, the prior
+    packet at K:2K, and so on. Root terms are transformed from each packet's
+    publication-anchor frame into the current publication-anchor frame before
+    averaging. History is cleared on every asynchronous episode discontinuity.
+    """
+
+    def __init__(
+        self,
+        *,
+        num_envs: int,
+        prediction_layout: PacketLayout,
+        execution_frames: int,
+        decay: float,
+        device: torch.device | str,
+        dtype: torch.dtype,
+    ) -> None:
+        if execution_frames <= 0:
+            raise ValueError("execution_frames must be positive.")
+        if prediction_layout.packet_frames % int(execution_frames) != 0:
+            raise ValueError(
+                "Temporal ensemble requires prediction_frames to be an exact "
+                "multiple of execution_frames."
+            )
+        if decay < 0:
+            raise ValueError("Temporal ensemble decay must be non-negative.")
+        self.prediction_layout = prediction_layout
+        self.execution_layout = PacketLayout(
+            prediction_layout.term_widths, packet_frames=int(execution_frames)
+        )
+        self.overlap = prediction_layout.packet_frames // int(execution_frames)
+        self.decay = float(decay)
+        self.device = torch.device(device)
+        self.dtype = dtype
+        self._frames = torch.zeros(
+            int(num_envs),
+            self.overlap,
+            prediction_layout.packet_frames,
+            prediction_layout.frame_width,
+            device=self.device,
+            dtype=dtype,
+        )
+        self._anchor_pos = torch.zeros(
+            int(num_envs), self.overlap, 3, device=self.device, dtype=dtype
+        )
+        self._anchor_quat = torch.zeros(
+            int(num_envs), self.overlap, 4, device=self.device, dtype=dtype
+        )
+        self._anchor_quat[..., 0] = 1.0
+        self._valid = torch.zeros(
+            int(num_envs), self.overlap, device=self.device, dtype=torch.bool
+        )
+        self._last_episode_step = torch.full(
+            (int(num_envs),), -1, device=self.device, dtype=torch.long
+        )
+        self.publications = 0
+        self.history_resets = 0
+        self.candidate_histogram = [0 for _ in range(self.overlap + 1)]
+
+        cursor = 0
+        self._term_slices: dict[str, slice] = {}
+        for name, width in prediction_layout.term_widths:
+            self._term_slices[name] = slice(cursor, cursor + int(width))
+            cursor += int(width)
+
+    def _reexpress(
+        self,
+        frames: torch.Tensor,
+        *,
+        publication_pos: torch.Tensor,
+        publication_quat: torch.Tensor,
+        current_pos: torch.Tensor,
+        current_quat: torch.Tensor,
+    ) -> torch.Tensor:
+        result = frames.clone()
+        current_rot = _quat_wxyz_to_matrix(current_quat)
+        publication_rot = _quat_wxyz_to_matrix(publication_quat)
+        delta_rot = current_rot.transpose(-1, -2) @ publication_rot
+        delta_pos = torch.einsum(
+            "bij,bj->bi",
+            current_rot.transpose(-1, -2),
+            publication_pos - current_pos,
+        )
+        for name, width in self.prediction_layout.term_widths:
+            term_slice = self._term_slices[name]
+            values = frames[..., term_slice]
+            if name.endswith("_pos_b"):
+                if int(width) % 3 != 0:
+                    raise ValueError(f"Position term {name!r} is not 3-vector packed.")
+                vectors = values.reshape(values.shape[0], values.shape[1], -1, 3)
+                rotated = torch.einsum("bij,btkj->btki", delta_rot, vectors)
+                result[..., term_slice] = (
+                    rotated + delta_pos[:, None, None, :]
+                ).reshape_as(values)
+            elif name.endswith("_ori_b"):
+                if int(width) % 6 != 0:
+                    raise ValueError(f"Orientation term {name!r} is not rot6d packed.")
+                rotations = _rot6d_to_matrix(
+                    values.reshape(values.shape[0], values.shape[1], -1, 6)
+                )
+                transformed = torch.einsum("bij,btkjl->btkil", delta_rot, rotations)
+                result[..., term_slice] = _matrix_to_rot6d(transformed).reshape_as(
+                    values
+                )
+        return result
+
+    def update(
+        self,
+        *,
+        env_ids: torch.Tensor,
+        packet: torch.Tensor,
+        anchor_pos: torch.Tensor,
+        anchor_quat: torch.Tensor,
+        episode_steps: torch.Tensor,
+    ) -> torch.Tensor:
+        env_ids = env_ids.to(device=self.device, dtype=torch.long).reshape(-1)
+        packet = packet.to(device=self.device, dtype=self.dtype)
+        anchor_pos = anchor_pos.to(device=self.device, dtype=self.dtype)
+        anchor_quat = anchor_quat.to(device=self.device, dtype=self.dtype)
+        episode_steps = episode_steps.to(device=self.device, dtype=torch.long)
+        frames = term_major_to_frames(packet, self.prediction_layout)
+        previous_steps = self._last_episode_step.index_select(0, env_ids)
+        discontinuity = (episode_steps == 0) | (
+            previous_steps + self.execution_layout.packet_frames != episode_steps
+        )
+        if bool(discontinuity.any()):
+            reset_ids = env_ids[discontinuity]
+            self._valid.index_fill_(0, reset_ids, False)
+            self.history_resets += int(reset_ids.numel())
+
+        if self.overlap > 1:
+            self._frames[env_ids, 1:] = self._frames[env_ids, :-1].clone()
+            self._anchor_pos[env_ids, 1:] = self._anchor_pos[env_ids, :-1].clone()
+            self._anchor_quat[env_ids, 1:] = self._anchor_quat[env_ids, :-1].clone()
+            self._valid[env_ids, 1:] = self._valid[env_ids, :-1].clone()
+        self._frames[env_ids, 0] = frames
+        self._anchor_pos[env_ids, 0] = anchor_pos
+        self._anchor_quat[env_ids, 0] = anchor_quat
+        self._valid[env_ids, 0] = True
+        self._last_episode_step.index_copy_(0, env_ids, episode_steps)
+
+        candidate_frames: list[torch.Tensor] = []
+        candidate_valid: list[torch.Tensor] = []
+        for age in range(self.overlap):
+            start = age * self.execution_layout.packet_frames
+            stop = start + self.execution_layout.packet_frames
+            raw = self._frames[env_ids, age, start:stop]
+            candidate_frames.append(
+                self._reexpress(
+                    raw,
+                    publication_pos=self._anchor_pos[env_ids, age],
+                    publication_quat=self._anchor_quat[env_ids, age],
+                    current_pos=anchor_pos,
+                    current_quat=anchor_quat,
+                )
+            )
+            candidate_valid.append(self._valid[env_ids, age])
+        candidates = torch.stack(candidate_frames, dim=1)
+        valid = torch.stack(candidate_valid, dim=1)
+        ages = torch.arange(self.overlap, device=self.device, dtype=self.dtype).reshape(
+            1, -1
+        )
+        weights = torch.exp(-self.decay * ages) * valid.to(dtype=self.dtype)
+        weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1.0e-12)
+        blended = (candidates * weights[:, :, None, None]).sum(dim=1)
+
+        # Average orientations as rotations, then project the weighted matrix
+        # back onto SO(3). This avoids invalid raw rot6d columns.
+        for name, width in self.prediction_layout.term_widths:
+            if not name.endswith("_ori_b"):
+                continue
+            term_slice = self._term_slices[name]
+            rotations = _rot6d_to_matrix(
+                candidates[..., term_slice].reshape(
+                    candidates.shape[0],
+                    candidates.shape[1],
+                    candidates.shape[2],
+                    -1,
+                    6,
+                )
+            )
+            matrix_mean = (rotations * weights[:, :, None, None, None, None]).sum(dim=1)
+            u, _, vh = torch.linalg.svd(matrix_mean)
+            projected = u @ vh
+            negative = torch.linalg.det(projected) < 0
+            if bool(negative.any()):
+                u = u.clone()
+                u[negative, :, -1] *= -1
+                projected = u @ vh
+            blended[..., term_slice] = _matrix_to_rot6d(projected).reshape(
+                blended.shape[0], blended.shape[1], int(width)
+            )
+
+        counts = valid.sum(dim=1)
+        for count in range(1, self.overlap + 1):
+            self.candidate_histogram[count] += int((counts == count).sum().item())
+        self.publications += int(env_ids.numel())
+        return frames_to_term_major(blended, self.execution_layout)
+
+    def stats(self) -> dict[str, Any]:
+        return {
+            "temporal_ensemble_mode": "exponential",
+            "temporal_ensemble_decay": self.decay,
+            "temporal_ensemble_overlap": self.overlap,
+            "temporal_ensemble_publications": self.publications,
+            "temporal_ensemble_history_resets": self.history_resets,
+            "temporal_ensemble_candidate_histogram": {
+                str(index): count
+                for index, count in enumerate(self.candidate_histogram)
+                if index > 0
+            },
+        }
+
+
+def split_packet_for_encoder(
+    packet: torch.Tensor, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """``[B, 670]`` term-major -> ``(state [B, 67], future_window [B, 9, 67])``."""
-    frames = term_major_to_frames(packet)
+    """Split a packet into the encoder's current frame and future window."""
+
+    frames = term_major_to_frames(packet, layout)
     return frames[:, 0, :].contiguous(), frames[:, 1:, :].contiguous()
 
 
-def verify_frame_layout(feature_slices: Any) -> None:
-    """Gate: TERM_WIDTHS must match the environment's own per-frame term layout.
+def verify_frame_layout(
+    feature_slices: Any, layout: PacketLayout = DEFAULT_PACKET_LAYOUT
+) -> None:
+    """Gate: selected terms must match the environment's per-frame layout.
 
     Checked against ``ImitationRLEnv._expert_macro_feature_slices``, which the
     environment fills in when it builds the macro sequence. That is an
@@ -123,11 +577,11 @@ def verify_frame_layout(feature_slices: Any) -> None:
             "Refusing to encode a packet whose layout is unchecked."
         )
     cursor = 0
-    for name, width in TERM_WIDTHS:
+    for name, width in layout.term_widths:
         if name not in feature_slices:
             raise RuntimeError(
                 f"Environment frame layout has no term {name!r}; got "
-                f"{sorted(feature_slices)}. TERM_WIDTHS is stale."
+                f"{sorted(feature_slices)}. PacketLayout is stale."
             )
         span = feature_slices[name]
         # `getattr(span, "start", span[0])` would raise on a slice: Python
@@ -139,18 +593,21 @@ def verify_frame_layout(feature_slices: Any) -> None:
         if start != cursor or stop - start != width:
             raise RuntimeError(
                 f"Term {name!r} occupies [{start}, {stop}) in the environment's "
-                f"frame but TERM_WIDTHS assumes [{cursor}, {cursor + width}). "
+                f"frame but PacketLayout assumes [{cursor}, {cursor + width}). "
                 "The encoder would receive permuted features without erroring."
             )
         cursor = stop
-    if cursor != FRAME_WIDTH:
+    if cursor != layout.frame_width:
         raise RuntimeError(
-            f"Environment frame width is {cursor}, TERM_WIDTHS sums to {FRAME_WIDTH}."
+            f"Environment frame width is {cursor}, layout sums to {layout.frame_width}."
         )
 
 
 def build_noise_reference(
-    encoder: Any, packets: torch.Tensor
+    encoder: Any,
+    packets: torch.Tensor,
+    *,
+    packet_layout: PacketLayout = DEFAULT_PACKET_LAYOUT,
 ) -> dict[str, torch.Tensor]:
     """Per-dimension stds of the packet and of z, for calibrated BB3 noise.
 
@@ -160,7 +617,7 @@ def build_noise_reference(
     any crossing between them would be an artifact of the scaling.
     """
     packets = packets.float()
-    state, window = split_packet_for_encoder(packets)
+    state, window = split_packet_for_encoder(packets, packet_layout)
     with torch.no_grad():
         z = encoder(
             state.to(next(encoder.parameters()).device),
@@ -178,6 +635,7 @@ def install_packet_encoder_command_source(
     planner: torch.nn.Module,
     causal_state_provider: Callable[[torch.Tensor], torch.Tensor],
     env: Any,
+    packet_layout: PacketLayout = DEFAULT_PACKET_LAYOUT,
     flow_num_inference_steps: int = 16,
     flow_inference_noise_std: float = 0.0,
     packet_source: str = "planner",
@@ -186,6 +644,8 @@ def install_packet_encoder_command_source(
     noise_reference: dict[str, torch.Tensor] | None = None,
     noise_seed: int = 0,
     verify_layout: bool = True,
+    temporal_ensemble_mode: str = "none",
+    temporal_ensemble_decay: float = 0.5,
 ) -> Callable[[], dict[str, Any]]:
     """Route the sampler's command through ``planner -> packet -> encoder -> z``.
 
@@ -200,6 +660,33 @@ def install_packet_encoder_command_source(
             "oracle sampler (agent.ipmd.command_source=hl_skill with "
             "--skill_checkpoint), not a frozen commander."
         )
+    if int(getattr(encoder, "state_dim", -1)) != packet_layout.frame_width:
+        raise ValueError(
+            f"Packet frame width {packet_layout.frame_width} does not match the "
+            f"frozen encoder state_dim={getattr(encoder, 'state_dim', None)}."
+        )
+    execution_frames = int(getattr(encoder, "window_steps", -1)) + 1
+    if execution_frames <= 0:
+        raise ValueError("Frozen encoder has no valid state-plus-window horizon.")
+    if packet_layout.packet_frames < execution_frames:
+        raise ValueError(
+            f"Planner packet H{packet_layout.packet_frames} is shorter than the "
+            f"frozen encoder's H{execution_frames} input."
+        )
+    temporal_ensemble_mode = str(temporal_ensemble_mode)
+    if temporal_ensemble_mode not in {"none", "exponential"}:
+        raise ValueError("temporal_ensemble_mode must be 'none' or 'exponential'.")
+    if temporal_ensemble_mode == "exponential" and (
+        packet_layout.packet_frames == execution_frames
+    ):
+        raise ValueError("Temporal ensemble needs a prediction horizon with overlap.")
+    if packet_layout.packet_frames > execution_frames and (
+        packet_noise_alpha > 0.0 or z_noise_alpha > 0.0
+    ):
+        raise ValueError("Long-horizon packet execution is not a BB3 noise protocol.")
+    execution_layout = PacketLayout(
+        packet_layout.term_widths, packet_frames=execution_frames
+    )
     original = sampler._encode_current_macro_batch
     # CPU generator so the injected noise is reproducible independently of GPU
     # kernel scheduling -- the rollout itself is already non-deterministic, and
@@ -208,8 +695,18 @@ def install_packet_encoder_command_source(
     stats = {
         "publishes": 0,
         "layout_verified": False,
+        "packet_frames": execution_layout.packet_frames,
+        "planner_prediction_frames": packet_layout.packet_frames,
+        "packet_frame_width": packet_layout.frame_width,
+        "packet_width": execution_layout.packet_width,
+        "planner_prediction_width": packet_layout.packet_width,
         "packet_noise_alpha": float(packet_noise_alpha),
         "z_noise_alpha": float(z_noise_alpha),
+        "temporal_ensemble_mode": temporal_ensemble_mode,
+        "temporal_ensemble_decay": float(temporal_ensemble_decay),
+        "expert_pin_latent_value_count": 0,
+        "expert_pin_latent_squared_error_sum": 0.0,
+        "expert_pin_latent_max_abs": 0.0,
     }
     if packet_noise_alpha > 0.0 and z_noise_alpha > 0.0:
         raise ValueError(
@@ -218,6 +715,16 @@ def install_packet_encoder_command_source(
         )
     planner.eval()
     planner.requires_grad_(False)
+    ensembler: OverlappingPacketEnsembler | None = None
+    if temporal_ensemble_mode == "exponential":
+        ensembler = OverlappingPacketEnsembler(
+            num_envs=int(getattr(env, "num_envs")),
+            prediction_layout=packet_layout,
+            execution_frames=execution_frames,
+            decay=float(temporal_ensemble_decay),
+            device=next(planner.parameters()).device,
+            dtype=next(planner.parameters()).dtype,
+        )
 
     @torch.no_grad()
     def _encode_from_predicted_packet(env_ids: torch.Tensor):
@@ -226,9 +733,15 @@ def install_packet_encoder_command_source(
         # z is replaced, so everything else about the publish is unchanged.
         _, state, future_window, target, initial_z = original(env_ids)
         if verify_layout and not stats["layout_verified"]:
-            verify_frame_layout(getattr(env, "_expert_macro_feature_slices", None))
+            verify_frame_layout(
+                getattr(env, "_expert_macro_feature_slices", None), execution_layout
+            )
             stats["layout_verified"] = True
         if packet_source == "expert":
+            if packet_layout.packet_frames != execution_frames:
+                raise ValueError(
+                    "The expert pin test only supports the encoder's native horizon."
+                )
             # Pin test. Pack the environment's OWN expert window into a
             # term-major packet exactly as the full-body interface would, then
             # push it back through the same split/encode path the planner packet
@@ -238,8 +751,13 @@ def install_packet_encoder_command_source(
             # module rather than to the planner or the interface.
             packet = frames_to_term_major(
                 torch.cat(
-                    [state.unsqueeze(1), future_window[:, : PACKET_FRAMES - 1]], dim=1
-                )
+                    [
+                        state.unsqueeze(1),
+                        future_window[:, : packet_layout.packet_frames - 1],
+                    ],
+                    dim=1,
+                ),
+                execution_layout,
             )
         else:
             causal_state = causal_state_provider(env_ids)
@@ -248,6 +766,33 @@ def install_packet_encoder_command_source(
                 num_inference_steps=int(flow_num_inference_steps),
                 inference_noise_std=float(flow_inference_noise_std),
             )
+            if packet_layout.packet_frames > execution_frames:
+                if ensembler is None:
+                    packet, _ = first_packet_window(
+                        packet,
+                        prediction_layout=packet_layout,
+                        execution_frames=execution_frames,
+                    )
+                else:
+                    anchor_body_name = str(
+                        getattr(env, "_expert_anchor_body_name", "pelvis")
+                    )
+                    all_anchor_pos, all_anchor_quat = (
+                        env._get_robot_anchor_state_w_fast(anchor_body_name)
+                    )
+                    env_ids_device = env_ids.to(
+                        device=all_anchor_pos.device, dtype=torch.long
+                    )
+                    episode_steps = getattr(env, "episode_length_buf").index_select(
+                        0, env_ids_device
+                    )
+                    packet = ensembler.update(
+                        env_ids=env_ids,
+                        packet=packet,
+                        anchor_pos=all_anchor_pos.index_select(0, env_ids_device),
+                        anchor_quat=all_anchor_quat.index_select(0, env_ids_device),
+                        episode_steps=episode_steps,
+                    )
         # BB3: inject calibrated noise on ONE side of the encoder at a time.
         # Both alphas are in per-dimension std units of the clean quantity, so
         # `packet_noise_alpha=a` and `z_noise_alpha=a` are the same relative
@@ -264,7 +809,7 @@ def install_packet_encoder_command_source(
             packet = packet + torch.randn(
                 packet.shape, generator=generator, device="cpu"
             ).to(packet.device, packet.dtype) * std * float(packet_noise_alpha)
-        packet_state, packet_window = split_packet_for_encoder(packet)
+        packet_state, packet_window = split_packet_for_encoder(packet, execution_layout)
         # Compare against the ENCODER's window, not the environment's. The env
         # returns horizon_steps=10 future frames (t+1..t+10), while the encoder
         # consumes state + 9 of them (t..t+9) -- `_encoder_input_window` drops
@@ -278,6 +823,21 @@ def install_packet_encoder_command_source(
                 f"frames, encoder wants {expected_window_steps}."
             )
         z = encoder(packet_state, packet_window)
+        if packet_source == "expert":
+            # Compare inside the publication call, against the oracle encoder
+            # output computed from the exact same state/window by `original`.
+            # A rollout-level "published z vs current target" metric is not a
+            # pin: between 5 Hz renewals the held command intentionally differs
+            # from the reference window recomputed at every 50 Hz step.
+            pin_error = z - initial_z
+            stats["expert_pin_latent_value_count"] += int(pin_error.numel())
+            stats["expert_pin_latent_squared_error_sum"] += float(
+                pin_error.double().square().sum().item()
+            )
+            stats["expert_pin_latent_max_abs"] = max(
+                float(stats["expert_pin_latent_max_abs"]),
+                float(pin_error.abs().max().item()),
+            )
         if z_noise_alpha > 0.0:
             if noise_reference is None or "z_std" not in noise_reference:
                 raise RuntimeError(
@@ -292,4 +852,17 @@ def install_packet_encoder_command_source(
         return z, state, future_window, target, initial_z
 
     sampler._encode_current_macro_batch = _encode_from_predicted_packet
-    return lambda: dict(stats)
+
+    def _stats() -> dict[str, Any]:
+        result = dict(stats)
+        count = int(result["expert_pin_latent_value_count"])
+        result["expert_pin_latent_mse"] = (
+            float(result["expert_pin_latent_squared_error_sum"]) / count
+            if count > 0
+            else None
+        )
+        if ensembler is not None:
+            result.update(ensembler.stats())
+        return result
+
+    return _stats

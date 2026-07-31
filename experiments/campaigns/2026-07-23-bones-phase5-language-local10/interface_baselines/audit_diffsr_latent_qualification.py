@@ -39,8 +39,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--expected_dataset_path", type=Path, default=None)
     parser.add_argument("--output_json", type=Path, required=True)
     parser.add_argument("--expected_num_envs", type=int, default=40)
+    parser.add_argument("--expected_motion_names", nargs="+", default=None)
     parser.add_argument("--expected_steps", type=int, default=1000)
+    parser.add_argument("--expected_random_reset_step_max", type=int, default=0)
+    parser.add_argument(
+        "--expect_episode_length_extension",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--expected_seed", type=int, default=0)
+    parser.add_argument("--expected_task", default="Isaac-Imitation-G1-Latent-v0")
+    parser.add_argument("--expected_planner_target_dim", type=int, default=256)
     parser.add_argument("--success_threshold", type=float, default=0.8)
     parser.add_argument("--require_pass", action="store_true", default=False)
     return parser.parse_args()
@@ -58,13 +67,19 @@ def main() -> None:
     dataset_path = Path(str(metadata.get("dataset_path", ""))).expanduser().resolve()
     tracking_success = float(aggregate.get("tracking_success_rate", float("nan")))
     tracking_failure = float(aggregate.get("tracking_failure_rate", float("nan")))
+    start_motion_names = sorted(
+        set(summary.get("start_trajectories", {}).get("motion_names", []))
+    )
+    final_motion_names = sorted(
+        set(summary.get("final_trajectories", {}).get("motion_names", []))
+    )
     skill_binding = validate_binding(low_level_checkpoint, skill_checkpoint)
     checks = [
         _check(
             "task",
-            metadata.get("task") == "Isaac-Imitation-G1-Latent-v0",
+            metadata.get("task") == args.expected_task,
             metadata.get("task"),
-            "Isaac-Imitation-G1-Latent-v0",
+            args.expected_task,
         ),
         _check(
             "algorithm",
@@ -80,15 +95,33 @@ def main() -> None:
         ),
         _check(
             "planner_target_dim",
-            int(metadata.get("planner_target_dim", -1)) == 256,
+            int(metadata.get("planner_target_dim", -1))
+            == args.expected_planner_target_dim,
             metadata.get("planner_target_dim"),
-            256,
+            args.expected_planner_target_dim,
         ),
         _check(
             "num_envs",
             int(metadata.get("num_envs", -1)) == args.expected_num_envs,
             metadata.get("num_envs"),
             args.expected_num_envs,
+        ),
+        _check(
+            "motion_names",
+            args.expected_motion_names is None
+            or (
+                start_motion_names == sorted(set(args.expected_motion_names))
+                and final_motion_names == sorted(set(args.expected_motion_names))
+            ),
+            {
+                "start": start_motion_names,
+                "final": final_motion_names,
+            },
+            (
+                sorted(set(args.expected_motion_names))
+                if args.expected_motion_names is not None
+                else "recorded motion names"
+            ),
         ),
         _check(
             "seed",
@@ -107,6 +140,19 @@ def main() -> None:
             metadata.get("wrap_steps") is False,
             metadata.get("wrap_steps"),
             False,
+        ),
+        _check(
+            "random_reset_step_min",
+            int(metadata.get("random_reset_step_min", -1)) == 0,
+            metadata.get("random_reset_step_min"),
+            0,
+        ),
+        _check(
+            "random_reset_step_max",
+            int(metadata.get("random_reset_step_max", -1))
+            == args.expected_random_reset_step_max,
+            metadata.get("random_reset_step_max"),
+            args.expected_random_reset_step_max,
         ),
         _check(
             "observation_corruption",
@@ -128,9 +174,10 @@ def main() -> None:
         ),
         _check(
             "episode_length_extension",
-            metadata.get("episode_length_extension_enabled") is True,
+            metadata.get("episode_length_extension_enabled")
+            is args.expect_episode_length_extension,
             metadata.get("episode_length_extension_enabled"),
-            True,
+            args.expect_episode_length_extension,
         ),
         _check(
             "reward_clipping",
