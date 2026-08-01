@@ -212,6 +212,16 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # the macro-only window whitelist above, 72.2 -> 59.4 ms (-17.7%). True
     # (the default) keeps the historical layout.
     enable_expert_goal_observations: bool = True
+    # Master switch for the reward_input observation group (where the surface
+    # has one). The group feeds only the IPMD reward estimator (IRL
+    # discriminator inputs, selected via `agent.ipmd.reward_input_keys`); no
+    # current recipe consumes an estimated reward, yet the group's three terms
+    # are computed every step and the env pre-materializes an expert-side
+    # cache for them at construction. True (the default) keeps the historical
+    # v0/v1 layouts; the v2 release parks the stack by defaulting this off.
+    # Opting back in pairs with `agent.reward_estimation=true` so the agent
+    # actually trains the estimator the group feeds.
+    enable_reward_input_observations: bool = True
 
     def _anchor_term_names_by_group(self) -> dict[str, tuple[str, ...]]:
         """Anchor-relative observation terms per group for this surface.
@@ -397,6 +407,7 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         self._prune_command_observation_terms()
         self._prune_expert_window_observation_terms()
         self._apply_expert_goal_observation_toggle()
+        self._apply_reward_input_observation_toggle()
 
     # ------------------------------------------------------------------
     # LAFAN1 dataset/manifest machinery, inherited by every G1 task.
@@ -793,6 +804,14 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         if getattr(self.observations, "expert_goal", None) is not None:
             self.observations.expert_goal = None
 
+    def _apply_reward_input_observation_toggle(self) -> None:
+        """Drop the reward_input group when ``enable_reward_input_observations``
+        is False; inert on surfaces without the group."""
+        if bool(self.enable_reward_input_observations):
+            return
+        if getattr(self.observations, "reward_input", None) is not None:
+            self.observations.reward_input = None
+
     def _refresh_command_observation_terms(self) -> None:
         """Re-derive every pruned observation selection from the field values.
 
@@ -801,11 +820,11 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         through ``from_dict`` when non-dotted Hydra args remain, so
         ``command_mode`` / ``command_observation_terms`` /
         ``expert_window_observation_terms`` / ``enable_expert_goal_observations``
-        overrides can arrive after ``__post_init__`` already pruned with the
-        class defaults. ``ImitationRLEnv`` calls this at construction (and
-        ``from_dict`` calls it after applying a dict) so the final field
-        values always win. Idempotent: restore + re-anchor + re-sync + prune
-        is a fixed point.
+        / ``enable_reward_input_observations`` overrides can arrive after
+        ``__post_init__`` already pruned with the class defaults.
+        ``ImitationRLEnv`` calls this at construction (and ``from_dict`` calls
+        it after applying a dict) so the final field values always win.
+        Idempotent: restore + re-anchor + re-sync + prune is a fixed point.
         """
         self._restore_pruned_command_observation_terms()
         self._restore_pruned_expert_window_and_goal_observations()
@@ -817,9 +836,11 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         self._prune_command_observation_terms()
         self._prune_expert_window_observation_terms()
         self._apply_expert_goal_observation_toggle()
+        self._apply_reward_input_observation_toggle()
 
     def _restore_pruned_expert_window_and_goal_observations(self) -> None:
-        """Re-instate pruned expert_window terms and the expert_goal group.
+        """Re-instate pruned expert_window terms and the expert_goal /
+        reward_input groups.
 
         Restored terms/groups carry declaration-time params, so callers must
         re-apply ``_set_anchor_body`` and the window/goal param syncs before
@@ -844,6 +865,12 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         ):
             observation_defaults = type(self.observations)()
             self.observations.expert_goal = observation_defaults.expert_goal
+        if (
+            hasattr(self.observations, "reward_input")
+            and self.observations.reward_input is None
+        ):
+            observation_defaults = type(self.observations)()
+            self.observations.reward_input = observation_defaults.reward_input
 
     def _restore_pruned_command_observation_terms(self) -> None:
         """Re-instate pruned command terms from the group-class declarations.

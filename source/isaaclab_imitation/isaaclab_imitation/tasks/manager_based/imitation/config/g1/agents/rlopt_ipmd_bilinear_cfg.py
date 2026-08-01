@@ -10,6 +10,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipm
     REWARD_INPUT_KEYS,
     VANILLA_CRITIC_INPUT_KEYS,
     VANILLA_POLICY_INPUT_KEYS,
+    apply_reward_estimation_switch,
 )
 
 UNITREE_G1_WBT_LEROBOT_REPO_IDS: list[str] = [
@@ -59,6 +60,10 @@ class _G1ImitationRLOptIPMDBilinearBaseConfig(IPMDBilinearRLOptConfig):
     """Shared RLOpt IPMD + Bilinear configuration for G1 imitation."""
 
     _default_use_latent_command: bool = False
+    # Declares that this run trains the IPMD reward estimator (IRL) and
+    # therefore requires the env's reward_input observation group. False (the
+    # default) parks the stack: see `apply_reward_estimation_switch`.
+    reward_estimation: bool = False
 
     def sync_input_keys(self) -> None:
         use_latent_command = bool(self.ipmd.use_latent_command)
@@ -73,7 +78,7 @@ class _G1ImitationRLOptIPMDBilinearBaseConfig(IPMDBilinearRLOptConfig):
                 if use_latent_command
                 else list(VANILLA_CRITIC_INPUT_KEYS)
             )
-        self.ipmd.reward_input_keys = list(REWARD_INPUT_KEYS)
+        apply_reward_estimation_switch(self)
         self.ipmd.latent_learning.posterior_input_keys = list(
             LATENT_POSTERIOR_INPUT_KEYS
         )
@@ -176,9 +181,6 @@ class _G1ImitationRLOptIPMDBilinearBaseConfig(IPMDBilinearRLOptConfig):
         self.ipmd.estimated_reward_clamp_min = -1.0
         self.ipmd.estimated_reward_clamp_max = 1.0
         self.ipmd.est_reward_weight = 1.0
-        self.ipmd.reward_loss_coeff = 1.0
-        self.ipmd.reward_l2_coeff = 0.0
-        self.ipmd.reward_grad_penalty_coeff = 0.0
         self.collector.no_cuda_sync = True
 
         # Collector latents should consume the same observation-manager channel
@@ -186,6 +188,11 @@ class _G1ImitationRLOptIPMDBilinearBaseConfig(IPMDBilinearRLOptConfig):
         # sample_expert_batch(...) during updates, not through live env getters.
         if self._default_use_latent_command:
             self.ipmd.command_source = "posterior"
+
+        # Single authority for the parked-vs-active reward-estimation wiring;
+        # runs after every branch above so the declarative `reward_estimation`
+        # field always wins.
+        apply_reward_estimation_switch(self)
 
         self.bilinear.feature_dim = self.ipmd.latent_dim
         self.bilinear.policy_include_raw_state = False
@@ -239,7 +246,8 @@ class G1ImitationLatentRLOptIPMDBilinearConfig(_G1ImitationRLOptIPMDBilinearBase
         self.ipmd.latent_learning.command_phase_mode = "sin_cos"
         self.ipmd.latent_learning.code_latent_dim = 256
         self.ipmd.latent_learning.code_period = 25
-        self.ipmd.reward_loss_coeff = 0.0
+        # The learned-reward terms stay disabled via the base class's
+        # `reward_estimation` switch (default False).
 
 
 @configclass

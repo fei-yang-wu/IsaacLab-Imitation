@@ -248,6 +248,81 @@ def test_expert_window_and_goal_observation_pruning_knobs() -> None:
     )
 
 
+REWARD_INPUT_TERMS = ["expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b"]
+
+
+def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
+    """-G1-v2 parks the IPMD reward-estimation (IRL) stack by default.
+
+    The reward_input group feeds only the IPMD reward estimator, so v2
+    defaults `enable_reward_input_observations=False` and drops the group;
+    v0/v1 keep it (pinned by the recorded-default test). Opting back in must
+    restore the exact v0/v1 term list, and True -> False -> True must
+    round-trip through the construction-time refresh.
+    """
+    v2_cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
+    assert v2_cfg.enable_reward_input_observations is False
+    assert v2_cfg.observations.reward_input is None
+
+    v1_cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
+    assert v1_cfg.enable_reward_input_observations is True
+    assert _group_terms(v1_cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    v0_cfg = _load_env_cfg("Isaac-Imitation-G1-v0")
+    assert _group_terms(v0_cfg.observations.reward_input) == REWARD_INPUT_TERMS
+
+    # Opting in on v2 restores the exact v0/v1 term list (from_dict path).
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
+    cfg.from_dict({"enable_reward_input_observations": True})
+    assert cfg.observations.reward_input is not None
+    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    # Restored anchor terms follow the surface's expert anchor body.
+    for name in ("expert_anchor_pos_b", "expert_anchor_ori_b"):
+        term = getattr(cfg.observations.reward_input, name)
+        assert term.params["anchor_body_name"] == cfg.expert_anchor_body_name
+
+    # True -> False -> True round-trips through the construction-time refresh.
+    cfg.enable_reward_input_observations = False
+    cfg._refresh_command_observation_terms()
+    assert cfg.observations.reward_input is None
+    cfg.enable_reward_input_observations = True
+    cfg._refresh_command_observation_terms()
+    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    # Refresh stays a fixed point.
+    cfg._refresh_command_observation_terms()
+    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
+
+
+def test_reward_estimation_agent_switch_defaults_parked() -> None:
+    """The declarative agent switch mirrors the env knob: parked by default."""
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (  # noqa: E501
+        REWARD_INPUT_KEYS,
+        G1ImitationLatentSonicRLOptIPMDConfig,
+        G1ImitationRLOptIPMDConfig,
+    )
+
+    coeff_names = (
+        "reward_loss_coeff",
+        "reward_l2_coeff",
+        "reward_grad_penalty_coeff",
+        "reward_logit_reg_coeff",
+        "reward_param_weight_decay_coeff",
+    )
+    for cls in (G1ImitationRLOptIPMDConfig, G1ImitationLatentSonicRLOptIPMDConfig):
+        agent_cfg = cls()
+        assert agent_cfg.reward_estimation is False, cls.__name__
+        assert agent_cfg.ipmd.reward_input_keys is None, cls.__name__
+        for name in coeff_names:
+            assert float(getattr(agent_cfg.ipmd, name)) == 0.0, (cls.__name__, name)
+        # Opting in restores the historical vanilla estimator wiring, also
+        # through the post-override sync path the train entrypoint uses.
+        agent_cfg.reward_estimation = True
+        agent_cfg.sync_input_keys()
+        assert agent_cfg.ipmd.reward_input_keys == list(REWARD_INPUT_KEYS)
+        assert float(agent_cfg.ipmd.reward_loss_coeff) == 1.0, cls.__name__
+        for name in coeff_names[1:]:
+            assert float(getattr(agent_cfg.ipmd, name)) == 0.0, (cls.__name__, name)
+
+
 def test_expert_window_whitelist_must_cover_macro_state_terms() -> None:
     cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
     with pytest.raises(ValueError, match="expert_macro_state_terms"):

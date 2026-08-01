@@ -311,6 +311,37 @@ REWARD_INPUT_KEYS: list[tuple[str, str]] = [
 ]
 
 
+def apply_reward_estimation_switch(
+    agent_cfg, reward_input_keys: list[tuple[str, str]] = REWARD_INPUT_KEYS
+) -> None:
+    """Apply the declarative ``reward_estimation`` switch (single authority).
+
+    ``reward_estimation=False`` (the default) parks the IPMD IRL stack: all
+    five reward-estimator loss/regularizer coefficients are zeroed and
+    ``ipmd.reward_input_keys`` is cleared to ``None`` -- RLOpt then falls back
+    to the value-function input keys for the constructed-but-never-updated
+    estimator, so the run needs no ``reward_input`` observation group (the
+    ``-G1-v2`` env default drops it). ``reward_estimation=True`` declares that
+    the run trains the estimator: it selects ``reward_input_keys`` (so the env
+    must expose the group; set ``env.enable_reward_input_observations=True``
+    on tasks that default it off) and restores the historical vanilla
+    coefficients (``reward_loss_coeff=1.0``, every regularizer 0.0).
+
+    Called at the end of each IPMD-family ``sync_input_keys`` and
+    ``__post_init__`` so it wins over every earlier branch (including the
+    latent hl_skill zeroing) and over Hydra-applied ``agent.*`` overrides
+    (the train entrypoint re-runs ``sync_input_keys`` after applying them).
+    """
+    reward_estimation = bool(agent_cfg.reward_estimation)
+    ipmd = agent_cfg.ipmd
+    ipmd.reward_input_keys = list(reward_input_keys) if reward_estimation else None
+    ipmd.reward_loss_coeff = 1.0 if reward_estimation else 0.0
+    ipmd.reward_l2_coeff = 0.0
+    ipmd.reward_grad_penalty_coeff = 0.0
+    ipmd.reward_logit_reg_coeff = 0.0
+    ipmd.reward_param_weight_decay_coeff = 0.0
+
+
 def normalize_command_space(command_space: str) -> str:
     normalized = str(command_space).strip().lower().replace("-", "_")
     try:
@@ -391,6 +422,10 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
     # without adding an enum arm in Python.
     command_components: list[str] | None = None
     command_spec_name: str = ""
+    # Declares that this run trains the IPMD reward estimator (IRL) and
+    # therefore requires the env's reward_input observation group. False (the
+    # default) parks the stack: see `apply_reward_estimation_switch`.
+    reward_estimation: bool = False
 
     def sync_input_keys(self) -> None:
         use_latent_command = bool(self.ipmd.use_latent_command)
@@ -420,7 +455,7 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
                 if use_latent_command
                 else command_space_critic_input_keys(self.command_space, components)
             )
-        self.ipmd.reward_input_keys = list(REWARD_INPUT_KEYS)
+        apply_reward_estimation_switch(self)
         self.ipmd.latent_learning.posterior_input_keys = list(
             LATENT_POSTERIOR_INPUT_KEYS
         )
@@ -550,9 +585,8 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
         self.ipmd.estimated_reward_clamp_min = -1.0
         self.ipmd.estimated_reward_clamp_max = 1.0
         self.ipmd.est_reward_weight = 1.0
-        self.ipmd.reward_loss_coeff = 1.0
-        self.ipmd.reward_l2_coeff = 0.0
-        self.ipmd.reward_grad_penalty_coeff = 0.0
+        # Reward-estimator coefficients are owned by the declarative
+        # `reward_estimation` switch applied at the end of this method.
         self.collector.no_cuda_sync = True
 
         # Default latent-conditioned scheme: consume a pretrained high-level
@@ -579,12 +613,13 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
             self.ipmd.latent_learning.command_phase_mode = "sin_cos"
             self.ipmd.latent_learning.code_period = 25
             self.ipmd.latent_learning.code_latent_dim = 256
-            # hl_skill drives the objective; disable the learned-reward terms.
-            self.ipmd.reward_loss_coeff = 0.0
-            self.ipmd.reward_l2_coeff = 0.0
-            self.ipmd.reward_grad_penalty_coeff = 0.0
-            self.ipmd.reward_logit_reg_coeff = 0.0
-            self.ipmd.reward_param_weight_decay_coeff = 0.0
+            # hl_skill drives the objective; the learned-reward terms stay
+            # disabled via the `reward_estimation` switch below.
+
+        # Single authority for the parked-vs-active reward-estimation wiring;
+        # runs after every branch above (including the latent one) so the
+        # declarative `reward_estimation` field always wins.
+        apply_reward_estimation_switch(self)
 
 
 @configclass
