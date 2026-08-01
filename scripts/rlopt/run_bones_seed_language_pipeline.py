@@ -16,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from data.hf_utils import hf_file_url, resolve_hf_token  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HF_REPO = "bones-studio/seed"
@@ -100,20 +103,6 @@ def _motion_name(filename: str) -> str:
     return filename.replace("__", "_")
 
 
-def _hf_url(repo: str, path: str) -> str:
-    return f"https://huggingface.co/datasets/{repo}/resolve/main/{path}"
-
-
-def _token() -> str | None:
-    value = os.environ.get("HF_TOKEN")
-    if value:
-        return value.strip()
-    for path in (Path.home() / ".hf_token", Path.home() / ".cache/huggingface/token"):
-        if path.is_file():
-            return path.read_text(encoding="utf-8").strip()
-    return None
-
-
 def _download(url: str, output: Path, *, token: str | None, force: bool) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.is_file() and output.stat().st_size > 0 and not force:
@@ -150,7 +139,9 @@ def _download(url: str, output: Path, *, token: str | None, force: bool) -> None
                     if now - last_report > 60:
                         gib = written / (1024**3)
                         rate = written / max(now - started, 1.0) / (1024**2)
-                        print(f"[INFO] Download progress {gib:.2f} GiB at {rate:.1f} MiB/s")
+                        print(
+                            f"[INFO] Download progress {gib:.2f} GiB at {rate:.1f} MiB/s"
+                        )
                         last_report = now
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"Download failed for {url}: HTTP {exc.code}") from exc
@@ -214,7 +205,9 @@ def _write_shortlist(
                 "overview_description": overview,
                 "num_events": int(event_payload.get("num_events", len(event_rows))),
                 "events": event_rows,
-                "propagated_from_filename": event_payload.get("propagated_from_filename"),
+                "propagated_from_filename": event_payload.get(
+                    "propagated_from_filename"
+                ),
             }
         )
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -272,7 +265,9 @@ def main() -> None:
     npz_dir = data_root / "npz" / "g1"
     manifest = data_root / "manifests" / "g1_bones_seed_paper24_manifest.json"
     language = data_root / "language" / "g1_bones_seed_paper24_language.json"
-    embeddings = data_root / "language" / "g1_bones_seed_paper24_minilm_goal_embeddings.pt"
+    embeddings = (
+        data_root / "language" / "g1_bones_seed_paper24_minilm_goal_embeddings.pt"
+    )
     dataset_path = data_root / "g1_hl_diffsr"
     skill_dir = run_root / "skill_encoder_h25_z256"
     commander_dir = run_root / "commander_contrastive_20000"
@@ -281,7 +276,7 @@ def main() -> None:
     skill_ckpt = skill_dir / "checkpoints" / "latest.pt"
     commander_ckpt = commander_dir / "checkpoints" / "latest.pt"
 
-    token = _token()
+    token = resolve_hf_token()
     run_root.mkdir(parents=True, exist_ok=True)
     (run_root / "metadata.json").write_text(
         json.dumps(
@@ -303,19 +298,19 @@ def main() -> None:
 
     if not args.skip_download:
         _download(
-            _hf_url(HF_REPO, "metadata/seed_metadata_v004.csv"),
+            hf_file_url(HF_REPO, "metadata/seed_metadata_v004.csv"),
             metadata_csv,
             token=token,
             force=args.force_download,
         )
         _download(
-            _hf_url(HF_REPO, "metadata/seed_metadata_v002_temporal_labels.jsonl"),
+            hf_file_url(HF_REPO, "metadata/seed_metadata_v002_temporal_labels.jsonl"),
             events_jsonl,
             token=token,
             force=args.force_download,
         )
         _download(
-            _hf_url(HF_REPO, "g1.tar.gz"),
+            hf_file_url(HF_REPO, "g1.tar.gz"),
             archive,
             token=token,
             force=args.force_download,
@@ -567,7 +562,9 @@ def main() -> None:
         print("[INFO] Skipping rollout finetune/eval.")
         return
     if low_ckpt is None:
-        raise FileNotFoundError(f"No low-level checkpoint found under {low_dir / 'models'}")
+        raise FileNotFoundError(
+            f"No low-level checkpoint found under {low_dir / 'models'}"
+        )
     _run(
         [
             sys.executable,

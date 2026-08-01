@@ -16,13 +16,17 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from hf_utils import resolve_hf_token
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo_id", required=True)
     parser.add_argument("--folder", type=Path, required=True)
     parser.add_argument("--private", action="store_true", default=False)
-    parser.add_argument("--token", default=None, help="HF token (default: cached login).")
+    parser.add_argument(
+        "--token", default=None, help="HF token (default: cached login)."
+    )
     parser.add_argument(
         "--dry_run",
         action="store_true",
@@ -46,7 +50,9 @@ def main() -> None:
     total_bytes = sum(p.stat().st_size for p in shards)
     print(f"[upload] repo_id={args.repo_id} private={args.private}")
     print(f"[upload] folder={folder}")
-    print(f"[upload] shards={len(shards)} ({total_bytes / 1e9:.1f} GB) sidecars={sidecars}")
+    print(
+        f"[upload] shards={len(shards)} ({total_bytes / 1e9:.1f} GB) sidecars={sidecars}"
+    )
 
     api = HfApi()
     print(f"[upload] ensuring dataset repo exists: {args.repo_id}")
@@ -55,7 +61,7 @@ def main() -> None:
         repo_type="dataset",
         private=bool(args.private),
         exist_ok=True,
-        token=args.token,
+        token=args.token or resolve_hf_token(),
     )
     if args.dry_run:
         print("[upload] dry-run: repo ensured; not uploading.")

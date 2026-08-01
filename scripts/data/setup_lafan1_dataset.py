@@ -57,20 +57,18 @@ def _prepare_script_path() -> Path:
     return Path(__file__).resolve().with_name("prepare_lafan1_from_csv.py")
 
 
-def _resolve_converter_script(explicit_path: str | None) -> Path | None:
+def _resolve_batch_converter_script(explicit_path: str | None) -> Path | None:
     if explicit_path is not None:
         converter_script = Path(explicit_path).expanduser().resolve()
         if not converter_script.is_file():
-            raise FileNotFoundError(f"converter_script not found: {converter_script}")
+            raise FileNotFoundError(
+                f"batch_converter_script not found: {converter_script}"
+            )
         return converter_script
 
-    repo_root = _repo_root()
-    candidate_paths = [
-        repo_root / "scripts" / "csv_to_npz.py",
-    ]
-    for path in candidate_paths:
-        if path.is_file():
-            return path.resolve()
+    candidate = Path(__file__).resolve().with_name("batch_csv_to_npz.py")
+    if candidate.is_file():
+        return candidate.resolve()
     return None
 
 
@@ -121,7 +119,7 @@ def _run_prepare_pipeline(
     csv_dir: Path,
     npz_dir: Path,
     manifest_path: Path,
-    converter_script: Path,
+    batch_converter_script: Path,
 ) -> None:
     prepare_script = _prepare_script_path()
     if not prepare_script.is_file():
@@ -137,8 +135,8 @@ def _run_prepare_pipeline(
         "--manifest_path",
         str(manifest_path),
         "--recursive",
-        "--converter_script",
-        str(converter_script),
+        "--batch_converter_script",
+        str(batch_converter_script),
         "--python",
         args.python,
         "--input_fps",
@@ -210,10 +208,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Convert downloaded CSV files to NPZ and write a manifest JSON.",
     )
     parser.add_argument(
-        "--converter_script",
+        "--batch_converter_script",
         type=str,
         default=None,
-        help="Optional path to the CSV-to-NPZ converter script.",
+        help="Optional path to the batched CSV-to-NPZ converter script.",
     )
     parser.add_argument(
         "--python",
@@ -416,10 +414,13 @@ def main() -> None:
         print(f"[CMD]  {_format_command(preview_cmd)}")
         return
 
-    converter_script = _resolve_converter_script(args.converter_script)
-    if converter_script is None:
+    batch_converter_script = _resolve_batch_converter_script(
+        args.batch_converter_script
+    )
+    if batch_converter_script is None:
         raise FileNotFoundError(
-            "Could not locate a CSV-to-NPZ converter script. Pass --converter_script explicitly."
+            "Could not locate the batched CSV-to-NPZ converter script. Pass "
+            "--batch_converter_script explicitly."
         )
 
     npz_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -430,7 +431,7 @@ def main() -> None:
         csv_dir=csv_dir,
         npz_dir=npz_dir,
         manifest_path=manifest_path,
-        converter_script=converter_script,
+        batch_converter_script=batch_converter_script,
     )
 
     print("[INFO] Dataset setup completed.")
