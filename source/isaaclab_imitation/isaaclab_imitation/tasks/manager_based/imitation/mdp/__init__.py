@@ -2,7 +2,14 @@
 
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
-from .commands import MotionCommand, MotionCommandCfg
+from .commands import (
+    MotionCommand,
+    MotionCommandCfg,
+    PublishedCommandTerm,
+    PublishedCommandTermCfg,
+    SkillCommand,
+    SkillCommandCfg,
+)
 from .events import (
     randomize_joint_default_pos,
     reset_joints_to_reference,
@@ -33,6 +40,7 @@ from .observations import (
     motion_command_anchor_ori_b,
     motion_command_anchor_pos_b,
     motion_command_joint,
+    skill_command,
     policy_expert_anchor_ori_b,
     policy_expert_ee_ori_b,
     policy_expert_keypoint_ori_b,
@@ -87,6 +95,10 @@ from .terminations import (
 __all__ = [
     "MotionCommand",
     "MotionCommandCfg",
+    "PublishedCommandTerm",
+    "PublishedCommandTermCfg",
+    "SkillCommand",
+    "SkillCommandCfg",
     "track_root_quat",
     "track_root_pos",
     "track_joint_pos",
@@ -116,6 +128,7 @@ __all__ = [
     "motion_command_joint",
     "motion_command_anchor_pos_b",
     "motion_command_anchor_ori_b",
+    "skill_command",
     "policy_expert_motion_command",
     "policy_expert_anchor_pos_b",
     "policy_expert_ee_pos_b",

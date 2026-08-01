@@ -182,6 +182,16 @@ def motion_command_anchor_ori_b(env: ImitationRLEnv) -> torch.Tensor:
     return env.command_manager.get_command("motion")[..., -6:].contiguous()
 
 
+def skill_command(env: ImitationRLEnv) -> torch.Tensor:
+    """Latent skill command via the manager-based ``skill`` command term.
+
+    Adapter phase: the term serves the env's agent-latent buffer, so this
+    returns exactly the same tensor as :func:`agent_latent_command`; the
+    CommandManager term is the single producer for v2 surfaces.
+    """
+    return env.command_manager.get_command("skill")
+
+
 def expert_window_motion(
     env: ImitationRLEnv,
     past_steps: int = 1,
