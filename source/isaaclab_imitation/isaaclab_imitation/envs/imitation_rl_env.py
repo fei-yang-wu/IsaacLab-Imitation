@@ -927,6 +927,19 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._mpjpe_metric_sum = torch.zeros(self.num_envs, device=self.device)
         self._mpjpe_metric_count = torch.zeros(self.num_envs, device=self.device)
 
+    def _motion_command_owns_metrics(self) -> bool:
+        """True when a manager-based ``motion`` command term owns the metrics.
+
+        The v2 surface's ``MotionCommand`` term logs ``Metrics/motion/...``
+        natively (delegating to :meth:`_compute_mpjpe_metric`), so the env-side
+        ``Metrics/mpjpe_mm*`` channel is skipped to avoid logging the same
+        quantity twice. Tasks without the term (v0/v1) keep the env channel.
+        """
+        command_manager = getattr(self, "command_manager", None)
+        if command_manager is None:
+            return False
+        return "motion" in getattr(command_manager, "active_terms", ())
+
     def _compute_mpjpe_metric(self) -> torch.Tensor | None:
         """Per-environment root-relative MPJPE in metres.
 
@@ -981,6 +994,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 reset write. Accumulating here too would double-count the
                 terminal frame into the wrong (new) episode.
         """
+        if self._motion_command_owns_metrics():
+            return {}
         mpjpe = self._compute_mpjpe_metric()
         if mpjpe is None:
             return {}
@@ -1010,6 +1025,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         """
         if self._mpjpe_metric_sum is None or env_ids.numel() == 0:
             return
+        if self._motion_command_owns_metrics():
+            return
         mpjpe = self._compute_mpjpe_metric()
         if mpjpe is None:
             return
@@ -1028,6 +1045,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         gaps on steps where nothing reset.
         """
         if self._mpjpe_metric_sum is None or env_ids.numel() == 0:
+            return
+        if self._motion_command_owns_metrics():
             return
         counts = self._mpjpe_metric_count.index_select(0, env_ids)
         valid = counts > 0
