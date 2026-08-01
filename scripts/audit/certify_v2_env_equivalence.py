@@ -53,6 +53,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     capture.add_argument("--steps", type=int, default=12)
     capture.add_argument("--seed", type=int, default=42)
     capture.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    capture.add_argument(
+        "--env-overrides",
+        default="",
+        help="Comma-separated env.* overrides applied to the cfg (e.g. "
+        "env.reset_start_mode=adaptive,env.random_reset_step_min=0).",
+    )
     capture.add_argument("--headless", action="store_true", default=True)
     capture.set_defaults(headless=True)
 
@@ -62,6 +68,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     compare.add_argument("legacy_capture", type=Path)
     compare.add_argument("v2_capture", type=Path)
     return parser.parse_args(argv)
+
+
+def _apply_env_override(env_cfg: object, key: str, value: str) -> object:
+    """Apply a dotted env.* override with YAML coercion (plain-setattr path)."""
+    import yaml
+
+    if key.startswith("env."):
+        key = key[len("env.") :]
+    parts = key.split(".")
+    target = env_cfg
+    for part in parts[:-1]:
+        target = getattr(target, part)
+    setattr(target, parts[-1], yaml.safe_load(value))
+    return env_cfg
 
 
 def _capture(args: argparse.Namespace) -> None:
@@ -91,6 +111,12 @@ def _capture(args: argparse.Namespace) -> None:
         use_fabric=True,
     )
     setattr(env_cfg, "lafan1_manifest_path", str(args.manifest.resolve()))
+    for override in args.env_overrides.split(","):
+        override = override.strip()
+        if not override:
+            continue
+        key, value = override.split("=", 1)
+        env_cfg = _apply_env_override(env_cfg, key, value)
 
     env_cls = ImitationRLEnvLegacy if args.class_name == "legacy" else ImitationRLEnv
     env = env_cls(env_cfg)

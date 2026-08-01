@@ -43,10 +43,6 @@ from isaaclab_imitation.contracts.causal_planner_observation import (
     build_causal_planner_frame,
     causal_planner_observation_spec,
 )
-from iltools.datasets.reset_sampling import (
-    SonicAdaptiveResetSampler,
-    StartFrameSampler,
-)
 from tensordict import TensorDict
 
 from .command_plane import HeldCommandPlane, LatentCommandBuffer
@@ -153,8 +149,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             refresh_command_terms()
 
         # Reset / start-frame configuration (cluster K: the env parses these
-        # once; on v2 the `motion` command term owns the samplers and reads
-        # them back, see `_setup_adaptive_failure_reset_sampler`).
+        # once; on v2 the `motion` command term owns the reset-start samplers
+        # and reads the parsed knobs back through the env attributes).
         reference_start_frame = int(getattr(cfg, "reference_start_frame", 0))
         if reference_start_frame < 0:
             raise ValueError("reference_start_frame must be >= 0.")
@@ -220,8 +216,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # managers), exactly where the legacy env loads its reference data.
         self.expert_data_plane = ExpertDataPlane(cfg, self)
 
-        self._setup_adaptive_failure_reset_sampler(cfg)
-
         # Command-plane buffers (agent-published latent + held chunk windows).
         # Allocated before `super().__init__` so the command terms constructed
         # inside `load_managers()` can validate against them.
@@ -275,8 +269,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
 
         # Initialize parent class (builds the managers; the `motion` term
-        # constructs its owned reset samplers inside `load_managers` and
-        # mirrors them onto the env-side aliases).
+        # constructs its owned reset-start samplers inside `load_managers`).
         super().__init__(cfg, render_mode, **kwargs)
 
         self.robot: Articulation = self.scene["robot"]
@@ -284,6 +277,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # the fast paths against the live scene, resolve the metric bodies.
         self.expert_data_plane.finalize(self.scene, self.robot)
         self._initialize_causal_planner_history()
+
+        # The v2 env's reset/sampling path is fully absorbed into the
+        # `motion` command term; require it so `step` / `_reset_idx` never
+        # fall into the legacy inline branches.
+        self._motion_reset_owner = self._motion_command_reset_owner()
+        if self._motion_reset_owner is None:
+            raise RuntimeError(
+                "ImitationRLEnvV2 requires the `motion` command term with "
+                "owns_reset=True: the term owns the reset-start samplers and "
+                "the adaptive-failure bookkeeping (see MotionCommand)."
+            )
 
     # ------------------------------------------------------------------
     # ExpertDataPlane delegators (name-identical to the legacy env).
@@ -955,19 +959,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     # Reset / adaptive-failure sampling (cluster K, env-owned).
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _motion_command_cfg_owns_reset(cfg: Any) -> bool:
-        """True when the configured ``motion`` command term owns reset sampling.
-
-        Cfg-level twin of :meth:`_motion_command_reset_owner`, needed because
-        `_setup_adaptive_failure_reset_sampler` runs before ``super().__init__``
-        builds the CommandManager (and hence the term).
-        """
-        motion_cfg = getattr(getattr(cfg, "commands", None), "motion", None)
-        return bool(getattr(motion_cfg, "owns_reset", False))
-
     def _motion_command_reset_owner(self) -> Any | None:
-        """The ``motion`` command term when it owns reset-start sampling (v2)."""
+        """The ``motion`` command term that owns reset-start sampling (v2)."""
         command_manager = getattr(self, "command_manager", None)
         if command_manager is None:
             return None
@@ -978,157 +971,25 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             return term
         return None
 
-    def _setup_adaptive_failure_reset_sampler(self, cfg: Any) -> None:
-        tm = self.trajectory_manager
-        self._adaptive_failure_reset_sampler: SonicAdaptiveResetSampler | None = None
-        if self._motion_command_cfg_owns_reset(cfg):
-            # v2: the `motion` command term owns the reset-start samplers. It
-            # constructs the single instance set in its __init__ (inside
-            # `super().__init__`'s load_managers, i.e. after this method) and
-            # mirrors the instances back onto these two attributes so the
-            # adaptive-failure record/sample hooks keep feeding the same
-            # objects. Building them here as well would silently split the
-            # SONIC failure statistics across two SonicAdaptiveResetSampler
-            # instances.
-            self._start_frame_sampler = None
-            return
-        # The SONIC weight function is needed both by the legacy full-trajectory
-        # joint rank+frame path and by reset_start_mode="adaptive".
-        if self._random_reset_full_trajectory or self._reset_start_mode == "adaptive":
-            self._adaptive_failure_reset_sampler = SonicAdaptiveResetSampler(
-                tm._length,
-                bin_size=self._adaptive_failure_reset_bin_size,
-                sequence_length_agnostic=(
-                    self._adaptive_failure_reset_sequence_length_agnostic
-                ),
-                init_num_failures=self._adaptive_failure_reset_init_num_failures,
-                uniform_sampling_rate=self._adaptive_failure_reset_uniform_ratio,
-                pre_failure_sample_window=(
-                    self._adaptive_failure_reset_pre_failure_window
-                ),
-                failure_rate_max_over_mean=(
-                    self._adaptive_failure_reset_failure_rate_max_over_mean
-                ),
-            )
-        if self._random_reset_full_trajectory:
-            # Legacy full-trajectory path: SONIC picks ranks AND frames jointly
-            # from the bin distribution; the generic start sampler is unused.
-            self._start_frame_sampler = None
-            return
-
-        # Resolve the effective starting-frame mode: "auto" keeps the legacy
-        # random-range / fixed behavior; explicit modes map 1:1 onto
-        # StartFrameSampler. Trajectory selection stays with the manager's
-        # reset_schedule in every mode.
-        mode = self._reset_start_mode
-        if mode == "auto":
-            mode = (
-                StartFrameSampler.RANDOM
-                if self._random_reset_step_max > self._random_reset_step_min
-                else StartFrameSampler.FIXED
-            )
-        if mode == StartFrameSampler.ADAPTIVE:
-            weight_fn = self._adaptive_reset_weight_fn
-            if weight_fn is None:
-                weight_fn = self._adaptive_failure_reset_sampler
-            if weight_fn is None:
-                raise ValueError(
-                    "reset_start_mode='adaptive' requires the SONIC reset "
-                    "sampler or a custom `cfg.adaptive_reset_weight_fn`."
-                )
-            self._start_frame_sampler = StartFrameSampler(
-                tm._length,
-                mode="adaptive",
-                weight_fn=weight_fn,
-                device=tm._state_device,
-            )
-            return
-        self._start_frame_sampler = StartFrameSampler(
-            tm._length,
-            mode=mode,
-            fixed_step=self._reference_start_frame,
-            random_step_min=self._random_reset_step_min,
-            random_step_max=self._random_reset_step_max,
-            device=tm._state_device,
-        )
-
     def set_adaptive_reset_weight_fn(self, weight_fn: Any) -> None:
         """Provide a custom adaptive starting-frame weight function.
 
-        The callable must accept ``(trajectory_ranks, frame_steps)`` tensors
-        and return one non-negative weight per (rank, step) pair, as expected
-        by ``iltools.datasets.reset_sampling.StartFrameSampler``. It replaces
-        the SONIC failure-weight function and switches the env to
+        Delegates to the owning ``motion`` command term, which owns the
+        ``StartFrameSampler`` instance. The callable must accept
+        ``(trajectory_ranks, frame_steps)`` tensors and return one
+        non-negative weight per (rank, step) pair, as expected by
+        ``iltools.datasets.reset_sampling.StartFrameSampler``. It replaces
+        the SONIC failure-weight function and switches the term to
         ``reset_start_mode='adaptive'`` (trajectory ranks still come from the
         manager's reset schedule).
         """
-        if self._random_reset_full_trajectory:
+        owner = getattr(self, "_motion_reset_owner", None)
+        if owner is None:
             raise RuntimeError(
-                "A custom adaptive weight function is incompatible with "
-                "random_reset_full_trajectory (SONIC joint rank+frame sampling)."
+                "set_adaptive_reset_weight_fn requires the `motion` command "
+                "term with owns_reset=True."
             )
-        if not callable(weight_fn):
-            raise ValueError("weight_fn must be a callable.")
-        self._adaptive_reset_weight_fn = weight_fn
-        self._reset_start_mode = StartFrameSampler.ADAPTIVE
-        self._start_frame_sampler = StartFrameSampler(
-            self.trajectory_manager._length,
-            mode="adaptive",
-            weight_fn=weight_fn,
-            device=self.trajectory_manager._state_device,
-        )
-        # v2 term-owned resets: keep the single-instance guarantee by handing
-        # the replacement sampler to the owning `motion` command term too.
-        motion_reset_owner = self._motion_command_reset_owner()
-        if motion_reset_owner is not None:
-            motion_reset_owner._start_frame_sampler = self._start_frame_sampler
-
-    def _reset_tracking_failure_mask(self) -> torch.Tensor:
-        failure_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
-        for term_name in self.termination_manager.active_terms:
-            term_cfg = self.termination_manager.get_term_cfg(term_name)
-            if term_cfg.time_out or term_name == "reference_finished":
-                continue
-            failure_mask |= self.termination_manager.get_term(term_name)
-        return failure_mask
-
-    def _record_adaptive_failure_reset_visits(self) -> None:
-        sampler = self._adaptive_failure_reset_sampler
-        if sampler is None:
-            return
-        tm = self.trajectory_manager
-        sampler.record_visits(
-            tm.env_traj_rank,
-            self._current_reference_local_step,
-        )
-
-    def _record_adaptive_failure_reset_bins(self, env_ids: torch.Tensor) -> None:
-        sampler = self._adaptive_failure_reset_sampler
-        if sampler is None:
-            return
-        tm = self.trajectory_manager
-        env_ids_device = env_ids.to(device=self.device, dtype=torch.long)
-        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
-        failed_mask = self._reset_tracking_failure_mask().index_select(
-            0, env_ids_device
-        )
-        if not torch.any(failed_mask):
-            return
-        failed_mask_tm = failed_mask.to(device=tm._state_device)
-        sampler.record_failures(
-            tm.env_traj_rank.index_select(0, env_ids_tm)[failed_mask_tm],
-            self._current_reference_local_step.index_select(0, env_ids_device)[
-                failed_mask
-            ],
-        )
-
-    def _sample_adaptive_failure_resets(
-        self, count: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        sampler = self._adaptive_failure_reset_sampler
-        if sampler is None:
-            raise RuntimeError("Adaptive failure reset sampler is not enabled.")
-        return sampler.sample(count)
+        owner.set_weight_fn(weight_fn)
 
     # ------------------------------------------------------------------
     # Causal planner observation surface (robot-only, no expert reads).
@@ -1291,40 +1152,14 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
 
         # Reset trajectory tracking (reassigns trajectories and resets steps).
-        tm = self.trajectory_manager
-        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
-        motion_reset_owner = self._motion_command_reset_owner()
-        if motion_reset_owner is not None:
-            # v2: the `motion` command term owns the reset-start samplers and
-            # applies them here, at the same point the inline paths below run
-            # (before `super()._reset_idx`, whose reset-mode events read the
-            # reference at the new cursor). Failure-bin recording stays with
-            # the env because it reads termination-manager state; it feeds the
-            # same sampler instances through the env-side aliases.
-            self._record_adaptive_failure_reset_bins(env_ids)
-            motion_reset_owner.resample_reference(env_ids)
-        elif self._random_reset_full_trajectory:
-            self._record_adaptive_failure_reset_bins(env_ids)
-            reset_ranks, reset_steps = self._sample_adaptive_failure_resets(
-                int(env_ids_tm.numel())
-            )
-            tm.reset_envs(
-                env_ids_tm,
-                ranks=reset_ranks,
-                steps=reset_steps,
-            )
-        else:
-            # Record terminal failure bins whenever the SONIC weight function
-            # is in use, so adaptive starting frames keep adapting under
-            # reset_schedule-driven trajectory selection too. No-op unless an
-            # adaptive failure sampler exists.
-            self._record_adaptive_failure_reset_bins(env_ids)
-            # StartFrameSampler picks the local step (fixed/random/adaptive);
-            # the trajectory manager picks the rank via its configured
-            # reset_schedule.
-            ranks = tm.env_traj_rank.index_select(0, env_ids_tm)
-            reset_steps = self._start_frame_sampler.sample_steps(ranks)
-            tm.reset_envs(env_ids_tm, steps=reset_steps)
+        # The `motion` command term owns the reset-start samplers AND the
+        # adaptive-failure bookkeeping; failure bins are recorded here, at
+        # the same point the legacy env-inline path recorded them (before
+        # `super()._reset_idx`, whose reset-mode events read the reference at
+        # the new cursor), then the term applies its samplers.
+        motion_reset_owner = self._motion_reset_owner
+        motion_reset_owner.record_failures(env_ids)
+        motion_reset_owner.resample_reference(env_ids)
         self.reset_agent_latent_command(env_ids)
         self.reset_agent_trajectory_command(env_ids)
 
@@ -1344,7 +1179,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         """Step the environment and update reference data."""
         # Get next reference data point (advance=True to move to next step)
         self._refresh_current_expert_frame(advance=True)
-        self._record_adaptive_failure_reset_visits()
+        # Record the pre-step cursor as a visit in the SONIC failure sampler
+        # (the `motion` term owns the sampler; the timing-critical call site
+        # stays here, before the physics step).
+        self._motion_reset_owner.record_visits()
         super().step(action)
         rollout_state_log = self._compute_rollout_reference_state_log()
         if rollout_state_log:
