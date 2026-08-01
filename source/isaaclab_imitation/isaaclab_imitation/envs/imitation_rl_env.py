@@ -539,6 +539,14 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._current_reference_local_step = self.trajectory_manager.env_step.to(
             device=device, dtype=torch.long
         ).clone()
+        # The reward_input observation group is opt-in (parked IPMD reward
+        # estimation; see cfg.enable_reward_input_observations). The refresh
+        # above already applied the toggle, so the group's presence on the
+        # observation config decides whether the expert-side cache exists.
+        self._reward_input_group_present = (
+            getattr(getattr(cfg, "observations", None), "reward_input", None)
+            is not None
+        )
         self._build_reward_input_cache(device=torch.device(device))
         self._agent_latent_dim = int(getattr(cfg, "latent_command_dim", 16))
         self._agent_latent_command = torch.zeros(
@@ -3344,7 +3352,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         expert_motion term (joint_pos + joint_vel concatenated), plus two
         broadcast buffers for the anchor-error terms that are zero / identity
         on the expert side by construction.
+
+        No-op when the active observation config has no `reward_input` group
+        (cfg.enable_reward_input_observations=False, the -G1-v2 default): the
+        cache buffers stay None and `_reward_input_expert_terms` fails loudly
+        if anything still requests expert-side reward_input values.
         """
+        if not self._reward_input_group_present:
+            self._reward_input_motion_cache = None
+            self._reward_input_zero_anchor_pos = None
+            self._reward_input_identity_rot6d = None
+            return
         tm = self.trajectory_manager
         total = int(tm._end.max().item())
         if total <= 0:
@@ -3380,15 +3398,25 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         term_name: str,
     ) -> torch.Tensor | None:
         """Return expert-side reward_input term values from the precomputed cache."""
-        if term_name == "expert_motion":
-            idx = global_indices.to(
-                device=self._reward_input_motion_cache.device, dtype=torch.int64
+        motion_cache = self._reward_input_motion_cache
+        zero_anchor_pos = self._reward_input_zero_anchor_pos
+        identity_rot6d = self._reward_input_identity_rot6d
+        if motion_cache is None or zero_anchor_pos is None or identity_rot6d is None:
+            raise RuntimeError(
+                "Expert-side reward_input values were requested, but this task "
+                "has no reward_input observation group "
+                "(cfg.enable_reward_input_observations=False). Reward "
+                "estimation is opt-in: set "
+                "env.enable_reward_input_observations=True and "
+                "agent.reward_estimation=true."
             )
-            return self._reward_input_motion_cache.index_select(0, idx)
+        if term_name == "expert_motion":
+            idx = global_indices.to(device=motion_cache.device, dtype=torch.int64)
+            return motion_cache.index_select(0, idx)
         if term_name == "expert_anchor_pos_b":
-            return self._reward_input_zero_anchor_pos.expand(batch_size, 3)
+            return zero_anchor_pos.expand(batch_size, 3)
         if term_name == "expert_anchor_ori_b":
-            return self._reward_input_identity_rot6d.expand(batch_size, 6)
+            return identity_rot6d.expand(batch_size, 6)
         return None
 
     def _expert_local_steps_from_global_indices(

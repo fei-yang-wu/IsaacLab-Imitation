@@ -4,6 +4,10 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_imitation.envs.rlopt import IPMDRLOptConfig
 
+from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
+    apply_reward_estimation_switch,
+)
+
 
 VANILLA_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_motion"),
@@ -73,6 +77,10 @@ class _G1ImitationRLOptIPMDVQVAEBaseConfig(IPMDRLOptConfig):
     """Shared IPMD configuration with a VQ-VAE skill codebook for G1 imitation."""
 
     _default_use_latent_command: bool = True
+    # Declares that this run trains the IPMD reward estimator (IRL) and
+    # therefore requires the env's reward_input observation group. False (the
+    # default) parks the stack: see `apply_reward_estimation_switch`.
+    reward_estimation: bool = False
 
     def sync_input_keys(self) -> None:
         use_latent_command = bool(self.ipmd.use_latent_command)
@@ -87,7 +95,7 @@ class _G1ImitationRLOptIPMDVQVAEBaseConfig(IPMDRLOptConfig):
                 if use_latent_command
                 else list(VANILLA_CRITIC_INPUT_KEYS)
             )
-        self.ipmd.reward_input_keys = list(REWARD_INPUT_KEYS)
+        apply_reward_estimation_switch(self, REWARD_INPUT_KEYS)
         self.ipmd.latent_learning.posterior_input_keys = list(
             LATENT_POSTERIOR_INPUT_KEYS
         )
@@ -211,13 +219,15 @@ class _G1ImitationRLOptIPMDVQVAEBaseConfig(IPMDRLOptConfig):
         self.ipmd.estimated_reward_clamp_max = 1.0
         self.ipmd.est_reward_weight = 1.0
         self.ipmd.env_reward_weight = 1.0
-        self.ipmd.reward_loss_coeff = 1.0
-        self.ipmd.reward_l2_coeff = 0.0
-        self.ipmd.reward_grad_penalty_coeff = 0.0
         self.collector.no_cuda_sync = True
 
         if self._default_use_latent_command:
             self.ipmd.command_source = "posterior"
+
+        # Single authority for the parked-vs-active reward-estimation wiring;
+        # runs after every branch above so the declarative `reward_estimation`
+        # field always wins.
+        apply_reward_estimation_switch(self, REWARD_INPUT_KEYS)
 
 
 @configclass

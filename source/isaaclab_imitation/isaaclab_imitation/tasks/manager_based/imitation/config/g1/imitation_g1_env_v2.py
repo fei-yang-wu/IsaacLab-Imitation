@@ -90,6 +90,14 @@ class ImitationG1EnvV2Cfg(ImitationG1EnvCfg):
     # pyrefly: ignore[bad-override-mutable-attribute]  # configclass override idiom
     commands: G1MotionCommandsCfg = G1MotionCommandsCfg()
 
+    # v2 parks the IPMD reward-estimation (IRL) stack: the reward_input group
+    # feeds only that estimator, which no current recipe trains or consumes,
+    # so v2 drops the group (and the env's expert-side cache for it) by
+    # default. Opt back in with `env.enable_reward_input_observations=True`
+    # plus `agent.reward_estimation=true`; v0/v1 keep the group so their
+    # recorded layouts are untouched.
+    enable_reward_input_observations: bool = False
+
     def __post_init__(self):
         super().__post_init__()
         # Keep the command term's anchor in lockstep with the env protocol's
