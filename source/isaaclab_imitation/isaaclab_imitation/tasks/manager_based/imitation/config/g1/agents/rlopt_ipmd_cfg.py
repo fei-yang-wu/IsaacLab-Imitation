@@ -766,6 +766,13 @@ class G1ImitationLatentFutureCVAERLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfi
 
     def __post_init__(self):
         super().__post_init__()
+        # In-loop reconstruction encoder: the command is the encoder's own
+        # posterior features, not a pretrained DiffSR skill code. The base
+        # latent config defaults command_source="hl_skill", which demands a
+        # skill-encoder checkpoint at validation; without this line every
+        # FutureCVAE run needed a manual `agent.ipmd.command_source=posterior`
+        # override (the smokes and launchers all carried it).
+        self.ipmd.command_source = "posterior"
         self.ipmd.latent_dim = 256
         self.ipmd.latent_steps_min = 10
         self.ipmd.latent_steps_max = 10
@@ -795,6 +802,9 @@ class G1ImitationLatentPerStepVQRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig
 
     def __post_init__(self):
         super().__post_init__()
+        # Same in-loop posterior command source as the FutureCVAE config: the
+        # per-step token packet is the encoder's own output.
+        self.ipmd.command_source = "posterior"
         self.ipmd.latent_dim = 64
         self.ipmd.latent_steps_min = 1
         self.ipmd.latent_steps_max = 1
