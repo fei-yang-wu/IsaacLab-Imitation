@@ -20,12 +20,51 @@ Examples:
 from __future__ import annotations
 
 import argparse
-import json
+import importlib.util
 import os
 import re
 from pathlib import Path
 
 import numpy as np
+
+_MOTION_MANIFEST_MODULE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "source"
+    / "isaaclab_imitation"
+    / "isaaclab_imitation"
+    / "tasks"
+    / "manager_based"
+    / "imitation"
+    / "motion_manifest.py"
+)
+
+
+def _load_motion_manifest_module():
+    """Load the stdlib-only manifest schema authority by file path.
+
+    Avoids importing the ``isaaclab_imitation`` package, which registers Isaac
+    tasks on import and is unavailable in the default Pixi environment.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "motion_manifest", _MOTION_MANIFEST_MODULE_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Could not load motion manifest module: {_MOTION_MANIFEST_MODULE_PATH}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _manifest_family_for_dataset_name(dataset_name: str) -> str:
+    """Map the requested dataset name onto a known manifest family."""
+    lowered = dataset_name.lower()
+    if "dance102" in lowered:
+        return "dance102"
+    if "bones" in lowered:
+        return "bones_seed"
+    return "lafan1"
 
 
 def _sanitize_motion_name(path_without_suffix: Path) -> str:
@@ -205,14 +244,12 @@ def main() -> None:
     ):
         inferred_control_freq = manifest_fps_values[0]
 
-    manifest = {
-        "dataset_name": args.dataset_name,
-        "dataset": {
-            "trajectories": {
-                "lafan1_csv": manifest_entries,
-            }
-        },
-        "metadata": {
+    motion_manifest = _load_motion_manifest_module()
+    motion_manifest.write_manifest(
+        manifest_path,
+        dataset_name=args.dataset_name,
+        entries=manifest_entries,
+        metadata={
             "npz_dir": str(npz_dir),
             "num_motions": len(manifest_entries),
             "recursive": bool(args.recursive),
@@ -223,10 +260,8 @@ def main() -> None:
             "fps_values": manifest_fps_values,
             "control_freq": inferred_control_freq,
         },
-    }
-
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        family=_manifest_family_for_dataset_name(args.dataset_name),
+    )
 
     print(f"[INFO] Wrote manifest: {manifest_path}")
     print(f"[INFO] Motion count: {len(manifest_entries)}")

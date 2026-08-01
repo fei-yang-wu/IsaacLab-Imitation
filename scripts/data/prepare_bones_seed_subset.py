@@ -38,9 +38,13 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SHORTLIST = (
-    REPO_ROOT / "data" / "bones_seed" / "curated" / "bones_seed_10_shortlist.timeline.json"
+    REPO_ROOT
+    / "data"
+    / "bones_seed"
+    / "curated"
+    / "bones_seed_10_shortlist.timeline.json"
 )
 DEFAULT_CSV_DIR = REPO_ROOT / "data" / "bones_seed" / "raw" / "g1"
 DEFAULT_NPZ_DIR = REPO_ROOT / "data" / "bones_seed" / "npz" / "g1"
@@ -94,6 +98,37 @@ def _load_unitree_g1_joint_order() -> tuple[tuple[str, ...], str]:
 UNITREE_G1_29DOF_JOINT_NAMES, UNITREE_G1_29DOF_JOINT_ORDER_SOURCE = (
     _load_unitree_g1_joint_order()
 )
+
+_MOTION_MANIFEST_MODULE_PATH = (
+    REPO_ROOT
+    / "source"
+    / "isaaclab_imitation"
+    / "isaaclab_imitation"
+    / "tasks"
+    / "manager_based"
+    / "imitation"
+    / "motion_manifest.py"
+)
+
+
+def _load_motion_manifest_module():
+    """Load the stdlib-only manifest schema authority by file path.
+
+    Avoids importing the ``isaaclab_imitation`` package, which registers Isaac
+    tasks on import and is unavailable in the default Pixi environment.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "motion_manifest", _MOTION_MANIFEST_MODULE_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Could not load motion manifest module: {_MOTION_MANIFEST_MODULE_PATH}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 BONES_G1_ROOT_COLUMNS: tuple[str, ...] = (
     "Frame",
     "root_translateX",
@@ -169,7 +204,9 @@ def _extract_missing_from_archive(
         raise FileNotFoundError(f"BONES-SEED archive not found: {archive_path}")
 
     csv_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[INFO] Scanning archive for {len(missing_csv_names)} CSV(s): {archive_path}")
+    print(
+        f"[INFO] Scanning archive for {len(missing_csv_names)} CSV(s): {archive_path}"
+    )
     with tarfile.open(archive_path, mode="r:*") as tar:
         for member in tar:
             if not member.isfile():
@@ -197,15 +234,18 @@ def _read_csv_header(path: Path) -> list[str]:
 
 def _is_bones_g1_csv(path: Path) -> bool:
     first_row = _read_csv_header(path)
-    return len(first_row) == len(BONES_G1_EXPECTED_COLUMNS) and tuple(
-        first_row[: len(BONES_G1_ROOT_COLUMNS)]
-    ) == BONES_G1_ROOT_COLUMNS
+    return (
+        len(first_row) == len(BONES_G1_EXPECTED_COLUMNS)
+        and tuple(first_row[: len(BONES_G1_ROOT_COLUMNS)]) == BONES_G1_ROOT_COLUMNS
+    )
 
 
 def _validate_bones_g1_columns(path: Path) -> list[str]:
     header = _read_csv_header(path)
     if tuple(header) != BONES_G1_EXPECTED_COLUMNS:
-        expected_joint_columns = list(BONES_G1_EXPECTED_COLUMNS[len(BONES_G1_ROOT_COLUMNS) :])
+        expected_joint_columns = list(
+            BONES_G1_EXPECTED_COLUMNS[len(BONES_G1_ROOT_COLUMNS) :]
+        )
         actual_joint_columns = header[len(BONES_G1_ROOT_COLUMNS) :]
         raise ValueError(
             "BONES-SEED G1 CSV joint columns do not match this repo's Unitree "
@@ -236,9 +276,7 @@ def _write_converter_csv(source: Path, target: Path) -> str:
     # BONES seed-viewer uses Three.js Euler(rx, ry, rz, "ZYX"). In SciPy,
     # lowercase "xyz" with the CSV X/Y/Z columns is the matching extrinsic XYZ
     # convention.
-    root_quat_xyzw = Rotation.from_euler(
-        "xyz", data[:, 4:7], degrees=True
-    ).as_quat()
+    root_quat_xyzw = Rotation.from_euler("xyz", data[:, 4:7], degrees=True).as_quat()
     joint_pos_rad = np.deg2rad(data[:, 7:])
     output = np.concatenate([root_pos_m, root_quat_xyzw, joint_pos_rad], axis=1)
     if output.shape[1] != 36:
@@ -358,7 +396,7 @@ def _write_language_sidecar(
 def _run_converter(args: argparse.Namespace) -> None:
     cmd = [
         sys.executable,
-        str(REPO_ROOT / "scripts" / "prepare_lafan1_from_csv.py"),
+        str(REPO_ROOT / "scripts" / "data" / "prepare_lafan1_from_csv.py"),
         "--csv_dir",
         str(args.csv_dir),
         "--npz_dir",
@@ -406,9 +444,7 @@ def _pad_npz_arrays_to_transition_multiple(
         padded_transition_count = (
             (transition_count + multiple - 1) // multiple
         ) * multiple
-        padded_transition_count = max(
-            padded_transition_count, ILTOOLS_ZARR_SHARD_SIZE
-        )
+        padded_transition_count = max(padded_transition_count, ILTOOLS_ZARR_SHARD_SIZE)
         padded_frame_count = padded_transition_count + 1
         if padded_frame_count == frame_count:
             continue
@@ -421,7 +457,9 @@ def _pad_npz_arrays_to_transition_multiple(
             else:
                 padded_payload[key] = value
         original_frame_count = int(
-            np.asarray(payload.get("original_frame_count", [frame_count])).reshape(-1)[0]
+            np.asarray(payload.get("original_frame_count", [frame_count])).reshape(-1)[
+                0
+            ]
         )
         padded_payload["original_frame_count"] = np.asarray(
             [original_frame_count], dtype=np.int64
@@ -454,6 +492,7 @@ def _annotate_manifest(
 ) -> None:
     if not manifest_path.is_file():
         return
+    motion_manifest = _load_motion_manifest_module()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     metadata = manifest.setdefault("metadata", {})
     metadata["source_dataset"] = "bones-studio/seed"
@@ -489,7 +528,16 @@ def _annotate_manifest(
             ),
             "motions": padding_summary,
         }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    motion_manifest.write_manifest(
+        manifest_path,
+        dataset_name=manifest.get("dataset_name", "bones_seed"),
+        entries=manifest.get("dataset", {})
+        .get("trajectories", {})
+        .get("lafan1_csv", []),
+        metadata=metadata,
+        family="bones_seed",
+        role="headline",
+    )
     print(f"[INFO] Annotated manifest metadata: {manifest_path}")
 
 
@@ -574,7 +622,9 @@ def main() -> None:
     source_dirs = _candidate_source_dirs(args.source_dir)
     found: dict[str, Path] = {}
     if args.archive is not None and args.overwrite:
-        print("[INFO] Refreshing selected raw CSVs from archive because --overwrite is set.")
+        print(
+            "[INFO] Refreshing selected raw CSVs from archive because --overwrite is set."
+        )
         found.update(
             _extract_missing_from_archive(
                 args.archive,
