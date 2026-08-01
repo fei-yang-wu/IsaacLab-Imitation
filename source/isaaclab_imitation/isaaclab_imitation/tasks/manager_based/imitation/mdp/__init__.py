@@ -3,6 +3,8 @@
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
 from .commands import (
+    HeldChunkCommand,
+    HeldChunkCommandCfg,
     MotionCommand,
     MotionCommandCfg,
     PublishedCommandTerm,
@@ -93,6 +95,8 @@ from .terminations import (
 
 
 __all__ = [
+    "HeldChunkCommand",
+    "HeldChunkCommandCfg",
     "MotionCommand",
     "MotionCommandCfg",
     "PublishedCommandTerm",

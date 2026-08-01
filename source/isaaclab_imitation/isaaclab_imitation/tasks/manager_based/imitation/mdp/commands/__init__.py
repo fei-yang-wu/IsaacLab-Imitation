@@ -7,11 +7,14 @@ externally-published command layer (env-side mirror of
 ``contracts/command_publisher.py``).
 """
 
+from .held_chunk_command import HeldChunkCommand, HeldChunkCommandCfg
 from .motion_command import MotionCommand, MotionCommandCfg
 from .published_command import PublishedCommandTerm, PublishedCommandTermCfg
 from .skill_command import SkillCommand, SkillCommandCfg
 
 __all__ = [
+    "HeldChunkCommand",
+    "HeldChunkCommandCfg",
     "MotionCommand",
     "MotionCommandCfg",
     "PublishedCommandTerm",
