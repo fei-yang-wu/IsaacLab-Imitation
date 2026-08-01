@@ -51,6 +51,11 @@ class G1MotionCommandsCfg:
         anchor_body_name="pelvis",
         joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES.copy(),
         mpjpe_body_names=G1_TRACKED_BODY_NAMES.copy(),
+        # v2 step 3c: the term owns reference reset-start sampling (it builds
+        # the StartFrameSampler / SONIC sampler pair and the env calls
+        # `resample_reference` in `_reset_idx` instead of its inline path).
+        # Same sampler semantics and cfg knobs as v0/v1's env-inline path.
+        owns_reset=True,
     )
 
     # Placeholder width: the env cfg wires `latent_command_dim` from its own
