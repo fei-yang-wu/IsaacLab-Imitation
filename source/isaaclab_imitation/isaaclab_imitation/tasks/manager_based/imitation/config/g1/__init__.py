@@ -4,14 +4,22 @@ Recipe (reward/termination/reset design) is the only axis with separate env
 classes; the latent-vs-explicit command choice is pure configuration
 (``env.command_mode`` plus the agent entry point). Three recipes exist:
 
-- **Stable** (``ImitationG1LatentStableEnvCfg``, alias
-  ``ImitationG1StableEnvCfg``): SONIC release recipe with this repo's legacy
-  reset distribution -- the current default.
-- **Strict** (``_apply_strict_recipe``): strict SONIC termination functions on
-  the legacy scaffolding -- pins ``ImitationG1StrictTrackEnvCfg`` (explicit)
-  and ``ImitationG1LatentStrictEnvCfg`` (latent).
-- **LafanTrack** (``ImitationG1LafanTrackEnvCfg``): the original torso-anchored
-  loose-termination tracking recipe.
+- **Stable** (``imitation_g1_env_v1.ImitationG1EnvCfg`` -- the flagship
+  class name follows the newest release): SONIC release recipe with this
+  repo's legacy reset distribution -- the current default.
+- **Strict** (``common.tracking_env._apply_strict_recipe``): strict SONIC
+  termination functions on the legacy scaffolding -- pins
+  ``variants.strict.ImitationG1StrictTrackEnvCfg`` (explicit) and
+  ``variants.strict.ImitationG1LatentStrictEnvCfg`` (latent).
+- **LafanTrack** (``imitation_g1_env_v0.ImitationG1LafanTrackEnvCfg``): the
+  original torso-anchored loose-termination tracking recipe.
+
+Module layout: shared components and the base machinery in ``common/``; the
+two releases as standalone, fully spelled-out assemblies in
+``imitation_g1_env_v0.py`` and ``imitation_g1_env_v1.py``; every non-default
+surface in ``variants/`` (one standalone file per family, composing from
+``common`` only). The four historical ``imitation_g1*_env_cfg`` modules
+remain as re-export shims for old imports and serialized configs.
 
 Registrations below are grouped: current defaults first, then the Strict
 recipe pins, then deprecated/frozen pins kept for reproducibility.
@@ -21,18 +29,20 @@ import gymnasium as gym
 
 from . import (
     agents,
-    imitation_g1_env_cfg,
-    imitation_g1_latent_ablation_env_cfg,
-    imitation_g1_latent_env_cfg,
-    imitation_g1_latent_vqvae_env_cfg,
+    common,
+    imitation_g1_env_v0,
+    imitation_g1_env_v1,
+    imitation_g1_env_v2,
+    variants,
 )
 
 __all__ = [
-    "imitation_g1_env_cfg",
-    "imitation_g1_latent_ablation_env_cfg",
-    "imitation_g1_latent_env_cfg",
-    "imitation_g1_latent_vqvae_env_cfg",
     "agents",
+    "common",
+    "imitation_g1_env_v0",
+    "imitation_g1_env_v1",
+    "imitation_g1_env_v2",
+    "variants",
 ]
 
 # ---------------------------------------------------------------------------
@@ -41,7 +51,7 @@ __all__ = [
 
 # LafanTrack recipe x explicit full-body command (vanilla observation surface).
 _VANILLA_TASK_KWARGS = {
-    "env_cfg_entry_point": f"{__name__}.imitation_g1_env_cfg:ImitationG1LafanTrackEnvCfg",
+    "env_cfg_entry_point": f"{__name__}.imitation_g1_env_v0:ImitationG1LafanTrackEnvCfg",
     "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:G1ImitationPPORunnerCfg",
     "rlopt_cfg_entry_point": f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig",
     "rlopt_ppo_cfg_entry_point": f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig",
@@ -61,9 +71,7 @@ _VANILLA_TASK_KWARGS = {
 # and differ only in the command space.
 _VANILLA_STRICT_TASK_KWARGS = {
     **_VANILLA_TASK_KWARGS,
-    "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_env_cfg:ImitationG1StrictTrackEnvCfg"
-    ),
+    "env_cfg_entry_point": (f"{__name__}.variants.strict:ImitationG1StrictTrackEnvCfg"),
 }
 
 # DEPRECATED (2026-07-19): the pre-migration beyondmimic-style latent surface
@@ -73,7 +81,7 @@ _VANILLA_STRICT_TASK_KWARGS = {
 # anchored strict-terminations surface built on this base
 # (`_LATENT_STRICT_TASK_KWARGS` below) superseded it as the default.
 _LATENT_LEGACY_TASK_KWARGS = {
-    "env_cfg_entry_point": f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentEnvCfg",
+    "env_cfg_entry_point": f"{__name__}.common.latent_env:ImitationG1LatentEnvCfg",
     "rlopt_cfg_entry_point": f"{agents.__name__}.rlopt_ase_cfg:G1ImitationRLOptASEConfig",
     "rlopt_ipmd_cfg_entry_point": f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentRLOptIPMDConfig",
     "rlopt_ipmd_bilinear_cfg_entry_point": f"{agents.__name__}.rlopt_ipmd_bilinear_cfg:G1ImitationLatentRLOptIPMDBilinearConfig",
@@ -96,9 +104,7 @@ _LATENT_LEGACY_TASK_KWARGS = {
 # wiki/isaaclab3-cu130-runtime-migration.md, "Training-gate resolution
 # (2026-07-19)" and the 2026-07-21 reversal.
 _LATENT_SONIC_TASK_KWARGS = {
-    "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentSonicEnvCfg"
-    ),
+    "env_cfg_entry_point": (f"{__name__}.variants.sonic:ImitationG1LatentSonicEnvCfg"),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig"
     ),
@@ -127,7 +133,7 @@ _LATENT_SONIC_TASK_KWARGS = {
 _LATENT_STRICT_TASK_KWARGS = {
     **_LATENT_LEGACY_TASK_KWARGS,
     "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentStrictEnvCfg"
+        f"{__name__}.variants.strict:ImitationG1LatentStrictEnvCfg"
     ),
 }
 
@@ -137,7 +143,7 @@ _LATENT_STRICT_TASK_KWARGS = {
 # `failure_rate_max_over_mean=50`) and strict-from-scratch terminations. The
 # 2026-07-27 reset-sampling screen showed SONIC's full-trajectory
 # adaptive-failure sampler, not its rewards or actuators, was what cost ~5.6x
-# episode length at 4096 environments; see `ImitationG1LatentStableEnvCfg`.
+# episode length at 4096 environments; see `imitation_g1_env_v1.ImitationG1EnvCfg`.
 #
 # The agent side stays the SONIC input-key contract
 # (`G1ImitationLatentSonicRLOptIPMDConfig`, local optimizer contract), matching
@@ -151,15 +157,11 @@ _LATENT_STRICT_TASK_KWARGS = {
 # explicit id to stay reproducible.
 _LATENT_STABLE_TASK_KWARGS = {
     **_LATENT_SONIC_TASK_KWARGS,
-    "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentStableEnvCfg"
-    ),
+    "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v1:ImitationG1EnvCfg"),
 }
 
 _LATENT_GOAL_TASK_KWARGS = {
-    "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentGoalEnvCfg"
-    ),
+    "env_cfg_entry_point": (f"{__name__}.variants.goal:ImitationG1LatentGoalEnvCfg"),
     "rlopt_ipmd_bilinear_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_bilinear_cfg:"
         "G1ImitationLatentGoalRLOptIPMDBilinearConfig"
@@ -168,7 +170,7 @@ _LATENT_GOAL_TASK_KWARGS = {
 
 _LATENT_FUTURE_CVAE_TASK_KWARGS = {
     "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentFutureCVAEEnvCfg"
+        f"{__name__}.variants.future_cvae:ImitationG1LatentFutureCVAEEnvCfg"
     ),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentFutureCVAERLOptIPMDConfig"
@@ -180,7 +182,7 @@ _LATENT_FUTURE_CVAE_TASK_KWARGS = {
 
 _LATENT_PER_STEP_VQ_TASK_KWARGS = {
     "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:ImitationG1LatentPerStepVQEnvCfg"
+        f"{__name__}.variants.future_cvae:ImitationG1LatentPerStepVQEnvCfg"
     ),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentPerStepVQRLOptIPMDConfig"
@@ -197,8 +199,7 @@ _LATENT_PER_STEP_VQ_TASK_KWARGS = {
 _LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS = {
     **_LATENT_SONIC_TASK_KWARGS,
     "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_env_cfg:"
-        "ImitationG1LatentSonicOfficialFSQEnvCfg"
+        f"{__name__}.variants.sonic:ImitationG1LatentSonicOfficialFSQEnvCfg"
     ),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:"
@@ -211,9 +212,7 @@ _LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS = {
 }
 
 _LATENT_VQVAE_TASK_KWARGS = {
-    "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_vqvae_env_cfg:ImitationG1LatentVQVAEEnvCfg"
-    ),
+    "env_cfg_entry_point": (f"{__name__}.variants.vqvae:ImitationG1LatentVQVAEEnvCfg"),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_vqvae_cfg:G1ImitationLatentRLOptIPMDVQVAEConfig"
     ),
@@ -232,8 +231,7 @@ _LATENT_VQVAE_TASK_KWARGS = {
 _LATENT_ABLATION_TASK_KWARGS = {
     **_LATENT_STRICT_TASK_KWARGS,
     "env_cfg_entry_point": (
-        f"{__name__}.imitation_g1_latent_ablation_env_cfg:"
-        "ImitationG1LatentAblationEnvCfg"
+        f"{__name__}.variants.ablation:ImitationG1LatentAblationEnvCfg"
     ),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_latent_ablation_cfg:"
@@ -256,6 +254,23 @@ _LATENT_ABLATION_TASK_KWARGS = {
 # `-Latent-v0`'s "moving alias" pattern again; it predates this convention
 # and is kept only for its own back-compat reasons (see its comment below).
 # ---------------------------------------------------------------------------
+
+# v2 overhaul WIP surface (2026-08-01): the v1 config plus the first
+# CommandManager increment -- a native `motion` command term
+# (`mdp.MotionCommandCfg`) that exposes the 67-D explicit tracking command via
+# `command_manager.get_command("motion")` and logs `Metrics/motion/...`
+# natively. Behavior is otherwise identical to `-G1-v1`, which remains the
+# default until the v2 redesign lands completely; do not cite this id as the
+# default yet.
+gym.register(
+    id="Isaac-Imitation-G1-v2",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        **_LATENT_STABLE_TASK_KWARGS,
+        "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v2:ImitationG1EnvV2Cfg"),
+    },
+)
 
 # Stable recipe, command space configured -- the default latent task
 # (2026-07-31 onward, until superseded by a future -G1-v2+). No `Latent` tag:
@@ -360,8 +375,7 @@ gym.register(
     kwargs={
         **_LATENT_SONIC_TASK_KWARGS,
         "env_cfg_entry_point": (
-            f"{__name__}.imitation_g1_latent_env_cfg:"
-            "ImitationG1LatentSonicNoHistoryEnvCfg"
+            f"{__name__}.variants.sonic:ImitationG1LatentSonicNoHistoryEnvCfg"
         ),
     },
 )
@@ -386,8 +400,7 @@ gym.register(
     kwargs={
         **_LATENT_STRICT_TASK_KWARGS,
         "env_cfg_entry_point": (
-            f"{__name__}.imitation_g1_latent_env_cfg:"
-            "ImitationG1LatentStrictHistoryEnvCfg"
+            f"{__name__}.variants.strict:ImitationG1LatentStrictHistoryEnvCfg"
         ),
         "rlopt_cfg_entry_point": (
             f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig"

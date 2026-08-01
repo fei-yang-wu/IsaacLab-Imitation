@@ -3,31 +3,8 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Latent-conditioned env variant tuned for the IPMD VQ-VAE skill codebook.
+"""DEPRECATED module path -- import from ``variants.vqvae`` instead."""
 
-Differs from :class:`ImitationG1LatentEnvCfg` only in the size of the
-expert observation window the encoder consumes; the rest of the latent
-pipeline (latent_command obs term, observation groups, terminations,
-events) is inherited unchanged.
-"""
+from .variants.vqvae import ImitationG1LatentVQVAEEnvCfg
 
-from isaaclab.utils.configclass import configclass
-
-from .imitation_g1_env_cfg import _bind_lafan_track_from_dict
-from .imitation_g1_latent_env_cfg import ImitationG1LatentEnvCfg
-
-
-@configclass
-class ImitationG1LatentVQVAEEnvCfg(ImitationG1LatentEnvCfg):
-    """Latent-conditioned G1 env exposing a temporally-extended expert window."""
-
-    def __post_init__(self):
-        super().__post_init__()
-        # Expert encoder consumes a causal 9-step window: 8 past frames plus
-        # the current frame emitted by the trajectory manager.
-        self.latent_patch_past_steps = 8
-        self.latent_patch_future_steps = 0
-        self._sync_expert_window_observation_params()
-
-
-_bind_lafan_track_from_dict(ImitationG1LatentVQVAEEnvCfg)
+__all__ = ["ImitationG1LatentVQVAEEnvCfg"]

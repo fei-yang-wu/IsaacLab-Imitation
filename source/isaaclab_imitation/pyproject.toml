@@ -8,10 +8,16 @@ build-backend = "setuptools.build_meta"
 # Isaac Lab itself is not a submodule (pixi.toml pins it as a pip package in
 # the `isaaclab` feature environment instead), so it resolves through that
 # environment's installed site-packages rather than an in-repo source path.
+# Its nested source tree (isaaclab.app, isaaclab.envs, ...) is only exposed at
+# runtime via `__path__.append`, which static analysis does not execute, so
+# that tree must be added explicitly here. Note: do NOT also add the plain
+# site-packages directory, or `isaaclab` will resolve to the wheel's empty
+# top-level package and the nested subpackages will stay unresolvable.
 [tool.pyrefly]
+python-interpreter-path = "../../.pixi/envs/isaaclab/bin/python"
 search-path = [
     "isaaclab_imitation",
-    "../../.pixi/envs/isaaclab/lib/python3.12/site-packages",
+    "../../.pixi/envs/isaaclab/lib/python3.12/site-packages/isaaclab/source/isaaclab",
     "../../RLOpt",
     "../../ImitationLearningTools",
 ]

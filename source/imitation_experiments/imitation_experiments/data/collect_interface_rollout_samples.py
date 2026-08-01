@@ -285,7 +285,7 @@ from torchrl.envs.utils import set_exploration_type, step_mdp
 
 from imitation_experiments.data.balanced_motion_rows import BalancedMotionRowSelector  # noqa: E402
 from imitation_experiments.lowlevel.low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
-from imitation_experiments.planner.planner_publish_schedule import planner_renew_env_ids  # noqa: E402
+from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
 from imitation_experiments.planner.interface_planner_common import (  # noqa: E402
     INTERFACE_TERMS,

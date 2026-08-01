@@ -79,7 +79,7 @@ class G1ImitationRLOptGAILConfig(GAILRLOptConfig):
         self.value_function.num_cells = [512, 256, 128]
 
         self.collector.total_frames = 30000 * 4096 * 24
-        self.save_interval = 5_000_000   # samples
+        self.save_interval = 5_000_000  # samples
 
         self.gail.expert_batch_size = int(self.loss.mini_batch_size)
         self.gail.discriminator_updates_per_policy_update = 2

@@ -90,15 +90,6 @@ def agent_latent_command(
     return env.get_agent_latent_command()
 
 
-def reconstructed_reference_action(
-    env: ImitationRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """Aligned raw action label for training; never include it in actor inputs."""
-    del asset_cfg
-    return env.current_reconstructed_reference_action()
-
-
 def expert_anchor_pos_b(
     env: ImitationRLEnv,
     anchor_body_name: str = "torso_link",

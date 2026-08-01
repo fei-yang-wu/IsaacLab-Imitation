@@ -492,11 +492,11 @@ def _configure_base_only_termination(
     return disabled
 
 
-from imitation_experiments.planner.command_publisher import (  # noqa: E402
+from isaaclab_imitation.contracts.command_publisher import (  # noqa: E402
     ChunkCommandPublisher,
     renewal_env_ids as publisher_renewal_env_ids,
 )
-from imitation_experiments.planner.planner_publish_schedule import planner_renew_env_ids  # noqa: E402
+from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
 from imitation_experiments.evaluation.closed_loop_metrics import FallTracker  # noqa: E402
 from imitation_experiments.planner.interface_planner_common import (  # noqa: E402

@@ -1,23 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
 import torch
 
-_MODULE_PATH = (
-    Path(__file__).parent.parent
-    / "isaaclab_imitation"
-    / "envs"
-    / "sonic_adaptive_sampling.py"
-)
-_MODULE_SPEC = importlib.util.spec_from_file_location(
-    "sonic_adaptive_sampling", _MODULE_PATH
-)
-assert _MODULE_SPEC is not None and _MODULE_SPEC.loader is not None
-_MODULE = importlib.util.module_from_spec(_MODULE_SPEC)
-_MODULE_SPEC.loader.exec_module(_MODULE)
-SonicAdaptiveResetSampler = _MODULE.SonicAdaptiveResetSampler
+from iltools.datasets.reset_sampling import SonicAdaptiveResetSampler
 
 
 def test_fixed_motion_local_bins_and_sequence_length_weights() -> None:

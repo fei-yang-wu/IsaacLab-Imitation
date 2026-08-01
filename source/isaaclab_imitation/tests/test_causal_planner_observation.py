@@ -8,7 +8,7 @@ import torch
 _MODULE_PATH = (
     Path(__file__).parent.parent
     / "isaaclab_imitation"
-    / "envs"
+    / "contracts"
     / "causal_planner_observation.py"
 )
 _MODULE_SPEC = importlib.util.spec_from_file_location(
@@ -21,7 +21,6 @@ _MODULE_SPEC.loader.exec_module(_MODULE)
 CAUSAL_PLANNER_FRAME_DIM = _MODULE.CAUSAL_PLANNER_FRAME_DIM
 CausalPlannerHistory = _MODULE.CausalPlannerHistory
 build_causal_planner_frame = _MODULE.build_causal_planner_frame
-build_offline_causal_planner_frame = _MODULE.build_offline_causal_planner_frame
 causal_planner_observation_spec = _MODULE.causal_planner_observation_spec
 
 
@@ -84,39 +83,3 @@ def test_history_reset_repeats_new_initial_frame_only_for_reset_rows() -> None:
     assert selected[0, -1, 0].item() == 1.0
     assert selected[0, 0, 0].item() == 0.0
     assert torch.all(selected[1, :, 0] == 7.0)
-
-
-def test_offline_builder_matches_live_order_for_identity_root() -> None:
-    features = _features(batch_size=1)
-    features["joint_pos_rel"].normal_()
-    features["joint_vel_rel"].normal_()
-    features["base_ang_vel"].normal_()
-    features["last_action"].normal_()
-    live = build_causal_planner_frame(features)
-    offline = build_offline_causal_planner_frame(
-        joint_pos=features["joint_pos_rel"],
-        joint_vel=features["joint_vel_rel"],
-        root_quat_wxyz=torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
-        root_ang_vel_w=features["base_ang_vel"],
-        last_action=features["last_action"],
-        default_joint_pos=torch.zeros(1, 29),
-        default_joint_vel=torch.zeros(1, 29),
-    )
-    torch.testing.assert_close(offline, live)
-
-
-def test_offline_builder_requires_previous_action() -> None:
-    try:
-        build_offline_causal_planner_frame(
-            joint_pos=torch.zeros(1, 29),
-            joint_vel=torch.zeros(1, 29),
-            root_quat_wxyz=torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
-            root_ang_vel_w=torch.zeros(1, 3),
-            last_action=None,
-            default_joint_pos=torch.zeros(1, 29),
-            default_joint_vel=torch.zeros(1, 29),
-        )
-    except ValueError as error:
-        assert "previous action" in str(error)
-    else:
-        raise AssertionError("missing previous action must fail")

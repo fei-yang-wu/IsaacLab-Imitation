@@ -2,6 +2,7 @@
 
 from isaaclab.envs.mdp import *  # noqa: F401, F403
 
+from .commands import MotionCommand, MotionCommandCfg
 from .events import (
     randomize_joint_default_pos,
     reset_joints_to_reference,
@@ -40,7 +41,6 @@ from .observations import (
     robot_body_ori_b,
     robot_body_pos_b,
     robot_motion,
-    reconstructed_reference_action,
 )
 from .rewards import (
     body_angular_velocity_excess_l2,
@@ -82,6 +82,8 @@ from .terminations import (
 
 
 __all__ = [
+    "MotionCommand",
+    "MotionCommandCfg",
     "track_root_quat",
     "track_root_pos",
     "track_joint_pos",
@@ -130,7 +132,6 @@ __all__ = [
     "robot_body_pos_b",
     "robot_body_ori_b",
     "robot_motion",
-    "reconstructed_reference_action",
     "expert_joint_pos",
     "expert_joint_vel",
     "expert_root_pos",

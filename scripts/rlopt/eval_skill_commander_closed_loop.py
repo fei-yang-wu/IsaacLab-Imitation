@@ -538,7 +538,7 @@ from imitation_experiments.provenance.paper_protocol_metadata import (
 # loudly rather than silently mix protocols.
 DETERMINISTIC_METRIC_PREFIX = "deterministic_tracking/"
 from imitation_experiments.planner.planner_latency import PlannerForwardTimer
-from imitation_experiments.planner.planner_publish_schedule import planner_renew_env_ids
+from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids
 from imitation_experiments.data.planner_sample_schema import (
     CompletedTrajectorySampleWriter,
     PlannerSampleWriter,
