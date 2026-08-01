@@ -16,7 +16,10 @@ and owns the tracking metrics, so the CommandManager logs
 ``Metrics/motion/...`` natively (the beyondmimic/SONIC idiom); ``skill``
 serves the env's agent-latent buffer via
 ``command_manager.get_command("skill")`` and carries the published/hold
-bookkeeping from ``mdp.PublishedCommandTerm``. Behavior is otherwise
+bookkeeping from ``mdp.PublishedCommandTerm``. Under a
+``*_chunk_current_slot`` ``policy_command_mode`` (and only then) a third term,
+``chunk`` (``mdp.HeldChunkCommandCfg``), adapts over the env's held-window
+machinery and serves the consumed packet slot. Behavior is otherwise
 byte-identical to v1.
 
 The flagship class/task name moves here when v2 supersedes v1 as the default
@@ -26,10 +29,20 @@ The flagship class/task name moves here when v2 supersedes v1 as the default
 from isaaclab.utils.configclass import configclass
 
 from ... import mdp
-from ...mdp.commands import MotionCommandCfg, SkillCommandCfg
+from ...mdp.commands import HeldChunkCommandCfg, MotionCommandCfg, SkillCommandCfg
 from .common.constants import G1_29DOF_ISAACLAB_JOINT_NAMES, G1_TRACKED_BODY_NAMES
 from .common.tracking_env import _bind_lafan_track_from_dict
 from .imitation_g1_env_v1 import ImitationG1EnvCfg
+
+# The `*_chunk_current_slot` policy command modes (the same set the base cfg's
+# `__post_init__` validation accepts next to "reference"): only under one of
+# these does the env stream the actor's command from a held packet, so only
+# then does the `chunk` command term exist.
+_POLICY_CHUNK_COMMAND_MODES = (
+    "explicit_chunk_current_slot",
+    "full_body_chunk_current_slot",
+    "ee_chunk_current_slot",
+)
 
 # The command-backed observation terms that v2 rebinds onto CommandManager
 # terms (same values, one producer): the baseline explicit trio moves to the
@@ -63,6 +76,12 @@ class G1MotionCommandsCfg:
     # refresh so plain-setattr overrides of `env.latent_command_dim` land).
     skill: SkillCommandCfg = SkillCommandCfg(latent_command_dim=258)
 
+    # Held explicit-chunk term (v2 step 4b). None on the default latent task:
+    # the env cfg instantiates it in `_sync_chunk_command_cfg` only when
+    # `policy_command_mode` is a `*_chunk_current_slot` adapter (the
+    # CommandManager skips None entries).
+    chunk: HeldChunkCommandCfg | None = None
+
 
 @configclass
 class ImitationG1EnvV2Cfg(ImitationG1EnvCfg):
@@ -77,6 +96,7 @@ class ImitationG1EnvV2Cfg(ImitationG1EnvCfg):
         # expert anchor (v1's `_apply_pelvis_protocol` sets "pelvis").
         self.commands.motion.anchor_body_name = self.expert_anchor_body_name
         self._sync_skill_command_cfg()
+        self._sync_chunk_command_cfg()
         self._rebind_command_manager_backed_terms()
 
     def _sync_skill_command_cfg(self) -> None:
@@ -88,6 +108,31 @@ class ImitationG1EnvV2Cfg(ImitationG1EnvCfg):
         construction. Idempotent.
         """
         self.commands.skill.latent_command_dim = int(self.latent_command_dim)
+
+    def _sync_chunk_command_cfg(self) -> None:
+        """Instantiate/prune the ``chunk`` term from ``policy_command_mode``.
+
+        Only a ``*_chunk_current_slot`` mode streams the actor's command from
+        the env's held window, so only then does the adapter term exist; the
+        default latent task keeps ``chunk=None`` (the CommandManager skips
+        None entries). When present, its knobs are wired in lockstep with the
+        env fields the held-window machinery reads: ``hold_steps`` from
+        ``command_hold_steps`` (HeldChunkCommand fails loudly on a mismatch),
+        the pinned 29-DoF joint order of the chunk-mode
+        ``policy_expert_motion_command`` observation term, and the expert
+        anchor body. Normalizes the mode string the same way the base
+        ``__post_init__`` does because plain-setattr overrides can arrive
+        un-normalized before the construction-time refresh. Idempotent.
+        """
+        mode = str(self.policy_command_mode).strip().lower().replace("-", "_")
+        if mode not in _POLICY_CHUNK_COMMAND_MODES:
+            self.commands.chunk = None
+            return
+        if self.commands.chunk is None:
+            self.commands.chunk = HeldChunkCommandCfg()
+        self.commands.chunk.hold_steps = int(self.command_hold_steps)
+        self.commands.chunk.joint_names = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
+        self.commands.chunk.anchor_body_name = self.expert_anchor_body_name
 
     def _rebind_command_manager_backed_terms(self) -> None:
         """Serve the command-backed observation terms from CommandManager terms.
@@ -121,6 +166,7 @@ class ImitationG1EnvV2Cfg(ImitationG1EnvCfg):
         # idempotent, so refresh stays a fixed point.
         super()._refresh_command_observation_terms()
         self._sync_skill_command_cfg()
+        self._sync_chunk_command_cfg()
         self._rebind_command_manager_backed_terms()
 
 
