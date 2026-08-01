@@ -8,7 +8,6 @@ from typing import Any, TypeAlias
 import isaaclab.utils.math as math_utils
 import numpy as np
 import torch
-import torch.nn.functional as F
 import zarr
 from isaaclab.assets import Articulation
 from isaaclab.envs.common import VecEnvStepReturn
@@ -19,15 +18,15 @@ from isaaclab.markers.config import (
     FRAME_MARKER_CFG,
 )
 from isaaclab_imitation.assets.robots import UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES
-from isaaclab_imitation.envs.causal_planner_observation import (
+from isaaclab_imitation.contracts.causal_planner_observation import (
     CAUSAL_PLANNER_FRAME_DIM,
     CausalPlannerHistory,
     build_causal_planner_frame,
-    build_offline_causal_planner_frame,
     causal_planner_observation_spec,
 )
-from isaaclab_imitation.envs.sonic_adaptive_sampling import (
+from iltools.datasets.reset_sampling import (
     SonicAdaptiveResetSampler,
+    StartFrameSampler,
 )
 from tensordict import TensorDict
 
@@ -201,6 +200,15 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             relocatable so it can be built once and copied to a compute node.
         dataset_storage_persist_rebuild: bool, force a refill of dataset_storage_persist_dir.
         reference_start_frame: int, trajectory-local frame index used after each reset (default: 0)
+        random_reset_step_min/random_reset_step_max: int, uniform random starting-frame range on
+            reset (inclusive). Ignored when reset_start_mode selects another mode.
+        reset_start_mode: str, starting-frame selection on reset -- "auto" (default, legacy:
+            random when a [min, max] range is configured, else the fixed reference_start_frame),
+            "fixed", "random", or "adaptive" (weighted by the SONIC failure sampler or by a custom
+            callable attached as `cfg.adaptive_reset_weight_fn`). Trajectory selection always stays
+            with reset_schedule; only random_reset_full_trajectory overrides both via SONIC.
+        adaptive_reset_weight_fn: Callable|None, optional (trajectory_ranks, frame_steps) -> weights
+            callable used by reset_start_mode="adaptive"; defaults to the SONIC failure sampler.
         visualize_reference_arrows: bool, if True show reference velocity/position/heading arrows and
             desired/current frame markers for root and tracked bodies (default: False)
 
@@ -264,9 +272,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # the observation groups with the class defaults. Re-derive the
         # pruned command-term set from the final field values before any
         # manager reads the observation config. Idempotent for defaults.
-        refresh_command_terms = getattr(
-            cfg, "_refresh_command_observation_terms", None
-        )
+        refresh_command_terms = getattr(cfg, "_refresh_command_observation_terms", None)
         if callable(refresh_command_terms):
             refresh_command_terms()
 
@@ -418,6 +424,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         reference_start_frame = int(getattr(cfg, "reference_start_frame", 0))
         if reference_start_frame < 0:
             raise ValueError("reference_start_frame must be >= 0.")
+        self._reference_start_frame = reference_start_frame
         self._latent_patch_past_steps = int(getattr(cfg, "latent_patch_past_steps", 0))
         self._latent_patch_future_steps = int(
             getattr(cfg, "latent_patch_future_steps", 0)
@@ -437,6 +444,19 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._random_reset_full_trajectory = bool(
             getattr(cfg, "random_reset_full_trajectory", False)
         )
+        self._reset_start_mode = (
+            str(getattr(cfg, "reset_start_mode", "auto")).strip().lower()
+        )
+        if self._reset_start_mode not in ("auto", "fixed", "random", "adaptive"):
+            raise ValueError(
+                "reset_start_mode must be one of 'auto', 'fixed', 'random', "
+                f"'adaptive'; got {self._reset_start_mode!r}."
+            )
+        # Optional custom adaptive weight function (see StartFrameSampler). A
+        # callable (trajectory_ranks, frame_steps) -> non-negative weights,
+        # attached as `cfg.adaptive_reset_weight_fn`; falls back to the SONIC
+        # failure-weight function when None.
+        self._adaptive_reset_weight_fn = getattr(cfg, "adaptive_reset_weight_fn", None)
         self._adaptive_failure_reset_uniform_ratio = float(
             getattr(cfg, "adaptive_failure_reset_uniform_ratio", 0.1)
         )
@@ -497,20 +517,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             first_transition.get("next_qpos") is not None
             and first_transition.get("next_qvel") is not None
         )
-        self._reconstructed_reference_action_enabled = bool(
-            getattr(cfg, "reconstructed_reference_action", False)
-        )
-        self._reconstructed_reference_action_mode = str(
-            getattr(cfg, "reconstructed_reference_action_mode", "next_pose")
-        )
-        if (
-            self._reconstructed_reference_action_enabled
-            and not self._reference_has_aligned_next
-        ):
-            raise ValueError(
-                "reconstructed_reference_action=True requires transition-aligned next_* reference data. "
-                "Rebuild the cached dataset with `refresh_zarr_dataset=True`."
-            )
 
         # Initialize the trajectory manager
         self.trajectory_manager = ParallelTrajectoryManager(
@@ -628,9 +634,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._reference_replay_target_env_ids: torch.Tensor | None = None
         self._expert_sampler_warned_action_fallback = False
         self._expert_sampler_warned_unknown_terms: set[str] = set()
-        self._reconstructed_reference_action_term: JointPositionAction | None = None
-        self._reconstructed_reference_target_to_action_index: torch.Tensor | None = None
-        self._reconstructed_reference_action_pd_ratio_target: torch.Tensor | None = None
 
         self._load_reference_metadata(zarr_path)
 
@@ -642,7 +645,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._expert_env_origins = self.scene.env_origins.clone()
         self._expert_default_joint_pos = self.robot.data.default_joint_pos.torch.clone()
         self._expert_default_joint_vel = self.robot.data.default_joint_vel.torch.clone()
-        self._setup_reconstructed_reference_action_cache()
         self._finalize_reference_body_names()
         self._initialize_mdp_fast_paths()
         self._setup_reference_velocity_visualizer()
@@ -737,158 +739,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         site_names = dataset_group.attrs.get("site_names", [])
         self.reference_body_names = list(body_names) if body_names is not None else []
         self.reference_site_names = list(site_names) if site_names is not None else []
-
-    def _resolve_static_joint_parameter(
-        self, values: torch.Tensor, *, name: str
-    ) -> torch.Tensor:
-        """Collapse per-env joint parameters to a single vector for cached reconstruction."""
-        tensor = values.to(device=self.device, dtype=torch.float32)
-        if tensor.ndim == 1:
-            return tensor
-        if tensor.ndim != 2:
-            raise ValueError(f"Unexpected {name} tensor shape {tuple(tensor.shape)}.")
-        reference = tensor[0]
-        if tensor.shape[0] > 1 and not torch.allclose(tensor, reference.unsqueeze(0)):
-            logger.warning(
-                "Reference action reconstruction expected env-invariant %s; using env 0 values.",
-                name,
-            )
-        return reference
-
-    def _compute_reconstructed_reference_action_targets(
-        self,
-        *,
-        mode: str,
-        kp_target: torch.Tensor | None,
-        kd_target: torch.Tensor | None,
-        chunk_size: int = 65536,
-    ) -> torch.Tensor:
-        """Precompute reference joint position targets for every replay transition."""
-        tm = self.trajectory_manager
-        num_transitions = len(tm.rb)
-        cache = torch.empty(
-            (num_transitions, len(tm.target_joint_names)),
-            device=tm.storage_device,
-            dtype=torch.float32,
-        )
-        ratio = None
-        if mode == "pd_compensated":
-            if kp_target is None or kd_target is None:
-                raise ValueError("pd_compensated reconstruction requires Kp and Kd.")
-            safe_kp = torch.where(
-                kp_target.abs() > 1.0e-8, kp_target, torch.ones_like(kp_target)
-            )
-            ratio = torch.where(
-                kp_target.abs() > 1.0e-8,
-                kd_target / safe_kp,
-                torch.zeros_like(kd_target),
-            )
-        elif mode != "next_pose":
-            raise ValueError(
-                "Unsupported reconstructed_reference_action_mode: "
-                f"{mode!r}. Expected 'next_pose' or 'pd_compensated'."
-            )
-
-        for start in range(0, num_transitions, chunk_size):
-            end = min(start + chunk_size, num_transitions)
-            indices = torch.arange(
-                start, end, device=tm.storage_device, dtype=torch.int64
-            )
-            reference = tm.rb[indices]
-            if getattr(tm, "_device", None) is not None:
-                reference = reference.to(tm._device)
-            reference = tm._attach_reference_fields(reference, use_buffers=False)
-            next_joint_pos = reference.get(("next", "joint_pos"))
-            if next_joint_pos is None:
-                raise ValueError(
-                    "Transition-aligned next joint positions are missing from the replay buffer."
-                )
-            command_target = next_joint_pos
-            if ratio is not None:
-                command_target = command_target + reference["joint_vel"] * ratio
-            cache[start:end] = command_target.to(device=tm.storage_device)
-
-        return cache
-
-    def _setup_reconstructed_reference_action_cache(self) -> None:
-        """Initialize optional cached expert-action reconstruction after action manager setup."""
-        self.trajectory_manager.set_reconstructed_action_targets(None)
-        self._reconstructed_reference_action_term = None
-        self._reconstructed_reference_target_to_action_index = None
-        self._reconstructed_reference_action_pd_ratio_target = None
-        if not self._reference_has_aligned_next:
-            if self._reconstructed_reference_action_enabled:
-                raise ValueError(
-                    "reconstructed_reference_action=True requires transition-aligned next_* reference data. "
-                    "Rebuild the cached dataset with `refresh_zarr_dataset=True`."
-                )
-            return
-
-        try:
-            action_term = self.action_manager.get_term("joint_pos")
-        except Exception:
-            if self._reconstructed_reference_action_enabled:
-                raise
-            return
-        if not isinstance(action_term, JointPositionAction):
-            if self._reconstructed_reference_action_enabled:
-                raise TypeError(
-                    "reconstructed_reference_action is only supported for JointPositionAction."
-                )
-            return
-
-        target_joint_names = list(self.trajectory_manager.target_joint_names)
-        target_name_to_index = {
-            name: idx for idx, name in enumerate(target_joint_names)
-        }
-        action_joint_names = list(action_term._joint_names)
-        missing_joint_names = [
-            name for name in action_joint_names if name not in target_name_to_index
-        ]
-        if missing_joint_names:
-            raise ValueError(
-                "JointPositionAction joints are missing from target_joint_names: "
-                f"{missing_joint_names}"
-            )
-
-        target_joint_ids, _ = self.robot.find_joints(
-            target_joint_names, preserve_order=True
-        )
-        kp_target = None
-        kd_target = None
-        if self._reconstructed_reference_action_mode == "pd_compensated":
-            kp_target = self._resolve_static_joint_parameter(
-                self.robot.data.default_joint_stiffness.torch[:, target_joint_ids],
-                name="joint stiffness",
-            )
-            kd_target = self._resolve_static_joint_parameter(
-                self.robot.data.default_joint_damping.torch[:, target_joint_ids],
-                name="joint damping",
-            )
-            safe_kp = torch.where(
-                kp_target.abs() > 1.0e-8, kp_target, torch.ones_like(kp_target)
-            )
-            self._reconstructed_reference_action_pd_ratio_target = torch.where(
-                kp_target.abs() > 1.0e-8,
-                kd_target / safe_kp,
-                torch.zeros_like(kd_target),
-            )
-
-        self._reconstructed_reference_action_term = action_term
-        self._reconstructed_reference_target_to_action_index = torch.tensor(
-            [target_name_to_index[name] for name in action_joint_names],
-            device=self.device,
-            dtype=torch.int64,
-        )
-        if not self._reconstructed_reference_action_enabled:
-            return
-
-        cached_targets = self._compute_reconstructed_reference_action_targets(
-            mode=self._reconstructed_reference_action_mode,
-            kp_target=kp_target,
-            kd_target=kd_target,
-        )
-        self.trajectory_manager.set_reconstructed_action_targets(cached_targets)
 
     def _gather_action_term_parameter(
         self,
@@ -1002,240 +852,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             "target_joint_names": action_joint_names,
             "joint_names": action_joint_names,
         }
-
-    def _raw_to_processed_action(
-        self,
-        raw_action: torch.Tensor,
-        *,
-        env_ids: torch.Tensor,
-        action_term: JointPositionAction | None = None,
-    ) -> torch.Tensor:
-        """Apply the action term's affine transform and clipping to raw actions."""
-        if action_term is None:
-            action_term = self._reconstructed_reference_action_term
-        if action_term is None:
-            raise ValueError(
-                "JointPositionAction term is unavailable for action processing."
-            )
-
-        raw_action = raw_action.to(device=self.device, dtype=torch.float32)
-        env_ids = env_ids.to(device=self.device, dtype=torch.int64)
-        offset = self._gather_action_term_parameter(
-            action_term._offset, env_ids=env_ids, template=raw_action
-        )
-        scale = self._gather_action_term_parameter(
-            action_term._scale, env_ids=env_ids, template=raw_action
-        )
-        processed_action = raw_action * scale + offset
-        if getattr(action_term.cfg, "clip", None) is not None:
-            clip = action_term._clip.index_select(0, env_ids).to(
-                device=self.device, dtype=processed_action.dtype
-            )
-            processed_action = torch.clamp(
-                processed_action, min=clip[..., 0], max=clip[..., 1]
-            )
-        return processed_action
-
-    def _processed_to_raw_action(
-        self,
-        processed_action: torch.Tensor,
-        *,
-        env_ids: torch.Tensor,
-        action_term: JointPositionAction | None = None,
-    ) -> torch.Tensor:
-        """Invert the unclipped affine transform from processed to raw action space."""
-        if action_term is None:
-            action_term = self._reconstructed_reference_action_term
-        if action_term is None:
-            raise ValueError(
-                "JointPositionAction term is unavailable for action processing."
-            )
-
-        processed_action = processed_action.to(device=self.device, dtype=torch.float32)
-        env_ids = env_ids.to(device=self.device, dtype=torch.int64)
-        offset = self._gather_action_term_parameter(
-            action_term._offset, env_ids=env_ids, template=processed_action
-        )
-        scale = self._gather_action_term_parameter(
-            action_term._scale, env_ids=env_ids, template=processed_action
-        )
-        safe_scale = torch.where(scale.abs() > 1.0e-8, scale, torch.ones_like(scale))
-        return torch.where(
-            scale.abs() > 1.0e-8,
-            (processed_action - offset) / safe_scale,
-            torch.zeros_like(processed_action),
-        )
-
-    def _reconstruct_reference_action_from_reference(
-        self,
-        reference: TensorDict,
-        *,
-        env_ids: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor] | None:
-        """Reconstruct raw and processed reference actions from a live reference batch."""
-        action_term = self._reconstructed_reference_action_term
-        action_index = self._reconstructed_reference_target_to_action_index
-        if action_term is None or action_index is None:
-            return None
-
-        next_joint_pos = reference.get(("next", "joint_pos"))
-        if next_joint_pos is None:
-            return None
-        processed_reference_action = next_joint_pos.to(
-            device=self.device, dtype=torch.float32
-        ).index_select(-1, action_index)
-
-        if self._reconstructed_reference_action_pd_ratio_target is not None:
-            joint_vel = reference.get("joint_vel")
-            if joint_vel is None:
-                return None
-            pd_ratio = self._reconstructed_reference_action_pd_ratio_target.to(
-                device=self.device, dtype=processed_reference_action.dtype
-            ).index_select(0, action_index)
-            processed_reference_action = (
-                processed_reference_action
-                + joint_vel.to(
-                    device=self.device, dtype=processed_reference_action.dtype
-                ).index_select(-1, action_index)
-                * pd_ratio
-            )
-
-        if env_ids is None:
-            env_ids = torch.arange(
-                processed_reference_action.shape[0],
-                device=self.device,
-                dtype=torch.int64,
-            )
-        else:
-            env_ids = env_ids.to(device=self.device, dtype=torch.int64)
-
-        if getattr(action_term.cfg, "clip", None) is not None:
-            clip = action_term._clip.index_select(0, env_ids).to(
-                device=self.device, dtype=processed_reference_action.dtype
-            )
-            processed_reference_action = torch.clamp(
-                processed_reference_action, min=clip[..., 0], max=clip[..., 1]
-            )
-
-        raw_reference_action = self._processed_to_raw_action(
-            processed_reference_action,
-            env_ids=env_ids,
-            action_term=action_term,
-        )
-        return raw_reference_action, processed_reference_action
-
-    def current_reconstructed_reference_action(self) -> torch.Tensor:
-        """Return the aligned raw reference action for training-only supervision."""
-        if self.current_expert_frame is None:
-            raise RuntimeError(
-                "Reference action requested before expert data is ready."
-            )
-        reconstructed = self._reconstruct_reference_action_from_reference(
-            self.current_expert_frame
-        )
-        if reconstructed is None:
-            # ObservationManager probes each term once while it is constructing
-            # itself. At that point ActionManager exists, but the reconstruction
-            # cache is intentionally initialized only after the parent env has
-            # finished loading all managers. Return only a shape-correct probe;
-            # a missing reconstruction after construction remains a hard error.
-            if getattr(self, "observation_manager", None) is None:
-                return torch.zeros_like(self.action_manager.action)
-            raise RuntimeError(
-                "Reference action supervision requires reconstructed_reference_action."
-            )
-        return reconstructed[0]
-
-    @staticmethod
-    def _compute_action_alignment_metrics(
-        policy_action: torch.Tensor,
-        reference_action: torch.Tensor,
-        *,
-        prefix: str,
-        include_reference_nan_frac: bool = False,
-    ) -> dict[str, float]:
-        """Aggregate alignment metrics between policy and reconstructed reference actions."""
-        if policy_action.ndim == 1:
-            policy_action = policy_action.unsqueeze(0)
-        if reference_action.ndim == 1:
-            reference_action = reference_action.unsqueeze(0)
-
-        policy_action = policy_action.detach().to(dtype=torch.float32)
-        reference_action = reference_action.detach().to(dtype=torch.float32)
-        reference_nan_frac = float(
-            (~torch.isfinite(reference_action)).float().mean().item()
-        )
-
-        policy_action = torch.nan_to_num(policy_action, nan=0.0, posinf=0.0, neginf=0.0)
-        reference_action = torch.nan_to_num(
-            reference_action, nan=0.0, posinf=0.0, neginf=0.0
-        )
-
-        policy_flat = policy_action.reshape(policy_action.shape[0], -1)
-        reference_flat = reference_action.reshape(reference_action.shape[0], -1)
-        diff_flat = policy_flat - reference_flat
-        per_env_abs_mean = diff_flat.abs().mean(dim=-1)
-        per_env_mse = diff_flat.square().mean(dim=-1)
-
-        metrics = {
-            f"{prefix}_mae": float(per_env_abs_mean.mean().item()),
-            f"{prefix}_mse": float(per_env_mse.mean().item()),
-            f"{prefix}_rmse": float(per_env_mse.sqrt().mean().item()),
-            f"{prefix}_max_abs": float(diff_flat.abs().amax(dim=-1).mean().item()),
-            f"{prefix}_cosine": float(
-                F.cosine_similarity(policy_flat, reference_flat, dim=-1, eps=1.0e-8)
-                .mean()
-                .item()
-            ),
-            f"{prefix}_policy_abs_mean": float(policy_flat.abs().mean().item()),
-            f"{prefix}_reference_abs_mean": float(reference_flat.abs().mean().item()),
-        }
-        if include_reference_nan_frac:
-            metrics[f"{prefix}_reference_nan_frac"] = reference_nan_frac
-        return metrics
-
-    def _compute_rollout_reference_action_log(
-        self, policy_raw_action: torch.Tensor
-    ) -> dict[str, float]:
-        """Compare the rollout action against the aligned reconstructed reference action."""
-        if self.current_expert_frame is None:
-            return {}
-
-        reconstructed = self._reconstruct_reference_action_from_reference(
-            self.current_expert_frame
-        )
-        if reconstructed is None:
-            return {}
-        reference_raw_action, reference_processed_action = reconstructed
-
-        policy_raw_action = policy_raw_action.to(
-            device=self.device, dtype=torch.float32
-        )
-        if policy_raw_action.shape != reference_raw_action.shape:
-            return {}
-
-        env_ids = torch.arange(
-            policy_raw_action.shape[0], device=self.device, dtype=torch.int64
-        )
-        policy_processed_action = self._raw_to_processed_action(
-            policy_raw_action,
-            env_ids=env_ids,
-        )
-
-        metrics = self._compute_action_alignment_metrics(
-            policy_raw_action,
-            reference_raw_action,
-            prefix="rollout_action/raw",
-            include_reference_nan_frac=True,
-        )
-        metrics.update(
-            self._compute_action_alignment_metrics(
-                policy_processed_action,
-                reference_processed_action,
-                prefix="rollout_action/processed",
-            )
-        )
-        return metrics
 
     @staticmethod
     def _compute_rollout_state_alignment_metrics(
@@ -1447,39 +1063,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             )
         )
         return metrics
-
-    def _sample_reconstructed_reference_actions(
-        self,
-        *,
-        global_indices: torch.Tensor,
-        env_ids: torch.Tensor,
-    ) -> torch.Tensor | None:
-        """Convert cached target joint positions into raw policy actions."""
-        if self._reconstructed_reference_action_term is None:
-            return None
-        if self._reconstructed_reference_target_to_action_index is None:
-            return None
-
-        cached_targets = self.trajectory_manager.get_reconstructed_action_targets(
-            global_indices
-        )
-        if cached_targets is None:
-            return None
-
-        env_ids = env_ids.to(device=self.device, dtype=torch.int64)
-        q_cmd = cached_targets.to(device=self.device, dtype=torch.float32).index_select(
-            -1, self._reconstructed_reference_target_to_action_index
-        )
-        action_term = self._reconstructed_reference_action_term
-
-        if getattr(action_term.cfg, "clip", None) is not None:
-            clip = action_term._clip.index_select(0, env_ids).to(
-                device=self.device, dtype=q_cmd.dtype
-            )
-            q_cmd = torch.clamp(q_cmd, min=clip[..., 0], max=clip[..., 1])
-        return self._processed_to_raw_action(
-            q_cmd, env_ids=env_ids, action_term=action_term
-        )
 
     def _finalize_reference_body_names(self) -> None:
         """Improve reference body-name mapping for datasets that only provide generic names."""
@@ -2952,21 +2535,92 @@ class ImitationRLEnv(ManagerBasedRLEnv):
 
     def _setup_adaptive_failure_reset_sampler(self, cfg: Any) -> None:
         del cfg
+        tm = self.trajectory_manager
         self._adaptive_failure_reset_sampler: SonicAdaptiveResetSampler | None = None
-        if not self._random_reset_full_trajectory:
+        # The SONIC weight function is needed both by the legacy full-trajectory
+        # joint rank+frame path and by reset_start_mode="adaptive".
+        if self._random_reset_full_trajectory or self._reset_start_mode == "adaptive":
+            self._adaptive_failure_reset_sampler = SonicAdaptiveResetSampler(
+                tm._length,
+                bin_size=self._adaptive_failure_reset_bin_size,
+                sequence_length_agnostic=(
+                    self._adaptive_failure_reset_sequence_length_agnostic
+                ),
+                init_num_failures=self._adaptive_failure_reset_init_num_failures,
+                uniform_sampling_rate=self._adaptive_failure_reset_uniform_ratio,
+                pre_failure_sample_window=(
+                    self._adaptive_failure_reset_pre_failure_window
+                ),
+                failure_rate_max_over_mean=(
+                    self._adaptive_failure_reset_failure_rate_max_over_mean
+                ),
+            )
+        if self._random_reset_full_trajectory:
+            # Legacy full-trajectory path: SONIC picks ranks AND frames jointly
+            # from the bin distribution; the generic start sampler is unused.
+            self._start_frame_sampler = None
             return
-        self._adaptive_failure_reset_sampler = SonicAdaptiveResetSampler(
+
+        # Resolve the effective starting-frame mode: "auto" keeps the legacy
+        # random-range / fixed behavior; explicit modes map 1:1 onto
+        # StartFrameSampler. Trajectory selection stays with the manager's
+        # reset_schedule in every mode.
+        mode = self._reset_start_mode
+        if mode == "auto":
+            mode = (
+                StartFrameSampler.RANDOM
+                if self._random_reset_step_max > self._random_reset_step_min
+                else StartFrameSampler.FIXED
+            )
+        if mode == StartFrameSampler.ADAPTIVE:
+            weight_fn = self._adaptive_reset_weight_fn
+            if weight_fn is None:
+                weight_fn = self._adaptive_failure_reset_sampler
+            if weight_fn is None:
+                raise ValueError(
+                    "reset_start_mode='adaptive' requires the SONIC reset "
+                    "sampler or a custom `cfg.adaptive_reset_weight_fn`."
+                )
+            self._start_frame_sampler = StartFrameSampler(
+                tm._length,
+                mode="adaptive",
+                weight_fn=weight_fn,
+                device=tm._state_device,
+            )
+            return
+        self._start_frame_sampler = StartFrameSampler(
+            tm._length,
+            mode=mode,
+            fixed_step=self._reference_start_frame,
+            random_step_min=self._random_reset_step_min,
+            random_step_max=self._random_reset_step_max,
+            device=tm._state_device,
+        )
+
+    def set_adaptive_reset_weight_fn(self, weight_fn: Any) -> None:
+        """Provide a custom adaptive starting-frame weight function.
+
+        The callable must accept ``(trajectory_ranks, frame_steps)`` tensors
+        and return one non-negative weight per (rank, step) pair, as expected
+        by ``iltools.datasets.reset_sampling.StartFrameSampler``. It replaces
+        the SONIC failure-weight function and switches the env to
+        ``reset_start_mode='adaptive'`` (trajectory ranks still come from the
+        manager's reset schedule).
+        """
+        if self._random_reset_full_trajectory:
+            raise RuntimeError(
+                "A custom adaptive weight function is incompatible with "
+                "random_reset_full_trajectory (SONIC joint rank+frame sampling)."
+            )
+        if not callable(weight_fn):
+            raise ValueError("weight_fn must be a callable.")
+        self._adaptive_reset_weight_fn = weight_fn
+        self._reset_start_mode = StartFrameSampler.ADAPTIVE
+        self._start_frame_sampler = StartFrameSampler(
             self.trajectory_manager._length,
-            bin_size=self._adaptive_failure_reset_bin_size,
-            sequence_length_agnostic=(
-                self._adaptive_failure_reset_sequence_length_agnostic
-            ),
-            init_num_failures=self._adaptive_failure_reset_init_num_failures,
-            uniform_sampling_rate=self._adaptive_failure_reset_uniform_ratio,
-            pre_failure_sample_window=(self._adaptive_failure_reset_pre_failure_window),
-            failure_rate_max_over_mean=(
-                self._adaptive_failure_reset_failure_rate_max_over_mean
-            ),
+            mode="adaptive",
+            weight_fn=weight_fn,
+            device=self.trajectory_manager._state_device,
         )
 
     def _reset_tracking_failure_mask(self) -> torch.Tensor:
@@ -3155,165 +2809,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             device=self.device,
         )
 
-    def causal_planner_observation_from_expert_frame(
-        self, expert_frame: TensorDict
-    ) -> torch.Tensor:
-        """Build sensor-equivalent planner features from offline demonstration data."""
-        joint_pos = expert_frame.get("joint_pos")
-        joint_vel = expert_frame.get("joint_vel")
-        root_quat = expert_frame.get("root_quat")
-        root_ang_vel = expert_frame.get("root_ang_vel")
-        last_action = expert_frame.get("last_action")
-        missing = [
-            name
-            for name, value in (
-                ("joint_pos", joint_pos),
-                ("joint_vel", joint_vel),
-                ("root_quat", root_quat),
-                ("root_ang_vel", root_ang_vel),
-            )
-            if value is None
-        ]
-        if missing:
-            raise KeyError(
-                f"Offline causal planner frame is missing demonstration fields: {missing}."
-            )
-        assert joint_pos is not None
-        assert joint_vel is not None
-        assert root_quat is not None
-        assert root_ang_vel is not None
-        # The expert frame and the cached defaults are both stored in the live
-        # articulation order. Reorder both into the pinned order so this offline
-        # frame stays numerically identical to the live sensor frame built by
-        # ``_current_causal_planner_frame`` on any physics backend.
-        joint_ids = self._pinned_joint_ids()
-        joint_pos = joint_pos.index_select(-1, joint_ids)
-        joint_vel = joint_vel.index_select(-1, joint_ids)
-        leading_dims = joint_pos.shape[:-1]
-        default_joint_pos = (
-            self._expert_default_joint_pos[0]
-            .index_select(-1, joint_ids)
-            .reshape(*((1,) * len(leading_dims)), -1)
-        )
-        default_joint_vel = (
-            self._expert_default_joint_vel[0]
-            .index_select(-1, joint_ids)
-            .reshape(*((1,) * len(leading_dims)), -1)
-        )
-        return build_offline_causal_planner_frame(
-            joint_pos=joint_pos,
-            joint_vel=joint_vel,
-            root_quat_wxyz=root_quat,
-            root_ang_vel_w=root_ang_vel,
-            last_action=last_action,
-            default_joint_pos=default_joint_pos,
-            default_joint_vel=default_joint_vel,
-        )
-
-    def current_offline_demo_planner_observation(
-        self,
-        env_ids: torch.Tensor | Sequence[int] | None = None,
-        history_steps: int = _CAUSAL_PLANNER_HISTORY_STEPS,
-    ) -> TensorDict:
-        """Return training-only sensor-equivalent history from the current demo cursor."""
-        history_steps = int(history_steps)
-        spec = self.causal_planner_observation_spec(history_steps)
-        if env_ids is None:
-            env_ids_t = torch.arange(
-                self.num_envs, device=self.device, dtype=torch.long
-            )
-        else:
-            env_ids_t = torch.as_tensor(
-                env_ids, device=self.device, dtype=torch.long
-            ).reshape(-1)
-        if int(env_ids_t.numel()) == 0:
-            raise ValueError("env_ids must select at least one environment.")
-        local_steps = self._current_local_steps(env_ids_t)
-        tm = self.trajectory_manager
-        traj_ranks = tm.env_traj_rank.index_select(
-            0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
-        ).to(self.device)
-        expert_window = self._sample_expert_window_slice(
-            env_ids_t,
-            local_steps,
-            past_steps=history_steps,
-            future_steps=0,
-        )
-        global_indices, trajectory_starts = self._offline_window_global_indices(
-            traj_ranks,
-            local_steps,
-            past_steps=history_steps,
-            future_steps=0,
-        )
-        expert_window = self._attach_offline_previous_action(
-            expert_window,
-            global_indices=global_indices,
-            trajectory_starts=trajectory_starts,
-        )
-        history = self.causal_planner_observation_from_expert_frame(expert_window)
-        expected_history = (
-            int(env_ids_t.numel()),
-            int(spec["history_frames"]),
-            int(spec["frame_dim"]),
-        )
-        if tuple(history.shape) != expected_history:
-            raise RuntimeError(
-                "Offline demo planner history shape mismatch: expected "
-                f"{expected_history}, got {tuple(history.shape)}."
-            )
-        planner = TensorDict(
-            {"state": history[:, -1], "state_history": history},
-            batch_size=[int(env_ids_t.numel())],
-            device=self.device,
-        )
-        return TensorDict(
-            {"planner": planner},
-            batch_size=[int(env_ids_t.numel())],
-            device=self.device,
-        )
-
-    def current_offline_demo_command_terms(
-        self,
-        *,
-        past_steps: int,
-        future_steps: int,
-        env_ids: torch.Tensor | Sequence[int] | None = None,
-        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
-        anchor_body_name: str = "torso_link",
-        reference_body_names: Sequence[str] = (),
-    ) -> dict[str, torch.Tensor]:
-        """Return an expert window expressed in its own current-anchor frame."""
-        past_steps = int(past_steps)
-        future_steps = int(future_steps)
-        if past_steps < 0 or future_steps < 0:
-            raise ValueError("Offline demonstration window steps must be >= 0.")
-        if env_ids is None:
-            env_ids_t = torch.arange(
-                self.num_envs, device=self.device, dtype=torch.long
-            )
-        else:
-            env_ids_t = torch.as_tensor(
-                env_ids, device=self.device, dtype=torch.long
-            ).reshape(-1)
-        if int(env_ids_t.numel()) == 0:
-            raise ValueError("env_ids must select at least one environment.")
-        local_steps = self._current_local_steps(env_ids_t)
-        expert_window = self._sample_expert_window_slice(
-            env_ids_t,
-            local_steps,
-            past_steps=past_steps,
-            future_steps=future_steps,
-        )
-        return self._build_expert_window_terms(
-            expert_window,
-            env_ids_t,
-            context="expert",
-            past_steps=past_steps,
-            joint_ids=joint_ids,
-            anchor_body_name=anchor_body_name,
-            reference_body_names=reference_body_names,
-        )
-
     def _reset_idx(self, env_ids: torch.Tensor):
         """Reset the specified environments.
 
@@ -3334,23 +2829,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._accumulate_terminal_mpjpe_metric(env_ids)
 
         # Reset trajectory tracking (reassigns trajectories and resets steps).
-        reset_steps = None
+        tm = self.trajectory_manager
+        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
         if self._random_reset_full_trajectory:
             self._record_adaptive_failure_reset_bins(env_ids)
-        if (
-            not self._random_reset_full_trajectory
-            and self._random_reset_step_max > self._random_reset_step_min
-        ):
-            reset_steps = torch.randint(
-                low=self._random_reset_step_min,
-                high=self._random_reset_step_max + 1,
-                size=(int(env_ids.shape[0]),),
-                device=self.trajectory_manager._state_device,
-                dtype=torch.long,
-            )
-        if self._random_reset_full_trajectory:
-            tm = self.trajectory_manager
-            env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
             reset_ranks, reset_steps = self._sample_adaptive_failure_resets(
                 int(env_ids_tm.numel())
             )
@@ -3360,7 +2842,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 steps=reset_steps,
             )
         else:
-            self.trajectory_manager.reset_envs(env_ids.clone(), steps=reset_steps)
+            # Record terminal failure bins whenever the SONIC weight function
+            # is in use, so adaptive starting frames keep adapting under
+            # reset_schedule-driven trajectory selection too. No-op unless an
+            # adaptive failure sampler exists.
+            self._record_adaptive_failure_reset_bins(env_ids)
+            # StartFrameSampler picks the local step (fixed/random/adaptive);
+            # the trajectory manager picks the rank via its configured
+            # reset_schedule.
+            ranks = tm.env_traj_rank.index_select(0, env_ids_tm)
+            reset_steps = self._start_frame_sampler.sample_steps(ranks)
+            tm.reset_envs(env_ids_tm, steps=reset_steps)
         self.reset_agent_latent_command(env_ids)
         self.reset_agent_trajectory_command(env_ids)
 
@@ -3450,9 +2942,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             # Get next reference data point (advance=True to move to next step)
             self._refresh_current_expert_frame(advance=True)
             self._record_adaptive_failure_reset_visits()
-            rollout_action_log = self._compute_rollout_reference_action_log(
-                action.to(self.device)
-            )
             super().step(action)
             rollout_state_log = self._compute_rollout_reference_state_log()
             # Accumulated after the physics step and after any reset inside it.
@@ -3466,8 +2955,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                 as_tuple=True
             )[0]
             mpjpe_log = self._accumulate_mpjpe_metric(exclude_env_ids=just_reset)
-            if rollout_action_log or rollout_state_log or mpjpe_log:
-                self.extras.setdefault("log", {}).update(rollout_action_log)
+            if rollout_state_log or mpjpe_log:
                 self.extras.setdefault("log", {}).update(rollout_state_log)
                 self.extras.setdefault("log", {}).update(mpjpe_log)
             self._apply_reference_replay_targets()
@@ -3668,66 +3156,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             env_ids_tm.to(self.device),
             global_indices.to(self.device),
         )
-
-    def _offline_window_global_indices(
-        self,
-        traj_ranks: torch.Tensor,
-        local_steps: torch.Tensor,
-        *,
-        past_steps: int,
-        future_steps: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return clamped replay indices and trajectory starts for an expert window."""
-        tm = self.trajectory_manager
-        traj_ranks_tm = traj_ranks.to(device=tm._state_device, dtype=torch.long)
-        local_steps_tm = local_steps.to(device=tm._state_device, dtype=torch.long)
-        offsets = torch.arange(
-            -int(past_steps),
-            int(future_steps) + 1,
-            device=tm._state_device,
-            dtype=torch.long,
-        )
-        lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
-        steps = local_steps_tm.unsqueeze(1) + offsets.unsqueeze(0)
-        steps = steps.clamp(min=0)
-        steps = torch.minimum(steps, (lengths - 1).unsqueeze(1))
-        starts = tm._start.index_select(0, traj_ranks_tm).unsqueeze(1)
-        return (starts + steps).to(self.device), starts.to(self.device)
-
-    def _attach_offline_previous_action(
-        self,
-        expert_window: TensorDict,
-        *,
-        global_indices: torch.Tensor,
-        trajectory_starts: torch.Tensor,
-    ) -> TensorDict:
-        """Attach aligned previous actions, preferring recorded labels."""
-        if expert_window.get("last_action") is not None:
-            return expert_window
-        previous_indices = torch.maximum(global_indices - 1, trajectory_starts)
-        tm = self.trajectory_manager
-        previous = tm.rb[previous_indices.to(device=tm._storage_device)]
-        recorded_action = previous.get("action")
-        if recorded_action is not None:
-            last_action = recorded_action.to(self.device, dtype=torch.float32)
-        else:
-            flat_indices = previous_indices.reshape(-1)
-            reconstructed = self._sample_reconstructed_reference_actions(
-                global_indices=flat_indices,
-                env_ids=torch.zeros_like(flat_indices, device=self.device),
-            )
-            if reconstructed is None:
-                raise ValueError(
-                    "Offline causal planner observations require recorded action "
-                    "labels or reconstructed reference actions."
-                )
-            last_action = reconstructed.reshape(*previous_indices.shape, -1)
-        at_start = global_indices == trajectory_starts
-        last_action = torch.where(
-            at_start.unsqueeze(-1), torch.zeros_like(last_action), last_action
-        )
-        expert_window.set("last_action", last_action)
-        return expert_window
 
     @staticmethod
     def _normalize_expert_macro_split(split: str | None) -> str:
@@ -4766,7 +4194,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
 
         for key in dedup_required_keys:
             key_tuple = self._normalize_nested_key(key)
-            if key_tuple in (("action",), ("expert_action",)):
+            if key_tuple == ("action",):
                 needs_action = True
                 continue
             if len(key_tuple) > 0 and key_tuple[0] == "next":
@@ -4855,34 +4283,18 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if needs_action:
             sampled_action = None
             if (
-                self._reconstructed_reference_action_enabled
-                and current_env_ids is not None
-                and current_global_indices is not None
-            ):
-                sampled_action = self._sample_reconstructed_reference_actions(
-                    global_indices=current_global_indices,
-                    env_ids=current_env_ids,
-                )
-            if (
                 current_expert_frame is not None
                 and "action" in current_expert_frame.keys()
             ):
-                sampled_action = (
-                    sampled_action
-                    if sampled_action is not None
-                    else current_expert_frame.get("action")
-                )
+                sampled_action = current_expert_frame.get("action")
             if sampled_action is None:
                 raise RuntimeError(
-                    "Expert sampler was asked for action/expert_action, but no "
-                    "reconstructed reference action or recorded expert action is "
-                    "available. Enable reconstructed_reference_action=True with "
-                    "transition-aligned next_* reference data, or provide action "
-                    "labels in the expert frame."
+                    "Expert sampler was asked for action labels, but no recorded "
+                    "expert action is available in the expert frame. Provide "
+                    "action labels in the expert data."
                 )
             sampled_action = sampled_action.to(self.device)
             expert_batch.set("action", sampled_action)
-            expert_batch.set("expert_action", sampled_action)
 
         return expert_batch
 
@@ -5089,70 +4501,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
         return TensorDict({"hl": hl}, batch_size=[batch_size], device=self.device)
 
-    def sample_causal_planner_training_batch(
-        self,
-        batch_size: int,
-        horizon_steps: int,
-        split: str | None = None,
-        eval_fraction: float = 0.1,
-        split_seed: int = 0,
-        trajectory_ranks: Sequence[int] | torch.Tensor | None = None,
-        history_steps: int = _CAUSAL_PLANNER_HISTORY_STEPS,
-    ) -> TensorDict:
-        """Pair offline robot-equivalent planner history with expert future labels."""
-        history_steps = int(history_steps)
-        batch = self.sample_expert_macro_transition_batch(
-            batch_size=batch_size,
-            horizon_steps=horizon_steps,
-            split=split,
-            eval_fraction=eval_fraction,
-            split_seed=split_seed,
-            trajectory_ranks=trajectory_ranks,
-            state_history_steps=0,
-        )
-        traj_rank = batch.get(("hl", "traj_rank"))
-        local_step = batch.get(("hl", "local_step"))
-        if traj_rank is None or local_step is None:
-            raise RuntimeError(
-                "Expert macro sampler did not return trajectory rank and local step."
-            )
-        expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
-            traj_rank,
-            local_step,
-            past_steps=history_steps,
-            future_steps=0,
-        )
-        global_indices, trajectory_starts = self._offline_window_global_indices(
-            traj_rank,
-            local_step,
-            past_steps=history_steps,
-            future_steps=0,
-        )
-        expert_window = self._attach_offline_previous_action(
-            expert_window,
-            global_indices=global_indices,
-            trajectory_starts=trajectory_starts,
-        )
-        history = self.causal_planner_observation_from_expert_frame(expert_window)
-        spec = self.causal_planner_observation_spec(history_steps)
-        expected = (
-            int(batch_size),
-            int(spec["history_frames"]),
-            int(spec["frame_dim"]),
-        )
-        if tuple(history.shape) != expected:
-            raise RuntimeError(
-                "Sampled offline planner history shape mismatch: expected "
-                f"{expected}, got {tuple(history.shape)}."
-            )
-        planner = TensorDict(
-            {"state": history[:, -1], "state_history": history},
-            batch_size=[int(batch_size)],
-            device=self.device,
-        )
-        batch.set("planner", planner)
-        return batch
-
     def current_expert_macro_transition_batch(
         self,
         horizon_steps: int,
@@ -5254,77 +4602,6 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             hl_payload["state_history"] = state_history
         hl = TensorDict(
             hl_payload,
-            batch_size=[batch_size],
-            device=self.device,
-        )
-        return TensorDict({"hl": hl}, batch_size=[batch_size], device=self.device)
-
-    def current_offline_demo_macro_transition_batch(
-        self,
-        horizon_steps: int,
-        env_ids: torch.Tensor | Sequence[int] | None = None,
-    ) -> TensorDict:
-        """Return an offline expert macro window paired to the demo cursor.
-
-        Unlike the rollout macro batch, all anchor terms are expressed relative
-        to the offline expert anchor at the current frame. The current anchor is
-        therefore zero position and identity orientation.
-        """
-        horizon_steps = int(horizon_steps)
-        if horizon_steps <= 0:
-            raise ValueError("horizon_steps must be > 0.")
-        if env_ids is None:
-            env_ids_t = torch.arange(
-                self.num_envs, device=self.device, dtype=torch.long
-            )
-        else:
-            env_ids_t = torch.as_tensor(
-                env_ids, device=self.device, dtype=torch.long
-            ).reshape(-1)
-        batch_size = int(env_ids_t.numel())
-        if batch_size <= 0:
-            raise ValueError("env_ids must select at least one environment.")
-
-        local_steps = self._current_local_steps(env_ids_t)
-        expert_window = self._sample_expert_window_slice(
-            env_ids_t,
-            local_steps,
-            past_steps=0,
-            future_steps=horizon_steps,
-        )
-        terms = self._build_expert_macro_window_terms(
-            expert_window,
-            env_ids_t,
-            context="expert",
-            past_steps=0,
-            joint_ids=slice(None),
-            anchor_body_name=self._expert_anchor_body_name,
-        )
-        window_steps = horizon_steps + 1
-        sequence = self._expert_macro_state_sequence_from_terms(
-            terms,
-            batch_size=batch_size,
-            window_steps=window_steps,
-        )
-        self._expert_macro_feature_slices = (
-            self._expert_macro_state_feature_slices_from_terms(
-                terms,
-                batch_size=batch_size,
-                window_steps=window_steps,
-            )
-        )
-        tm = self.trajectory_manager
-        traj_rank = tm.env_traj_rank.index_select(
-            0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
-        ).to(device=self.device, dtype=torch.long)
-        hl = TensorDict(
-            {
-                "state": sequence[:, 0, :].contiguous(),
-                "future_window": sequence[:, 1:, :].contiguous(),
-                "target": sequence[:, -1, :].contiguous(),
-                "traj_rank": traj_rank,
-                "local_step": local_steps,
-            },
             batch_size=[batch_size],
             device=self.device,
         )

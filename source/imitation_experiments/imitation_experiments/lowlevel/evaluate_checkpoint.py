@@ -192,7 +192,7 @@ from torchrl.envs.utils import set_exploration_type, step_mdp
 
 from imitation_experiments.lowlevel.low_level_tracker import load_frozen_low_level_tracker
 from imitation_experiments.provenance.paper_protocol_metadata import interval_event_metadata
-from imitation_experiments.planner.planner_publish_schedule import planner_renew_env_ids
+from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids
 
 
 ALGORITHM_CLASS_MAP = {

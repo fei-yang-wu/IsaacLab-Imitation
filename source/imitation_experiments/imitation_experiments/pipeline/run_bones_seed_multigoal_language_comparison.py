@@ -41,7 +41,7 @@ WORKFLOW_SOURCE_PATHS = (
     module_source_rel("imitation_experiments.data.balanced_motion_rows"),
     module_source_rel("imitation_experiments.evaluation.closed_loop_metrics"),
     module_source_rel("imitation_experiments.lowlevel.low_level_tracker"),
-    module_source_rel("imitation_experiments.planner.planner_publish_schedule"),
+    "source/isaaclab_imitation/isaaclab_imitation/contracts/planner_publish_schedule.py",
     module_source_rel("imitation_experiments.provenance.paper_protocol_metadata"),
     module_source_rel("imitation_experiments.planner.planner_latency"),
     module_source_rel("imitation_experiments.evaluation.eval_interface_planner_closed_loop"),
@@ -58,7 +58,7 @@ WORKFLOW_SOURCE_PATHS = (
     "scripts/rlopt/eval_skill_commander_closed_loop.py",
     "RLOpt/rlopt/agent/causal_interface_planner.py",
     "RLOpt/rlopt/agent/skill_commander.py",
-    "source/isaaclab_imitation/isaaclab_imitation/envs/causal_planner_observation.py",
+    "source/isaaclab_imitation/isaaclab_imitation/contracts/causal_planner_observation.py",
     "source/isaaclab_imitation/isaaclab_imitation/envs/imitation_rl_env.py",
 )
 

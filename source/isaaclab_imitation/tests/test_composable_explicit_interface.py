@@ -14,7 +14,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipm
     normalize_command_components,
 )
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
-    ImitationG1EnvCfg,
+    ImitationG1LafanTrackEnvCfg,
 )
 
 
@@ -71,7 +71,7 @@ def test_composed_explicit_interface_rejects_latent_tracker_mode() -> None:
 
 
 def test_g1_observation_config_registers_keypoint_orientations() -> None:
-    cfg = ImitationG1EnvCfg()
+    cfg = ImitationG1LafanTrackEnvCfg()
     assert cfg.observations.policy.expert_keypoint_ori_b is not None
     assert cfg.observations.critic.expert_keypoint_ori_b is not None
     assert cfg.observations.expert_window.expert_keypoint_ori_b is not None

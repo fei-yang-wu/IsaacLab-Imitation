@@ -11,7 +11,7 @@ See ``wiki/sim2sim-dynamics-gap-and-randomization.md``.
 
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_TRACKED_BODY_NAMES,
-    ImitationG1EnvCfg,
+    ImitationG1LafanTrackEnvCfg,
 )
 
 
@@ -33,7 +33,7 @@ def test_reward_manager_skips_zero_weight_terms() -> None:
 
 
 def test_g1_configures_the_mpjpe_metric() -> None:
-    cfg = ImitationG1EnvCfg()
+    cfg = ImitationG1LafanTrackEnvCfg()
     assert cfg.mpjpe_metric_body_names, (
         "G1 must configure mpjpe_metric_body_names; without it the env logs no "
         "MPJPE metric and Episode_Reward/mpjpe_m is a constant zero."
@@ -46,7 +46,7 @@ def test_mpjpe_metric_matches_the_evaluated_body_set() -> None:
     The metric is only useful if it is the same quantity the closed-loop
     evaluators report, which means the same bodies in the same order.
     """
-    cfg = ImitationG1EnvCfg()
+    cfg = ImitationG1LafanTrackEnvCfg()
     assert list(cfg.mpjpe_metric_body_names) == list(G1_TRACKED_BODY_NAMES)
 
 
@@ -79,7 +79,7 @@ def test_mpjpe_metric_is_reported_in_millimetres() -> None:
 
 def test_mpjpe_metric_bodies_exist_in_the_reference() -> None:
     """The metric compares robot and reference bodies of the same name."""
-    cfg = ImitationG1EnvCfg()
+    cfg = ImitationG1LafanTrackEnvCfg()
     missing = [
         name
         for name in cfg.mpjpe_metric_body_names
@@ -109,7 +109,9 @@ def test_terminal_mpjpe_is_folded_in_before_trajectory_reassignment() -> None:
         "_reset_idx no longer folds the terminal frame into the MPJPE episode "
         "sum; the last transition of every episode will be dropped."
     )
-    reassignment_call = source.find("trajectory_manager.reset_envs")
+    # Match the call by method name only: the receiver spelling varies
+    # (`self.trajectory_manager.reset_envs` vs a local `tm.reset_envs`).
+    reassignment_call = source.find(".reset_envs(")
     assert reassignment_call != -1, "trajectory reassignment call not found"
     assert terminal_call < reassignment_call, (
         "_accumulate_terminal_mpjpe_metric must run before the trajectory is "

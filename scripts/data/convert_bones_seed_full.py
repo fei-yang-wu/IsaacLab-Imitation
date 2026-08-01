@@ -432,7 +432,8 @@ G1_ENV_CFG = (
     / "imitation"
     / "config"
     / "g1"
-    / "imitation_g1_env_cfg.py"
+    / "common"
+    / "constants.py"
 )
 
 

@@ -57,7 +57,7 @@ class G1ImitationRLOptSACConfig(SACRLOptConfig):
         self.optim.target_update_polyak = 0.995
         self.optim.lr = 3.0e-4
         self.optim.weight_decay = 0.0
-        self.save_interval = 5_000_000   # samples
+        self.save_interval = 5_000_000  # samples
         self.trainer.progress_bar = True
         self.trainer.log_interval = 10_000_000  # samples
         self.compile.compile = False

@@ -47,6 +47,8 @@ from typing import Any, Protocol
 
 import torch
 
+from .planner_publish_schedule import planner_renew_env_ids
+
 
 def renewal_env_ids(
     episode_length_buf: torch.Tensor,
@@ -60,21 +62,13 @@ def renewal_env_ids(
     internally, so publisher and consumer cannot disagree about when a window
     begins. Reset environments return to episode step zero, which keeps
     asynchronously-resetting environments aligned without a global step counter.
+
+    Thin publisher-facing alias of :func:`planner_renew_env_ids` -- one
+    schedule authority for every interface.
     """
-    if episode_length_buf.ndim != 1:
-        raise ValueError(
-            f"episode_length_buf must be 1-D, got {tuple(episode_length_buf.shape)}."
-        )
-    if int(hold_steps) <= 0:
-        raise ValueError(f"hold_steps must be positive, got {hold_steps}.")
-    if initial:
-        return torch.arange(
-            episode_length_buf.numel(),
-            device=episode_length_buf.device,
-            dtype=torch.long,
-        )
-    phase = episode_length_buf.to(dtype=torch.long) % int(hold_steps)
-    return torch.nonzero(phase == 0, as_tuple=False).flatten()
+    return planner_renew_env_ids(
+        episode_length_buf, hold_steps, initial_publication=initial
+    )
 
 
 class CommandPublisher(Protocol):

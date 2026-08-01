@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import MISSING
-from typing import Literal
 
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
@@ -332,8 +331,7 @@ class ImitationLearningEnvCfg(ManagerBasedRLEnvCfg):
     # Restrict which Zarr arrays are loaded into the reference buffer. None
     # loads every key. This is the main lever on buffer size: for a 30-body G1
     # tree the full key set is 2,696 B/frame, of which the eight transition-
-    # aligned `next_*` duplicates are 568 B (21%). Dropping them requires
-    # `reconstructed_reference_action=False`, since that is their only consumer.
+    # aligned `next_*` duplicates are 568 B (21%).
     # NOTE: this cannot be named `keys` -- that shadows dict-like access on the
     # config object and silently resolves to a bound method rather than a field.
     dataset_keys: list[str] | None = None
@@ -350,10 +348,6 @@ class ImitationLearningEnvCfg(ManagerBasedRLEnvCfg):
     }
     replay_reference: bool = False
     replay_only: bool = False
-    reconstructed_reference_action: bool = True
-    reconstructed_reference_action_mode: Literal["next_pose", "pd_compensated"] = (
-        "pd_compensated"
-    )
     # Reference joint names for the robot from the historical G1 reference qpos order.
     reference_joint_names: list[str] = [
         "root_x",

@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import pytest
 import torch
 
-from imitation_experiments.planner.planner_publish_schedule import planner_renew_env_ids
+# Load by file path (contracts modules are torch-only by design) so this test
+# runs in any environment without importing the isaaclab_imitation package.
+_MODULE_PATH = (
+    Path(__file__).parent.parent
+    / "isaaclab_imitation"
+    / "contracts"
+    / "planner_publish_schedule.py"
+)
+_MODULE_SPEC = importlib.util.spec_from_file_location(
+    "planner_publish_schedule", _MODULE_PATH
+)
+assert _MODULE_SPEC is not None and _MODULE_SPEC.loader is not None
+_MODULE = importlib.util.module_from_spec(_MODULE_SPEC)
+_MODULE_SPEC.loader.exec_module(_MODULE)
+
+planner_renew_env_ids = _MODULE.planner_renew_env_ids
 
 
 def test_renewals_follow_each_environments_episode_step() -> None:

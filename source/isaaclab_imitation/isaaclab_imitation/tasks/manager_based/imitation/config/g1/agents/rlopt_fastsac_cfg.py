@@ -85,9 +85,11 @@ class G1ImitationRLOptFastSACConfig(FastSACRLOptConfig):
         self.optim.target_update_polyak = 0.995  # unused by FastSAC (uses fastsac.tau)
 
         # Logging / saving  (both intervals are in *samples*, not iterations)
-        self.save_interval = 5_000_000    # samples: save checkpoint every 5 M steps
+        self.save_interval = 5_000_000  # samples: save checkpoint every 5 M steps
         self.trainer.progress_bar = True
-        self.trainer.log_interval = 10_000_000  # samples: print console summary every 1 M steps
+        self.trainer.log_interval = (
+            10_000_000  # samples: print console summary every 1 M steps
+        )
         self.compile.compile = False
 
         self.logger.project_name = "G1-Imitation-RLOpt-FastSAC"

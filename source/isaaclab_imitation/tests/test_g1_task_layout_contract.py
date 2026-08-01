@@ -200,3 +200,104 @@ def test_refresh_is_identity_for_default_tasks() -> None:
             if getattr(cfg.observations, field.name) is not None
         }
         assert after == before, task_id
+
+
+MACRO_TRIO = ("expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b")
+
+
+def test_expert_window_and_goal_observation_pruning_knobs() -> None:
+    """Opt-in observation-cost knobs on the default task.
+
+    `expert_window_observation_terms` whitelists expert_window terms (must
+    retain the active macro-state terms) and
+    `enable_expert_goal_observations=False` drops the expert_goal group.
+    Both default to no-change; that is covered by the recorded-default test.
+    """
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
+    cfg.from_dict(
+        {
+            "expert_window_observation_terms": (
+                "[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]"
+            ),
+            "enable_expert_goal_observations": False,
+        }
+    )
+    assert _group_terms(cfg.observations.expert_window) == list(MACRO_TRIO)
+    assert cfg.observations.expert_goal is None
+    # The env-construction refresh path must be a fixed point.
+    cfg._refresh_command_observation_terms()
+    assert _group_terms(cfg.observations.expert_window) == list(MACRO_TRIO)
+    assert cfg.observations.expert_goal is None
+    # Kept window terms still follow the task's window/params sync.
+    for name in MACRO_TRIO:
+        term = getattr(cfg.observations.expert_window, name)
+        assert term.params["past_steps"] == cfg.latent_patch_past_steps
+        assert term.params["future_steps"] == cfg.latent_patch_future_steps
+
+    # Turning the knobs back off restores the full declared layout.
+    cfg.expert_window_observation_terms = None
+    cfg.enable_expert_goal_observations = True
+    cfg._refresh_command_observation_terms()
+    default_cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
+    assert _group_terms(cfg.observations.expert_window) == _group_terms(
+        default_cfg.observations.expert_window
+    )
+    assert cfg.observations.expert_goal is not None
+    assert _group_terms(cfg.observations.expert_goal) == _group_terms(
+        default_cfg.observations.expert_goal
+    )
+
+
+def test_expert_window_whitelist_must_cover_macro_state_terms() -> None:
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
+    with pytest.raises(ValueError, match="expert_macro_state_terms"):
+        cfg.from_dict(
+            {
+                "expert_window_observation_terms": (
+                    "[expert_anchor_pos_b,expert_anchor_ori_b]"
+                )
+            }
+        )
+
+
+def test_reset_start_mode_config_surface() -> None:
+    """Every registered G1 task exposes a valid reset_start_mode default."""
+    for task_id in TASK_IDS:
+        cfg = _load_env_cfg(task_id)
+        assert getattr(cfg, "reset_start_mode", None) in (
+            "auto",
+            "fixed",
+            "random",
+            "adaptive",
+        ), f"{task_id}: bad reset_start_mode default {cfg.reset_start_mode!r}"
+
+    # Explicit modes survive config validation and are normalized.
+    for mode in ("fixed", "random", "adaptive"):
+        cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
+        cfg.reset_start_mode = mode
+        cfg.__post_init__()
+        assert cfg.reset_start_mode == mode
+
+    # Case/whitespace is normalized by the config validation.
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
+    cfg.reset_start_mode = " Adaptive "
+    cfg.__post_init__()
+    assert cfg.reset_start_mode == "adaptive"
+
+    # Unknown modes fail loudly at config time.
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
+    cfg.reset_start_mode = "bogus"
+    with pytest.raises(ValueError, match="reset_start_mode"):
+        cfg.__post_init__()
+
+    # Legacy full-trajectory variants keep the SONIC joint rank+frame path.
+    full_trajectory_ids = [
+        task_id
+        for task_id in TASK_IDS
+        if getattr(_load_env_cfg(task_id), "random_reset_full_trajectory", False)
+    ]
+    assert full_trajectory_ids, "expected at least one full-trajectory task"
+    for task_id in full_trajectory_ids:
+        cfg = _load_env_cfg(task_id)
+        assert cfg.random_reset_full_trajectory is True
+        assert cfg.reset_start_mode == "auto"
