@@ -189,7 +189,7 @@ Audited separately, since a permutation can propagate into datasets:
 
 | Artifact | Status |
 | --- | --- |
-| Source LAFAN1 / BONES-SEED NPZ and Zarr | **Safe.** `csv_to_npz.py` and `batch_csv_to_npz.py` both store `joint_names`/`body_names`, and every consumer remaps by name via `_map_reference_to_target`. |
+| Source LAFAN1 / BONES-SEED NPZ and Zarr | **Safe.** `batch_csv_to_npz.py` stores `joint_names`/`body_names`, and every consumer remaps by name via `_map_reference_to_target`. |
 | `record_policy_rollout.py` state arrays | **Contaminated and mislabeled.** Live-order `joint_pos`/`joint_vel`/`body_*_w`, but the file writes no `joint_names` key, so the loader falls back to the pinned list and silently labels Newton data as PhysX. Actions are pinned, so a single file mixes two orderings. |
 | Planner sample rows (`.pt`) | **Contaminated.** `causal_state_history` and `demonstration_state_history` carry 58 live-ordered values plus 29 pinned ones per frame; no joint names and no backend recorded. Explicit-interface rows are permutable; latent rows contain encoder outputs and must be regenerated. |
 | Skill encoder / DiffSR latent space | **Contaminated but self-consistent.** Train-time and runtime both fed live order, so nothing visibly broke; the weights are baked to the Newton permutation and every latent checkpoint's encoder now receives a permuted input. |

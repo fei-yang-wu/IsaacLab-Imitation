@@ -46,10 +46,6 @@ G1_LEFT_SHOULDER_ROLL_INDEX = 16
 G1_RIGHT_SHOULDER_ROLL_INDEX = 23
 
 
-def _resolve_default_converter() -> Path:
-    return Path(__file__).resolve().with_name("csv_to_npz.py")
-
-
 def _resolve_default_batch_converter() -> Path:
     return Path(__file__).resolve().with_name("batch_csv_to_npz.py")
 
@@ -70,48 +66,6 @@ def _discover_csv_files(csv_dir: Path, recursive: bool) -> list[Path]:
 def _build_npz_path(csv_file: Path, csv_root: Path, npz_root: Path) -> Path:
     relative = csv_file.relative_to(csv_root)
     return (npz_root / relative).with_suffix(".npz")
-
-
-def _run_conversion(
-    *,
-    csv_file: Path,
-    npz_file: Path,
-    converter_script: Path,
-    python_exe: str,
-    input_fps: float,
-    output_fps: float,
-    frame_range: tuple[int, int] | None,
-    headless: bool,
-    device: str | None,
-    video_output: Path | None,
-    overwrite_video: bool,
-) -> None:
-    cmd = [
-        python_exe,
-        str(converter_script),
-        "-f",
-        str(csv_file),
-        "--input_fps",
-        str(input_fps),
-        "--output_name",
-        str(npz_file),
-        "--output_fps",
-        str(output_fps),
-    ]
-    if frame_range is not None:
-        cmd.extend(["--frame_range", str(frame_range[0]), str(frame_range[1])])
-    if device is not None:
-        cmd.extend(["--device", device])
-    if headless:
-        cmd.append("--headless")
-    if video_output is not None:
-        cmd.extend(["--video", "--video_output", str(video_output)])
-        if overwrite_video:
-            cmd.append("--overwrite_video")
-
-    print(f"[INFO] Converting: {csv_file} -> {npz_file}")
-    print(f"[CMD]  {' '.join(shlex.quote(x) for x in cmd)}")
-    subprocess.run(cmd, check=True)
 
 
 def _run_batch_conversion(
@@ -396,12 +350,6 @@ def main() -> None:
         help="Recursively scan csv_dir.",
     )
     parser.add_argument(
-        "--converter_script",
-        type=str,
-        default=str(_resolve_default_converter()),
-        help="Path to csv_to_npz.py converter script.",
-    )
-    parser.add_argument(
         "--batch_converter_script",
         type=str,
         default=str(_resolve_default_batch_converter()),
@@ -551,13 +499,10 @@ def main() -> None:
     csv_dir = Path(args.csv_dir).expanduser().resolve()
     npz_dir = Path(args.npz_dir).expanduser().resolve()
     manifest_path = Path(args.manifest_path).expanduser().resolve()
-    converter_script = Path(args.converter_script).expanduser().resolve()
     batch_converter_script = Path(args.batch_converter_script).expanduser().resolve()
 
     if not csv_dir.is_dir():
         raise NotADirectoryError(f"csv_dir does not exist: {csv_dir}")
-    if not args.assume_npz_exists and not converter_script.is_file():
-        raise FileNotFoundError(f"converter_script not found: {converter_script}")
     if not args.assume_npz_exists and not batch_converter_script.is_file():
         raise FileNotFoundError(
             f"batch_converter_script not found: {batch_converter_script}"
@@ -711,7 +656,7 @@ def main() -> None:
             "num_motions": len(manifest_entries),
             "input_fps": float(args.input_fps),
             "output_fps": float(args.output_fps),
-            "converter_script": str(converter_script),
+            "converter_script": str(batch_converter_script),
             "assume_npz_exists": bool(args.assume_npz_exists),
             "trimmed_motion_count": int(trimmed_motion_count),
             "source_trim_applied_in_manifest": bool(
