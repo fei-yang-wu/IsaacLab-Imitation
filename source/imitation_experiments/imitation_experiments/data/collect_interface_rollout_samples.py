@@ -237,11 +237,13 @@ parser.add_argument(
 )
 parser.add_argument(
     "--low_level_action_source",
-    choices=("policy", "reconstructed_reference"),
+    choices=("policy", "oracle"),
     default="policy",
     help=(
-        "Action source used for the environment step. The reconstructed-reference "
-        "option is a training-target diagnostic, not a deployable policy result."
+        "Action source used for the environment step. 'oracle' steps with the "
+        "live reference-derived tracking action (the reference's next-frame "
+        "joint targets inverse-processed through the action term) -- a "
+        "training-target diagnostic, not a deployable policy result."
     ),
 )
 parser.add_argument(
@@ -284,7 +286,10 @@ from torchrl.envs import Compose, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 
 from imitation_experiments.data.balanced_motion_rows import BalancedMotionRowSelector  # noqa: E402
-from imitation_experiments.lowlevel.low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
+from imitation_experiments.lowlevel.low_level_tracker import (
+    load_frozen_low_level_tracker,
+)  # noqa: E402
+from imitation_experiments.lowlevel.oracle_action import live_oracle_action  # noqa: E402
 from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids  # noqa: E402
 
 from imitation_experiments.planner.interface_planner_common import (  # noqa: E402
@@ -1154,8 +1159,8 @@ def main(
                         },
                     },
                     collection_stage=(
-                        "reference_action_diagnostic"
-                        if args_cli.low_level_action_source == "reconstructed_reference"
+                        "oracle_action_diagnostic"
+                        if args_cli.low_level_action_source == "oracle"
                         else (
                             "planner_rollout"
                             if planner_checkpoint_path is not None
@@ -1366,8 +1371,8 @@ def main(
                 _actor_trace_n[0] += 1
                 torch.save(_actor_trace, _os.environ["ISAACLAB_ACTOR_TRACE"])
             td = policy(td)
-            if args_cli.low_level_action_source == "reconstructed_reference":
-                td.set("action", base_env.current_reconstructed_reference_action())
+            if args_cli.low_level_action_source == "oracle":
+                td.set("action", live_oracle_action(base_env))
             action = td.get("action")
             if isinstance(action, torch.Tensor):
                 action_2d = action.detach().reshape(num_envs, -1).cpu()

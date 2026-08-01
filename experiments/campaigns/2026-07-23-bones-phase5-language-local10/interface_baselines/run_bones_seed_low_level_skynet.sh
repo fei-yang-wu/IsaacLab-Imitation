@@ -126,7 +126,7 @@ if [[ "${SUBMIT_LATENT}" == "1" ]]; then
 fi
 
 if [[ "${SUBMIT_VANILLA}" == "1" ]]; then
-    vanilla_overrides="env.dataset_path=${VANILLA_DATASET_PATH} env.random_reset_step_min=0 env.random_reset_step_max=200 env.random_reset_full_trajectory=false env.command_hold_steps=0 env.reconstructed_reference_action=true agent.ipmd.reward_loss_coeff=0.0 agent.ipmd.reward_l2_coeff=0.0 agent.ipmd.reward_grad_penalty_coeff=0.0 agent.ipmd.reward_logit_reg_coeff=0.0 agent.ipmd.reward_param_weight_decay_coeff=0.0 agent.ipmd.use_estimated_rewards_for_ppo=false agent.ipmd.env_reward_weight=1.0 agent.ipmd.bc_coef=0.0 agent.ipmd.rollout_bc_coef=0.0 agent.value_function.num_cells=[768,512,256] agent.logger.backend=wandb"
+    vanilla_overrides="env.dataset_path=${VANILLA_DATASET_PATH} env.random_reset_step_min=0 env.random_reset_step_max=200 env.random_reset_full_trajectory=false env.command_hold_steps=0 agent.ipmd.reward_loss_coeff=0.0 agent.ipmd.reward_l2_coeff=0.0 agent.ipmd.reward_grad_penalty_coeff=0.0 agent.ipmd.reward_logit_reg_coeff=0.0 agent.ipmd.reward_param_weight_decay_coeff=0.0 agent.ipmd.use_estimated_rewards_for_ppo=false agent.ipmd.env_reward_weight=1.0 agent.ipmd.bc_coef=0.0 agent.ipmd.rollout_bc_coef=0.0 agent.value_function.num_cells=[768,512,256] agent.logger.backend=wandb"
     run_cmd env \
         "${common_cluster_env[@]}" \
         COMMAND_SPACES=single_frame_full_body \

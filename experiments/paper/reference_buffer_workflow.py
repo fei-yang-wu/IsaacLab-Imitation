@@ -243,9 +243,10 @@ def stage_build(cfg: DictConfig) -> None:
     )
     if keys is not None:
         LOGGER.info(
-            "Buffer holds a key subset; training must also set "
-            "env.reconstructed_reference_action=false and "
-            "env.observations.policy_supervision=null when next_* keys are absent."
+            "Buffer holds a key subset; training must also use the live oracle "
+            "action source (the reconstructed-reference-action subsystem was "
+            "deleted) and drop any policy_supervision observations when "
+            "next_* keys are absent."
         )
 
 

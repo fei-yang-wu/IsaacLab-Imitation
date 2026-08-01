@@ -2435,7 +2435,7 @@ class ExpertDataPlane:
 
         for key in dedup_required_keys:
             key_tuple = self._normalize_nested_key(key)
-            if key_tuple == ("action",):
+            if key_tuple in (("action",), ("expert_action",)):
                 needs_action = True
                 continue
             if len(key_tuple) > 0 and key_tuple[0] == "next":
@@ -2535,7 +2535,14 @@ class ExpertDataPlane:
                     "action labels in the expert data."
                 )
             sampled_action = sampled_action.to(self._env.device)
-            expert_batch.set("action", sampled_action)
+            # The historical `expert_action` name (used by the bilinear
+            # offline policy-BC pretrain) is an alias of the recorded
+            # `action`; serve whichever key(s) the caller requested.
+            requested = {self._normalize_nested_key(key) for key in dedup_required_keys}
+            if ("action",) in requested:
+                expert_batch.set("action", sampled_action)
+            if ("expert_action",) in requested:
+                expert_batch.set("expert_action", sampled_action)
 
         return expert_batch
 

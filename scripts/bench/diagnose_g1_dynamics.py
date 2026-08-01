@@ -2,10 +2,12 @@
 """Compare G1 reference-action tracking across Isaac Lab physics backends.
 
 The probe deliberately avoids a learned policy.  At every control step it sends
-the transition-aligned reconstructed reference action already exposed by the G1
-imitation environment, then records joint/body tracking error and the exact
-termination causes.  This isolates robot, actuator, contact, and termination
-behavior from PPO/IPMD optimization.
+the live oracle tracking action (the reference's next-frame joint targets
+inverse-processed through the action term, see
+``imitation_experiments.lowlevel.oracle_action.live_oracle_action``), then
+records joint/body tracking error and the exact termination causes.  This
+isolates robot, actuator, contact, and termination behavior from PPO/IPMD
+optimization.
 
 Examples (run from the repository root):
 
@@ -46,10 +48,11 @@ from runtime_bootstrap import (  # noqa: E402
     requested_backend,
     validate_gpu_policy,
 )
+from imitation_experiments.lowlevel.oracle_action import live_oracle_action  # noqa: E402
 
 
 logger = logging.getLogger(__name__)
-DEFAULT_TASK = "Isaac-Imitation-G1-Latent-v0"
+DEFAULT_TASK = "Isaac-Imitation-G1-v2"
 DEFAULT_OUTPUT_ROOT = Path("logs/dynamics_diagnostics")
 EE_BODY_NAMES = (
     "left_ankle_roll_link",
@@ -228,7 +231,6 @@ def _run_probe(env_cfg: object, args_cli: argparse.Namespace, backend: str) -> d
         _apply_sonic_release_overrides(env_cfg, task_name=args_cli.task)
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
-    env_cfg.reconstructed_reference_action = True
     if not args_cli.full_trajectory_random_starts:
         env_cfg.random_reset_step_min = 0
         env_cfg.random_reset_step_max = 0
@@ -333,7 +335,7 @@ def _run_probe(env_cfg: object, args_cli: argparse.Namespace, backend: str) -> d
                 vector_sample_count += int(args_cli.num_envs)
 
                 if args_cli.action_mode == "reference":
-                    action = unwrapped.current_reconstructed_reference_action().clone()
+                    action = live_oracle_action(unwrapped).clone()
                 else:
                     action = torch.zeros(
                         (int(args_cli.num_envs), int(robot.num_joints)),

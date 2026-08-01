@@ -10,7 +10,7 @@ from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--task", default="Isaac-Imitation-G1-Latent-v0")
+parser.add_argument("--task", default="Isaac-Imitation-G1-v2")
 parser.add_argument("--motion_manifest", type=Path, required=True)
 parser.add_argument("--num_envs", type=int, default=4)
 parser.add_argument("--history_steps", type=int, default=9)
@@ -68,15 +68,31 @@ def main() -> None:
         tm._set_env_steps(torch.arange(int(args_cli.num_envs)), original_steps)
         base_env._refresh_current_expert_frame(advance=False)
 
-        training_batch = base_env.sample_causal_planner_training_batch(
-            batch_size=int(args_cli.num_envs),
+        # Live oracle/DAgger collection contract: the planner trains on live
+        # causal frames (the offline demo-planner sampler was deleted). Verify
+        # the live cursor-aligned macro sampler (the data source for skill
+        # pretraining / planner oracle labels) exposes the requested horizon
+        # with internally consistent per-frame widths.
+        macro = base_env.current_expert_macro_transition_batch(
             horizon_steps=int(args_cli.horizon_steps),
-            split="all",
-            history_steps=int(args_cli.history_steps),
+            state_history_steps=int(args_cli.history_steps),
         )
-        offline_history = training_batch.get(("planner", "state_history"))
-        assert tuple(offline_history.shape) == tuple(live_before.shape)
-        assert int(spec["flat_dim"]) == int(offline_history[0].numel())
+        hl = macro.get("hl")
+        state = hl.get("state")
+        future_window = hl.get("future_window")
+        state_history = hl.get("state_history")
+        per_frame = int(state.shape[1])
+        assert tuple(state.shape) == (int(args_cli.num_envs), per_frame)
+        assert tuple(future_window.shape) == (
+            int(args_cli.num_envs),
+            int(args_cli.horizon_steps),
+            per_frame,
+        )
+        assert tuple(state_history.shape) == (
+            int(args_cli.num_envs),
+            int(args_cli.history_steps) + 1,
+            per_frame,
+        )
 
         zeros = torch.zeros(env.action_space.shape, device=base_env.device)
         env.step(zeros)
