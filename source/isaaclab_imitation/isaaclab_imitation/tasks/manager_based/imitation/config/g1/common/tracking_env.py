@@ -17,9 +17,11 @@ classes; the latent-vs-explicit command choice is configuration
 - **Strict** (``_apply_strict_recipe``): strict SONIC termination functions on
   the legacy scaffolding (pelvis anchor, [0, 200] reset starts, no
   curriculum). Pins live in ``variants/strict.py``.
-- **Stable** (``imitation_g1_env_v1.ImitationG1EnvCfg``,
-  ``Isaac-Imitation-G1-v1``): the SONIC release recipe with this repo's
-  legacy reset distribution. The flagship class name follows the newest
+- **Stable** (``imitation_g1_env_v2.ImitationG1EnvCfg``,
+  ``Isaac-Imitation-G1-v2``): the SONIC release recipe with this repo's
+  legacy reset distribution -- the current default (2026-08-01 onward; the
+  frozen v1 config is ``imitation_g1_env_v1.ImitationG1EnvV1Cfg`` under
+  ``Isaac-Imitation-G1-v1``). The flagship class name follows the newest
   release.
 
 ``ImitationG1BaseTrackingEnvCfg`` carries everything every G1 task shares:

@@ -59,7 +59,7 @@ WORKFLOW_SOURCE_PATHS = (
     "RLOpt/rlopt/agent/causal_interface_planner.py",
     "RLOpt/rlopt/agent/skill_commander.py",
     "source/isaaclab_imitation/isaaclab_imitation/contracts/causal_planner_observation.py",
-    "source/isaaclab_imitation/isaaclab_imitation/envs/imitation_rl_env.py",
+    "source/isaaclab_imitation/isaaclab_imitation/envs/imitation_rl_env_legacy.py",
 )
 
 

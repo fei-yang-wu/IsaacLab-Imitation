@@ -480,7 +480,7 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
 )
 from isaaclab.utils import math as math_utils
-from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
@@ -733,7 +733,7 @@ def _optional_flat_tensor(
 
 
 def _resolve_existing_body_names(
-    base_env: ImitationRLEnv, requested_names: list[str]
+    base_env: ImitationRLEnvLegacy, requested_names: list[str]
 ) -> list[str]:
     names: list[str] = []
     for name in requested_names:
@@ -760,7 +760,7 @@ def _as_torch_tensor(value: Any, *, label: str) -> Tensor:
 
 
 def _mean_body_pose_errors(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     names: list[str],
 ) -> tuple[Tensor, Tensor] | None:
     if len(names) == 0:
@@ -781,7 +781,7 @@ def _mean_body_pose_errors(
 
 
 def _body_tracking_tensors(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     names: list[str],
 ) -> dict[str, Tensor] | None:
     if len(names) == 0:
@@ -814,7 +814,7 @@ def _body_tracking_tensors(
 
 
 def _tracking_metrics(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     tracked_body_names: list[str],
     ee_body_names: list[str],
@@ -1709,8 +1709,8 @@ def main(
     if not args_cli.disable_reward_clipping:
         transforms.append(RewardClipping(-10.0, 5.0))
     env = TransformedEnv(base_env=wrapped_env, transform=Compose(*transforms))
-    if not isinstance(raw_isaac_env, ImitationRLEnv):
-        raise TypeError("Expected the unwrapped gym env to be an ImitationRLEnv.")
+    if not isinstance(raw_isaac_env, ImitationRLEnvLegacy):
+        raise TypeError("Expected the unwrapped gym env to be an ImitationRLEnvLegacy.")
     base_env = raw_isaac_env
     loaded_motion_names = [
         str(name) for name in base_env.expert_trajectory_motion_names()

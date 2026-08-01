@@ -28,7 +28,7 @@ def test_reward_manager_skips_zero_weight_terms() -> None:
     source = inspect.getsource(RewardManager.compute)
     assert "weight == 0.0" in source and "continue" in source, (
         "RewardManager.compute no longer short-circuits zero-weight terms; "
-        "the Metrics/ channel in ImitationRLEnv may no longer be necessary."
+        "the Metrics/ channel in ImitationRLEnvLegacy may no longer be necessary."
     )
 
 
@@ -57,15 +57,15 @@ def test_mpjpe_metric_is_reported_in_millimetres() -> None:
     so a training curve in metres would differ from the reported number by
     1000x and invite a silent misreading.
     """
-    from isaaclab_imitation.envs.imitation_rl_env import (
+    from isaaclab_imitation.envs.imitation_rl_env_legacy import (
         _METRES_TO_MM,
-        ImitationRLEnv,
+        ImitationRLEnvLegacy,
     )
 
     assert _METRES_TO_MM == 1000.0
     for method in (
-        ImitationRLEnv._accumulate_mpjpe_metric,
-        ImitationRLEnv._emit_mpjpe_episode_metric,
+        ImitationRLEnvLegacy._accumulate_mpjpe_metric,
+        ImitationRLEnvLegacy._emit_mpjpe_episode_metric,
     ):
         names = method.__code__.co_consts
         keys = [c for c in names if isinstance(c, str) and c.startswith("Metrics/")]
@@ -101,9 +101,9 @@ def test_terminal_mpjpe_is_folded_in_before_trajectory_reassignment() -> None:
     """
     import inspect
 
-    from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+    from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 
-    source = inspect.getsource(ImitationRLEnv._reset_idx)
+    source = inspect.getsource(ImitationRLEnvLegacy._reset_idx)
     terminal_call = source.find("_accumulate_terminal_mpjpe_metric")
     assert terminal_call != -1, (
         "_reset_idx no longer folds the terminal frame into the MPJPE episode "
@@ -132,9 +132,9 @@ def test_step_excludes_just_reset_envs_from_the_new_episode_sum() -> None:
     """
     import inspect
 
-    from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+    from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 
-    source = inspect.getsource(ImitationRLEnv.step)
+    source = inspect.getsource(ImitationRLEnvLegacy.step)
     assert "exclude_env_ids" in source and "reset_terminated" in source, (
         "step() no longer excludes just-reset envs from the post-step MPJPE "
         "accumulation; their post-reset pose would be misattributed to the "

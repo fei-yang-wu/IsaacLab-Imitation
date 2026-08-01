@@ -173,7 +173,7 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
 )
 from isaaclab.utils import math as math_utils
-from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
@@ -249,22 +249,22 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     raise ValueError(msg)
 
 
-def _unwrap_imitation_env(env: object) -> ImitationRLEnv:
+def _unwrap_imitation_env(env: object) -> ImitationRLEnvLegacy:
     current = env
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if isinstance(current, ImitationRLEnv):
+        if isinstance(current, ImitationRLEnvLegacy):
             return current
         unwrapped = getattr(current, "unwrapped", None)
-        if isinstance(unwrapped, ImitationRLEnv):
+        if isinstance(unwrapped, ImitationRLEnvLegacy):
             return unwrapped
         current = (
             getattr(current, "base_env", None)
             or getattr(current, "env", None)
             or getattr(current, "_env", None)
         )
-    raise TypeError("Could not unwrap an ImitationRLEnv.")
+    raise TypeError("Could not unwrap an ImitationRLEnvLegacy.")
 
 
 def _disable_observation_corruption(env_cfg: object) -> None:
@@ -324,7 +324,7 @@ def _optional_flat_tensor(
 
 
 def _resolve_existing_body_names(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     requested_names: list[str] | tuple[str, ...],
 ) -> list[str]:
     names: list[str] = []
@@ -339,12 +339,12 @@ def _resolve_existing_body_names(
     return names
 
 
-def _body_ids_for_names(base_env: ImitationRLEnv, names: list[str]) -> list[int]:
+def _body_ids_for_names(base_env: ImitationRLEnvLegacy, names: list[str]) -> list[int]:
     return [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
 
 
 def _mean_body_pose_errors(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     names: list[str],
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     if len(names) == 0:
@@ -361,7 +361,7 @@ def _mean_body_pose_errors(
 
 
 def _body_tracking_tensors(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     names: list[str],
 ) -> dict[str, torch.Tensor] | None:
     if len(names) == 0:
@@ -386,7 +386,7 @@ def _body_tracking_tensors(
 
 
 def _tracking_metrics(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     tracked_body_names: list[str],
     ee_body_names: list[str],
@@ -489,7 +489,7 @@ def _command_reference_kwargs(
 
 def _refresh_tensordict_observations(
     td: TensorDictBase,
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
 ) -> TensorDictBase:
     observations = base_env.observation_manager.compute(update_history=False)
     for group_name, group_obs in observations.items():
@@ -511,7 +511,7 @@ def _refresh_tensordict_observations(
 
 def _certify_streamed_vanilla_equivalence(
     env: TransformedEnv,
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     collector_policy: torch.nn.Module,
     *,
     num_steps: int,
@@ -693,7 +693,7 @@ def _planner_command_terms(command_space: str) -> tuple[str, ...]:
 
 
 def _current_reference_command_terms(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -743,7 +743,7 @@ def _hold_current_command_window(
 
 
 def _build_planner_command_terms(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -790,7 +790,7 @@ def _build_planner_command_terms(
 
 
 def _maybe_publish_planner_command(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -828,7 +828,7 @@ def _maybe_publish_planner_command(
 
 
 def _command_metrics(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -901,7 +901,7 @@ def _clone_observation_terms(
 
 def _debug_compare_command_sources(
     env: TransformedEnv,
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     command_space: str,
     ee_body_names: list[str],

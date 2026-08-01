@@ -11,7 +11,7 @@ pins is visible below; the LAFAN1 dataset/manifest machinery comes from
 ``ImitationG1BaseTrackingEnvCfg`` in ``common``.
 
 The flagship ``ImitationG1EnvCfg`` name moved to the newest release
-(``imitation_g1_env_v1.py``) in the 2026-07-31 overhaul; this class keeps
+(``imitation_g1_env_v2.py``) in the 2026-08-01 flip; this class keeps
 its recipe name only.
 """
 

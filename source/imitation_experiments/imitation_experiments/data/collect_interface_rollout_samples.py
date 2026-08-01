@@ -267,7 +267,7 @@ from isaaclab.envs import (
     DirectRLEnvCfg,
     ManagerBasedRLEnvCfg,
 )
-from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
@@ -397,22 +397,22 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     )
 
 
-def _unwrap_imitation_env(env: object) -> ImitationRLEnv:
+def _unwrap_imitation_env(env: object) -> ImitationRLEnvLegacy:
     current = env
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if isinstance(current, ImitationRLEnv):
+        if isinstance(current, ImitationRLEnvLegacy):
             return current
         unwrapped = getattr(current, "unwrapped", None)
-        if isinstance(unwrapped, ImitationRLEnv):
+        if isinstance(unwrapped, ImitationRLEnvLegacy):
             return unwrapped
         current = (
             getattr(current, "base_env", None)
             or getattr(current, "env", None)
             or getattr(current, "_env", None)
         )
-    raise TypeError("Could not unwrap an ImitationRLEnv.")
+    raise TypeError("Could not unwrap an ImitationRLEnvLegacy.")
 
 
 def _disable_observation_corruption(env_cfg: object) -> None:
@@ -509,7 +509,7 @@ def _command_reference_kwargs(
 
 
 def _current_reference_command_terms(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     interface: str,
     ee_body_names: list[str],
@@ -532,7 +532,7 @@ def _current_reference_command_terms(
 
 
 def _current_demonstration_command_terms(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     interface: str,
     ee_body_names: list[str],

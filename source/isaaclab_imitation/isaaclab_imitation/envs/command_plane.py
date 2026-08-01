@@ -1,7 +1,7 @@
-"""Command-plane components for the v2 env fork (``ImitationRLEnvV2``).
+"""Command-plane components for the v2 env fork (``ImitationRLEnv``).
 
 Owned components of the published-command surface that the legacy env
-(``envs/imitation_rl_env.py``) still implements inline for v0/v1:
+(``envs/imitation_rl_env_legacy.py``) still implements inline for v0/v1:
 
 - :class:`LatentCommandBuffer`: the agent-published latent skill command
   buffer (z + phase), served to the ``skill`` command term, the RLOpt
@@ -24,7 +24,7 @@ import isaaclab.utils.math as math_utils
 import torch
 
 if TYPE_CHECKING:
-    from isaaclab_imitation.envs.imitation_rl_env_v2 import ImitationRLEnvV2
+    from isaaclab_imitation.envs.imitation_rl_env_v2 import ImitationRLEnv
 
 
 class LatentCommandBuffer:
@@ -117,7 +117,7 @@ class HeldCommandPlane:
 
     def __init__(
         self,
-        env: ImitationRLEnvV2,
+        env: ImitationRLEnv,
         *,
         num_envs: int,
         device: torch.device,

@@ -3,27 +3,28 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``Isaac-Imitation-G1-v2``: work-in-progress CommandManager-based redesign.
+"""``Isaac-Imitation-G1-v2``: the default G1 tracking environment (flagship).
 
-First increments of the v2 overhaul: identical to ``Isaac-Imitation-G1-v1``
-(:class:`~.imitation_g1_env_v1.ImitationG1EnvCfg`) except that the motion
-tracking command and the agent-published latent skill command are additionally
-exposed through Isaac Lab's native CommandManager as the ``motion``
-(``mdp.MotionCommandCfg``) and ``skill`` (``mdp.SkillCommandCfg``) terms. Both
-are adapters over the existing ImitationRLEnv machinery: ``motion`` publishes
-the 67-D explicit command tensor via ``command_manager.get_command("motion")``
-and owns the tracking metrics, so the CommandManager logs
-``Metrics/motion/...`` natively (the beyondmimic/SONIC idiom); ``skill``
-serves the env's agent-latent buffer via
+The v1 config (:class:`~.imitation_g1_env_v1.ImitationG1EnvV1Cfg`) plus the
+CommandManager increment: the motion tracking command and the agent-published
+latent skill command are exposed through Isaac Lab's native CommandManager as
+the ``motion`` (``mdp.MotionCommandCfg``) and ``skill`` (``mdp.SkillCommandCfg``)
+terms. Both are adapters over the v2 env's composed planes: ``motion``
+publishes the 67-D explicit command tensor via
+``command_manager.get_command("motion")`` and owns the tracking metrics, so
+the CommandManager logs ``Metrics/motion/...`` natively (the
+beyondmimic/SONIC idiom); ``skill`` serves the agent-latent buffer via
 ``command_manager.get_command("skill")`` and carries the published/hold
 bookkeeping from ``mdp.PublishedCommandTerm``. Under a
 ``*_chunk_current_slot`` ``policy_command_mode`` (and only then) a third term,
-``chunk`` (``mdp.HeldChunkCommandCfg``), adapts over the env's held-window
-machinery and serves the consumed packet slot. Behavior is otherwise
-byte-identical to v1.
+``chunk`` (``mdp.HeldChunkCommandCfg``), adapts over the held-window machinery
+and serves the consumed packet slot. Behavior is otherwise byte-identical to
+v1.
 
-The flagship class/task name moves here when v2 supersedes v1 as the default
-(see the versioning convention in ``config/g1/__init__.py``).
+Since 2026-08-01 this is the default task surface: the flagship
+``ImitationG1EnvCfg`` class name lives here, the task registration points at
+the composed ``ImitationRLEnv`` env, and ``-G1-v1`` stays frozen at its exact
+old kwargs (see the versioning convention in ``config/g1/__init__.py``).
 """
 
 from isaaclab.utils.configclass import configclass
@@ -32,7 +33,7 @@ from ... import mdp
 from ...mdp.commands import HeldChunkCommandCfg, MotionCommandCfg, SkillCommandCfg
 from .common.constants import G1_29DOF_ISAACLAB_JOINT_NAMES, G1_TRACKED_BODY_NAMES
 from .common.tracking_env import _bind_lafan_track_from_dict
-from .imitation_g1_env_v1 import ImitationG1EnvCfg
+from .imitation_g1_env_v1 import ImitationG1EnvV1Cfg
 
 # The `*_chunk_current_slot` policy command modes (the same set the base cfg's
 # `__post_init__` validation accepts next to "reference"): only under one of
@@ -84,8 +85,8 @@ class G1MotionCommandsCfg:
 
 
 @configclass
-class ImitationG1EnvV2Cfg(ImitationG1EnvCfg):
-    """v2 WIP: the v1 surface plus the native ``motion`` command term."""
+class ImitationG1EnvCfg(ImitationG1EnvV1Cfg):
+    """v2 default: the v1 surface plus the native ``motion`` command term."""
 
     # pyrefly: ignore[bad-override-mutable-attribute]  # configclass override idiom
     commands: G1MotionCommandsCfg = G1MotionCommandsCfg()
@@ -178,6 +179,10 @@ class ImitationG1EnvV2Cfg(ImitationG1EnvCfg):
         self._rebind_command_manager_backed_terms()
 
 
-_bind_lafan_track_from_dict(ImitationG1EnvV2Cfg)
+_bind_lafan_track_from_dict(ImitationG1EnvCfg)
 
-__all__ = ["G1MotionCommandsCfg", "ImitationG1EnvV2Cfg"]
+# Back-compat alias: configs recorded against the pre-flip
+# `imitation_g1_env_v2:ImitationG1EnvV2Cfg` entry point keep resolving.
+ImitationG1EnvV2Cfg = ImitationG1EnvCfg
+
+__all__ = ["G1MotionCommandsCfg", "ImitationG1EnvCfg", "ImitationG1EnvV2Cfg"]

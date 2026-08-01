@@ -119,7 +119,7 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
 )
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
-from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
@@ -183,22 +183,22 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     raise ValueError(msg)
 
 
-def _unwrap_imitation_env(env) -> ImitationRLEnv:
+def _unwrap_imitation_env(env) -> ImitationRLEnvLegacy:
     current = env
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if isinstance(current, ImitationRLEnv):
+        if isinstance(current, ImitationRLEnvLegacy):
             return current
         unwrapped = getattr(current, "unwrapped", None)
-        if isinstance(unwrapped, ImitationRLEnv):
+        if isinstance(unwrapped, ImitationRLEnvLegacy):
             return unwrapped
         current = (
             getattr(current, "base_env", None)
             or getattr(current, "env", None)
             or getattr(current, "_env", None)
         )
-    raise TypeError("Could not unwrap ImitationRLEnv.")
+    raise TypeError("Could not unwrap ImitationRLEnvLegacy.")
 
 
 def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
@@ -233,7 +233,7 @@ def _disable_observation_corruption(env_cfg: object) -> None:
             group.enable_corruption = False
 
 
-def _infer_output_fps(base_env: ImitationRLEnv, env_cfg: object) -> float:
+def _infer_output_fps(base_env: ImitationRLEnvLegacy, env_cfg: object) -> float:
     if args_cli.fps > 0.0:
         return float(args_cli.fps)
 
@@ -262,7 +262,7 @@ def _configured_step_dt(env_cfg: object) -> float | None:
 
 
 def _snapshot_robot_state(
-    base_env: ImitationRLEnv, env_id: int = 0
+    base_env: ImitationRLEnvLegacy, env_id: int = 0
 ) -> dict[str, np.ndarray]:
     robot_data = base_env.robot.data
     return {
