@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Fixed-seed A/B equivalence certificate: legacy ImitationRLEnv vs ImitationRLEnvV2.
+"""Fixed-seed A/B equivalence certificate: legacy vs v2 env classes.
 
 Both env classes accept the same ``-G1-v2`` cfg, so the fork's switch-over
 condition is a fixed-seed A/B: run the identical cfg and action sequence once
-with the legacy class and once with ``ImitationRLEnvV2`` (one class per
-process), then ``torch.equal``-compare the full observation dict, rewards,
-dones, and the ``motion`` / ``skill`` command-manager commands at every step.
+with the legacy class (``ImitationRLEnvLegacy``) and once with the flagship
+``ImitationRLEnv`` (one class per process), then ``torch.equal``-compare the
+full observation dict, rewards, dones, and the ``motion`` / ``skill``
+command-manager commands at every step.
 
 Examples (run from the repository root):
 
@@ -77,7 +78,7 @@ def _capture(args: argparse.Namespace) -> None:
     from isaaclab_tasks.utils import parse_env_cfg
 
     import isaaclab_imitation.tasks  # noqa: F401
-    from isaaclab_imitation.envs import ImitationRLEnv, ImitationRLEnvV2
+    from isaaclab_imitation.envs import ImitationRLEnv, ImitationRLEnvLegacy
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -91,7 +92,7 @@ def _capture(args: argparse.Namespace) -> None:
     )
     setattr(env_cfg, "lafan1_manifest_path", str(args.manifest.resolve()))
 
-    env_cls = ImitationRLEnv if args.class_name == "legacy" else ImitationRLEnvV2
+    env_cls = ImitationRLEnvLegacy if args.class_name == "legacy" else ImitationRLEnv
     env = env_cls(env_cfg)
 
     action_gen = torch.Generator(device=env.device).manual_seed(args.seed)

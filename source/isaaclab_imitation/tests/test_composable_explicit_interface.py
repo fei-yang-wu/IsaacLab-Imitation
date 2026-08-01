@@ -6,8 +6,8 @@ import pytest
 import torch
 from tensordict import TensorDict
 
-from isaaclab_imitation.envs import imitation_rl_env
-from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.envs import imitation_rl_env_legacy
+from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
     G1ImitationRLOptIPMDConfig,
     command_component_input_keys,
@@ -132,7 +132,7 @@ def test_achieved_macro_state_supports_root_qpos_components() -> None:
     history = torch.full((2, 10, 38), -2.0)
     env = _fake_achieved_env(slices=slices, state=state, state_history=history)
 
-    result = ImitationRLEnv.current_achieved_macro_transition_batch(
+    result = ImitationRLEnvLegacy.current_achieved_macro_transition_batch(
         env, horizon_steps=10, state_history_steps=9
     )
 
@@ -167,12 +167,12 @@ def test_achieved_macro_state_supports_root_keypoint_pose_components(
     )
     achieved_ori = torch.arange(60, dtype=torch.float32).reshape(2, 5, 6)
     monkeypatch.setattr(
-        imitation_rl_env,
+        imitation_rl_env_legacy,
         "_get_mdp_compiled_module",
         lambda: SimpleNamespace(quat_to_rot6d_flat=lambda quat: achieved_ori),
     )
 
-    result = ImitationRLEnv.current_achieved_macro_transition_batch(
+    result = ImitationRLEnvLegacy.current_achieved_macro_transition_batch(
         env, horizon_steps=10, state_history_steps=9
     )
 

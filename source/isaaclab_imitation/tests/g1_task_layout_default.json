@@ -952,7 +952,7 @@
     "anchor_body": "pelvis",
     "command_hold_steps": 0,
     "curriculum": null,
-    "env_cfg_class": "ImitationG1EnvCfg",
+    "env_cfg_class": "ImitationG1EnvV1Cfg",
     "events_class": "G1SonicEventCfg",
     "groups": {
       "critic": [
@@ -1186,7 +1186,7 @@
     "anchor_body": "pelvis",
     "command_hold_steps": 0,
     "curriculum": null,
-    "env_cfg_class": "ImitationG1EnvCfg",
+    "env_cfg_class": "ImitationG1EnvV1Cfg",
     "events_class": "G1SonicEventCfg",
     "groups": {
       "critic": [
@@ -1266,7 +1266,7 @@
     "anchor_body": "pelvis",
     "command_hold_steps": 0,
     "curriculum": null,
-    "env_cfg_class": "ImitationG1EnvV2Cfg",
+    "env_cfg_class": "ImitationG1EnvCfg",
     "events_class": "G1SonicEventCfg",
     "groups": {
       "critic": [

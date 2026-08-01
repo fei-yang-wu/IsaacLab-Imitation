@@ -216,7 +216,7 @@ from isaaclab.envs import (
 )
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.dict import print_dict
-from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
 )
@@ -296,22 +296,22 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     raise ValueError(msg)
 
 
-def _unwrap_imitation_env(env) -> ImitationRLEnv:
+def _unwrap_imitation_env(env) -> ImitationRLEnvLegacy:
     current = env
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if isinstance(current, ImitationRLEnv):
+        if isinstance(current, ImitationRLEnvLegacy):
             return current
         current_unwrapped = getattr(current, "unwrapped", None)
-        if isinstance(current_unwrapped, ImitationRLEnv):
+        if isinstance(current_unwrapped, ImitationRLEnvLegacy):
             return current_unwrapped
         current = (
             getattr(current, "base_env", None)
             or getattr(current, "env", None)
             or getattr(current, "_env", None)
         )
-    raise TypeError("Could not unwrap an ImitationRLEnv from the provided environment.")
+    raise TypeError("Could not unwrap an ImitationRLEnvLegacy from the provided environment.")
 
 
 def _create_role_markers() -> VisualizationMarkers:
@@ -336,7 +336,7 @@ def _create_role_markers() -> VisualizationMarkers:
 
 
 def _update_role_markers(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     role_markers: VisualizationMarkers,
     *,
     reference_root_pos_w: torch.Tensor | None = None,
@@ -369,7 +369,7 @@ def _create_reference_body_markers() -> VisualizationMarkers:
 
 
 def _reference_body_pose_keys(reference) -> tuple[str, str | None]:
-    # Mirror ImitationRLEnv._initialize_mdp_fast_paths/_expert_body_pose_fields.
+    # Mirror ImitationRLEnvLegacy._initialize_mdp_fast_paths/_expert_body_pose_fields.
     pos_key = "xpos" if "xpos" in reference else "body_pos_w"
     quat_key = "xquat" if "xquat" in reference else "body_quat_w"
     if reference.get(pos_key) is None:
@@ -382,7 +382,7 @@ def _reference_body_pose_keys(reference) -> tuple[str, str | None]:
 
 
 def _reference_body_positions_w(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     source_env_id: int,
     target_env_id: int,
@@ -405,7 +405,7 @@ def _reference_body_positions_w(
 
 
 def _update_reference_body_markers(
-    base_env: ImitationRLEnv, reference_body_markers: VisualizationMarkers
+    base_env: ImitationRLEnvLegacy, reference_body_markers: VisualizationMarkers
 ) -> tuple[torch.Tensor | None, str, int, int]:
     positions_w, pos_key = _reference_body_positions_w(
         base_env, source_env_id=POLICY_ENV_ID, target_env_id=REFERENCE_ENV_ID
@@ -425,7 +425,7 @@ def _update_reference_body_markers(
 
 
 def _set_comparison_camera(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     reference_root_pos_w: torch.Tensor | None = None,
 ) -> None:
@@ -506,14 +506,14 @@ def _disable_reward_terms(env_cfg) -> None:
         )
 
 
-def _ordered_trajectories(base_env: ImitationRLEnv) -> list[tuple[str, str, str]]:
+def _ordered_trajectories(base_env: ImitationRLEnvLegacy) -> list[tuple[str, str, str]]:
     ordered = getattr(base_env.trajectory_manager, "_ordered_traj_list", None)
     if not ordered:
         raise RuntimeError("The trajectory manager does not expose trajectories.")
     return [(str(dataset), str(motion), str(traj)) for dataset, motion, traj in ordered]
 
 
-def _print_trajectories(base_env: ImitationRLEnv) -> None:
+def _print_trajectories(base_env: ImitationRLEnvLegacy) -> None:
     print("[INFO] Available trajectories:")
     for rank, (dataset, motion, trajectory) in enumerate(
         _ordered_trajectories(base_env)
@@ -521,7 +521,7 @@ def _print_trajectories(base_env: ImitationRLEnv) -> None:
         print(f"{rank:04d}\t{dataset}\t{motion}\t{trajectory}")
 
 
-def _resolve_policy_trajectory_rank(base_env: ImitationRLEnv) -> int | None:
+def _resolve_policy_trajectory_rank(base_env: ImitationRLEnvLegacy) -> int | None:
     if args_cli.policy_trajectory_rank is not None:
         rank = int(args_cli.policy_trajectory_rank)
         num_trajectories = len(_ordered_trajectories(base_env))
@@ -569,7 +569,7 @@ def _resolve_policy_trajectory_rank(base_env: ImitationRLEnv) -> int | None:
 
 
 def _force_policy_trajectory_on_reset(
-    base_env: ImitationRLEnv,
+    base_env: ImitationRLEnvLegacy,
     *,
     rank: int,
     start_step: int,

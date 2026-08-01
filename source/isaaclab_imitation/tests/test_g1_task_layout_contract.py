@@ -121,8 +121,9 @@ def test_stable_explicit_root_qpos_cli_override_layout(task_id: str) -> None:
     ``_refresh_command_observation_terms``; this test exercises that exact
     sequence without booting a simulation.
 
-    Parametrized over both ``-G1-v1`` (the default) and ``-Latent-v0`` (kept
-    for back-compat) -- they share ``_LATENT_STABLE_TASK_KWARGS``, but only
+    Parametrized over both ``-G1-v1`` (frozen since 2026-08-01) and
+    ``-Latent-v0`` (kept for back-compat) -- they share
+    ``_LATENT_STABLE_TASK_KWARGS``, but only
     this exercises that the override path (not just the recorded layout)
     behaves identically for both ids.
     """

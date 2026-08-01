@@ -4,9 +4,10 @@ Recipe (reward/termination/reset design) is the only axis with separate env
 classes; the latent-vs-explicit command choice is pure configuration
 (``env.command_mode`` plus the agent entry point). Three recipes exist:
 
-- **Stable** (``imitation_g1_env_v1.ImitationG1EnvCfg`` -- the flagship
+- **Stable** (``imitation_g1_env_v2.ImitationG1EnvCfg`` -- the flagship
   class name follows the newest release): SONIC release recipe with this
-  repo's legacy reset distribution -- the current default.
+  repo's legacy reset distribution -- the current default (``-G1-v2``,
+  2026-08-01 onward; ``-G1-v1`` is frozen at its exact old kwargs).
 - **Strict** (``common.tracking_env._apply_strict_recipe``): strict SONIC
   termination functions on the legacy scaffolding -- pins
   ``variants.strict.ImitationG1StrictTrackEnvCfg`` (explicit) and
@@ -15,11 +16,13 @@ classes; the latent-vs-explicit command choice is pure configuration
   original torso-anchored loose-termination tracking recipe.
 
 Module layout: shared components and the base machinery in ``common/``; the
-two releases as standalone, fully spelled-out assemblies in
-``imitation_g1_env_v0.py`` and ``imitation_g1_env_v1.py``; every non-default
-surface in ``variants/`` (one standalone file per family, composing from
-``common`` only). The four historical ``imitation_g1*_env_cfg`` modules
-remain as re-export shims for old imports and serialized configs.
+releases as standalone, fully spelled-out assemblies in
+``imitation_g1_env_v0.py`` (LafanTrack), ``imitation_g1_env_v1.py`` (the
+frozen v1, flagship name moved to v2) and ``imitation_g1_env_v2.py`` (the
+flagship ``ImitationG1EnvCfg``); every non-default surface in ``variants/``
+(one standalone file per family, composing from ``common`` only). The four
+historical ``imitation_g1*_env_cfg`` modules remain as re-export shims for
+old imports and serialized configs.
 
 Registrations below are grouped: current defaults first, then the Strict
 recipe pins, then deprecated/frozen pins kept for reproducibility.
@@ -143,7 +146,7 @@ _LATENT_STRICT_TASK_KWARGS = {
 # `failure_rate_max_over_mean=50`) and strict-from-scratch terminations. The
 # 2026-07-27 reset-sampling screen showed SONIC's full-trajectory
 # adaptive-failure sampler, not its rewards or actuators, was what cost ~5.6x
-# episode length at 4096 environments; see `imitation_g1_env_v1.ImitationG1EnvCfg`.
+# episode length at 4096 environments; see `imitation_g1_env_v1.ImitationG1EnvV1Cfg`.
 #
 # The agent side stays the SONIC input-key contract
 # (`G1ImitationLatentSonicRLOptIPMDConfig`, local optimizer contract), matching
@@ -255,47 +258,57 @@ _LATENT_ABLATION_TASK_KWARGS = {
 # and is kept only for its own back-compat reasons (see its comment below).
 # ---------------------------------------------------------------------------
 
-# v2 overhaul surface (2026-08-01): the v1 config plus the CommandManager
-# increment -- a native `motion` command term (`mdp.MotionCommandCfg`) that
-# exposes the 67-D explicit tracking command via
-# `command_manager.get_command("motion")` and logs `Metrics/motion/...`
-# natively, and a `skill` term serving the agent-latent buffer. From
-# 2026-08-01 the env entry point is the composed `ImitationRLEnvV2`
-# (ExpertDataPlane + command planes); behavior is verified identical to the
-# legacy env under the same cfg by the fixed-seed A/B certificate. The id
-# remains non-default until step 6 flips the default task.
+# Stable recipe, command space configured -- THE DEFAULT latent task
+# (2026-08-01 onward; supersedes `-G1-v1`, which stays frozen at its exact
+# old kwargs below). No `Latent` tag: under the recipe x command-config
+# architecture the command space is configuration, not identity. Defaults to
+# the latent 258-D command (the class default; unlike explicit `-G1-v0`);
+# select vanilla with `env.command_mode=explicit` +
+# `env.command_observation_terms` + `agent.ipmd.use_latent_command=false` +
+# `agent.command_components`. Cite this id in protocols, gates, and paper
+# commands so recorded runs and checkpoints stay reproducible even after a
+# newer vN becomes the default.
+#
+# The v2 surface: the v1 config plus the CommandManager increment -- a native
+# `motion` command term (`mdp.MotionCommandCfg`) that exposes the 67-D
+# explicit tracking command via `command_manager.get_command("motion")` and
+# logs `Metrics/motion/...` natively, and a `skill` term serving the
+# agent-latent buffer. The env entry point is the composed flagship
+# `ImitationRLEnv` (ExpertDataPlane + command planes); behavior is verified
+# identical to the legacy env under the same cfg by the fixed-seed A/B
+# certificate (`scripts/audit/certify_v2_env_equivalence.py`).
 gym.register(
     id="Isaac-Imitation-G1-v2",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnvV2",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
     disable_env_checker=True,
     kwargs={
         **_LATENT_STABLE_TASK_KWARGS,
-        "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v2:ImitationG1EnvV2Cfg"),
+        "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v2:ImitationG1EnvCfg"),
     },
 )
 
-# Stable recipe, command space configured -- the default latent task
-# (2026-07-31 onward, until superseded by a future -G1-v2+). No `Latent` tag:
-# under the recipe x command-config architecture the command space is
-# configuration, not identity. Defaults to the latent 258-D command (the
-# class default; unlike explicit `-G1-v0`); select vanilla with
-# `env.command_mode=explicit` + `env.command_observation_terms` +
-# `agent.ipmd.use_latent_command=false` + `agent.command_components`. Cite
-# this id in protocols, gates, and paper commands so recorded runs and
-# checkpoints stay reproducible even after a newer vN becomes the default.
+# Stable recipe, command space configured -- FROZEN (superseded as the
+# default by `-G1-v2` on 2026-08-01; see the versioning convention above).
+# Still registered with its exact old kwargs (including the
+# `imitation_g1_env_v1:ImitationG1EnvCfg` env-cfg string, which resolves via
+# the module's back-compat alias) and the legacy env entry point; do not
+# cite this id for new work. Defaults to the latent 258-D command; select
+# vanilla with `env.command_mode=explicit` + `env.command_observation_terms`
+# + `agent.ipmd.use_latent_command=false` + `agent.command_components`.
 gym.register(
     id="Isaac-Imitation-G1-v1",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_STABLE_TASK_KWARGS,
 )
 
-# Stable recipe x latent 258-D command -- ordinary alias of `-G1-v1` above,
-# kept for back-compat with commands and checkpoints recorded before
-# 2026-07-31. Same kwargs; new work should cite `-G1-v1` instead.
+# Stable recipe x latent 258-D command -- ordinary alias of the FROZEN
+# `-G1-v1` above, kept for back-compat with commands and checkpoints
+# recorded before 2026-07-31. Same kwargs; new work should cite `-G1-v2`
+# instead.
 gym.register(
     id="Isaac-Imitation-G1-Latent-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_STABLE_TASK_KWARGS,
 )
@@ -303,7 +316,7 @@ gym.register(
 # LafanTrack recipe x explicit full-body command -- the default vanilla task.
 gym.register(
     id="Isaac-Imitation-G1-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_VANILLA_TASK_KWARGS,
 )
@@ -311,7 +324,7 @@ gym.register(
 # LafanTrack recipe x explicit full-body command -- explicit-name alias of G1-v0.
 gym.register(
     id="Isaac-Imitation-G1-LafanTrack-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_VANILLA_TASK_KWARGS,
 )
@@ -323,7 +336,7 @@ gym.register(
 # Strict recipe x explicit command; see _VANILLA_STRICT_TASK_KWARGS.
 gym.register(
     id="Isaac-Imitation-G1-Strict-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_VANILLA_STRICT_TASK_KWARGS,
 )
@@ -335,7 +348,7 @@ gym.register(
 # that work; the default id no longer reproduces it.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Strict-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_STRICT_TASK_KWARGS,
 )
@@ -348,7 +361,7 @@ gym.register(
 # _LATENT_LEGACY_TASK_KWARGS.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Legacy-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_LEGACY_TASK_KWARGS,
 )
@@ -357,7 +370,7 @@ gym.register(
 # the SONIC release surface x latent command; see _LATENT_SONIC_TASK_KWARGS.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Sonic-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_SONIC_TASK_KWARGS,
 )
@@ -372,7 +385,7 @@ gym.register(
 # `Isaac-Imitation-G1-Latent-v0` is the environment.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Sonic-NoHist-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs={
         **_LATENT_SONIC_TASK_KWARGS,
@@ -386,7 +399,7 @@ gym.register(
 # _LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS.
 gym.register(
     id="Isaac-Imitation-G1-Latent-SonicOfficialFSQ-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_SONIC_OFFICIAL_FSQ_TASK_KWARGS,
 )
@@ -397,7 +410,7 @@ gym.register(
 # the then-default strict surface.
 gym.register(
     id="Isaac-Imitation-G1-Latent-History-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs={
         **_LATENT_STRICT_TASK_KWARGS,
@@ -416,7 +429,7 @@ gym.register(
 # LafanTrack-lineage latent surface x held 128-D future-goal command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Goal-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_GOAL_TASK_KWARGS,
 )
@@ -424,7 +437,7 @@ gym.register(
 # LafanTrack-lineage latent surface x 256-D future-window CVAE command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-FutureCVAE-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_FUTURE_CVAE_TASK_KWARGS,
 )
@@ -432,7 +445,7 @@ gym.register(
 # LafanTrack-lineage latent surface x 64-D per-control-step VQ token packets.
 gym.register(
     id="Isaac-Imitation-G1-Latent-PerStepVQ-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_PER_STEP_VQ_TASK_KWARGS,
 )
@@ -440,7 +453,7 @@ gym.register(
 # LafanTrack-lineage latent surface x causal 9-step-window VQ-VAE command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-VQVAE-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_VQVAE_TASK_KWARGS,
 )
@@ -448,7 +461,7 @@ gym.register(
 # Strict recipe x 66-D (64 code + 2 phase) reconstruction-ablation command.
 gym.register(
     id="Isaac-Imitation-G1-Latent-Ablation-v0",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvLegacy",
     disable_env_checker=True,
     kwargs=_LATENT_ABLATION_TASK_KWARGS,
 )

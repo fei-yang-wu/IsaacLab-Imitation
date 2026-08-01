@@ -3,13 +3,19 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``Isaac-Imitation-G1-v1``: the current default G1 tracking environment.
+"""``Isaac-Imitation-G1-v1``: the frozen v1 G1 tracking environment.
 
 Skill-conditioned tracker on the SONIC release recipe with this repo's
 legacy reset distribution. The command space is configuration, not identity:
 the class defaults to the latent 258-D skill command, and
 ``env.command_mode=explicit`` + ``command_observation_terms`` turn the same
 surface into an explicit tracker.
+
+Superseded as the default by ``-G1-v2`` on 2026-08-01 (the flagship
+``ImitationG1EnvCfg`` name moved to ``imitation_g1_env_v2.py``); this module
+keeps the exact class as ``ImitationG1EnvV1Cfg`` (with a back-compat
+``ImitationG1EnvCfg`` alias) so the frozen ``-G1-v1`` task and old
+serialized configs keep resolving.
 
 This file is the complete v1 release definition: it inherits only the
 generic machinery base (``ImitationG1BaseTrackingEnvCfg``) and states every
@@ -35,7 +41,7 @@ from .common.tracking_env import (
 
 
 @configclass
-class ImitationG1EnvCfg(ImitationG1BaseTrackingEnvCfg):
+class ImitationG1EnvV1Cfg(ImitationG1BaseTrackingEnvCfg):
     """Skill-conditioned 29-DoF G1 tracking env (`Isaac-Imitation-G1-v1`).
 
     Validated 2026-07-27: the full SONIC release recipe, taking back only the
@@ -126,6 +132,12 @@ class ImitationG1EnvCfg(ImitationG1BaseTrackingEnvCfg):
         _apply_pelvis_protocol(self, failure_rate_max_over_mean=50.0)
 
 
-_bind_lafan_track_from_dict(ImitationG1EnvCfg)
+_bind_lafan_track_from_dict(ImitationG1EnvV1Cfg)
 
-__all__ = ["ImitationG1EnvCfg"]
+# Back-compat alias: old imports and serialized configs that resolve
+# `imitation_g1_env_v1:ImitationG1EnvCfg` (including the frozen
+# `_LATENT_STABLE_TASK_KWARGS` entry-point string) keep resolving to the v1
+# class. The flagship `ImitationG1EnvCfg` name now belongs to the v2 module.
+ImitationG1EnvCfg = ImitationG1EnvV1Cfg
+
+__all__ = ["ImitationG1EnvCfg", "ImitationG1EnvV1Cfg"]

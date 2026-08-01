@@ -1,12 +1,12 @@
 """ExpertDataPlane: the reference-data component of the v2 env fork.
 
-Owned component of :class:`~isaaclab_imitation.envs.imitation_rl_env_v2.ImitationRLEnvV2`
+Owned component of :class:`~isaaclab_imitation.envs.imitation_rl_env_v2.ImitationRLEnv`
 that replaces the legacy env's inline reference machinery: dataset load,
 reference metadata / joint alignment, every MDP fast-path cache and accessor,
 frame refresh, alignment transforms, expert window / goal building, expert
 batch / macro-transition sampling, the parked reward-input cache, the MPJPE
 metric computation, and the offline-dataset mapper params. The legacy env
-(``envs/imitation_rl_env.py``) stays byte-untouched for v0/v1; this plane is
+(``envs/imitation_rl_env_legacy.py``) stays byte-frozen for v0/v1; this plane is
 only used by the v2 env.
 
 Construction is two-phase, mirroring the legacy env's lifecycle:
@@ -46,7 +46,7 @@ from isaaclab_imitation.assets.robots import UNITREE_G1_WBT_29DOF_DATASET_JOINT_
 from tensordict import TensorDict
 
 if TYPE_CHECKING:
-    from isaaclab_imitation.envs.imitation_rl_env_v2 import ImitationRLEnvV2
+    from isaaclab_imitation.envs.imitation_rl_env_v2 import ImitationRLEnv
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ class ExpertDataPlane:
     See the module docstring for the ownership split and lifecycle.
     """
 
-    def __init__(self, cfg: Any, env: ImitationRLEnvV2) -> None:
+    def __init__(self, cfg: Any, env: ImitationRLEnv) -> None:
         """Phase 1: load the dataset and build the trajectory manager.
 
         Runs in the env's ``__init__`` before ``super().__init__`` (the

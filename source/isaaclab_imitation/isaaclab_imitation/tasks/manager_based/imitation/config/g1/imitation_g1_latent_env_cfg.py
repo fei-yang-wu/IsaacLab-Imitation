@@ -21,7 +21,7 @@ from .common.observations_latent import (
     G1LatentObservationCfg,
     G1SonicLatentObservationCfg,
 )
-from .imitation_g1_env_v1 import ImitationG1EnvCfg
+from .imitation_g1_env_v1 import ImitationG1EnvV1Cfg
 from .variants.future_cvae import (
     ImitationG1LatentFutureCVAEEnvCfg,
     ImitationG1LatentPerStepVQEnvCfg,
@@ -37,11 +37,12 @@ from .variants.strict import (
     ImitationG1LatentStrictHistoryEnvCfg,
 )
 
-# Historical names for the current default (renamed to the flagship
-# `ImitationG1EnvCfg` in the 2026-07-31 overhaul); kept resolvable for old
-# serialized configs and entry-point strings.
-ImitationG1LatentStableEnvCfg = ImitationG1EnvCfg
-ImitationG1StableEnvCfg = ImitationG1EnvCfg
+# Historical names for the stable (now frozen) v1 config (the flagship
+# `ImitationG1EnvCfg` name moved to the v2 module in the 2026-08-01 flip);
+# kept resolvable for old serialized configs and entry-point strings.
+ImitationG1LatentStableEnvCfg = ImitationG1EnvV1Cfg
+ImitationG1StableEnvCfg = ImitationG1EnvV1Cfg
+ImitationG1EnvCfg = ImitationG1EnvV1Cfg
 
 __all__ = [
     "G1LatentObservationCfg",

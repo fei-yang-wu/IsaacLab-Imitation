@@ -172,8 +172,9 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   implementation details. Ask the user to confirm the proposed group name
   before launching the run.
 - For IPMD/Bilinear representation-learning work, use the latent task surface
-  `Isaac-Imitation-G1-v1` (the default; `Isaac-Imitation-G1-Latent-v0` is the
-  same config, kept as an ordinary back-compat alias) unless the user
+  `Isaac-Imitation-G1-v2` (the default since 2026-08-01; the frozen
+  `Isaac-Imitation-G1-v1` and its back-compat alias
+  `Isaac-Imitation-G1-Latent-v0` keep the pre-v2 surface) unless the user
   explicitly requests vanilla. Do not submit `IPMD_BILINEAR` comparison jobs
   on `Isaac-Imitation-G1-v0`; the vanilla bilinear path is debug-only.
 - G1 latent task versioning (2026-07-31 onward): "the default" is always the

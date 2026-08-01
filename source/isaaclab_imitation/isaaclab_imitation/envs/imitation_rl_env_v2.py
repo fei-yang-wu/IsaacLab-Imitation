@@ -1,9 +1,10 @@
-"""ImitationRLEnvV2: the clean, composed env of the v2 fork.
+"""ImitationRLEnv: the clean, composed env of the v2 fork (flagship).
 
-The 4,997-line ``envs/imitation_rl_env.py`` stays byte-untouched as the
-legacy env for v0/v1; this class is the new reference env used only by the
-``-G1-v2`` task registration. It composes two owned components instead of
-carrying a ~5,000-line monolith:
+The 4,997-line ``envs/imitation_rl_env_legacy.py`` is the byte-frozen LEGACY
+env for the v0/v1 tasks (class :class:`ImitationRLEnvLegacy`); this module
+holds the flagship env class :class:`ImitationRLEnv`, used only by the
+``-G1-v2`` task registration (the default latent task since 2026-08-01). It
+composes two owned components instead of carrying a ~5,000-line monolith:
 
 - :class:`~isaaclab_imitation.envs.expert_data_plane.ExpertDataPlane`:
   dataset load, reference metadata / joint alignment, all MDP fast paths,
@@ -86,12 +87,12 @@ def _normalize_policy_command_mode(value: str) -> str:
     return mode
 
 
-class ImitationRLEnvV2(ManagerBasedRLEnv):
+class ImitationRLEnv(ManagerBasedRLEnv):
     """Reference-tracking env composing the ExpertDataPlane and command planes.
 
-    Config attributes: identical to :class:`ImitationRLEnv` (both classes
-    accept the same v2 cfg); see the legacy class docstring for the full
-    field reference. The lifecycle order mirrors the legacy env so that
+    Config attributes: identical to :class:`ImitationRLEnvLegacy` (both
+    classes accept the same v2 cfg); see the legacy class docstring for the
+    full field reference. The lifecycle order mirrors the legacy env so that
     observations, rewards, terminations, and command values are
     behaviorally identical under the same cfg.
     """
@@ -1362,3 +1363,9 @@ class ImitationRLEnvV2(ManagerBasedRLEnv):
             self.reset_time_outs,
             self.extras,
         )
+
+
+# Back-compat alias: the pre-flip (2026-08-01) `-G1-v2` registration and any
+# serialized config recorded against `isaaclab_imitation.envs:ImitationRLEnvV2`
+# resolve to the same class.
+ImitationRLEnvV2 = ImitationRLEnv

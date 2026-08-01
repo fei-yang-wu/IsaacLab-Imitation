@@ -168,9 +168,15 @@ def _normalize_dataset_keys(raw: Any) -> list[str] | None:
     return names
 
 
-class ImitationRLEnv(ManagerBasedRLEnv):
+class ImitationRLEnvLegacy(ManagerBasedRLEnv):
     """
     Simplified RL environment for imitation learning with clean dataset interface.
+
+    LEGACY env: byte-frozen reference implementation for the v0/v1 tasks.
+    The v2 fork (:class:`~isaaclab_imitation.envs.imitation_rl_env_v2.ImitationRLEnv`)
+    composes the ExpertDataPlane and the command planes instead of carrying
+    this monolith; the two are equivalence-certified under the same cfg
+    (``scripts/audit/certify_v2_env_equivalence.py``).
 
     Config attributes (cfg):
         dataset_path: str, path to Zarr dataset directory (or directory containing trajectories.zarr)
@@ -234,7 +240,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         return [entry for entry in entries if isinstance(entry, dict)]
 
     def __init__(self, cfg: Any, render_mode: str | None = None, **kwargs: Any) -> None:
-        """Initialize the simplified ImitationRLEnv."""
+        """Initialize the simplified legacy ImitationRLEnv."""
         # Get device
         device = cfg.sim.device
         num_envs = cfg.scene.num_envs
