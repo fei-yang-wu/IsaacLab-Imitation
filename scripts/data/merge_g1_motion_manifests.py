@@ -18,6 +18,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -26,7 +27,37 @@ from pathlib import Path
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_MOTION_MANIFEST_MODULE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "source"
+    / "isaaclab_imitation"
+    / "isaaclab_imitation"
+    / "tasks"
+    / "manager_based"
+    / "imitation"
+    / "motion_manifest.py"
+)
+
+
+def _load_motion_manifest_module():
+    """Load the stdlib-only manifest schema authority by file path.
+
+    Avoids importing the ``isaaclab_imitation`` package, which registers Isaac
+    tasks on import and is unavailable in the default Pixi environment.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "motion_manifest", _MOTION_MANIFEST_MODULE_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Could not load motion manifest module: {_MOTION_MANIFEST_MODULE_PATH}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 DEFAULT_LAFAN1_MANIFEST = REPO_ROOT / "data/lafan1/manifests/g1_lafan1_manifest.json"
 DEFAULT_LAFAN1_LANGUAGE = (
@@ -97,7 +128,9 @@ def _humanize_motion_name(name: str) -> str:
     return base or str(name).strip().lower()
 
 
-def _load_manifest_entries(manifest_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _load_manifest_entries(
+    manifest_path: Path,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -257,7 +290,7 @@ def _merge_sources(
     dataset_name: str,
     prefix_names: bool,
     allow_missing_motion_files: bool,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     manifest_entries: list[dict[str, Any]] = []
     language_motions: list[dict[str, Any]] = []
     source_summaries: list[dict[str, Any]] = []
@@ -285,7 +318,9 @@ def _merge_sources(
 
             safe_original_name = _sanitize_name(original_name or motion_path.stem)
             merged_name = (
-                f"{source.prefix}{safe_original_name}" if prefix_names else safe_original_name
+                f"{source.prefix}{safe_original_name}"
+                if prefix_names
+                else safe_original_name
             )
             if merged_name in names_seen:
                 raise ValueError(f"Duplicate merged motion name: {merged_name}")
@@ -383,22 +418,16 @@ def _merge_sources(
     if fps_values and all(abs(value - fps_values[0]) <= 1.0e-6 for value in fps_values):
         control_freq = fps_values[0]
 
-    manifest = {
-        "dataset_name": dataset_name,
-        "dataset": {"trajectories": {"lafan1_csv": manifest_entries}},
-        "metadata": {
-            "num_motions": len(manifest_entries),
-            "sources": source_summaries,
-            "paths_are_relative_to_manifest": True,
-            "generated_from_existing_npz": True,
-            "fps_values": sorted(set(fps_values)),
-            "control_freq": control_freq,
-            "loader_kwargs": {"chunk_size": 1, "shard_size": 512},
-            "language_annotations_path": _relpath(
-                output_language, output_manifest.parent
-            ),
-            "name_prefixes_enabled": bool(prefix_names),
-        },
+    manifest_metadata = {
+        "num_motions": len(manifest_entries),
+        "sources": source_summaries,
+        "paths_are_relative_to_manifest": True,
+        "generated_from_existing_npz": True,
+        "fps_values": sorted(set(fps_values)),
+        "control_freq": control_freq,
+        "loader_kwargs": {"chunk_size": 1, "shard_size": 512},
+        "language_annotations_path": _relpath(output_language, output_manifest.parent),
+        "name_prefixes_enabled": bool(prefix_names),
     }
     language = {
         "dataset_name": dataset_name,
@@ -408,7 +437,7 @@ def _merge_sources(
         "output_fps": control_freq,
         "motions": language_motions,
     }
-    return manifest, language
+    return manifest_entries, manifest_metadata, language
 
 
 def main() -> None:
@@ -453,7 +482,7 @@ def main() -> None:
     if not sources:
         raise SystemExit("No sources selected.")
 
-    manifest, language = _merge_sources(
+    manifest_entries, manifest_metadata, language = _merge_sources(
         sources,
         output_manifest=output_manifest,
         output_language=output_language,
@@ -462,9 +491,16 @@ def main() -> None:
         allow_missing_motion_files=bool(args.allow_missing_motion_files),
     )
 
-    output_manifest.parent.mkdir(parents=True, exist_ok=True)
+    motion_manifest = _load_motion_manifest_module()
+    manifest = motion_manifest.write_manifest(
+        output_manifest,
+        dataset_name=args.dataset_name,
+        entries=manifest_entries,
+        metadata=manifest_metadata,
+        family="unified",
+        role="testing",
+    )
     output_language.parent.mkdir(parents=True, exist_ok=True)
-    output_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     output_language.write_text(json.dumps(language, indent=2) + "\n", encoding="utf-8")
 
     counts = {

@@ -38,12 +38,13 @@ from pathlib import Path
 from isaaclab.utils.configclass import configclass
 
 from ....imitation_env_cfg import ImitationLearningEnvCfg
-from ....lafan1_manifest import (
+from ....motion_manifest import (
     build_lafan1_loader_kwargs,
     dataset_path_from_entries,
     infer_npz_manifest_control_freq,
     load_lafan1_manifest,
     load_lafan1_manifest_loader_options,
+    load_manifest_family,
 )
 from .actions import G1ActionsCfg
 from .constants import (
@@ -624,6 +625,7 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             self.dataset_path = dataset_path_from_entries(
                 manifest_entries,
                 manifest_path=self.lafan1_manifest_path,
+                family=load_manifest_family(self.lafan1_manifest_path),
             )
 
         if motions_explicit and self.motions is not None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -30,13 +31,44 @@ SCHEMA_NAME = "bones_seed_phase5_preparation"
 SCHEMA_VERSION = 1
 SOURCE_DATASET = "bones-studio/seed"
 
+_MOTION_MANIFEST_MODULE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "source"
+    / "isaaclab_imitation"
+    / "isaaclab_imitation"
+    / "tasks"
+    / "manager_based"
+    / "imitation"
+    / "motion_manifest.py"
+)
+
+
+def _load_motion_manifest_module():
+    """Load the stdlib-only manifest schema authority by file path.
+
+    Avoids importing the ``isaaclab_imitation`` package, which registers Isaac
+    tasks on import and is unavailable in the default Pixi environment.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "motion_manifest", _MOTION_MANIFEST_MODULE_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Could not load motion manifest module: {_MOTION_MANIFEST_MODULE_PATH}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 def _default_batch_converter() -> Path:
     return Path(__file__).resolve().with_name("batch_csv_to_npz.py")
 
 
 def _default_preflight() -> Path:
-    return Path(__file__).resolve().parent.parent / "audit" / "audit_bones_seed_phase5.py"
+    return (
+        Path(__file__).resolve().parent.parent / "audit" / "audit_bones_seed_phase5.py"
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -371,10 +403,12 @@ def _write_staged_inputs(
                 "input_fps": plan["output_fps"],
             }
         )
-    manifest = {
-        "dataset_name": plan["dataset_name"],
-        "dataset": {"trajectories": {"lafan1_csv": manifest_entries}},
-        "metadata": {
+    motion_manifest = _load_motion_manifest_module()
+    motion_manifest.write_manifest(
+        plan["manifest_path"],
+        dataset_name=plan["dataset_name"],
+        entries=manifest_entries,
+        metadata={
             "source_dataset": SOURCE_DATASET,
             "source_csv_dir": str(plan["csv_dir"]),
             "source_language_sidecar": str(plan["language_source"]),
@@ -394,8 +428,9 @@ def _write_staged_inputs(
             ),
             "body_names_required": True,
         },
-    }
-    _write_json(plan["manifest_path"], manifest)
+        family="bones_seed",
+        role="headline",
+    )
 
     record = _public_plan(plan, require_temporal_events=require_temporal_events)
     record["status"] = "staged"

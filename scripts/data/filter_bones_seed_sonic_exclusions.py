@@ -10,8 +10,38 @@ keyword; NPZ files are left untouched, so this is a manifest-only filter.
 
 import argparse
 import hashlib
-import json
+import importlib.util
 from pathlib import Path
+
+_MOTION_MANIFEST_MODULE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "source"
+    / "isaaclab_imitation"
+    / "isaaclab_imitation"
+    / "tasks"
+    / "manager_based"
+    / "imitation"
+    / "motion_manifest.py"
+)
+
+
+def _load_motion_manifest_module():
+    """Load the stdlib-only manifest schema authority by file path.
+
+    Avoids importing the ``isaaclab_imitation`` package, which registers Isaac
+    tasks on import and is unavailable in the default Pixi environment.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "motion_manifest", _MOTION_MANIFEST_MODULE_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(
+            f"Could not load motion manifest module: {_MOTION_MANIFEST_MODULE_PATH}"
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 # Verbatim default --filter-keywords list from
 # gear_sonic/data_process/filter_and_copy_bones_data.py in
@@ -72,7 +102,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    manifest = json.loads(args.source_manifest.read_text())
+    motion_manifest = _load_motion_manifest_module()
+    manifest = motion_manifest.read_manifest(args.source_manifest)
     trajectories = manifest["dataset"]["trajectories"]["lafan1_csv"]
 
     kept = []
@@ -93,20 +124,24 @@ def main() -> None:
     if args.dry_run:
         return
 
-    manifest["dataset"]["trajectories"]["lafan1_csv"] = kept
-    manifest["metadata"]["num_motions"] = len(kept)
-    manifest["metadata"]["sonic_exclusion_filter_applied"] = True
-    manifest["metadata"]["sonic_exclusion_filter_source"] = (
+    metadata = dict(manifest.get("metadata") or {})
+    metadata["num_motions"] = len(kept)
+    metadata["sonic_exclusion_filter_applied"] = True
+    metadata["sonic_exclusion_filter_source"] = (
         "NVlabs/GR00T-WholeBodyControl gear_sonic/data_process/"
         "filter_and_copy_bones_data.py default --filter-keywords"
     )
-    manifest["metadata"]["sonic_excluded_trajectories"] = excluded
-    manifest["metadata"]["sonic_exclusion_filter_source_manifest"] = str(
-        args.source_manifest
-    )
+    metadata["sonic_excluded_trajectories"] = excluded
+    metadata["sonic_exclusion_filter_source_manifest"] = str(args.source_manifest)
 
-    args.dest_manifest.parent.mkdir(parents=True, exist_ok=True)
-    args.dest_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
+    motion_manifest.write_manifest(
+        args.dest_manifest,
+        dataset_name=manifest.get("dataset_name", "bones_seed"),
+        entries=kept,
+        metadata=metadata,
+        family="bones_seed",
+        role="headline",
+    )
 
     digest = hashlib.sha256(args.dest_manifest.read_bytes()).hexdigest()
     print(f"Wrote: {args.dest_manifest}")
