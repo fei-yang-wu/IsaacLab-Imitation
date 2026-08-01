@@ -12,9 +12,18 @@ reference machinery instead of owning it. Its two jobs in this phase are:
    logs ``Metrics/motion/...`` natively at episode reset (the
    beyondmimic/SONIC idiom).
 
-Motion (re)sampling stays in the env's reset path for now;
-``_resample_command`` is a documented no-op that will absorb the reset-time
-reference sampler in a later step of the redesign.
+Reset-start sampling (v2, step 3c): with ``cfg.owns_reset=True`` this term
+also owns the reference reset-start samplers
+(``iltools.datasets.reset_sampling.StartFrameSampler`` /
+``SonicAdaptiveResetSampler``) and applies them through the public
+:meth:`MotionCommand.resample_reference`, which ``ImitationRLEnv._reset_idx``
+calls at the exact point the env-inline sampling used to run.
+``_resample_command`` remains a documented no-op because Isaac Lab's reset
+chain runs ``event_manager.apply(mode="reset")`` -- where the
+``reset_reference_state`` event reads ``current_expert_frame`` at the *new*
+cursor to write the robot's reset pose -- before ``command_manager.reset``
+ever reaches the term, so cursor resampling inside ``_resample_command``
+would arrive too late.
 """
 
 from __future__ import annotations
@@ -28,6 +37,11 @@ from dataclasses import MISSING
 
 from isaaclab.managers import CommandTerm, CommandTermCfg
 from isaaclab.utils.configclass import configclass
+
+from iltools.datasets.reset_sampling import (
+    SonicAdaptiveResetSampler,
+    StartFrameSampler,
+)
 
 from .._compiled import (
     body_pose_in_anchor_frame,
@@ -76,6 +90,17 @@ class MotionCommand(CommandTerm):
         self._joint_ids: Sequence[int] | slice | None = None
         self._command: torch.Tensor | None = None
         self._mpjpe_bodies_validated = False
+        # Reset-start samplers (owned only when cfg.owns_reset). Constructed
+        # eagerly: the CommandManager builds this term inside load_managers(),
+        # which `ImitationRLEnv.__init__` triggers *after* it has parsed the
+        # reset cfg fields, created `trajectory_manager`, and run
+        # `_setup_adaptive_failure_reset_sampler` (which skips its own
+        # construction when this term owns resets), so everything needed is
+        # available and exactly one sampler instance set ever exists.
+        self._start_frame_sampler: StartFrameSampler | None = None
+        self._adaptive_failure_reset_sampler: SonicAdaptiveResetSampler | None = None
+        if cfg.owns_reset:
+            self._build_reset_samplers()
         # Per-env metric buffers; CommandTerm.reset() averages these over the
         # resetting envs into `Metrics/motion/<name>` extras and zeroes them.
         self.metrics["mpjpe_mm"] = torch.zeros(self.num_envs, device=self.device)
@@ -141,15 +166,134 @@ class MotionCommand(CommandTerm):
             quat_error_squared(robot_anchor_quat_w, ref_anchor_quat_w[:, 0, :])
         )
 
-    def _resample_command(self, env_ids: Sequence[int]):
-        """No-op in the adapter phase.
+    def resample_reference(self, env_ids: torch.Tensor) -> None:
+        """Resample the reference reset-start cursor for the given envs.
 
-        Motion resampling currently happens through the env's reset path
-        (trajectory manager + start-frame sampler in ``_reset_idx``);
-        ``cfg.resampling_time_range`` is set to effectively-never so the
-        manager's timer never fights it. A later step of the redesign moves
-        the reset-time reference sampler into this hook.
+        Only valid when ``cfg.owns_reset``. Called by
+        ``ImitationRLEnv._reset_idx`` at the exact point where the env-inline
+        sampling used to run -- *before* ``super()._reset_idx`` so the
+        ``reset_reference_state`` reset event (applied by
+        ``event_manager.apply(mode="reset")`` inside Isaac Lab's reset chain)
+        reads the reference at the freshly sampled cursor. Adaptive
+        failure-bin recording stays with the env (it reads termination-manager
+        state); it feeds these same sampler instances via the env-side
+        aliases installed by :meth:`_build_reset_samplers`.
+
+        Semantics are identical to the env-inline path: with
+        ``random_reset_full_trajectory`` the SONIC sampler picks trajectory
+        ranks and frames jointly; otherwise the trajectory manager's
+        ``reset_schedule`` keeps trajectory selection and the
+        ``StartFrameSampler`` picks the local start (fixed/random/adaptive).
         """
+        env = self._imitation_env()
+        tm = env.trajectory_manager
+        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
+        if env._random_reset_full_trajectory:
+            if self._adaptive_failure_reset_sampler is None:
+                raise RuntimeError("Adaptive failure reset sampler is not enabled.")
+            reset_ranks, reset_steps = self._adaptive_failure_reset_sampler.sample(
+                env_ids_tm.numel()
+            )
+            tm.reset_envs(env_ids_tm, ranks=reset_ranks, steps=reset_steps)
+            return
+        if self._start_frame_sampler is None:
+            raise RuntimeError(
+                "MotionCommand.resample_reference requires cfg.owns_reset=True "
+                "(no start-frame sampler was built)."
+            )
+        ranks = tm.env_traj_rank.index_select(0, env_ids_tm)
+        reset_steps = self._start_frame_sampler.sample_steps(ranks)
+        tm.reset_envs(env_ids_tm, steps=reset_steps)
+
+    def _resample_command(self, env_ids: Sequence[int]):
+        """No-op: Isaac Lab's reset ordering forbids cursor sampling here.
+
+        ``ManagerBasedRLEnv._reset_idx`` applies the reset-mode events
+        (``reset_reference_state`` reads ``current_expert_frame`` at the new
+        cursor to write the robot's reset pose) *before* it reaches
+        ``command_manager.reset`` -> ``_resample_command``, so a cursor
+        resampled here would arrive after the robot was already teleported to
+        the stale pre-reset reference. The term therefore exposes
+        :meth:`resample_reference` instead, which ``ImitationRLEnv._reset_idx``
+        calls ahead of ``super()._reset_idx`` (v2, ``cfg.owns_reset``);
+        without ownership the env's inline path runs unchanged (v0/v1).
+        ``cfg.resampling_time_range`` is effectively-never so the manager's
+        timer never fires this hook mid-episode either.
+        """
+
+    def _build_reset_samplers(self) -> None:
+        """Construct the reset-start samplers this term owns (v2).
+
+        Mirrors ``ImitationRLEnv._setup_adaptive_failure_reset_sampler``
+        exactly, reading the env's already-parsed reset cfg fields
+        (``reset_start_mode``, ``random_reset_step_min/max``,
+        ``random_reset_full_trajectory``, ``reference_start_frame`` and the
+        ``adaptive_failure_reset_*`` knobs -- one parse, in the env). The
+        built instances are then mirrored onto the env's
+        ``_adaptive_failure_reset_sampler`` / ``_start_frame_sampler``
+        attributes so the adaptive-failure bookkeeping hooks
+        (``_record_adaptive_failure_reset_visits`` / ``_bins``) keep feeding
+        the *same* objects: exactly one sampler instance set exists.
+        """
+        env = self._imitation_env()
+        tm = env.trajectory_manager
+        if env._random_reset_full_trajectory or env._reset_start_mode == "adaptive":
+            self._adaptive_failure_reset_sampler = SonicAdaptiveResetSampler(
+                tm._length,
+                bin_size=env._adaptive_failure_reset_bin_size,
+                sequence_length_agnostic=(
+                    env._adaptive_failure_reset_sequence_length_agnostic
+                ),
+                init_num_failures=env._adaptive_failure_reset_init_num_failures,
+                uniform_sampling_rate=env._adaptive_failure_reset_uniform_ratio,
+                pre_failure_sample_window=(
+                    env._adaptive_failure_reset_pre_failure_window
+                ),
+                failure_rate_max_over_mean=(
+                    env._adaptive_failure_reset_failure_rate_max_over_mean
+                ),
+            )
+        if env._random_reset_full_trajectory:
+            # Legacy full-trajectory path: SONIC picks ranks AND frames jointly
+            # from the bin distribution; the generic start sampler is unused.
+            self._start_frame_sampler = None
+        else:
+            mode = env._reset_start_mode
+            if mode == "auto":
+                mode = (
+                    StartFrameSampler.RANDOM
+                    if env._random_reset_step_max > env._random_reset_step_min
+                    else StartFrameSampler.FIXED
+                )
+            if mode == StartFrameSampler.ADAPTIVE:
+                weight_fn = env._adaptive_reset_weight_fn
+                if weight_fn is None:
+                    weight_fn = self._adaptive_failure_reset_sampler
+                if weight_fn is None:
+                    raise ValueError(
+                        "reset_start_mode='adaptive' requires the SONIC reset "
+                        "sampler or a custom `cfg.adaptive_reset_weight_fn`."
+                    )
+                self._start_frame_sampler = StartFrameSampler(
+                    tm._length,
+                    mode="adaptive",
+                    weight_fn=weight_fn,
+                    device=tm._state_device,
+                )
+            else:
+                self._start_frame_sampler = StartFrameSampler(
+                    tm._length,
+                    mode=mode,
+                    fixed_step=env._reference_start_frame,
+                    random_step_min=env._random_reset_step_min,
+                    random_step_max=env._random_reset_step_max,
+                    device=tm._state_device,
+                )
+        # Single-instance guarantee: the env skipped its own construction
+        # (`_setup_adaptive_failure_reset_sampler` gates on cfg ownership) and
+        # now aliases the term-owned instances for its record/sample hooks.
+        env._adaptive_failure_reset_sampler = self._adaptive_failure_reset_sampler
+        env._start_frame_sampler = self._start_frame_sampler
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         """No-op: no debug visualization in the adapter phase."""
@@ -261,4 +405,14 @@ class MotionCommandCfg(CommandTermCfg):
     ``None`` uses every joint in live articulation order. Supply the pinned
     joint-name list (resolved with ``preserve_order=True``) to match the
     ordering contract of the v1 ``expert_motion_command`` observation term.
+    """
+
+    owns_reset: bool = False
+    """Whether this term owns reference reset-start sampling (v2 step 3c).
+
+    ``True``: the term constructs the ``StartFrameSampler`` /
+    ``SonicAdaptiveResetSampler`` pair (from the env cfg's reset fields) and
+    ``ImitationRLEnv._reset_idx`` calls :meth:`MotionCommand.resample_reference`
+    instead of running its inline sampling; the env builds no sampler of its
+    own. ``False`` (default): the env-inline path runs unchanged (v0/v1).
     """

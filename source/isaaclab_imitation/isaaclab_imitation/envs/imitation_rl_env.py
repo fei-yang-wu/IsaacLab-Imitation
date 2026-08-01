@@ -2552,10 +2552,47 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
         return self._current_reference_local_step >= final_steps
 
+    @staticmethod
+    def _motion_command_cfg_owns_reset(cfg: Any) -> bool:
+        """True when the configured ``motion`` command term owns reset sampling.
+
+        Cfg-level twin of :meth:`_motion_command_reset_owner`, needed because
+        `_setup_adaptive_failure_reset_sampler` runs before ``super().__init__``
+        builds the CommandManager (and hence the term).
+        """
+        motion_cfg = getattr(getattr(cfg, "commands", None), "motion", None)
+        return bool(getattr(motion_cfg, "owns_reset", False))
+
+    def _motion_command_reset_owner(self) -> Any | None:
+        """The ``motion`` command term when it owns reset-start sampling (v2).
+
+        Returns None for tasks without the term or without ``owns_reset``
+        (v0/v1), which keep the env-inline sampling path byte-identical.
+        """
+        command_manager = getattr(self, "command_manager", None)
+        if command_manager is None:
+            return None
+        if "motion" not in getattr(command_manager, "active_terms", ()):
+            return None
+        term = command_manager.get_term("motion")
+        if getattr(term.cfg, "owns_reset", False):
+            return term
+        return None
+
     def _setup_adaptive_failure_reset_sampler(self, cfg: Any) -> None:
-        del cfg
         tm = self.trajectory_manager
         self._adaptive_failure_reset_sampler: SonicAdaptiveResetSampler | None = None
+        if self._motion_command_cfg_owns_reset(cfg):
+            # v2: the `motion` command term owns the reset-start samplers. It
+            # constructs the single instance set in its __init__ (inside
+            # `super().__init__`'s load_managers, i.e. after this method) and
+            # mirrors the instances back onto these two attributes so the
+            # adaptive-failure record/sample hooks keep feeding the same
+            # objects. Building them here as well would silently split the
+            # SONIC failure statistics across two SonicAdaptiveResetSampler
+            # instances.
+            self._start_frame_sampler = None
+            return
         # The SONIC weight function is needed both by the legacy full-trajectory
         # joint rank+frame path and by reset_start_mode="adaptive".
         if self._random_reset_full_trajectory or self._reset_start_mode == "adaptive":
@@ -2641,6 +2678,11 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             weight_fn=weight_fn,
             device=self.trajectory_manager._state_device,
         )
+        # v2 term-owned resets: keep the single-instance guarantee by handing
+        # the replacement sampler to the owning `motion` command term too.
+        motion_reset_owner = self._motion_command_reset_owner()
+        if motion_reset_owner is not None:
+            motion_reset_owner._start_frame_sampler = self._start_frame_sampler
 
     def _reset_tracking_failure_mask(self) -> torch.Tensor:
         failure_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -2850,7 +2892,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Reset trajectory tracking (reassigns trajectories and resets steps).
         tm = self.trajectory_manager
         env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
-        if self._random_reset_full_trajectory:
+        motion_reset_owner = self._motion_command_reset_owner()
+        if motion_reset_owner is not None:
+            # v2: the `motion` command term owns the reset-start samplers and
+            # applies them here, at the same point the inline paths below run
+            # (before `super()._reset_idx`, whose reset-mode events read the
+            # reference at the new cursor). Failure-bin recording stays with
+            # the env because it reads termination-manager state; it feeds the
+            # same sampler instances through the env-side aliases.
+            self._record_adaptive_failure_reset_bins(env_ids)
+            motion_reset_owner.resample_reference(env_ids)
+        elif self._random_reset_full_trajectory:
             self._record_adaptive_failure_reset_bins(env_ids)
             reset_ranks, reset_steps = self._sample_adaptive_failure_resets(
                 int(env_ids_tm.numel())
