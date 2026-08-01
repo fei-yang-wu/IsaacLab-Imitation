@@ -24,7 +24,9 @@ env so the v2 surface is behaviorally equivalent.
 
 Excluded from the v2 env (legacy-only): the hand-rolled ``Metrics/mpjpe_mm*``
 logging channel (the ``motion`` command term owns ``Metrics/motion/*``), the
-diagnostic command trace, replay/vis tooling, and the video follow camera.
+diagnostic command trace, and the marker/visualizer tooling. Reference
+replay (``replay_reference`` / ``replay_only`` and the replay-target cursor
+sync) IS supported, ported from the legacy env.
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import isaaclab.utils.math as math_utils
+import numpy as np
 import torch
 from isaaclab.assets import Articulation
 from isaaclab.envs.common import VecEnvStepReturn
@@ -259,14 +263,17 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             num_keypoint_bodies=len(self._command_keypoint_body_names),
         )
 
-        if getattr(cfg, "replay_only", False) or getattr(
-            cfg, "replay_reference", False
-        ):
-            raise RuntimeError(
-                "replay_only / replay_reference are legacy-only tooling; the "
-                "v2 env does not implement reference replay. Use the legacy "
-                "env (v0/v1 tasks) for replay runs."
-            )
+        self.replay_reference = getattr(cfg, "replay_reference", False)
+        self.replay_only = getattr(cfg, "replay_only", False)
+        if self.replay_only and not self.replay_reference:
+            self.replay_reference = True
+        self._reference_replay_targets_enabled = False
+        self._reference_replay_source_env_ids: torch.Tensor | None = None
+        self._reference_replay_target_env_ids: torch.Tensor | None = None
+        self._last_tracked_root_pos_w = torch.zeros((num_envs, 3), device=device)
+        self._last_tracked_root_pos_valid = torch.zeros(
+            (num_envs,), device=device, dtype=torch.bool
+        )
 
         # Initialize parent class (builds the managers; the `motion` term
         # constructs its owned reset-start samplers inside `load_managers`).
@@ -1135,6 +1142,215 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
 
     # ------------------------------------------------------------------
+    # Reference replay (ported from the legacy env; vis stays legacy-only).
+    # ------------------------------------------------------------------
+
+    def configure_reference_replay_targets(
+        self,
+        *,
+        source_env_ids: Sequence[int] | torch.Tensor,
+        target_env_ids: Sequence[int] | torch.Tensor,
+    ) -> None:
+        """Configure target envs to replay the reference cursor of source envs."""
+
+        source_env_ids_t = torch.as_tensor(
+            source_env_ids, dtype=torch.long, device=self.device
+        ).reshape(-1)
+        target_env_ids_t = torch.as_tensor(
+            target_env_ids, dtype=torch.long, device=self.device
+        ).reshape(-1)
+        if source_env_ids_t.shape != target_env_ids_t.shape:
+            raise ValueError(
+                "source_env_ids and target_env_ids must have the same shape."
+            )
+
+        self._reference_replay_source_env_ids = source_env_ids_t
+        self._reference_replay_target_env_ids = target_env_ids_t
+        self._reference_replay_targets_enabled = True
+
+    def apply_reference_replay_targets(self) -> None:
+        """Public hook to synchronize and replay configured reference target envs."""
+
+        self._apply_reference_replay_targets()
+
+    def _apply_reference_replay_targets(self) -> None:
+        """Replay target envs from their paired source env trajectory cursors."""
+
+        if not self._reference_replay_targets_enabled:
+            return
+        if (
+            self._reference_replay_source_env_ids is None
+            or self._reference_replay_target_env_ids is None
+        ):
+            return
+
+        self.sync_reference_cursor_from_source_envs(
+            source_env_ids=self._reference_replay_source_env_ids,
+            target_env_ids=self._reference_replay_target_env_ids,
+        )
+        self._replay_reference(env_ids=self._reference_replay_target_env_ids)
+
+    def sync_reference_cursor_from_source_envs(
+        self,
+        *,
+        source_env_ids: Sequence[int] | torch.Tensor,
+        target_env_ids: Sequence[int] | torch.Tensor,
+    ) -> None:
+        """Copy trajectory cursor state from source envs to target envs."""
+
+        tm = self.trajectory_manager
+        source_env_ids_tm = torch.as_tensor(
+            source_env_ids, dtype=torch.long, device=tm._state_device
+        ).reshape(-1)
+        target_env_ids_tm = torch.as_tensor(
+            target_env_ids, dtype=torch.long, device=tm._state_device
+        ).reshape(-1)
+        if source_env_ids_tm.shape != target_env_ids_tm.shape:
+            raise ValueError(
+                "source_env_ids and target_env_ids must have the same shape."
+            )
+        if source_env_ids_tm.numel() == 0:
+            return
+
+        source_ranks = tm.env_traj_rank.index_select(0, source_env_ids_tm)
+        source_steps = tm.env_step.index_select(0, source_env_ids_tm)
+        tm.set_env_cursor(
+            env_ids=target_env_ids_tm,
+            ranks=source_ranks,
+            steps=source_steps,
+        )
+
+        source_env_ids = source_env_ids_tm.to(device=self.device)
+        target_env_ids = target_env_ids_tm.to(device=self.device)
+
+        self._refresh_current_expert_frame(target_env_ids, advance=False)
+
+        tracked_root_pos_w = self._get_tracked_reference_root_pos_w()
+        if tracked_root_pos_w is not None:
+            self._last_tracked_root_pos_w.index_copy_(
+                0,
+                target_env_ids,
+                tracked_root_pos_w.index_select(0, target_env_ids),
+            )
+            self._last_tracked_root_pos_valid.index_fill_(0, target_env_ids, True)
+
+    def _replay_reference(
+        self, env_ids: torch.Tensor | None = None, reference: TensorDict | None = None
+    ):
+        """Replay the reference data.
+
+        If env_ids is provided, only replay the reference data for the given
+        environments. If env_ids is not provided, replay the reference data
+        for all environments.
+        """
+
+        if env_ids is None:
+            ref = self.current_expert_frame if reference is None else reference
+            defaults_pos = self.robot.data.default_joint_pos.torch
+            defaults_vel = self.robot.data.default_joint_vel.torch
+        else:
+            env_ids_tensor = env_ids
+            full_reference = (
+                self.current_expert_frame if reference is None else reference
+            )
+            ref = full_reference[env_ids_tensor]
+            defaults_pos = self.robot.data.default_joint_pos.torch[env_ids_tensor]
+            defaults_vel = self.robot.data.default_joint_vel.torch[env_ids_tensor]
+
+        root_pos, root_quat_opt = self._transform_reference_pose_to_world(
+            ref["root_pos"], ref["root_quat"], env_ids=env_ids
+        )
+        if root_quat_opt is None:
+            raise RuntimeError(
+                "Failed to transform reference root quaternion for replay."
+            )
+        root_quat = root_quat_opt
+        align_quat, _ = self._get_reference_alignment_transform(env_ids)
+        root_lin_vel = self._estimate_reference_root_lin_vel_w_from_pos(
+            ref["root_pos"], env_ids=env_ids
+        )
+        root_ang_vel = math_utils.quat_apply(align_quat, ref["root_ang_vel"])
+        root_pose = torch.cat([root_pos, root_quat], dim=-1)
+        root_vel = torch.cat([root_lin_vel, root_ang_vel], dim=-1)
+        # Extract joint data from reference TensorDict
+        # ref is a TensorDict, so accessing keys returns tensors
+        joint_pos_raw = ref["joint_pos"]  # type: ignore[assignment]
+        joint_vel_raw = ref["joint_vel"]  # type: ignore[assignment]
+        joint_pos = joint_pos_raw.clone()
+        joint_vel = joint_vel_raw.clone()
+
+        # Replace NaN positions with default values
+        joint_pos = torch.where(torch.isnan(joint_pos), defaults_pos, joint_pos)
+        joint_vel = torch.where(torch.isnan(joint_vel), defaults_vel, joint_vel)
+        # Use link/com-specific writers so all articulation data buffers stay
+        # coherent. `base_lin_vel` uses root_com_vel_w + root_link_quat_w
+        # internally.
+        self.robot.write_root_link_pose_to_sim(root_pose, env_ids=env_ids)
+        self.robot.write_root_com_velocity_to_sim(root_vel, env_ids=env_ids)
+        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        self.robot.write_data_to_sim()
+        # Refresh cached kinematics buffers (e.g. root_lin_vel_b) after direct
+        # state writes.
+        self.scene.update(dt=0.0)
+        self.robot.update(dt=0.0)
+        self._invalidate_mdp_cache()
+
+    def _get_tracked_reference_root_pos_w(self) -> torch.Tensor | None:
+        """Return tracked reference root positions in world frame for all environments."""
+        if self.current_expert_frame is None:
+            return None
+
+        reference_root_pos = self.current_expert_frame.get("root_pos")
+        if reference_root_pos is None:
+            return None
+
+        # Apply the full per-episode rigid transform (R, t) from reset frame to
+        # world frame.
+        tracked_root_pos_w, _ = self._transform_reference_pose_to_world(
+            reference_root_pos
+        )
+        return tracked_root_pos_w
+
+    def _estimate_reference_root_lin_vel_w_from_pos(
+        self,
+        reference_root_pos: torch.Tensor,
+        env_ids: torch.Tensor | None = None,
+        update_cache: bool = False,
+    ) -> torch.Tensor:
+        """Estimate reference root linear velocity in world frame from finite differences of root position."""
+        if env_ids is None:
+            tracked_root_pos_w, _ = self._transform_reference_pose_to_world(
+                reference_root_pos
+            )
+            previous_pos_w = self._last_tracked_root_pos_w
+            previous_valid = self._last_tracked_root_pos_valid
+        else:
+            env_ids_tensor = env_ids.to(dtype=torch.int64)
+            tracked_root_pos_w, _ = self._transform_reference_pose_to_world(
+                reference_root_pos, env_ids=env_ids_tensor
+            )
+            previous_pos_w = self._last_tracked_root_pos_w[env_ids_tensor]
+            previous_valid = self._last_tracked_root_pos_valid[env_ids_tensor]
+
+        reference_root_lin_vel_w = torch.zeros_like(tracked_root_pos_w)
+        dt = float(self.step_dt)
+        if dt > 0.0:
+            reference_root_lin_vel_w[previous_valid] = (
+                tracked_root_pos_w[previous_valid] - previous_pos_w[previous_valid]
+            ) / dt
+
+        if update_cache:
+            if env_ids is None:
+                self._last_tracked_root_pos_w.copy_(tracked_root_pos_w)
+                self._last_tracked_root_pos_valid.fill_(True)
+            else:
+                env_ids_tensor = env_ids.to(dtype=torch.int64)
+                self._last_tracked_root_pos_w[env_ids_tensor] = tracked_root_pos_w
+                self._last_tracked_root_pos_valid[env_ids_tensor] = True
+
+        return reference_root_lin_vel_w
+
+    # ------------------------------------------------------------------
     # Lifecycle: step / reset.
     # ------------------------------------------------------------------
 
@@ -1171,12 +1387,28 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # tensor indices.
         result = super()._reset_idx(env_ids)  # type: ignore[arg-type]
 
+        if self.replay_reference:
+            self._replay_reference(env_ids)
+
+        tracked_root_pos_w = self._get_tracked_reference_root_pos_w()
+        if tracked_root_pos_w is not None:
+            self._last_tracked_root_pos_w.index_copy_(
+                0, env_ids, tracked_root_pos_w.index_select(0, env_ids)
+            )
+            self._last_tracked_root_pos_valid.index_fill_(0, env_ids, True)
+
         self._reset_causal_planner_history(env_ids)
 
         return result
 
     def step(self, action: torch.Tensor) -> VecEnvStepReturn:
         """Step the environment and update reference data."""
+        # Replay-only path: ignore physics stepping and evaluate rewards
+        # exactly on the replayed reference state (ported from the legacy
+        # env's replay-only branch).
+        if self.replay_only:
+            return self._step_replay_only(action)
+
         # Get next reference data point (advance=True to move to next step)
         self._refresh_current_expert_frame(advance=True)
         # Record the pre-step cursor as a visit in the SONIC failure sampler
@@ -1187,6 +1419,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         rollout_state_log = self._compute_rollout_reference_state_log()
         if rollout_state_log:
             self.extras.setdefault("log", {}).update(rollout_state_log)
+        self._apply_reference_replay_targets()
         # Match IsaacLab command timing: reward/logging use the pre-step
         # reference frame, while returned observations expose the next frame.
         # The pre-step sample already advanced the trajectory cursor, so this
@@ -1194,6 +1427,101 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self._refresh_current_expert_frame(advance=False)
         self._append_causal_planner_history()
         self.obs_buf = self.observation_manager.compute(update_history=True)
+        return (
+            self.obs_buf,
+            self.reward_buf,
+            self.reset_terminated,
+            self.reset_time_outs,
+            self.extras,
+        )
+
+    def _step_replay_only(self, action: torch.Tensor) -> VecEnvStepReturn:
+        """Replay-only stepping: no physics, rewards on the replayed reference."""
+        self.action_manager.process_action(action.to(self.device))
+        self.recorder_manager.record_pre_step()
+
+        # Sample the current reference frame and advance the internal step by
+        # exactly one. `sample(advance=True)` returns frame t and then
+        # increments to t+1. This avoids double-advance while keeping reward
+        # computation aligned with frame t.
+        self._refresh_current_expert_frame(advance=True)
+        self._motion_reset_owner.record_visits()
+        self._replay_reference()
+        self.scene.update(dt=0.0)
+
+        # post-step:
+        # -- update env counters (used for curriculum generation)
+        self.episode_length_buf += 1  # step in current episode (per env)
+        self.common_step_counter += 1  # total step (common for all envs)
+        # -- check terminations
+        self.reset_buf = self.termination_manager.compute()
+        self.reset_terminated = self.termination_manager.terminated
+        self.reset_time_outs = self.termination_manager.time_outs
+        # -- reward computation
+        self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
+
+        if len(self.recorder_manager.active_terms) > 0:
+            # update observations for recording if needed
+            self.obs_buf = self.observation_manager.compute()
+            self.recorder_manager.record_post_step()
+
+        # -- reset envs that terminated/timed-out and log the episode information
+        reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        # Clear any stale terminal info from previous steps.
+        for key in ("final_obs", "final_info"):
+            if key in self.extras:
+                del self.extras[key]
+
+        if len(reset_env_ids) > 0:
+            reset_env_ids_list = reset_env_ids.tolist()
+            # Populate Gymnasium-style terminal observation info for vector
+            # envs. final_obs/final_info are object arrays with None for
+            # non-reset envs.
+            final_obs = np.empty(self.num_envs, dtype=object)
+            final_obs[:] = None
+            final_info = np.empty(self.num_envs, dtype=object)
+            final_info[:] = None
+
+            def _slice_obs(obs: dict | torch.Tensor, env_id: int):
+                if isinstance(obs, dict):
+                    return {k: _slice_obs(v, env_id) for k, v in obs.items()}
+                return obs[env_id].clone()
+
+            for env_id in reset_env_ids_list:
+                final_obs[env_id] = _slice_obs(self.obs_buf, env_id)
+                final_info[env_id] = {}
+
+            self.extras["final_obs"] = final_obs
+            self.extras["final_info"] = final_info
+
+            # trigger recorder terms for pre-reset calls
+            self.recorder_manager.record_pre_reset(reset_env_ids_list)
+
+            self._reset_idx(reset_env_ids)
+
+            # if sensors are added to the scene, make sure we render to reflect
+            # changes in reset
+            if self.sim.has_rtx_sensors() and self.cfg.num_rerenders_on_reset > 0:
+                for _ in range(self.cfg.num_rerenders_on_reset):
+                    self.sim.render()
+
+            # trigger recorder terms for post-reset calls
+            self.recorder_manager.record_post_reset(reset_env_ids_list)
+
+        # -- update command
+        self.command_manager.compute(dt=self.step_dt)
+        # -- step interval events
+        if "interval" in self.event_manager.available_modes:
+            self.event_manager.apply(mode="interval", dt=self.step_dt)
+        # Expose post-step reference (frame t+1) for observations/outputs,
+        # matching ManagerBasedRLEnv command timing after
+        # command_manager.compute().
+        self._refresh_current_expert_frame(advance=False)
+        self._append_causal_planner_history()
+        # -- compute observations
+        # note: done after reset to get the correct observations for reset envs
+        self.obs_buf = self.observation_manager.compute(update_history=True)
+        # return observations, rewards, resets and extras
         return (
             self.obs_buf,
             self.reward_buf,
