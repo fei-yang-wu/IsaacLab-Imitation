@@ -255,16 +255,18 @@ _LATENT_ABLATION_TASK_KWARGS = {
 # and is kept only for its own back-compat reasons (see its comment below).
 # ---------------------------------------------------------------------------
 
-# v2 overhaul WIP surface (2026-08-01): the v1 config plus the first
-# CommandManager increment -- a native `motion` command term
-# (`mdp.MotionCommandCfg`) that exposes the 67-D explicit tracking command via
+# v2 overhaul surface (2026-08-01): the v1 config plus the CommandManager
+# increment -- a native `motion` command term (`mdp.MotionCommandCfg`) that
+# exposes the 67-D explicit tracking command via
 # `command_manager.get_command("motion")` and logs `Metrics/motion/...`
-# natively. Behavior is otherwise identical to `-G1-v1`, which remains the
-# default until the v2 redesign lands completely; do not cite this id as the
-# default yet.
+# natively, and a `skill` term serving the agent-latent buffer. From
+# 2026-08-01 the env entry point is the composed `ImitationRLEnvV2`
+# (ExpertDataPlane + command planes); behavior is verified identical to the
+# legacy env under the same cfg by the fixed-seed A/B certificate. The id
+# remains non-default until step 6 flips the default task.
 gym.register(
     id="Isaac-Imitation-G1-v2",
-    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnvV2",
     disable_env_checker=True,
     kwargs={
         **_LATENT_STABLE_TASK_KWARGS,
