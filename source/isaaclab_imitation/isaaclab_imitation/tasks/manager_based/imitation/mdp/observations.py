@@ -160,6 +160,28 @@ def policy_expert_anchor_ori_b(
     )
 
 
+def motion_command_joint(env: ImitationRLEnv) -> torch.Tensor:
+    """Joint pos/vel half of the manager-based ``motion`` command term.
+
+    The ``motion`` command layout is ``[joint_pos + joint_vel (2 * num_joints),
+    anchor_pos_b (3), anchor_ori_b rot6d (6)]`` (58 + 3 + 6 = 67 for G1), so
+    everything before the trailing 9 anchor values is the joint half. The
+    command property refreshes lazily on access, so this reads the same
+    post-step reference frame as ``expert_motion_command``.
+    """
+    return env.command_manager.get_command("motion")[..., :-9].contiguous()
+
+
+def motion_command_anchor_pos_b(env: ImitationRLEnv) -> torch.Tensor:
+    """Anchor-position slice (3) of the manager-based ``motion`` command term."""
+    return env.command_manager.get_command("motion")[..., -9:-6].contiguous()
+
+
+def motion_command_anchor_ori_b(env: ImitationRLEnv) -> torch.Tensor:
+    """Anchor-orientation rot6d slice (6) of the ``motion`` command term."""
+    return env.command_manager.get_command("motion")[..., -6:].contiguous()
+
+
 def expert_window_motion(
     env: ImitationRLEnv,
     past_steps: int = 1,
