@@ -1,27 +1,45 @@
 """Command terms for the manager-based imitation environments.
 
-First increments of the v2 CommandManager redesign: adapter-phase terms that
-expose the existing ImitationRLEnv reference machinery through the native
-Isaac Lab :class:`~isaaclab.managers.CommandManager` surface, plus the
-externally-published command layer (env-side mirror of
+Two channels (see ``tasks/manager_based/imitation/command_interface.py``): the
+always-present :class:`~.reference.ReferenceCommandTerm`, which owns reference
+selection, reset-start sampling, and the tracking metrics; and exactly one
+actor emitter -- latent, explicit, or chunk -- under the manager name
+``actor``. :class:`~.published_command.PublishedCommandTerm` is the shared base
+for the two externally-written emitters (env-side mirror of
 ``contracts/command_publisher.py``).
 """
 
-from .held_chunk_command import HeldChunkCommand, HeldChunkCommandCfg
-from .motion_command import MotionCommand, MotionCommandCfg
+from .actor import (
+    ACTOR_TERM_NAME,
+    REFERENCE_TERM_NAME,
+    ActorCommandCfg,
+    ChunkActorCommand,
+    ChunkCommandCfg,
+    ExplicitActorCommand,
+    ExplicitCommandCfg,
+    LatentActorCommand,
+    LatentCommandCfg,
+)
 from .published_command import PublishedCommandTerm, PublishedCommandTermCfg
-from .reference_command import ReferenceCommand, ReferenceCommandCfg
-from .skill_command import SkillCommand, SkillCommandCfg
+from .reference import (
+    ReferenceChannelCfg,
+    ReferenceCommandTerm,
+    ReferenceSelectionCfg,
+)
 
 __all__ = [
-    "HeldChunkCommand",
-    "HeldChunkCommandCfg",
-    "MotionCommand",
-    "MotionCommandCfg",
+    "ACTOR_TERM_NAME",
+    "REFERENCE_TERM_NAME",
+    "ActorCommandCfg",
+    "ChunkActorCommand",
+    "ChunkCommandCfg",
+    "ExplicitActorCommand",
+    "ExplicitCommandCfg",
+    "LatentActorCommand",
+    "LatentCommandCfg",
     "PublishedCommandTerm",
     "PublishedCommandTermCfg",
-    "ReferenceCommand",
-    "ReferenceCommandCfg",
-    "SkillCommand",
-    "SkillCommandCfg",
+    "ReferenceChannelCfg",
+    "ReferenceCommandTerm",
+    "ReferenceSelectionCfg",
 ]

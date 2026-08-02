@@ -190,46 +190,28 @@ def policy_expert_anchor_ori_b(
     )
 
 
-def motion_command_joint(env: ImitationRLEnv) -> torch.Tensor:
-    """Joint pos/vel half of the manager-based ``motion`` command term.
+def command_component(
+    env: ImitationRLEnv,
+    channel: str = "actor",
+    component: str = "joint_qpos_qvel",
+    past_steps: int = 0,
+    future_steps: int = 0,
+) -> torch.Tensor:
+    """One command component, from one of the two command channels.
 
-    The ``motion`` command layout is ``[joint_pos + joint_vel (2 * num_joints),
-    anchor_pos_b (3), anchor_ori_b rot6d (6)]`` (58 + 3 + 6 = 67 for G1), so
-    everything before the trailing 9 anchor values is the joint half. The
-    command property refreshes lazily on access, so this reads the same
-    post-step reference frame as ``expert_motion_command``.
+    This is the single observation-side reader of the v2 command surface. The
+    ``actor`` channel serves whatever the configured actor emitter produces
+    (explicit view, published packet slot) over its own window; the
+    ``reference`` channel serves privileged reference data at the requested
+    window -- single-frame for the critic, the recipe's window for the skill
+    encoder's view.
     """
-    return env.command_manager.get_command("motion")[..., :-9].contiguous()
-
-
-def motion_command_anchor_pos_b(env: ImitationRLEnv) -> torch.Tensor:
-    """Anchor-position slice (3) of the manager-based ``motion`` command term."""
-    return env.command_manager.get_command("motion")[..., -9:-6].contiguous()
-
-
-def motion_command_anchor_ori_b(env: ImitationRLEnv) -> torch.Tensor:
-    """Anchor-orientation rot6d slice (6) of the ``motion`` command term."""
-    return env.command_manager.get_command("motion")[..., -6:].contiguous()
-
-
-def skill_command(env: ImitationRLEnv) -> torch.Tensor:
-    """Latent skill command via the manager-based ``skill`` command term.
-
-    Adapter phase: the term serves the env's agent-latent buffer, so this
-    returns exactly the same tensor as :func:`agent_latent_command`; the
-    CommandManager term is the single producer for v2 surfaces.
-    """
-    return env.command_manager.get_command("skill")
-
-
-def reference_latent_command(env: ImitationRLEnv) -> torch.Tensor:
-    """Agent-published latent command via the lean ``command`` term.
-
-    The v2 lean surface uses one command term named ``command`` (which serves
-    the agent-latent buffer, owns the reset-start samplers, and owns the
-    tracking metrics); this is its observation view.
-    """
-    return env.command_manager.get_command("command")
+    term = env.command_manager.get_term(channel)
+    if int(past_steps) == 0 and int(future_steps) == 0:
+        return term.component(component)
+    return term.component(
+        component, past_steps=int(past_steps), future_steps=int(future_steps)
+    )
 
 
 def expert_window_motion(

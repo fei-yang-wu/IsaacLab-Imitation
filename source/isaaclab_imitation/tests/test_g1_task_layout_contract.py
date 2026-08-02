@@ -78,16 +78,60 @@ def _layout(task_id: str) -> dict:
         "actions_class": type(cfg.actions).__name__,
         "curriculum": type(cfg.curriculum).__name__ if cfg.curriculum else None,
         "anchor_body": getattr(cfg, "expert_anchor_body_name", None),
-        "latent_command_dim": getattr(cfg, "latent_command_dim", None),
-        "latent_patch_past_steps": getattr(cfg, "latent_patch_past_steps", None),
-        "latent_patch_future_steps": getattr(cfg, "latent_patch_future_steps", None),
-        "command_hold_steps": getattr(cfg, "command_hold_steps", None),
-        "random_reset_step_min": getattr(cfg, "random_reset_step_min", None),
-        "random_reset_step_max": getattr(cfg, "random_reset_step_max", None),
-        "random_reset_full_trajectory": getattr(
-            cfg, "random_reset_full_trajectory", None
-        ),
+        "command": _command_surface(cfg),
         "groups": groups,
+    }
+
+
+def _command_surface(cfg) -> dict:
+    """The task's command protocol, whichever generation declares it.
+
+    v2 declares one command interface; the frozen v0/v1 configs keep the flat
+    environment knobs. Recording both keeps this fixture a real protocol gate
+    for every registered task.
+    """
+    interface = getattr(cfg, "command_interface", None)
+    if interface is None:
+        return {
+            "generation": "legacy",
+            "latent_command_dim": getattr(cfg, "latent_command_dim", None),
+            "latent_patch_past_steps": getattr(cfg, "latent_patch_past_steps", None),
+            "latent_patch_future_steps": getattr(
+                cfg, "latent_patch_future_steps", None
+            ),
+            "command_hold_steps": getattr(cfg, "command_hold_steps", None),
+            "random_reset_step_min": getattr(cfg, "random_reset_step_min", None),
+            "random_reset_step_max": getattr(cfg, "random_reset_step_max", None),
+            "random_reset_full_trajectory": getattr(
+                cfg, "random_reset_full_trajectory", None
+            ),
+        }
+    selection = interface.reference.selection
+    encoder = interface.encoder
+    return {
+        "generation": "interface",
+        "actor_kind": interface.actor_kind(),
+        "actor_source": interface.actor.source,
+        "actor_components": list(interface.actor_components()),
+        "actor_latent_dim": getattr(interface.actor, "dim", None),
+        "actor_hold_steps": getattr(interface.actor, "hold_steps", None),
+        "actor_horizon": getattr(interface.actor, "horizon", None),
+        "critic_channels": list(interface.critic_channels),
+        "critic_components": list(interface.critic_components()),
+        "encoder_components": (
+            list(encoder.components) if encoder is not None else None
+        ),
+        "encoder_window": (
+            [int(encoder.past_steps), int(encoder.future_steps)]
+            if encoder is not None
+            else None
+        ),
+        "selection_schedule": selection.schedule,
+        "selection_start_mode": selection.start_mode,
+        "selection_start_frame": int(selection.start_frame),
+        "selection_random_step_min": int(selection.random_step_min),
+        "selection_random_step_max": int(selection.random_step_max),
+        "selection_full_trajectory": bool(selection.full_trajectory),
     }
 
 
@@ -345,44 +389,66 @@ def test_expert_window_whitelist_must_cover_macro_state_terms() -> None:
         )
 
 
-def test_reset_start_mode_config_surface() -> None:
-    """Every registered G1 task exposes a valid reset_start_mode default."""
-    for task_id in TASK_IDS:
-        cfg = _load_env_cfg(task_id)
-        assert getattr(cfg, "reset_start_mode", None) in (
-            "auto",
-            "fixed",
-            "random",
-            "adaptive",
-        ), f"{task_id}: bad reset_start_mode default {cfg.reset_start_mode!r}"
+def _reference_selection(cfg):
+    """The reference-selection surface of a task, whichever generation it is.
 
-    # Explicit modes survive config validation and are normalized.
+    v2 declares it on the command interface's reference channel; the frozen
+    v0/v1 configs keep the flat environment fields.
+    """
+    interface = getattr(cfg, "command_interface", None)
+    if interface is not None:
+        selection = interface.reference.selection
+        return selection.start_mode, bool(selection.full_trajectory)
+    return (
+        getattr(cfg, "reset_start_mode", None),
+        bool(getattr(cfg, "random_reset_full_trajectory", False)),
+    )
+
+
+def test_reset_start_mode_config_surface() -> None:
+    """Every registered G1 task exposes a valid start-frame policy."""
+    for task_id in TASK_IDS:
+        start_mode, _ = _reference_selection(_load_env_cfg(task_id))
+        assert start_mode in ("auto", "fixed", "random", "adaptive"), (
+            f"{task_id}: bad start mode default {start_mode!r}"
+        )
+
+    # Explicit modes survive validation and are normalized (legacy surface).
     for mode in ("fixed", "random", "adaptive"):
         cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
         cfg.reset_start_mode = mode
         cfg.__post_init__()
         assert cfg.reset_start_mode == mode
 
-    # Case/whitespace is normalized by the config validation.
     cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
     cfg.reset_start_mode = " Adaptive "
     cfg.__post_init__()
     assert cfg.reset_start_mode == "adaptive"
 
-    # Unknown modes fail loudly at config time.
     cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
     cfg.reset_start_mode = "bogus"
     with pytest.raises(ValueError, match="reset_start_mode"):
         cfg.__post_init__()
 
-    # Legacy full-trajectory variants keep the SONIC joint rank+frame path.
+    # ... and on the v2 surface, where the selection cfg validates itself.
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
+    cfg.command_interface.reference.selection.start_mode = " Adaptive "
+    cfg.command_interface.reference.selection.resolve()
+    assert cfg.command_interface.reference.selection.start_mode == "adaptive"
+
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
+    cfg.command_interface.reference.selection.start_mode = "bogus"
+    with pytest.raises(ValueError, match="start_mode"):
+        cfg.command_interface.reference.selection.resolve()
+
+    # Full-trajectory variants keep the SONIC joint rank+frame path.
     full_trajectory_ids = [
         task_id
         for task_id in TASK_IDS
-        if getattr(_load_env_cfg(task_id), "random_reset_full_trajectory", False)
+        if _reference_selection(_load_env_cfg(task_id))[1]
     ]
     assert full_trajectory_ids, "expected at least one full-trajectory task"
     for task_id in full_trajectory_ids:
-        cfg = _load_env_cfg(task_id)
-        assert cfg.random_reset_full_trajectory is True
-        assert cfg.reset_start_mode == "auto"
+        start_mode, full_trajectory = _reference_selection(_load_env_cfg(task_id))
+        assert full_trajectory is True
+        assert start_mode == "auto"

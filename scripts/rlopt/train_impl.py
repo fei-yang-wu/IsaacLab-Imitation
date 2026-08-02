@@ -255,29 +255,18 @@ def train(
     args_cli: argparse.Namespace,
 ) -> None:
     """Train an RLOpt agent inside an already-selected simulation lifecycle."""
-    sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
-    if callable(sync_input_keys):
-        sync_input_keys()
-
-    # The env's command_mode and the agent's latent-command switch describe the
-    # same contract from two sides; a mismatch trains the actor against a
-    # pruned (or never-published) command. Fail fast instead.
-    env_command_mode = getattr(env_cfg, "command_mode", None)
-    use_latent_command = getattr(
-        getattr(agent_cfg, "ipmd", None), "use_latent_command", None
+    # The environment's declared command interface is the authority on every
+    # command input key and on whether the actor consumes a latent. Binding the
+    # agent to it makes the historical env/agent mismatch impossible rather than
+    # validated after the fact; `sync_input_keys` runs as part of the binding.
+    from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+        bind_command_interface,
     )
-    if env_command_mode is not None and use_latent_command is not None:
-        if (str(env_command_mode).strip().lower() == "latent") != bool(
-            use_latent_command
-        ):
-            raise ValueError(
-                f"env.command_mode={env_command_mode!r} conflicts with "
-                f"agent.ipmd.use_latent_command={bool(use_latent_command)}. "
-                "Set env.command_mode=explicit with "
-                "agent.ipmd.use_latent_command=false (plus "
-                "agent.command_components/command_space), or "
-                "env.command_mode=latent with agent.ipmd.use_latent_command=true."
-            )
+
+    if bind_command_interface(agent_cfg, env_cfg) is None:
+        sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
+        if callable(sync_input_keys):
+            sync_input_keys()
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:

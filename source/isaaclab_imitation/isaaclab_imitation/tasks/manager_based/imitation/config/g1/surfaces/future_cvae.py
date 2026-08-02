@@ -6,7 +6,7 @@
 """Future-window surfaces on the single v2 env (rebase 2026-08-02).
 
 The encoders consume the windowed policy command terms
-(``("policy", "expert_motion")`` etc.); ``latent_patch_future_steps=9``
+(the encoder view of the reference channel); a future window of 9
 widens the command window to the current plus nine future frames.
 """
 
@@ -21,23 +21,23 @@ class ImitationG1FutureCVAESurfaceEnvCfg(ImitationG1V2EnvCfg):
 
     The future-window CVAE encoder consumes a ten-frame command window from
     the policy group; the published 256-D command renews every control step
-    (``command_hold_steps=0``).
+    (the command window advances with the live reference).
     """
-
-    latent_command_dim: int = 256
 
     def __post_init__(self):
         super().__post_init__()
-        self.latent_patch_past_steps = 0
-        self.latent_patch_future_steps = 9
-        self.command_hold_steps = 0
+        self.command_interface.actor.dim = 256
+        self.command_interface.encoder.past_steps = 0
+        self.command_interface.encoder.future_steps = 9
 
 
 @configclass
 class ImitationG1PerStepVQSurfaceEnvCfg(ImitationG1FutureCVAESurfaceEnvCfg):
     """Future-window surface for ten-token, per-control-step command packets."""
 
-    latent_command_dim: int = 64
+    def __post_init__(self):
+        super().__post_init__()
+        self.command_interface.actor.dim = 64
 
 
 __all__ = [

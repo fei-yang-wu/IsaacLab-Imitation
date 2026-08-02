@@ -46,12 +46,17 @@ def test_official_sonic_fsq_encodes_one_future_window_and_renews_each_step() -> 
 def test_official_sonic_fsq_environment_exposes_ten_advancing_frames() -> None:
     cfg = ImitationG1SonicOfficialFSQSurfaceEnvCfg()
 
-    assert cfg.latent_command_dim == 64
-    assert cfg.latent_patch_past_steps == 0
-    assert cfg.latent_patch_future_steps == 9
-    assert cfg.command_hold_steps == 0
-    assert cfg.random_reset_step_min == 0
-    assert cfg.random_reset_step_max == 200
-    assert cfg.random_reset_full_trajectory is False
-    assert cfg.adaptive_failure_reset_failure_rate_max_over_mean == 50.0
+    interface = cfg.command_interface
+    # The command is one 64-value FSQ code the agent publishes, encoded from a
+    # ten-frame reference window that advances every control step.
+    assert interface.actor_kind() == "latent"
+    assert interface.actor.dim == 64
+    assert interface.encoder is not None
+    assert interface.encoder.past_steps == 0
+    assert interface.encoder.future_steps == 9
+    selection = interface.reference.selection
+    assert selection.random_step_min == 0
+    assert selection.random_step_max == 200
+    assert selection.full_trajectory is False
+    assert selection.adaptive_failure_rate_max_over_mean == 50.0
     assert cfg.observations.policy.base_ang_vel.history_length == 10

@@ -6,7 +6,7 @@
 """Held future-goal surface on the single v2 env (rebase 2026-08-02).
 
 The historical expert_goal observation group is gone; the held future goal
-is the same command window machinery with ``latent_patch_future_steps=25``.
+is the same command window machinery with a 25-frame future window.
 Config-only surface: its historical agent (bilinear skill commander) was
 removed in the 2026-08-01 consolidation, so there is no registered task id;
 reach it via the config class or ``env_cfg_entry_point`` overrides on
@@ -25,12 +25,11 @@ class ImitationG1GoalSurfaceEnvCfg(ImitationG1V2EnvCfg):
     The 128-D command is held over a 25-frame future command window.
     """
 
-    latent_command_dim: int = 128
-
     def __post_init__(self):
         super().__post_init__()
-        self.latent_patch_past_steps = 0
-        self.latent_patch_future_steps = 25
+        self.command_interface.actor.dim = 128
+        self.command_interface.encoder.past_steps = 0
+        self.command_interface.encoder.future_steps = 25
 
 
 __all__ = ["ImitationG1GoalSurfaceEnvCfg"]

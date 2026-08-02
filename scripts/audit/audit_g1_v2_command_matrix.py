@@ -1,43 +1,42 @@
 #!/usr/bin/env python3
-"""Audit every command-space x encoder x period combination on the -G1-v2 env.
+"""Audit every command configuration the -G1-v2 environment can be asked for.
 
-The v2 fork made ``ImitationRLEnv`` / ``ImitationG1EnvCfg`` the default task.
-This audit checks that every combination a user might train or evaluate is
-coherently expressible on ``-G1-v2``: explicit command spaces (FB / root+qpos
-/ ee+root / keypoint-pose / ee-only) at every command hold period k, and
-latent schemes (pretrained DiffSR skill encoder with every spectral
-bottleneck, plus in-loop reconstruction encoders CVAE / VQVAE / VAE / AE /
-FSQ) at every encoding horizon h and command period k.
+One declared command interface now carries the whole command surface (see
+``tasks/manager_based/imitation/command_interface.py``): the always-present
+dataset-backed ``reference`` channel plus exactly one ``actor`` channel. This
+audit walks the matrix a user might train or evaluate -- explicit command
+spaces (FB / root+qpos / keypoints / keypoint-pose / EE) as direct commands and
+as published packets at every hold period, and the latent schemes (a pretrained
+DiffSR skill encoder at every spectral bottleneck, plus the in-loop
+reconstruction encoders CVAE / VQVAE / VAE / AE / FSQ at every encoding
+horizon) -- and checks that each one resolves coherently.
 
-Each row resolves the env config through the real Hydra path
-(``resolve_task_config`` on ``Isaac-Imitation-G1-v2`` with the row's
-``env.*`` overrides) and instantiates the row's agent config class directly,
-then checks:
+Per row it resolves the environment config, binds the agent config to the
+environment's command interface (the same call the training entry point makes),
+and checks:
 
-- ``env.command_mode`` agrees with ``agent.ipmd.use_latent_command``.
-- every actor/critic input key resolves to a present observation term after
-  command-term pruning,
-- ``env.latent_command_dim`` matches the agent's published latent width,
-- expert-window terms carry the row's encoding horizon h (and past window)
-  wherever the agent reads ``expert_window`` observations,
-- hold invariants: ``command_hold_steps=k>0`` requires
-  ``latent_patch_past_steps==0``, a chunk ``policy_command_mode``, a
-  planner/planner_oracle ``command_observation_source``, and a window that
-  covers the hold (h + 1 >= k),
-- the parked reward-estimation stack is coherent
-  (``agent.reward_estimation`` <-> the env's ``reward_input`` group),
-- the DiffSR spectral modes requested by latent rows exist in RLOpt.
+- every actor / critic / encoder input key resolves to a present observation
+  term after the interface narrows the groups,
+- the actor's kind agrees with the agent's latent switch, and the published
+  latent width matches on both sides,
+- the encoder view carries the row's window wherever the agent encodes one,
+- packet rows satisfy the hold invariants (future-only window, horizon covering
+  the hold, an external or oracle publisher),
+- the parked reward-estimation stack is coherent (``agent.reward_estimation``
+  <-> the environment's ``reward_input`` group),
+- the DiffSR spectral modes the latent rows request exist in RLOpt.
 
-``--construct ROW[,ROW...]`` additionally boots the simulation headless,
-builds the env, and steps it three times with zero actions, asserting the
-agent's input keys are present in the produced observations.
+``--construct ROW[,ROW...]`` additionally boots the simulation headless, builds
+each named row's environment, and steps it, asserting the agent's input keys
+are present in the produced observations.
 
 Examples (run from the repository root):
 
 .. code-block:: bash
 
     pixi run -e isaaclab python scripts/audit/audit_g1_v2_command_matrix.py
-    pixi run -e isaaclab python scripts/audit/audit_g1_v2_command_matrix.py --construct fb_chunk_k10,root_qpos_chunk_k10
+    pixi run -e isaaclab python scripts/audit/audit_g1_v2_command_matrix.py \
+        --construct fb_k10,hl_skill_deterministic,vqvae_fsq
 """
 
 from __future__ import annotations
@@ -48,52 +47,29 @@ import sys
 from pathlib import Path
 
 _TASK = "Isaac-Imitation-G1-v2"
-_AGENT_KEY = "rlopt_ipmd_cfg_entry_point"
+_MANIFEST = Path("./data/unitree/manifests/g1_unitree_dance102_manifest.json")
+
+_AGENTS = "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents."
+_IPMD = f"{_AGENTS}rlopt_ipmd_cfg"
+_VQVAE = f"{_AGENTS}rlopt_ipmd_vqvae_cfg"
 
 
 # ---------------------------------------------------------------------------
 # Matrix data.
 # ---------------------------------------------------------------------------
 
-# Explicit command spaces (env.command_mode=explicit, agent use_latent=false).
-# term: (name, command_space, command_observation_terms, chunk policy mode)
-EXPLICIT_SPACES: dict[str, tuple[str, tuple[str, ...], str | None]] = {
-    "fb": (
-        "single_frame_full_body",
-        ("expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b"),
-        "full_body_chunk_current_slot",
-    ),
-    "root_qpos": (
-        "root_qpos",
-        ("expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b"),
-        "full_body_chunk_current_slot",
-    ),
-    "root_points5": (
-        "root_points5",
-        ("expert_keypoint_pos_b", "expert_anchor_pos_b", "expert_anchor_ori_b"),
-        "full_body_chunk_current_slot",
-    ),
-    "root_points5_pose": (
-        "root_points5_pose",
-        (
-            "expert_keypoint_pos_b",
-            "expert_keypoint_ori_b",
-            "expert_anchor_pos_b",
-            "expert_anchor_ori_b",
-        ),
-        "explicit_chunk_current_slot",
-    ),
-    "ee": (
-        "ee_trajectory",
-        ("expert_ee_pos_b", "expert_ee_ori_b"),
-        "ee_chunk_current_slot",
-    ),
+# Explicit command spaces, as component sets.
+EXPLICIT_SPACES: dict[str, tuple[str, ...]] = {
+    "fb": ("joint_qpos_qvel", "root_pos", "root_ori"),
+    "root_qpos": ("joint_qpos", "root_pos", "root_ori"),
+    "root_points5": ("keypoint_pos", "root_pos", "root_ori"),
+    "root_points5_pose": ("keypoint_pos", "keypoint_ori", "root_pos", "root_ori"),
+    "ee": ("ee_pos", "ee_ori"),
 }
 
-# (h, k) pairs exercised for explicit chunk rows: encoding horizon h (frames
-# in the packet beyond the current one) and hold period k (control steps the
-# packet is consumed slot-by-slot). Window covers the hold: h + 1 >= k.
-EXPLICIT_PERIODS: tuple[tuple[int, int], ...] = ((0, 1), (4, 5), (9, 10))
+# Hold periods exercised per explicit space: k=1 is the direct command, k>1 is
+# a published packet of k frames consumed one slot per control step.
+EXPLICIT_PERIODS: tuple[int, ...] = (1, 5, 10)
 
 # Latent spectral bottlenecks available to the DiffSR pretrain stage.
 PRETRAIN_SPECTRAL_MODES: tuple[str, ...] = (
@@ -107,135 +83,94 @@ PRETRAIN_SPECTRAL_MODES: tuple[str, ...] = (
     "vq",
 )
 
-# Latent scheme rows: name, agent class import path, env overrides, agent
-# overrides. (h, k) semantics: h = encoded future horizon, k = command period
-# (hl_skill code_period / posterior_command_period / env command_hold_steps).
+_DUMMY_SKILL_CHECKPOINT = "agent.ipmd.hl_skill_checkpoint_path=/tmp/dummy_skill.pt"
+
+# Latent rows: the actor publishes a skill latent; the encoder view is the
+# windowed reference the encoder consumes. `latent_dim` is the published width.
 LATENT_ROWS: dict[str, dict] = {
     "hl_skill_deterministic": {
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
-        "h": 9,
-        "k": 10,
-        "env_overrides": ["env.command_mode=latent", "env.latent_patch_future_steps=9"],
+        "agent": f"{_IPMD}:G1ImitationLatentSonicRLOptIPMDConfig",
+        "latent_dim": 258,
+        "encoder_window": (0, 9),
         "agent_overrides": [
-            "agent.ipmd.hl_skill_checkpoint_path=/tmp/dummy_skill_encoder.pt",
+            _DUMMY_SKILL_CHECKPOINT,
             "agent.ipmd.latent_learning.code_period=10",
         ],
         "spectral": "deterministic",
     },
-    "hl_skill_deterministic_h25k25": {
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
-        "h": 25,
-        "k": 25,
-        "env_overrides": ["env.command_mode=latent"],
+    "hl_skill_deterministic_h25": {
+        "agent": f"{_IPMD}:G1ImitationLatentSonicRLOptIPMDConfig",
+        "latent_dim": 258,
+        "encoder_window": (0, 24),
         "agent_overrides": [
-            "agent.ipmd.hl_skill_checkpoint_path=/tmp/dummy_skill_encoder.pt",
+            _DUMMY_SKILL_CHECKPOINT,
             "agent.ipmd.hl_skill_horizon_steps=25",
             "agent.ipmd.latent_learning.code_period=25",
         ],
         "spectral": "deterministic",
     },
     "hl_skill_vq": {
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
-        "h": 9,
-        "k": 10,
-        "env_overrides": ["env.command_mode=latent", "env.latent_patch_future_steps=9"],
+        "agent": f"{_IPMD}:G1ImitationLatentSonicRLOptIPMDConfig",
+        "latent_dim": 258,
+        "encoder_window": (0, 9),
         "agent_overrides": [
-            "agent.ipmd.hl_skill_checkpoint_path=/tmp/dummy_skill_encoder.pt",
+            _DUMMY_SKILL_CHECKPOINT,
             "agent.ipmd.latent_learning.code_period=10",
         ],
         "spectral": "vq",
     },
     "hl_skill_fsq": {
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
-        "h": 9,
-        "k": 10,
-        "env_overrides": ["env.command_mode=latent", "env.latent_patch_future_steps=9"],
+        "agent": f"{_IPMD}:G1ImitationLatentSonicRLOptIPMDConfig",
+        "latent_dim": 258,
+        "encoder_window": (0, 9),
         "agent_overrides": [
-            "agent.ipmd.hl_skill_checkpoint_path=/tmp/dummy_skill_encoder.pt",
+            _DUMMY_SKILL_CHECKPOINT,
             "agent.ipmd.latent_learning.code_period=10",
         ],
         "spectral": "fsq",
     },
     "hl_skill_sonic_fsq": {
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
-        "h": 9,
-        "k": 10,
-        # sonic_fsq publishes the 64-level quantizer output directly, so the
-        # published command is z (64) + sin/cos phase (2) = 66.
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_patch_future_steps=9",
-            "env.latent_command_dim=66",
-        ],
+        # sonic_fsq publishes the quantizer output directly: z (64) + sin/cos
+        # phase (2) = 66.
+        "agent": f"{_IPMD}:G1ImitationLatentSonicRLOptIPMDConfig",
+        "latent_dim": 66,
+        "encoder_window": (0, 9),
         "agent_overrides": [
-            "agent.ipmd.hl_skill_checkpoint_path=/tmp/dummy_skill_encoder.pt",
+            _DUMMY_SKILL_CHECKPOINT,
             "agent.ipmd.latent_dim=66",
             "agent.ipmd.latent_learning.code_period=10",
         ],
         "spectral": "sonic_fsq",
     },
     "future_cvae": {
-        "surface": "full",
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentFutureCVAERLOptIPMDConfig",
-        "h": 9,
-        "k": 10,
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_command_dim=256",
-            "env.latent_patch_future_steps=9",
-        ],
-        "agent_overrides": [],
+        "agent": f"{_IPMD}:G1ImitationLatentFutureCVAERLOptIPMDConfig",
+        "latent_dim": 256,
+        "encoder_window": (0, 9),
         "recon_method": "future_cvae",
     },
     "per_step_vq": {
-        "surface": "full",
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentPerStepVQRLOptIPMDConfig",
-        "h": 9,
-        "k": 1,
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_command_dim=64",
-            "env.latent_patch_future_steps=9",
-        ],
-        "agent_overrides": [],
+        "agent": f"{_IPMD}:G1ImitationLatentPerStepVQRLOptIPMDConfig",
+        "latent_dim": 64,
+        "encoder_window": (0, 9),
         "recon_method": "per_step_vq_sequence",
     },
     "vqvae_fsq": {
-        "surface": "full",
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_vqvae_cfg:G1ImitationLatentRLOptIPMDVQVAEConfig",
-        "h": 0,
-        "k": 30,
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_command_dim=64",
-            "env.latent_patch_past_steps=8",
-        ],
-        "agent_overrides": [],
+        "agent": f"{_VQVAE}:G1ImitationLatentRLOptIPMDVQVAEConfig",
+        "latent_dim": 64,
+        "encoder_window": (8, 0),
         "recon_method": "patch_vqvae",
     },
     "vqvae_vq": {
-        "surface": "full",
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_vqvae_cfg:G1ImitationLatentRLOptIPMDVQVAEConfig",
-        "h": 0,
-        "k": 30,
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_command_dim=64",
-            "env.latent_patch_past_steps=8",
-        ],
+        "agent": f"{_VQVAE}:G1ImitationLatentRLOptIPMDVQVAEConfig",
+        "latent_dim": 64,
+        "encoder_window": (8, 0),
         "agent_overrides": ["agent.ipmd.latent_learning.quantizer=vq_ema"],
         "recon_method": "patch_vqvae",
     },
     "ae": {
-        "surface": "full",
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
-        "h": 9,
-        "k": 10,
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_command_dim=64",
-            "env.latent_patch_future_steps=9",
-        ],
+        "agent": f"{_IPMD}:G1ImitationLatentSonicRLOptIPMDConfig",
+        "latent_dim": 64,
+        "encoder_window": (0, 9),
         "agent_overrides": [
             "agent.ipmd.command_source=posterior",
             "agent.ipmd.latent_dim=64",
@@ -246,15 +181,9 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "patch_autoencoder",
     },
     "vae": {
-        "surface": "full",
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
-        "h": 9,
-        "k": 10,
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_command_dim=64",
-            "env.latent_patch_future_steps=9",
-        ],
+        "agent": f"{_IPMD}:G1ImitationLatentSonicRLOptIPMDConfig",
+        "latent_dim": 64,
+        "encoder_window": (0, 9),
         "agent_overrides": [
             "agent.ipmd.command_source=posterior",
             "agent.ipmd.latent_dim=64",
@@ -266,19 +195,98 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "patch_autoencoder",
     },
     "sonic_official_fsq": {
-        "surface": "full",
-        "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig",
-        "h": 9,
-        "k": 1,
-        "env_overrides": [
-            "env.command_mode=latent",
-            "env.latent_command_dim=64",
-            "env.latent_patch_future_steps=9",
-        ],
-        "agent_overrides": [],
+        "agent": f"{_IPMD}:G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig",
+        "latent_dim": 64,
+        "encoder_window": (0, 9),
         "recon_method": "patch_vqvae",
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Row construction.
+# ---------------------------------------------------------------------------
+
+
+def _build_rows() -> dict[str, dict]:
+    """The full matrix: explicit spaces x hold periods, plus the latent rows."""
+    rows: dict[str, dict] = {}
+    for space_name, components in EXPLICIT_SPACES.items():
+        for hold_steps in EXPLICIT_PERIODS:
+            rows[f"{space_name}_k{hold_steps}"] = {
+                "agent": f"{_IPMD}:G1ImitationRLOptIPMDConfig",
+                "components": components,
+                "hold_steps": hold_steps,
+            }
+    rows.update(LATENT_ROWS)
+    return rows
+
+
+def _env_cfg_for(row: dict):
+    """The environment config a row asks for, resolved as the env would."""
+    from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+        ChunkCommandCfg,
+        EncoderViewCfg,
+        ExplicitCommandCfg,
+        LatentCommandCfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+        ImitationG1V2EnvCfg,
+    )
+
+    env_cfg = ImitationG1V2EnvCfg()
+    interface = env_cfg.command_interface
+    components = row.get("components")
+    if components is None:
+        interface.actor = LatentCommandCfg(dim=int(row["latent_dim"]))
+        past_steps, future_steps = row["encoder_window"]
+        interface.encoder = EncoderViewCfg(
+            past_steps=int(past_steps), future_steps=int(future_steps)
+        )
+        interface.critic_channels = ("actor", "reference")
+    else:
+        hold_steps = int(row["hold_steps"])
+        if hold_steps <= 1:
+            interface.actor = ExplicitCommandCfg(components=tuple(components))
+        else:
+            interface.actor = ChunkCommandCfg(
+                source="reference",
+                components=tuple(components),
+                horizon=hold_steps,
+                hold_steps=hold_steps,
+            )
+        interface.encoder = None
+        interface.critic_channels = ("reference",)
+    env_cfg.resolve_late_overrides()
+    return env_cfg
+
+
+def _agent_cfg_for(row: dict, env_cfg):
+    """The row's agent config, bound to the environment's command interface."""
+    import yaml
+
+    from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+        bind_command_interface,
+    )
+
+    module_name, class_name = row["agent"].split(":")
+    module = __import__(module_name, fromlist=[class_name])
+    agent_cfg = getattr(module, class_name)()
+
+    overrides: dict = {}
+    for override in row.get("agent_overrides", []):
+        key, value = override.split("=", 1)
+        if not key.startswith("agent."):
+            raise ValueError(f"agent override expected, got {override!r}")
+        parts = key[len("agent.") :].split(".")
+        target = overrides
+        for part in parts[:-1]:
+            target = target.setdefault(part, {})
+        target[parts[-1]] = yaml.safe_load(value)
+    if overrides:
+        agent_cfg.from_dict(overrides)
+    bind_command_interface(agent_cfg, env_cfg)
+    return agent_cfg
 
 
 # ---------------------------------------------------------------------------
@@ -286,92 +294,13 @@ LATENT_ROWS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 
-def _resolve_env_cfg(surface: str, overrides: list[str]):
-    """Resolve the env config for a v2 surface.
-
-    Every v2 surface is the single configurable ``ImitationG1V2EnvCfg``
-    (latent default, explicit interfaces, chunk/packet interfaces, and the
-    windowed encoder surfaces are all knobs on the one class); the ``surface``
-    argument is kept for the rows' markers but resolves identically.
-    Overrides are applied via ``from_dict`` (the cfg's own parsers handle
-    list-form strings) and the construction-time resolution step is re-run,
-    mirroring the env constructor's handling of late overrides.
-    """
-    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
-        ImitationG1V2EnvCfg,
-    )
-
-    del surface
-    env_cfg = ImitationG1V2EnvCfg()
-
-    if overrides:
-        import yaml
-
-        from_dict: dict = {}
-        for override in overrides:
-            key, value = override.split("=", 1)
-            if key.startswith("agent."):
-                # Agent-side overrides are applied to the agent cfg separately.
-                continue
-            if key.startswith("env."):
-                key = key[len("env.") :]
-            parts = key.split(".")
-            target = from_dict
-            for part in parts[:-1]:
-                target = target.setdefault(part, {})
-            try:
-                target[parts[-1]] = yaml.safe_load(value)
-            except yaml.YAMLError:
-                # List-form strings like "[a,b,c]" are kept raw; the cfg's
-                # normalization/derivation methods parse both forms themselves.
-                target[parts[-1]] = value
-        env_cfg.from_dict(from_dict)
-    # The v2 surfaces resolve every override-dependent layout (manifest,
-    # command-mode pruning, syncs) in one construction-time step, mirroring
-    # the env constructor. Legacy surfaces keep `_refresh_command_observation_terms`.
-    resolve = getattr(env_cfg, "resolve_late_overrides", None)
-    if callable(resolve):
-        resolve()
-    else:
-        refresh = getattr(env_cfg, "_refresh_command_observation_terms", None)
-        if callable(refresh):
-            refresh()
-    return env_cfg
-
-
-def _resolve_agent_cfg(import_path: str, overrides: list[str]):
-    import yaml
-
-    module_name, class_name = import_path.split(":")
-    module = __import__(module_name, fromlist=[class_name])
-    agent_cfg = getattr(module, class_name)()
-    agent_overrides: dict = {}
-    for override in overrides:
-        key, value = override.split("=", 1)
-        if not key.startswith("agent."):
-            raise ValueError(f"agent override expected, got {override!r}")
-        parts = key[len("agent.") :].split(".")
-        target = agent_overrides
-        for part in parts[:-1]:
-            target = target.setdefault(part, {})
-        # Hydra parses override values as YAML scalars; configclass.from_dict
-        # applies strict typing, so coerce the same way.
-        target[parts[-1]] = yaml.safe_load(value)
-    if agent_overrides:
-        agent_cfg.from_dict(agent_overrides)
-    sync = getattr(agent_cfg, "sync_input_keys", None)
-    if callable(sync):
-        sync()
-    return agent_cfg
-
-
-def _group_terms(group) -> list[str]:
-    terms = []
-    for field in dataclasses.fields(group):
-        value = getattr(group, field.name)
-        if value is not None and hasattr(value, "func"):
-            terms.append(field.name)
-    return terms
+def _group_terms(group) -> set[str]:
+    return {
+        field.name
+        for field in dataclasses.fields(group)
+        if getattr(group, field.name) is not None
+        and hasattr(getattr(group, field.name), "func")
+    }
 
 
 def _obs_groups(env_cfg) -> dict[str, set[str]]:
@@ -379,178 +308,101 @@ def _obs_groups(env_cfg) -> dict[str, set[str]]:
     for field in dataclasses.fields(env_cfg.observations):
         group = getattr(env_cfg.observations, field.name)
         if group is not None:
-            groups[field.name] = set(_group_terms(group))
+            groups[field.name] = _group_terms(group)
     return groups
 
 
-def _window_params(env_cfg, group_name: str, term_name: str) -> dict | None:
-    group = getattr(env_cfg.observations, group_name, None)
-    if group is None:
-        return None
-    term = getattr(group, term_name, None)
-    if term is None:
-        return None
-    return dict(term.params)
+def _missing_keys(keys, groups: dict[str, set[str]]) -> list[str]:
+    return [
+        f"{group}.{term}"
+        for group, term in (keys or [])
+        if term not in groups.get(group, set())
+    ]
 
 
 def check_row(row_name: str, row: dict, report: list[str]) -> None:
-    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (  # noqa: F401
-        normalize_command_space,
+    from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+        encoder_command_keys,
     )
 
-    errors: list[str] = []
-    env_overrides = list(row.get("env_overrides", []))
-    agent_overrides = list(row.get("agent_overrides", [])) + [
-        override for override in env_overrides if override.startswith("agent.")
-    ]
     try:
-        env_cfg = _resolve_env_cfg(str(row.get("surface", "lean")), env_overrides)
-    except Exception as exc:  # pragma: no cover - failure surfaced in report
+        env_cfg = _env_cfg_for(row)
+    except Exception as exc:
         report.append(f"[FAIL] {row_name}: env resolution: {type(exc).__name__}: {exc}")
         return
     try:
-        agent_cfg = _resolve_agent_cfg(row["agent"], agent_overrides)
-    except Exception as exc:  # pragma: no cover
+        agent_cfg = _agent_cfg_for(row, env_cfg)
+    except Exception as exc:
         report.append(
             f"[FAIL] {row_name}: agent resolution: {type(exc).__name__}: {exc}"
         )
         return
 
+    errors: list[str] = []
+    interface = env_cfg.command_interface
+    groups = _obs_groups(env_cfg)
+
+    # Every network's inputs must exist on the narrowed observation surface.
+    for label, keys in (
+        ("actor", agent_cfg.policy.input_keys),
+        (
+            "critic",
+            agent_cfg.value_function.input_keys if agent_cfg.value_function else [],
+        ),
+        ("encoder", encoder_command_keys(interface)),
+    ):
+        missing = _missing_keys(keys, groups)
+        if missing:
+            errors.append(f"{label} input keys absent from the surface: {missing}")
+
     use_latent = bool(agent_cfg.ipmd.use_latent_command)
-    command_mode = str(getattr(env_cfg, "command_mode", "explicit"))
-    if use_latent != (command_mode == "latent"):
+    if use_latent != interface.is_latent():
         errors.append(
-            f"mode mismatch: env.command_mode={command_mode!r} vs "
+            f"actor kind {interface.actor_kind()!r} disagrees with "
             f"agent.ipmd.use_latent_command={use_latent}"
         )
 
-    groups = _obs_groups(env_cfg)
-    for label, keys in (("policy", agent_cfg.policy.input_keys or []),):
-        for grp, term in keys:
-            if grp not in groups or term not in groups[grp]:
-                errors.append(f"{label} key ({grp}, {term!r}) missing from obs groups")
-    value_function = getattr(agent_cfg, "value_function", None)
-    if value_function is not None:
-        for grp, term in value_function.input_keys or []:
-            if grp not in groups or term not in groups[grp]:
-                errors.append(f"critic key ({grp}, {term!r}) missing from obs groups")
-
-    if use_latent:
-        env_latent_dim = int(getattr(env_cfg, "latent_command_dim", 0))
-        agent_latent_dim = int(agent_cfg.ipmd.latent_dim)
-        if env_latent_dim != agent_latent_dim:
-            errors.append(
-                f"latent dim mismatch: env.latent_command_dim={env_latent_dim} vs "
-                f"agent.ipmd.latent_dim={agent_latent_dim}"
-            )
-        latent_learning = agent_cfg.ipmd.latent_learning
-        agent_h = int(getattr(latent_learning, "patch_future_steps", 0))
-        agent_past = int(getattr(latent_learning, "patch_past_steps", 0))
-        env_h = int(getattr(env_cfg, "latent_patch_future_steps", 0))
-        env_past = int(getattr(env_cfg, "latent_patch_past_steps", 0))
-        # Rows that read windowed command observations must carry the matching
-        # window horizon; the window lives on the policy command terms (the
-        # expert_window group is gone). The hl_skill scheme reads the policy
-        # group only (single-frame).
-        reads_window = any(
-            grp == "policy"
-            and term
-            in {
-                "expert_motion",
-                "expert_motion_qpos",
-                "expert_anchor_pos_b",
-                "expert_anchor_ori_b",
-                "expert_ee_pos_b",
-                "expert_ee_ori_b",
-                "expert_keypoint_pos_b",
-                "expert_keypoint_ori_b",
-            }
-            for grp, term in (agent_cfg.policy.input_keys or [])
-        ) or any(
-            grp == "policy"
-            and term
-            in {
-                "expert_motion",
-                "expert_motion_qpos",
-                "expert_anchor_pos_b",
-                "expert_anchor_ori_b",
-                "expert_ee_pos_b",
-                "expert_ee_ori_b",
-                "expert_keypoint_pos_b",
-                "expert_keypoint_ori_b",
-            }
-            for grp, term in (value_function.input_keys or [])
-            if value_function is not None
-        )
-        if reads_window:
-            if env_h != agent_h or env_past != agent_past:
-                errors.append(
-                    f"window mismatch for command-window reader: env (past={env_past}, "
-                    f"future={env_h}) vs agent (past={agent_past}, future={agent_h})"
-                )
-        # Command period (k) lives agent-side for latent schemes; which field
-        # owns it depends on the scheme (patch_vqvae and the pretrained
-        # hl_skill path hold via code_period; in-loop encoders via
-        # posterior_command_period).
-        method = str(getattr(latent_learning, "method", ""))
-        command_source = str(getattr(agent_cfg.ipmd, "command_source", ""))
-        if method == "patch_vqvae" or command_source == "hl_skill":
-            agent_k = int(getattr(latent_learning, "code_period", 0))
+    if interface.is_latent():
+        env_dim = int(interface.actor.dim)
+        agent_dim = int(agent_cfg.ipmd.latent_dim)
+        if env_dim != agent_dim:
+            errors.append(f"latent width mismatch: env {env_dim} vs agent {agent_dim}")
+        if interface.encoder is None:
+            errors.append("a latent row needs an encoder view to encode")
         else:
-            agent_k = int(getattr(latent_learning, "posterior_command_period", 0))
-        row_k = int(row.get("k", 0))
-        if agent_k != row_k:
-            errors.append(
-                f"command period mismatch: expected k={row_k}, agent has {agent_k}"
+            want = tuple(int(step) for step in row["encoder_window"])
+            got = (
+                int(interface.encoder.past_steps),
+                int(interface.encoder.future_steps),
             )
-
+            if got != want:
+                errors.append(f"encoder window {got} != requested {want}")
     else:
-        command_space = str(getattr(agent_cfg, "command_space", ""))
-        try:
-            normalize_command_space(command_space)
-        except ValueError as exc:
-            errors.append(str(exc))
-        # Explicit chunk rows: validate hold invariants.
-        hold = int(getattr(env_cfg, "command_hold_steps", 0))
-        env_past = int(getattr(env_cfg, "latent_patch_past_steps", 0))
-        env_h = int(getattr(env_cfg, "latent_patch_future_steps", 0))
-        policy_mode = str(getattr(env_cfg, "policy_command_mode", "reference"))
-        source = str(getattr(env_cfg, "command_observation_source", "reference"))
-        row_k = int(row.get("k", 0))
-        if hold != row_k:
-            errors.append(f"env.command_hold_steps={hold} != row k={row_k}")
-        if hold > 0:
-            if env_past != 0:
+        actor = interface.actor
+        hold_steps = int(getattr(actor, "hold_steps", 1) or 1)
+        if hold_steps > 1:
+            if int(actor.past_steps) != 0:
+                errors.append("a packet command requires a future-only window")
+            if int(actor.horizon) < hold_steps:
                 errors.append(
-                    "command_hold_steps>0 requires latent_patch_past_steps==0"
+                    f"packet does not cover the hold: horizon={actor.horizon} "
+                    f"< hold_steps={hold_steps}"
                 )
-            if policy_mode == "reference":
-                errors.append(
-                    "command_hold_steps>0 requires a *_chunk_current_slot "
-                    "policy_command_mode"
-                )
-            if source not in {"planner", "planner_oracle"}:
-                errors.append(
-                    "chunk consumption requires command_observation_source in "
-                    "{planner, planner_oracle}"
-                )
-            if env_h + 1 < hold:
-                errors.append(
-                    f"window does not cover the hold: h+1={env_h + 1} < k={hold}"
-                )
-        elif policy_mode != "reference":
-            errors.append("chunk policy_command_mode requires command_hold_steps>0")
+            if actor.source not in {"external", "reference"}:
+                errors.append(f"a packet cannot be published by {actor.source!r}")
+        if tuple(interface.actor_components()) != tuple(row["components"]):
+            errors.append(
+                f"actor components {interface.actor_components()} != requested "
+                f"{tuple(row['components'])}"
+            )
 
     reward_estimation = bool(getattr(agent_cfg, "reward_estimation", False))
-    reward_input_group = (
-        getattr(getattr(env_cfg, "observations", None), "reward_input", None)
-        is not None
-    )
+    reward_input_group = "reward_input" in groups
     if reward_estimation != reward_input_group:
         errors.append(
             "reward stack mismatch: "
-            f"agent.reward_estimation={reward_estimation} but "
-            f"env reward_input group present={reward_input_group}"
+            f"agent.reward_estimation={reward_estimation} but env reward_input "
+            f"group present={reward_input_group}"
         )
 
     report.append(
@@ -560,9 +412,8 @@ def check_row(row_name: str, row: dict, report: list[str]) -> None:
 
 
 def _construct_row(row_name: str, row: dict) -> int:
-    """Build the env for the row in the already-running app, step three times."""
+    """Build the row's environment in the running app and step it."""
     import gymnasium as gym
-    import isaaclab_tasks  # noqa: F401
     import torch
 
     import isaaclab_imitation.tasks  # noqa: F401
@@ -570,12 +421,10 @@ def _construct_row(row_name: str, row: dict) -> int:
     status = 1
     env = None
     try:
-        surface = str(row.get("surface", "lean"))
-        env_cfg = _resolve_env_cfg(surface, list(row.get("env_overrides", [])))
-        manifest = Path("./data/unitree/manifests/g1_unitree_dance102_manifest.json")
-        setattr(env_cfg, "lafan1_manifest_path", str(manifest.resolve()))
+        env_cfg = _env_cfg_for(row)
+        env_cfg.lafan1_manifest_path = str(_MANIFEST.resolve())
         env = gym.make(_TASK, cfg=env_cfg)
-        agent_cfg = _resolve_agent_cfg(row["agent"], row.get("agent_overrides", []))
+        agent_cfg = _agent_cfg_for(row, env_cfg)
         keys = list(agent_cfg.policy.input_keys or [])
         action = torch.zeros(env.action_space.shape, device=env.unwrapped.device)
         obs, _ = env.reset()
@@ -583,9 +432,11 @@ def _construct_row(row_name: str, row: dict) -> int:
             obs, *_ = env.step(action)
         obs_groups = dict(obs) if hasattr(obs, "keys") else {}
         missing = [
-            f"{grp}.{term}"
-            for grp, term in keys
-            if grp not in obs_groups or obs_groups[grp] is None
+            f"{group}.{term}"
+            for group, term in keys
+            if group not in obs_groups
+            or obs_groups[group] is None
+            or term not in obs_groups[group]
         ]
         if missing:
             print(f"[FAIL] {row_name}: constructed but missing obs keys: {missing}")
@@ -595,7 +446,7 @@ def _construct_row(row_name: str, row: dict) -> int:
                 f"{len(obs_groups)} obs groups, agent keys present"
             )
             status = 0
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:
         print(f"[FAIL] {row_name}: {type(exc).__name__}: {exc}")
     finally:
         if env is not None:
@@ -619,15 +470,13 @@ def main() -> None:
 
     if args.construct:
         # The AppLauncher must start before any Isaac Lab module import (pxr
-        # binding requirement); with constructions requested, boot the app
-        # first and run the config checks against the running app, then build
-        # every row's env in the same process.
+        # binding requirement), so boot it first and run the config checks
+        # against the running app.
         from isaaclab.app import AppLauncher
 
         app_launcher = AppLauncher({"headless": True, "device": "cuda:0"})
         simulation_app = app_launcher.app
 
-    # Spectral-mode availability (pretrain side, RLOpt owns the encoders).
     from rlopt.agent.hl_skill_encoder import LATENT_MODES
 
     for mode in PRETRAIN_SPECTRAL_MODES:
@@ -636,36 +485,7 @@ def main() -> None:
                 f"[FAIL] spectral mode {mode!r} missing from RLOpt LATENT_MODES"
             )
 
-    rows: dict[str, dict] = {}
-    for space_name, (command_space, terms, chunk_mode) in EXPLICIT_SPACES.items():
-        for h, k in EXPLICIT_PERIODS:
-            name = f"{space_name}_k{k}"
-            env_overrides = [
-                "env.command_mode=explicit",
-                f"env.command_observation_terms=[{','.join(terms)}]",
-                "agent.ipmd.use_latent_command=false",
-                f"agent.command_space={command_space}",
-            ]
-            if k > 0:
-                env_overrides += [
-                    f"env.policy_command_mode={chunk_mode}",
-                    f"env.command_hold_steps={k}",
-                    f"env.latent_patch_future_steps={h}",
-                    "env.command_observation_source=planner_oracle",
-                ]
-            rows[name] = {
-                "agent": (
-                    "isaaclab_imitation.tasks.manager_based.imitation.config.g1."
-                    "agents.rlopt_ipmd_cfg:G1ImitationRLOptIPMDConfig"
-                ),
-                "surface": "full",
-                "h": h,
-                "k": k,
-                "env_overrides": env_overrides,
-                "agent_overrides": ["agent.ipmd.use_latent_command=false"],
-            }
-    rows.update(LATENT_ROWS)
-
+    rows = _build_rows()
     for row_name, row in rows.items():
         check_row(row_name, row, report)
 

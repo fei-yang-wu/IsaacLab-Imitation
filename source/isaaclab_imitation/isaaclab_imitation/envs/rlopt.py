@@ -96,133 +96,14 @@ class IsaacLabWrapper(GymWrapper):
         env = getattr(self, "_env", None)
         return getattr(env, "unwrapped", env)
 
-    def sample_expert_batch(self, batch_size: int, required_keys):
-        return self._base_isaac_env().sample_expert_batch(
-            batch_size=batch_size,
-            required_keys=required_keys,
-        )
+    @property
+    def imitation_interface(self):
+        """The wrapped environment's imitation capability surface.
 
-    def sample_expert_macro_transition_batch(
-        self,
-        batch_size: int,
-        horizon_steps: int,
-        split: str | None = None,
-        eval_fraction: float = 0.1,
-        split_seed: int = 0,
-        trajectory_ranks=None,
-        state_history_steps: int = 0,
-    ):
-        return self._base_isaac_env().sample_expert_macro_transition_batch(
-            batch_size=batch_size,
-            horizon_steps=horizon_steps,
-            split=split,
-            eval_fraction=eval_fraction,
-            split_seed=split_seed,
-            trajectory_ranks=trajectory_ranks,
-            state_history_steps=state_history_steps,
-        )
-
-    def current_expert_macro_transition_batch(
-        self,
-        horizon_steps: int,
-        env_ids=None,
-        state_history_steps: int = 0,
-    ):
-        return self._base_isaac_env().current_expert_macro_transition_batch(
-            horizon_steps=horizon_steps,
-            env_ids=env_ids,
-            state_history_steps=state_history_steps,
-        )
-
-    def current_achieved_macro_transition_batch(
-        self,
-        horizon_steps: int,
-        env_ids=None,
-        state_history_steps: int = 0,
-    ):
-        return self._base_isaac_env().current_achieved_macro_transition_batch(
-            horizon_steps=horizon_steps,
-            env_ids=env_ids,
-            state_history_steps=state_history_steps,
-        )
-
-    def current_causal_planner_observation(
-        self,
-        env_ids=None,
-        history_steps: int = 9,
-    ):
-        return self._base_isaac_env().current_causal_planner_observation(
-            env_ids=env_ids,
-            history_steps=history_steps,
-        )
-
-    def causal_planner_observation_spec(self, history_steps: int = 9):
-        return self._base_isaac_env().causal_planner_observation_spec(
-            history_steps=history_steps,
-        )
-
-    def expert_macro_feature_slices(self, horizon_steps: int):
-        return self._base_isaac_env().expert_macro_feature_slices(
-            horizon_steps=horizon_steps,
-        )
-
-    def expert_trajectory_motion_names(self):
-        return self._base_isaac_env().expert_trajectory_motion_names()
-
-    def set_agent_latent_command(self, latent_command, env_ids=None):
-        return self._base_isaac_env().set_agent_latent_command(
-            latent_command,
-            env_ids=env_ids,
-        )
-
-    def reset_agent_latent_command(self, env_ids=None):
-        return self._base_isaac_env().reset_agent_latent_command(env_ids=env_ids)
-
-    def get_agent_latent_command(self, env_ids=None):
-        return self._base_isaac_env().get_agent_latent_command(env_ids=env_ids)
-
-    def set_agent_trajectory_command(self, command_terms, env_ids=None):
-        return self._base_isaac_env().set_agent_trajectory_command(
-            command_terms,
-            env_ids=env_ids,
-        )
-
-    def set_agent_full_body_trajectory_command(
-        self,
-        *,
-        expert_motion,
-        expert_anchor_pos_b,
-        expert_anchor_ori_b,
-        env_ids=None,
-    ):
-        return self._base_isaac_env().set_agent_full_body_trajectory_command(
-            expert_motion=expert_motion,
-            expert_anchor_pos_b=expert_anchor_pos_b,
-            expert_anchor_ori_b=expert_anchor_ori_b,
-            env_ids=env_ids,
-        )
-
-    def set_agent_ee_trajectory_command(
-        self,
-        *,
-        expert_ee_pos_b,
-        expert_ee_ori_b,
-        env_ids=None,
-    ):
-        return self._base_isaac_env().set_agent_ee_trajectory_command(
-            expert_ee_pos_b=expert_ee_pos_b,
-            expert_ee_ori_b=expert_ee_ori_b,
-            env_ids=env_ids,
-        )
-
-    def reset_agent_trajectory_command(self, env_ids=None):
-        return self._base_isaac_env().reset_agent_trajectory_command(env_ids=env_ids)
-
-    def get_agent_trajectory_command_term(self, term_name, env_ids=None):
-        return self._base_isaac_env().get_agent_trajectory_command_term(
-            term_name,
-            env_ids=env_ids,
-        )
+        RLOpt resolves this by walking the wrapper stack; forwarding it here
+        keeps the wrapper free of per-capability delegators.
+        """
+        return self._base_isaac_env().imitation_interface
 
     @property
     def _is_batched(self) -> bool:

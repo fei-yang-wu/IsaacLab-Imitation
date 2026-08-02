@@ -6,8 +6,8 @@
 """VQ-VAE surface on the single v2 env (rebase 2026-08-02).
 
 The encoder consumes the windowed policy command terms
-(``("policy", "expert_motion")`` etc.); ``latent_patch_past_steps=8`` widens
-the command window to a causal 9-frame context.
+(the encoder view of the reference channel); a past window of 8 widens it to a
+causal 9-frame context.
 """
 
 from isaaclab.utils.configclass import configclass
@@ -26,10 +26,10 @@ class ImitationG1VQVAESurfaceEnvCfg(ImitationG1V2EnvCfg):
 
     def __post_init__(self):
         super().__post_init__()
-        self.latent_patch_past_steps = 8
-        self.latent_patch_future_steps = 0
-        # The env-construction resolution syncs the policy command terms to
-        # this window (see ImitationG1V2EnvCfg.resolve_late_overrides).
+        self.command_interface.encoder.past_steps = 8
+        self.command_interface.encoder.future_steps = 0
+        # The env-construction resolution parameterizes the policy command
+        # terms with this window (see ImitationG1V2EnvCfg.resolve_late_overrides).
 
 
 __all__ = ["ImitationG1VQVAESurfaceEnvCfg"]

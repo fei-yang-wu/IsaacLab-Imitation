@@ -67,9 +67,10 @@ class ImitationG1SonicSurfaceEnvCfg(ImitationG1V2EnvCfg):
         # SONIC's motion library samples over the complete trajectory, with
         # adaptive failure weighting and a uniform component. The v2 default
         # intentionally limits starts to [0, 200], so undo that only here.
-        self.random_reset_step_max = 0
-        self.random_reset_full_trajectory = True
-        self.adaptive_failure_reset_failure_rate_max_over_mean = 200.0
+        selection = self.command_interface.reference.selection
+        selection.random_step_max = 0
+        selection.full_trajectory = True
+        selection.adaptive_failure_rate_max_over_mean = 200.0
 
 
 @configclass
@@ -88,21 +89,20 @@ class ImitationG1SonicNoHistorySurfaceEnvCfg(ImitationG1SonicSurfaceEnvCfg):
 class ImitationG1SonicOfficialFSQSurfaceEnvCfg(ImitationG1SonicSurfaceEnvCfg):
     """SONIC release environment with a renewed 10-frame FSQ window command."""
 
-    latent_command_dim: int = 64
-
     def __post_init__(self):
         super().__post_init__()
-        self.latent_patch_past_steps = 0
-        self.latent_patch_future_steps = 9
+        self.command_interface.actor.dim = 64
+        self.command_interface.encoder.past_steps = 0
+        self.command_interface.encoder.future_steps = 9
         # Keep the sample-efficient reset sampler established by the Stable
         # reset screen; full-trajectory adaptive-failure starts need far more
         # data at our single-GPU scale.
-        self.random_reset_step_max = 200
-        self.random_reset_full_trajectory = False
-        self.adaptive_failure_reset_failure_rate_max_over_mean = 50.0
-        # Zero means the observation window advances with the live reference.
-        # The agent-side code_period=1 independently renews the quantized code.
-        self.command_hold_steps = 0
+        selection = self.command_interface.reference.selection
+        selection.random_step_max = 200
+        selection.full_trajectory = False
+        selection.adaptive_failure_rate_max_over_mean = 50.0
+        # The command window advances with the live reference; the agent-side
+        # code_period=1 independently renews the quantized code.
 
 
 __all__ = [
