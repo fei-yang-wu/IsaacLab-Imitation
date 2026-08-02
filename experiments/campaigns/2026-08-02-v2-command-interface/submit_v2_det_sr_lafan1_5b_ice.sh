@@ -165,34 +165,38 @@ export_cluster_env() {
 
 submit_pretrain() {
     export_cluster_env
-    export CLUSTER_PYTHON_EXECUTABLE="scripts/rlopt/train_hl_skill_diffsr.py"
+    # The pipeline driver, not train_hl_skill_diffsr.py directly: run_singularity
+    # routes the interpreter by entrypoint, and the pipeline is the path every
+    # working cluster pretrain has used (e.g. the 2026-07-26 groupvq cache
+    # build). `--pretrain-only` stops after the encoder.
+    export CLUSTER_PYTHON_EXECUTABLE="scripts/rlopt/train_hl_skill_pipeline.py"
     export CLUSTER_SLURM_JOB_NAME_PREFIX="v2-detsr-pretrain"
 
     local cmd=(./docker/cluster/cluster_interface.sh -c ice_runtime job
         --task "${TASK_NAME}"
-        --num_envs "${PRETRAIN_NUM_ENVS}"
         --headless
         --assert-kitless
         --seed "${SEED}"
-        --output_dir "${ENCODER_DIR_CONTAINER}"
-        --horizon_steps "${HORIZON_STEPS}"
-        --encoder_window_mode intermediate
-        --z_dim "${Z_DIM}"
-        --latent_mode "${LATENT_MODE}"
-        --batch_size "${PRETRAIN_BATCH_SIZE}"
-        --num_updates "${PRETRAIN_UPDATES}"
-        --reconstruction_eval
-        --logger_backend wandb
-        --wandb_project "${WANDB_PROJECT}"
-        --wandb_group "${WANDB_GROUP}"
-        --wandb_run_name "${RUN_TAG}_pretrain"
-        --kit_args=--/app/extensions/fsWatcherEnabled=false
-        physics=newton_mjwarp
-        "env.lafan1_manifest_path=${MANIFEST_PATH}"
-        "env.dataset_path=${DATASET_PATH}"
+        --pretrain-only
+        --pretrain-output-dir "${ENCODER_DIR_CONTAINER}"
+        --pretrain-num-envs "${PRETRAIN_NUM_ENVS}"
+        --pretrain-updates "${PRETRAIN_UPDATES}"
+        --pretrain-batch-size "${PRETRAIN_BATCH_SIZE}"
+        --horizon-steps "${HORIZON_STEPS}"
+        --encoder-window-mode intermediate
+        --z-dim "${Z_DIM}"
+        --latent-mode "${LATENT_MODE}"
+        --phase-mode sin_cos
+        --latent-hold-steps "${LATENT_HOLD_STEPS}"
+        --manifest-path "${MANIFEST_PATH}"
+        --dataset-path "${DATASET_PATH}"
+        --logger-backend wandb
+        --wandb-project "${WANDB_PROJECT}"
+        --wandb-group "${WANDB_GROUP}"
+        --pretrain-override physics=newton_mjwarp
         # MUST stay false: the /data cache is shared with every other LAFAN1
         # arm and a refresh=true job rebuilds it underneath them.
-        env.refresh_zarr_dataset=false
+        --pretrain-override env.refresh_zarr_dataset=false
     )
 
     echo

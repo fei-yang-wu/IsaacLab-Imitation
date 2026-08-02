@@ -664,14 +664,25 @@ g1_usd_env_exports="export ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT=$(dirname "
 if [ "${g1_usd_path}" = "repo" ] || [ "${g1_usd_path}" = "none" ]; then
     g1_usd_env_exports=""
 fi
+# Which interpreter the workload gets. RLOpt training entrypoints need the CU130
+# runtime Python (it has torch); everything else -- data prep, agents, viz --
+# runs under Kit's Python. This used to be an exact-name allow-list of
+# `train.py` and `train_hl_skill_pipeline.py`, so any other rlopt entrypoint
+# fell through to /isaac-sim/python.sh and died on `No module named 'torch'`
+# several seconds in, with a traceback that pointed at Isaac Lab rather than at
+# the interpreter (ICE job 5558033). Match the whole class instead.
+#
+# `rlopt_pipeline=1` means "this entrypoint runs its own stages, never rewrite
+# it"; only `train.py` is rewritten to `train_physx.py` under the PhysX backend.
 rlopt_backend=""
 rlopt_pipeline=0
-if [ "${CLUSTER_PYTHON_EXECUTABLE}" = "scripts/rlopt/train_hl_skill_pipeline.py" ]; then
-    rlopt_pipeline=1
-fi
-if [ "${CLUSTER_PYTHON_EXECUTABLE}" = "scripts/rlopt/train.py" ] || [ "$rlopt_pipeline" = "1" ]; then
-    rlopt_backend="$(resolve_rlopt_backend "${@:3}")"
-fi
+case "${CLUSTER_PYTHON_EXECUTABLE}" in
+    scripts/rlopt/train.py) ;;
+    scripts/rlopt/train*.py) rlopt_pipeline=1 ;;
+esac
+case "${CLUSTER_PYTHON_EXECUTABLE}" in
+    scripts/rlopt/train*.py) rlopt_backend="$(resolve_rlopt_backend "${@:3}")" ;;
+esac
 
 if [ "$rlopt_backend" = "newton" ]; then
     printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}" --assert-kitless
