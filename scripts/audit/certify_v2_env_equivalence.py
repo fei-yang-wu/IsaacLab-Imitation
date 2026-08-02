@@ -5,8 +5,22 @@ Both env classes accept the same ``-G1-v2`` cfg, so the fork's switch-over
 condition is a fixed-seed A/B: run the identical cfg and action sequence once
 with the legacy class (``ImitationRLEnvLegacy``) and once with the flagship
 ``ImitationRLEnv`` (one class per process), then ``torch.equal``-compare the
-full observation dict, rewards, dones, and the ``motion`` / ``skill``
-command-manager commands at every step.
+full observation dict, rewards, dones, and the command-manager commands at
+every step.
+
+ROLE CHANGE (2026-08-01, lean v2): the v2 env now runs a single-compute step
+while the legacy env keeps the base env's double observation compute; the
+discarded mid-step compute also drew observation noise, so v2 has its own
+fresh stochastic stream and is deliberately NOT bit-equivalent to the legacy
+env. This tool therefore certifies:
+
+- legacy == legacy (cross-process determinism of the frozen v0/v1 env), and
+- v2 == v2 (determinism of the thin env) for a fixed cfg/seed/action
+  sequence.
+
+Capturing the same class twice and comparing is the regression gate; a
+legacy-vs-v2 comparison is expected to diverge after the first noise draw.
+"""
 
 Examples (run from the repository root):
 
@@ -155,7 +169,7 @@ def _capture(args: argparse.Namespace) -> None:
         commands = {}
         command_manager = getattr(env, "command_manager", None)
         active_terms = tuple(getattr(command_manager, "active_terms", ()))
-        for term_name in ("motion", "skill", "chunk"):
+        for term_name in ("command", "motion", "skill", "chunk"):
             if term_name in active_terms:
                 commands[term_name] = (
                     command_manager.get_command(term_name).detach().cpu().clone()

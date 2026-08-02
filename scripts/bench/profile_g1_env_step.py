@@ -163,17 +163,19 @@ def main() -> None:
         "observations", unwrapped.observation_manager.compute
     )
 
-    # Expert-window builders (the known-heavy obs-side suspects).
-    plane = unwrapped.expert_data_plane
-    plane._ensure_mdp_step_cache = add(  # type: ignore[method-assign]
-        "mdp_step_cache", plane._ensure_mdp_step_cache
-    )
-    plane._get_current_expert_window_terms = add(  # type: ignore[method-assign]
-        "expert_window_build", plane._get_current_expert_window_terms
-    )
-    plane._get_current_expert_goal_terms = add(  # type: ignore[method-assign]
-        "expert_goal_build", plane._get_current_expert_goal_terms
-    )
+    # Expert-window builders (the known-heavy obs-side suspects). Legacy envs
+    # keep the builders inline; only the composed v2 env has the plane.
+    plane = getattr(unwrapped, "expert_data_plane", None)
+    if plane is not None:
+        plane._ensure_mdp_step_cache = add(  # type: ignore[method-assign]
+            "mdp_step_cache", plane._ensure_mdp_step_cache
+        )
+        plane._get_current_expert_window_terms = add(  # type: ignore[method-assign]
+            "expert_window_build", plane._get_current_expert_window_terms
+        )
+        plane._get_current_expert_goal_terms = add(  # type: ignore[method-assign]
+            "expert_goal_build", plane._get_current_expert_goal_terms
+        )
 
     # Per-observation-group timing inside the observation manager.
     group_timers: dict[str, _Timer] = {}

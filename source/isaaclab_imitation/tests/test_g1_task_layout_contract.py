@@ -257,13 +257,14 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
 
     The reward_input group feeds only the IPMD reward estimator, so v2
     defaults `enable_reward_input_observations=False` and drops the group;
-    v0/v1 keep it (pinned by the recorded-default test). Opting back in must
-    restore the exact v0/v1 term list, and True -> False -> True must
-    round-trip through the construction-time refresh.
+    v0/v1 keep it (pinned by the recorded-default test). The lean v2 surface
+    (2026-08-01) has no reward_input group at all, so the opt-in knob stays
+    inert there -- reward estimation would require the full surface; the
+    full surface keeps the v1 opt-in semantics.
     """
     v2_cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
     assert v2_cfg.enable_reward_input_observations is False
-    assert v2_cfg.observations.reward_input is None
+    assert getattr(v2_cfg.observations, "reward_input", None) is None
 
     v1_cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
     assert v1_cfg.enable_reward_input_observations is True
@@ -271,26 +272,39 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     v0_cfg = _load_env_cfg("Isaac-Imitation-G1-v0")
     assert _group_terms(v0_cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
-    # Opting in on v2 restores the exact v0/v1 term list (from_dict path).
+    # The lean v2 surface cannot restore a group it does not declare; the
+    # knob stays inert (reward estimation would need the full surface).
     cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
     cfg.from_dict({"enable_reward_input_observations": True})
-    assert cfg.observations.reward_input is not None
-    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
-    # Restored anchor terms follow the surface's expert anchor body.
+    assert getattr(cfg.observations, "reward_input", None) is None
+    cfg._refresh_command_observation_terms()
+    assert getattr(cfg.observations, "reward_input", None) is None
+
+    # The full surface keeps the v1 opt-in semantics (restores the exact
+    # v0/v1 term list through the construction-time refresh).
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+        ImitationG1FullSurfaceEnvCfg,
+    )
+
+    full_cfg = ImitationG1FullSurfaceEnvCfg()
+    assert full_cfg.observations.reward_input is None
+    full_cfg.enable_reward_input_observations = True
+    full_cfg._refresh_command_observation_terms()
+    assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
     for name in ("expert_anchor_pos_b", "expert_anchor_ori_b"):
-        term = getattr(cfg.observations.reward_input, name)
-        assert term.params["anchor_body_name"] == cfg.expert_anchor_body_name
+        term = getattr(full_cfg.observations.reward_input, name)
+        assert term.params["anchor_body_name"] == full_cfg.expert_anchor_body_name
 
     # True -> False -> True round-trips through the construction-time refresh.
-    cfg.enable_reward_input_observations = False
-    cfg._refresh_command_observation_terms()
-    assert cfg.observations.reward_input is None
-    cfg.enable_reward_input_observations = True
-    cfg._refresh_command_observation_terms()
-    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    full_cfg.enable_reward_input_observations = False
+    full_cfg._refresh_command_observation_terms()
+    assert full_cfg.observations.reward_input is None
+    full_cfg.enable_reward_input_observations = True
+    full_cfg._refresh_command_observation_terms()
+    assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
     # Refresh stays a fixed point.
-    cfg._refresh_command_observation_terms()
-    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    full_cfg._refresh_command_observation_terms()
+    assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
 
 def test_reward_estimation_agent_switch_defaults_parked() -> None:

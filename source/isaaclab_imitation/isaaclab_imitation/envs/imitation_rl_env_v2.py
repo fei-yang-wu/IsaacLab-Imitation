@@ -967,15 +967,19 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     # ------------------------------------------------------------------
 
     def _motion_command_reset_owner(self) -> Any | None:
-        """The ``motion`` command term that owns reset-start sampling (v2)."""
+        """The active command term that owns reset-start sampling (v2).
+
+        Any command term with ``owns_reset=True`` qualifies: the lean
+        ``command`` term on the default surface, or the ``motion`` term on the
+        full explicit surface. Exactly one such term exists per config.
+        """
         command_manager = getattr(self, "command_manager", None)
         if command_manager is None:
             return None
-        if "motion" not in getattr(command_manager, "active_terms", ()):
-            return None
-        term = command_manager.get_term("motion")
-        if getattr(term.cfg, "owns_reset", False):
-            return term
+        for term_name in getattr(command_manager, "active_terms", ()):
+            term = command_manager.get_term(term_name)
+            if getattr(term.cfg, "owns_reset", False):
+                return term
         return None
 
     def set_adaptive_reset_weight_fn(self, weight_fn: Any) -> None:
@@ -1402,7 +1406,19 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         return result
 
     def step(self, action: torch.Tensor) -> VecEnvStepReturn:
-        """Step the environment and update reference data."""
+        """Step the environment and update reference data.
+
+        Thin single-compute step: unlike the legacy env (which runs the base
+        env's mid-step observation compute at the reward frame and then
+        recomputes at the next frame), this env runs the physics /
+        terminations / rewards / resets / command lifecycle directly and
+        computes observations exactly ONCE, at the returned next-reference
+        frame. The returned values follow the same frame contract (rewards at
+        frame T, obs at frame T+1); the difference is the stochastic stream:
+        the discarded mid-step compute also drew observation noise, so the
+        v2 stream is fresh and v2 is deliberately NOT bit-equivalent to the
+        legacy env.
+        """
         # Replay-only path: ignore physics stepping and evaluate rewards
         # exactly on the replayed reference state (ported from the legacy
         # env's replay-only branch).
@@ -1412,10 +1428,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Get next reference data point (advance=True to move to next step)
         self._refresh_current_expert_frame(advance=True)
         # Record the pre-step cursor as a visit in the SONIC failure sampler
-        # (the `motion` term owns the sampler; the timing-critical call site
-        # stays here, before the physics step).
+        # (the reset-owning command term owns the sampler; the timing-critical
+        # call site stays here, before the physics step).
         self._motion_reset_owner.record_visits()
-        super().step(action)
+        self._step_core(action)
         rollout_state_log = self._compute_rollout_reference_state_log()
         if rollout_state_log:
             self.extras.setdefault("log", {}).update(rollout_state_log)
@@ -1426,7 +1442,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # refresh must not advance again.
         self._refresh_current_expert_frame(advance=False)
         self._append_causal_planner_history()
+        # The single observation compute of the step, at the returned frame.
         self.obs_buf = self.observation_manager.compute(update_history=True)
+        if len(self.recorder_manager.active_terms) > 0:
+            self.recorder_manager.record_post_step()
         return (
             self.obs_buf,
             self.reward_buf,
@@ -1434,6 +1453,117 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self.reset_time_outs,
             self.extras,
         )
+
+    def _step_core(self, action: torch.Tensor) -> None:
+        """The base env step body without its mid-step observation compute.
+
+        Replicates ``ManagerBasedRLEnv.step``'s lifecycle (action process,
+        physics loop with decimation, counters, terminations, rewards, reset
+        handling with terminal obs / recorder hooks / re-renders, command
+        compute, interval events) so the caller can run the single
+        observation compute at the correct frame. The recorder-gated obs
+        compute is dropped: with active recorder terms the post-step record
+        hook runs after the caller's compute instead.
+        """
+        # process actions
+        self.action_manager.process_action(action.to(self.device))
+        self.recorder_manager.record_pre_step()
+
+        # check if we need to do rendering within the physics loop
+        # note: uses cached property to avoid settings lookup every step
+        is_rendering = self.sim.is_rendering
+
+        # perform physics stepping
+        if self._physics_handles_decimation:
+            self._sim_step_counter += self.cfg.decimation
+            self.action_manager.apply_action()
+            self.scene.write_data_to_sim()
+            self.sim.step(render=False)
+            self.recorder_manager.record_post_physics_decimation_step()
+            if (
+                self._sim_step_counter % self.cfg.sim.render_interval == 0
+                and is_rendering
+            ):
+                self.sim.render(skip_app_pumping=not self.render_enabled)
+            self.scene.update(dt=self.step_dt)
+        else:
+            for _ in range(self.cfg.decimation):
+                self._sim_step_counter += 1
+                # set actions into buffers
+                self.action_manager.apply_action()
+                # set actions into simulator
+                self.scene.write_data_to_sim()
+                # simulate
+                self.sim.step(render=False)
+                self.recorder_manager.record_post_physics_decimation_step()
+                # render between steps only if the GUI or an RTX sensor needs it.
+                if (
+                    self._sim_step_counter % self.cfg.sim.render_interval == 0
+                    and is_rendering
+                ):
+                    self.sim.render(skip_app_pumping=not self.render_enabled)
+                # update buffers at sim dt
+                self.scene.update(dt=self.physics_dt)
+
+        # post-step:
+        # -- update env counters (used for curriculum generation)
+        self.episode_length_buf += 1  # step in current episode (per env)
+        self.common_step_counter += 1  # total step (common for all envs)
+        # -- check terminations
+        self.reset_buf = self.termination_manager.compute()
+        self.reset_terminated = self.termination_manager.terminated
+        self.reset_time_outs = self.termination_manager.time_outs
+        # -- reward computation
+        self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
+
+        # -- reset envs that terminated/timed-out and log the episode information
+        reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1).int()
+        if len(reset_env_ids) > 0:
+            reset_env_ids_list = reset_env_ids.tolist()
+            # Populate Gymnasium-style terminal observation info for vector
+            # envs. final_obs/final_info are object arrays with None for
+            # non-reset envs.
+            final_obs = np.empty(self.num_envs, dtype=object)
+            final_obs[:] = None
+            final_info = np.empty(self.num_envs, dtype=object)
+            final_info[:] = None
+
+            def _slice_obs(obs: dict | torch.Tensor, env_id: int):
+                if isinstance(obs, dict):
+                    return {k: _slice_obs(v, env_id) for k, v in obs.items()}
+                return obs[env_id].clone()
+
+            for env_id in reset_env_ids_list:
+                final_obs[env_id] = _slice_obs(self.obs_buf, env_id)
+                final_info[env_id] = {}
+
+            self.extras["final_obs"] = final_obs
+            self.extras["final_info"] = final_info
+
+            # trigger recorder terms for pre-reset calls
+            self.recorder_manager.record_pre_reset(reset_env_ids_list)
+
+            self._reset_idx(reset_env_ids)
+
+            # if sensors are added to the scene, make sure we render to reflect
+            # changes in reset
+            if (
+                self.render_enabled
+                and is_rendering
+                and self.has_rtx_sensors
+                and self.cfg.num_rerenders_on_reset > 0
+            ):
+                for _ in range(self.cfg.num_rerenders_on_reset):
+                    self.sim.render()
+
+            # trigger recorder terms for post-reset calls
+            self.recorder_manager.record_post_reset(reset_env_ids_list)
+
+        # -- update command
+        self.command_manager.compute(dt=self.step_dt)
+        # -- step interval events
+        if "interval" in self.event_manager.available_modes:
+            self.event_manager.apply(mode="interval", dt=self.step_dt)
 
     def _step_replay_only(self, action: torch.Tensor) -> VecEnvStepReturn:
         """Replay-only stepping: no physics, rewards on the replayed reference."""

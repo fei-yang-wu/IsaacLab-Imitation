@@ -320,3 +320,95 @@ class G1SonicLatentObservationCfg(G1LatentObservationCfg):
 
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
+
+
+@configclass
+class G1LeanLatentObservationCfg:
+    """Thinnest v2 observation surface: exactly the actor and critic inputs.
+
+    The lean v2 default declares ONLY the policy and critic groups, and only
+    the terms the latent recipe actually reads (see the agent's input keys).
+    The windowed / goal / state / reward-input groups are deliberately absent:
+    nothing in the latent default consumes them, and the offline skill-encoder
+    sampler reads ``current_expert_macro_transition_batch`` (an env API), not
+    the observation groups. Explicit / reconstruction command surfaces add
+    their groups back via variant configs on top of this base.
+    """
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Actor observations: the agent-published latent command + proprio."""
+
+        latent_command = ObsTerm(func=mdp.reference_latent_command)
+        projected_gravity = ObsTerm(
+            func=mdp.projected_gravity,
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+            history_length=10,
+        )
+        base_ang_vel = ObsTerm(
+            func=mdp.base_ang_vel,
+            noise=Unoise(n_min=-0.2, n_max=0.2),
+            history_length=10,
+        )
+        joint_pos_rel = ObsTerm(
+            func=mdp.joint_pos_rel,
+            params=_g1_canonical_joint_obs_params(),
+            noise=Unoise(n_min=-0.01, n_max=0.01),
+            history_length=10,
+        )
+        joint_vel_rel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params=_g1_canonical_joint_obs_params(),
+            noise=Unoise(n_min=-0.5, n_max=0.5),
+            history_length=10,
+        )
+        last_action = ObsTerm(func=mdp.last_action, history_length=10)
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = False
+
+    @configclass
+    class CriticCfg(ObsGroup):
+        """Critic observations: latent command + single-frame expert command + privileged state."""
+
+        latent_command = ObsTerm(func=mdp.reference_latent_command)
+        expert_motion = ObsTerm(
+            func=mdp.expert_motion_command,
+            params=_g1_expert_motion_obs_params(),
+        )
+        expert_anchor_pos_b = ObsTerm(
+            func=mdp.expert_anchor_pos_b,
+            params=_g1_expert_anchor_obs_params(),
+        )
+        expert_anchor_ori_b = ObsTerm(
+            func=mdp.expert_anchor_ori_b,
+            params=_g1_expert_anchor_obs_params(),
+        )
+        body_pos = ObsTerm(
+            func=mdp.robot_body_pos_b,
+            params=_g1_tracked_body_obs_params(),
+        )
+        body_ori = ObsTerm(
+            func=mdp.robot_body_ori_b,
+            params=_g1_tracked_body_obs_params(),
+        )
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, history_length=10)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, history_length=10)
+        joint_pos_rel = ObsTerm(
+            func=mdp.joint_pos_rel,
+            params=_g1_canonical_joint_obs_params(),
+            history_length=10,
+        )
+        joint_vel_rel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params=_g1_canonical_joint_obs_params(),
+            history_length=10,
+        )
+        last_action = ObsTerm(func=mdp.last_action, history_length=10)
+
+        def __post_init__(self):
+            self.concatenate_terms = False
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()

@@ -10,6 +10,7 @@ externally-published command layer (env-side mirror of
 from .held_chunk_command import HeldChunkCommand, HeldChunkCommandCfg
 from .motion_command import MotionCommand, MotionCommandCfg
 from .published_command import PublishedCommandTerm, PublishedCommandTermCfg
+from .reference_command import ReferenceCommand, ReferenceCommandCfg
 from .skill_command import SkillCommand, SkillCommandCfg
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "MotionCommandCfg",
     "PublishedCommandTerm",
     "PublishedCommandTermCfg",
+    "ReferenceCommand",
+    "ReferenceCommandCfg",
     "SkillCommand",
     "SkillCommandCfg",
 ]
