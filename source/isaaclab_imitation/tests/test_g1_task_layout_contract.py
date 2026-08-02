@@ -187,14 +187,18 @@ def test_stable_explicit_root_qpos_cli_override_layout(task_id: str) -> None:
 
 
 def test_refresh_is_identity_for_default_tasks() -> None:
-    """The env-construction refresh must not move any registered default."""
+    """The env-construction resolution must not move any registered default."""
     for task_id in TASK_IDS:
         cfg = _load_env_cfg(task_id)
-        refresh = getattr(cfg, "_refresh_command_observation_terms", None)
-        if not callable(refresh):
-            continue
+        resolve = getattr(cfg, "resolve_late_overrides", None)
+        if not callable(resolve):
+            # Legacy v0/v1 surfaces keep the refresh path.
+            refresh = getattr(cfg, "_refresh_command_observation_terms", None)
+            if not callable(refresh):
+                continue
+            resolve = refresh
         before = _layout(task_id)["groups"]
-        refresh()
+        resolve()
         after = {
             field.name: _group_terms(getattr(cfg.observations, field.name))
             for field in dataclasses.fields(cfg.observations)
@@ -276,34 +280,29 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     # knob stays inert (reward estimation would need the full surface).
     cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
     cfg.from_dict({"enable_reward_input_observations": True})
-    assert getattr(cfg.observations, "reward_input", None) is None
-    cfg._refresh_command_observation_terms()
+    cfg.resolve_late_overrides()
     assert getattr(cfg.observations, "reward_input", None) is None
 
-    # The full surface keeps the v1 opt-in semantics (restores the exact
-    # v0/v1 term list through the construction-time refresh).
+    # The full surface keeps the v1 opt-in semantics: the env-construction
+    # resolution drops the group at the default (parked) toggle and keeps the
+    # exact v0/v1 term list when the knob is enabled before construction.
     from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
         ImitationG1FullSurfaceEnvCfg,
     )
 
+    parked_full = ImitationG1FullSurfaceEnvCfg()
+    parked_full.resolve_late_overrides()
+    assert parked_full.observations.reward_input is None
+
     full_cfg = ImitationG1FullSurfaceEnvCfg()
-    assert full_cfg.observations.reward_input is None
     full_cfg.enable_reward_input_observations = True
-    full_cfg._refresh_command_observation_terms()
+    full_cfg.resolve_late_overrides()
     assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
     for name in ("expert_anchor_pos_b", "expert_anchor_ori_b"):
         term = getattr(full_cfg.observations.reward_input, name)
         assert term.params["anchor_body_name"] == full_cfg.expert_anchor_body_name
-
-    # True -> False -> True round-trips through the construction-time refresh.
-    full_cfg.enable_reward_input_observations = False
-    full_cfg._refresh_command_observation_terms()
-    assert full_cfg.observations.reward_input is None
-    full_cfg.enable_reward_input_observations = True
-    full_cfg._refresh_command_observation_terms()
-    assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
-    # Refresh stays a fixed point.
-    full_cfg._refresh_command_observation_terms()
+    # Resolution stays a fixed point.
+    full_cfg.resolve_late_overrides()
     assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
 

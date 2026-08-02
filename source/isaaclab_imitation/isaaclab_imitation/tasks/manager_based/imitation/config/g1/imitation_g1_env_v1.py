@@ -3,13 +3,19 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``Isaac-Imitation-G1-v1``: the frozen v1 G1 tracking environment.
+"""DEPRECATED (frozen v1 lineage, 2026-08-01): the frozen v1 G1 tracking env.
 
 Skill-conditioned tracker on the SONIC release recipe with this repo's
 legacy reset distribution. The command space is configuration, not identity:
 the class defaults to the latent 258-D skill command, and
 ``env.command_mode=explicit`` + ``command_observation_terms`` turn the same
 surface into an explicit tracker.
+
+Do not use for new work: constructing this config emits a
+``DeprecationWarning``, and the flat v2 flagship
+(``imitation_g1_env_v2.ImitationG1EnvCfg``) superseded this surface on
+2026-08-01. ``-G1-v1`` / ``-G1-Latent-v0`` stay registered only for frozen
+reproductions.
 
 Superseded as the default by ``-G1-v2`` on 2026-08-01 (the flagship
 ``ImitationG1EnvCfg`` name moved to ``imitation_g1_env_v2.py``); this module

@@ -118,39 +118,60 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Isaac Lab 3.0's hydra integration applies `env.*` CLI overrides with
         # a plain setattr on the config (no `from_dict` round-trip), so a
         # `env.lafan1_manifest_path=...` override may arrive here without the
-        # manifest-derived loader config having been resolved yet.
-        if getattr(cfg, "lafan1_manifest_path", None) is not None and not (
-            self._lafan_source_entries_from_loader_kwargs(
-                getattr(cfg, "loader_kwargs", {})
+        # manifest-derived loader config having been resolved yet. The flat
+        # v2 configs own exactly one construction-time resolution step
+        # (`resolve_late_overrides`); legacy (v0/v1) configs keep the
+        # `_resolve_manifest_config` + `_refresh_command_observation_terms`
+        # machinery, which the else branch below preserves unchanged.
+        resolve = getattr(cfg, "resolve_late_overrides", None)
+        if callable(resolve):
+            # Preserve values applied after config construction. Isaac Lab's
+            # Hydra integration uses plain setattr for late CLI overrides, so
+            # default resolution would silently replace an explicit cache and
+            # motion subset.
+            configured_dataset_path = getattr(cfg, "dataset_path", None)
+            default_dataset_path = getattr(
+                type(cfg), "dataset_path", "data/lafan1/g1/"
             )
-        ):
-            manifest_resolver = getattr(cfg, "_resolve_manifest_config", None)
-            if callable(manifest_resolver):
-                # Preserve values applied after config construction. Isaac
-                # Lab's Hydra integration uses plain setattr for late CLI
-                # overrides, so default resolution would silently replace an
-                # explicit cache and motion subset.
-                configured_dataset_path = getattr(cfg, "dataset_path", None)
-                default_dataset_path = getattr(
-                    type(cfg), "dataset_path", "data/lafan1/g1/"
+            resolve(
+                dataset_path_explicit=(
+                    configured_dataset_path is not None
+                    and configured_dataset_path != default_dataset_path
+                ),
+                motions_explicit=getattr(cfg, "motions", None) is not None,
+            )
+        else:
+            if getattr(cfg, "lafan1_manifest_path", None) is not None and not (
+                self._lafan_source_entries_from_loader_kwargs(
+                    getattr(cfg, "loader_kwargs", {})
                 )
-                manifest_resolver(
-                    dataset_path_explicit=(
-                        configured_dataset_path is not None
-                        and configured_dataset_path != default_dataset_path
-                    ),
-                    motions_explicit=getattr(cfg, "motions", None) is not None,
-                )
+            ):
+                manifest_resolver = getattr(cfg, "_resolve_manifest_config", None)
+                if callable(manifest_resolver):
+                    configured_dataset_path = getattr(cfg, "dataset_path", None)
+                    default_dataset_path = getattr(
+                        type(cfg), "dataset_path", "data/lafan1/g1/"
+                    )
+                    manifest_resolver(
+                        dataset_path_explicit=(
+                            configured_dataset_path is not None
+                            and configured_dataset_path != default_dataset_path
+                        ),
+                        motions_explicit=getattr(cfg, "motions", None) is not None,
+                    )
 
-        # Same plain-setattr gotcha for the command configuration:
-        # `env.command_mode=...` / `env.command_observation_terms=[...]` can
-        # arrive as direct field writes after `__post_init__` already pruned
-        # the observation groups with the class defaults. Re-derive the
-        # pruned command-term set from the final field values before any
-        # manager reads the observation config. Idempotent for defaults.
-        refresh_command_terms = getattr(cfg, "_refresh_command_observation_terms", None)
-        if callable(refresh_command_terms):
-            refresh_command_terms()
+            # Same plain-setattr gotcha for the command configuration:
+            # `env.command_mode=...` / `env.command_observation_terms=[...]`
+            # can arrive as direct field writes after `__post_init__` already
+            # pruned the observation groups with the class defaults. Re-derive
+            # the pruned command-term set from the final field values before
+            # any manager reads the observation config. Idempotent for
+            # defaults.
+            refresh_command_terms = getattr(
+                cfg, "_refresh_command_observation_terms", None
+            )
+            if callable(refresh_command_terms):
+                refresh_command_terms()
 
         # Reset / start-frame configuration (cluster K: the env parses these
         # once; on v2 the `motion` command term owns the reset-start samplers

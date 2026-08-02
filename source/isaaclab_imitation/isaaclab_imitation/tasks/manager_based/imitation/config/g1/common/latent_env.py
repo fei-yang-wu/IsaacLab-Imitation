@@ -3,11 +3,17 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Latent-lineage base env config (also the deprecated Legacy pin).
+"""DEPRECATED (frozen v0/v1 lineage, 2026-08-01): latent-lineage base env cfg.
 
-``ImitationG1LatentEnvCfg`` is the parent of every latent variant and of the
-Stable default (``v1.py``); on its own it is the pre-migration
+``ImitationG1LatentEnvCfg`` is the parent of the legacy latent variants and
+of the frozen Stable default (``v1.py``); on its own it is the pre-migration
 beyondmimic-style surface frozen as ``Isaac-Imitation-G1-Latent-Legacy-v0``.
+
+Do not use for new work: constructing this config emits a
+``DeprecationWarning``, and the flat v2 surfaces
+(``imitation_g1_env_v2.ImitationG1EnvCfg`` /
+``ImitationG1FullSurfaceEnvCfg``) superseded this lineage on 2026-08-01.
+Legacy ids stay registered only for frozen reproductions.
 """
 
 from isaaclab.utils.configclass import configclass

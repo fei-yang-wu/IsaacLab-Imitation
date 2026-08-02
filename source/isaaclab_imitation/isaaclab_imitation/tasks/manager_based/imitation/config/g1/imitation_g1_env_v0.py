@@ -3,12 +3,19 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``Isaac-Imitation-G1-v0``: LafanTrack recipe x explicit full-body command.
+"""DEPRECATED (frozen v0 lineage, 2026-08-01): LafanTrack recipe x explicit
+full-body command.
 
 The original torso-anchored, loose-termination tracking recipe on the
 vanilla observation surface -- the frozen v0 release. Everything the release
 pins is visible below; the LAFAN1 dataset/manifest machinery comes from
 ``ImitationG1BaseTrackingEnvCfg`` in ``common``.
+
+Do not use for new work: constructing this config emits a
+``DeprecationWarning``, and the flat v2 flagship
+(``imitation_g1_env_v2.ImitationG1EnvCfg``) superseded the whole v0/v1
+lineage on 2026-08-01. ``-G1-v0`` / ``-G1-LafanTrack-v0`` stay registered
+only for frozen reproductions.
 
 The flagship ``ImitationG1EnvCfg`` name moved to the newest release
 (``imitation_g1_env_v2.py``) in the 2026-08-01 flip; this class keeps

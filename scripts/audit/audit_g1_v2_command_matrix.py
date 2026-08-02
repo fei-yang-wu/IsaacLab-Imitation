@@ -331,12 +331,19 @@ def _resolve_env_cfg(surface: str, overrides: list[str]):
                 target[parts[-1]] = yaml.safe_load(value)
             except yaml.YAMLError:
                 # List-form strings like "[a,b,c]" are kept raw; the cfg's
-                # prune/validation methods parse both forms themselves.
+                # normalization/derivation methods parse both forms themselves.
                 target[parts[-1]] = value
         env_cfg.from_dict(from_dict)
-    refresh = getattr(env_cfg, "_refresh_command_observation_terms", None)
-    if callable(refresh):
-        refresh()
+    # The v2 surfaces resolve every override-dependent layout (manifest,
+    # command-mode pruning, syncs) in one construction-time step, mirroring
+    # the env constructor. Legacy surfaces keep `_refresh_command_observation_terms`.
+    resolve = getattr(env_cfg, "resolve_late_overrides", None)
+    if callable(resolve):
+        resolve()
+    else:
+        refresh = getattr(env_cfg, "_refresh_command_observation_terms", None)
+        if callable(refresh):
+            refresh()
     return env_cfg
 
 
