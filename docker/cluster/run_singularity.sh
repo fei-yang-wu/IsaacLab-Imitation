@@ -497,6 +497,17 @@ else
     echo "[INFO] No W&B API key configured for container runtime."
 fi
 
+# W&B run tags. `--containall` isolates the workload environment, so the tags a
+# submitter declares have to cross the container boundary deliberately. wandb
+# reads WANDB_TAGS (comma-separated) itself, so this needs no config field:
+# the repo convention of tagging each run with its environment, primary change,
+# and main features works through here.
+if [ -n "${CLUSTER_WANDB_TAGS:-}" ]; then
+    export SINGULARITYENV_WANDB_TAGS="${CLUSTER_WANDB_TAGS}"
+    export APPTAINERENV_WANDB_TAGS="${CLUSTER_WANDB_TAGS}"
+    echo "[INFO] W&B run tags for container runtime: ${CLUSTER_WANDB_TAGS}"
+fi
+
 # `--containall` isolates the workload environment, so Slurm's array index is
 # not inherited automatically. Staged array workflows use it to select an
 # explicit goal; forward it deliberately across the container boundary.

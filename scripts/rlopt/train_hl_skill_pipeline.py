@@ -302,7 +302,9 @@ def _train_cmd(
         f"agent.logger.exp_name={exp_name}",
         f"agent.logger.video={_bool_str(args.train_video)}",
         f"agent.save_interval={args.save_interval}",
-        f"env.latent_command_dim={latent_dim}",
+        # The published latent width is declared on the actor channel of the
+        # environment's command interface; the agent side must match it.
+        f"env.command_interface.actor.dim={latent_dim}",
         f"agent.ipmd.latent_dim={latent_dim}",
         "agent.ipmd.command_source=hl_skill",
         f"agent.ipmd.hl_skill_checkpoint_path={checkpoint_path}",
@@ -354,7 +356,7 @@ def _parse_args() -> argparse.Namespace:
             "train the low-level IPMD policy with the frozen encoder."
         )
     )
-    parser.add_argument("--task", default="Isaac-Imitation-G1-Latent-v0")
+    parser.add_argument("--task", default="Isaac-Imitation-G1-v2")
     parser.add_argument("--algo", default="IPMD")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", default=None)
