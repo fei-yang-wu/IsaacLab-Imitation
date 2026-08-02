@@ -9,14 +9,14 @@ Kept as a pure re-export shim so historical imports, pickled configs, and
 recorded ``module:Class`` entry-point strings keep resolving. Everything this
 module used to define now lives in:
 
-- ``common.observations_latent`` (latent surfaces + anchor table),
+- ``common.observations`` (latent surfaces + anchor table),
 - ``common.latent_env`` (the latent-lineage base / Legacy pin),
 - ``imitation_g1_env_v1`` (the Stable default) and
   ``variants.{strict,sonic,goal,future_cvae}``.
 """
 
 from .common.latent_env import ImitationG1LatentEnvCfg
-from .common.observations_latent import (
+from .common.observations import (
     _LATENT_ANCHOR_TERM_NAMES_BY_GROUP,
     G1LatentObservationCfg,
     G1SonicLatentObservationCfg,

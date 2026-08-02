@@ -26,7 +26,7 @@ from isaaclab.utils.configclass import configclass
 
 from .common.actions import G1SonicActionsCfg
 from .common.events import G1SonicEventCfg
-from .common.observations_latent import (
+from .common.observations import (
     _LATENT_ANCHOR_TERM_NAMES_BY_GROUP,
     G1LatentObservationCfg,
 )

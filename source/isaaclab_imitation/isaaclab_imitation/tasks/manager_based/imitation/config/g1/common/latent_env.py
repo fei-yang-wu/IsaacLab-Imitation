@@ -12,7 +12,7 @@ beyondmimic-style surface frozen as ``Isaac-Imitation-G1-Latent-Legacy-v0``.
 
 from isaaclab.utils.configclass import configclass
 
-from .observations_latent import (
+from .observations import (
     _LATENT_ANCHOR_TERM_NAMES_BY_GROUP,
     G1LatentObservationCfg,
 )

@@ -11,7 +11,7 @@ Layout:
 - ``presets``: physics/robot/contact-sensor backend presets.
 - ``actions`` / ``events`` / ``rewards`` / ``terminations``: manager term
   blocks for the mimic baseline and the SONIC release recipe.
-- ``observations`` / ``observations_latent``: the vanilla and latent
+- ``observations``: every G1 observation surface (vanilla / latent / sonic / lean / full), composed from the shared term factories
   observation surfaces (checkpoint input contracts).
 - ``tracking_env``: the shared base env class (vanilla component defaults +
   LAFAN1 manifest machinery), recipe helpers, Hydra plumbing.
@@ -35,7 +35,7 @@ from .constants import (
 from .events import G1EventCfg, G1SonicEventCfg
 from .latent_env import ImitationG1LatentEnvCfg
 from .observations import G1ObservationCfg
-from .observations_latent import (
+from .observations import (
     G1LatentObservationCfg,
     G1SonicLatentObservationCfg,
 )
