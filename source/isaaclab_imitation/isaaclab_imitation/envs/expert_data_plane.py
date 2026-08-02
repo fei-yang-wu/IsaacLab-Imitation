@@ -447,10 +447,10 @@ class ExpertDataPlane:
         tm.ref_to_target_map, tm.target_to_ref_map = _map_reference_to_target(
             tm.reference_joint_names,
             tm.target_joint_names,
-            tm._state_device,
+            tm.state_device,
         )
         tm.target_mask = torch.zeros(
-            len(robot_joint_names), dtype=torch.bool, device=tm._state_device
+            len(robot_joint_names), dtype=torch.bool, device=tm.state_device
         )
         tm.target_mask[tm.ref_to_target_map] = True
         # Refresh everything that already captured target-ordered joint data.
@@ -1202,10 +1202,10 @@ class ExpertDataPlane:
         tm = self.trajectory_manager
         if env_ids is None:
             sampled_env_ids = torch.arange(
-                self._env.num_envs, device=tm._state_device, dtype=torch.long
+                self._env.num_envs, device=tm.state_device, dtype=torch.long
             )
         else:
-            sampled_env_ids = env_ids.to(device=tm._state_device, dtype=torch.long)
+            sampled_env_ids = env_ids.to(device=tm.state_device, dtype=torch.long)
         sampled_local_steps = tm.env_step.index_select(0, sampled_env_ids)
         reference = _convert_reference_quats_to_xyzw(
             self.trajectory_manager.sample(env_ids=env_ids, advance=advance)
@@ -1230,14 +1230,14 @@ class ExpertDataPlane:
         """Return true for envs whose current reward/obs reference is terminal."""
         tm = self.trajectory_manager
         traj_ranks = tm.env_traj_rank.to(device=self._env.device, dtype=torch.long)
-        final_steps = (tm._length.index_select(0, traj_ranks) - 1).to(
+        final_steps = (tm.length.index_select(0, traj_ranks) - 1).to(
             device=self._env.device, dtype=torch.long
         )
         return self._current_reference_local_step >= final_steps
 
     def _current_local_steps(self, env_ids: torch.Tensor) -> torch.Tensor:
         tm = self.trajectory_manager
-        return tm.env_step[env_ids.to(device=tm._state_device, dtype=torch.long)].to(
+        return tm.env_step[env_ids.to(device=tm.state_device, dtype=torch.long)].to(
             device=self._env.device, dtype=torch.long
         )
 
@@ -1482,7 +1482,7 @@ class ExpertDataPlane:
                 "Trajectory manager has no nonempty trajectories for expert "
                 "macro sampling."
             )
-        return nonempty_ranks.to(device=tm._state_device, dtype=torch.long)
+        return nonempty_ranks.to(device=tm.state_device, dtype=torch.long)
 
     def _expert_macro_split_trajectory_ranks(
         self,
@@ -1528,7 +1528,7 @@ class ExpertDataPlane:
         selected = perm[:eval_count] if normalized == "eval" else perm[eval_count:]
         selected = selected.sort().values
         return selected.to(
-            device=self.trajectory_manager._state_device, dtype=torch.long
+            device=self.trajectory_manager.state_device, dtype=torch.long
         )
 
     def _sample_expert_window_slice_for_trajectory_ranks(
@@ -1543,8 +1543,8 @@ class ExpertDataPlane:
         if past_steps < 0 or future_steps < 0:
             raise ValueError("Expert window steps must be >= 0.")
         tm = self.trajectory_manager
-        traj_ranks_tm = traj_ranks.to(device=tm._state_device, dtype=torch.long)
-        local_steps_tm = local_steps.to(device=tm._state_device, dtype=torch.long)
+        traj_ranks_tm = traj_ranks.to(device=tm.state_device, dtype=torch.long)
+        local_steps_tm = local_steps.to(device=tm.state_device, dtype=torch.long)
         if tuple(traj_ranks_tm.shape) != tuple(local_steps_tm.shape):
             raise ValueError(
                 "traj_ranks and local_steps must have matching shapes for "
@@ -1553,21 +1553,21 @@ class ExpertDataPlane:
         window_offsets = torch.arange(
             -past_steps,
             future_steps + 1,
-            device=tm._state_device,
+            device=tm.state_device,
             dtype=torch.long,
         )
-        lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
+        lengths = tm.length.index_select(0, traj_ranks_tm).clamp(min=1)
         max_step = lengths - 1
         window_steps = local_steps_tm.unsqueeze(1) + window_offsets.unsqueeze(0)
         window_steps = window_steps.clamp(min=0)
         window_steps = torch.minimum(window_steps, max_step.unsqueeze(1))
         global_indices = (
-            tm._start.index_select(0, traj_ranks_tm).unsqueeze(1) + window_steps
+            tm.start.index_select(0, traj_ranks_tm).unsqueeze(1) + window_steps
         )
-        expert_window = tm.rb[global_indices.to(device=tm._storage_device)]
+        expert_window = tm.rb[global_indices.to(device=tm.storage_device)]
         if getattr(tm, "_device", None) is not None:
-            expert_window = expert_window.to(tm._device)
-        expert_window = tm._attach_reference_fields(expert_window, use_buffers=False)
+            expert_window = expert_window.to(tm.device)
+        expert_window = tm.attach_reference_fields(expert_window, use_buffers=False)
         return _convert_reference_quats_to_xyzw(expert_window.to(self._env.device))
 
     def _build_reward_input_cache(self, *, device: torch.device) -> None:
@@ -1589,19 +1589,19 @@ class ExpertDataPlane:
             self._reward_input_identity_rot6d = None
             return
         tm = self.trajectory_manager
-        total = int(tm._end.max().item())
+        total = int(tm.end.max().item())
         if total <= 0:
             raise RuntimeError(
                 "Trajectory manager has no transitions; cannot build "
                 "reward_input cache."
             )
         global_indices = torch.arange(
-            total, device=tm._storage_device, dtype=torch.int64
+            total, device=tm.storage_device, dtype=torch.int64
         )
         reference = tm.rb[global_indices]
-        if tm._device is not None:
-            reference = reference.to(tm._device)
-        reference = tm._attach_reference_fields(reference, use_buffers=False)
+        if tm.device is not None:
+            reference = reference.to(tm.device)
+        reference = tm.attach_reference_fields(reference, use_buffers=False)
         joint_pos = reference.get("joint_pos")
         joint_vel = reference.get("joint_vel")
         if joint_pos is None or joint_vel is None:
@@ -1653,10 +1653,10 @@ class ExpertDataPlane:
     ) -> torch.Tensor:
         """Convert replay-buffer global indices back to local trajectory steps."""
         tm = self.trajectory_manager
-        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
-        global_indices_tm = global_indices.to(device=tm._state_device, dtype=torch.long)
+        env_ids_tm = env_ids.to(device=tm.state_device, dtype=torch.long)
+        global_indices_tm = global_indices.to(device=tm.state_device, dtype=torch.long)
         traj_ranks = tm.env_traj_rank[env_ids_tm]
-        local_steps = global_indices_tm - tm._start[traj_ranks]
+        local_steps = global_indices_tm - tm.start[traj_ranks]
         return local_steps.to(device=self._env.device, dtype=torch.long)
 
     def _sample_expert_window_slice(
@@ -1671,12 +1671,12 @@ class ExpertDataPlane:
         if past_steps < 0 or future_steps < 0:
             raise ValueError("Expert window steps must be >= 0.")
         tm = self.trajectory_manager
-        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
-        local_steps_tm = local_steps.to(device=tm._state_device, dtype=torch.long)
+        env_ids_tm = env_ids.to(device=tm.state_device, dtype=torch.long)
+        local_steps_tm = local_steps.to(device=tm.state_device, dtype=torch.long)
         window_offsets = torch.arange(
             -past_steps,
             future_steps + 1,
-            device=tm._state_device,
+            device=tm.state_device,
             dtype=torch.long,
         )
         window_steps = local_steps_tm.unsqueeze(1) + window_offsets.unsqueeze(0)
@@ -2590,11 +2590,11 @@ class ExpertDataPlane:
         tm = self.trajectory_manager
         if trajectory_ranks is not None:
             selected_ranks = torch.as_tensor(
-                trajectory_ranks, device=tm._state_device, dtype=torch.long
+                trajectory_ranks, device=tm.state_device, dtype=torch.long
             ).reshape(-1)
             if int(selected_ranks.numel()) == 0:
                 raise ValueError("trajectory_ranks must select at least one rank.")
-            max_rank = int(getattr(tm, "num_trajectories", tm._length.numel()))
+            max_rank = int(getattr(tm, "num_trajectories", tm.length.numel()))
             invalid = selected_ranks[
                 (selected_ranks < 0) | (selected_ranks >= max_rank)
             ]
@@ -2603,7 +2603,7 @@ class ExpertDataPlane:
                 raise ValueError(
                     f"trajectory_ranks out of range [0, {max_rank - 1}]: {bad}."
                 )
-            lengths_for_selected = tm._length.index_select(0, selected_ranks)
+            lengths_for_selected = tm.length.index_select(0, selected_ranks)
             empty = selected_ranks[lengths_for_selected <= 0]
             if int(empty.numel()) > 0:
                 bad = sorted({int(item) for item in empty.detach().cpu().tolist()})
@@ -2613,13 +2613,13 @@ class ExpertDataPlane:
                 low=0,
                 high=int(selected_ranks.numel()),
                 size=(batch_size,),
-                device=tm._state_device,
+                device=tm.state_device,
                 dtype=torch.long,
             )
             traj_ranks_tm = selected_ranks.index_select(0, choices)
-            lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
+            lengths = tm.length.index_select(0, traj_ranks_tm).clamp(min=1)
             local_steps_tm = torch.floor(
-                torch.rand(batch_size, device=tm._state_device)
+                torch.rand(batch_size, device=tm.state_device)
                 * lengths.to(dtype=torch.float32)
             ).to(dtype=torch.long)
             env_ids = torch.arange(
@@ -2645,7 +2645,7 @@ class ExpertDataPlane:
                     global_indices,
                 )
                 traj_rank = tm.env_traj_rank.index_select(
-                    0, env_ids.to(device=tm._state_device, dtype=torch.long)
+                    0, env_ids.to(device=tm.state_device, dtype=torch.long)
                 ).to(device=self._env.device, dtype=torch.long)
                 expert_window = self._sample_expert_window_slice(
                     env_ids,
@@ -2663,13 +2663,13 @@ class ExpertDataPlane:
                     low=0,
                     high=int(split_ranks.numel()),
                     size=(batch_size,),
-                    device=tm._state_device,
+                    device=tm.state_device,
                     dtype=torch.long,
                 )
                 traj_ranks_tm = split_ranks.index_select(0, choices)
-                lengths = tm._length.index_select(0, traj_ranks_tm).clamp(min=1)
+                lengths = tm.length.index_select(0, traj_ranks_tm).clamp(min=1)
                 local_steps_tm = torch.floor(
-                    torch.rand(batch_size, device=tm._state_device)
+                    torch.rand(batch_size, device=tm.state_device)
                     * lengths.to(dtype=torch.float32)
                 ).to(dtype=torch.long)
                 env_ids = torch.arange(
@@ -2784,7 +2784,7 @@ class ExpertDataPlane:
         local_steps = self._current_local_steps(env_ids_t)
         tm = self.trajectory_manager
         traj_rank = tm.env_traj_rank.index_select(
-            0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
+            0, env_ids_t.to(device=tm.state_device, dtype=torch.long)
         ).to(device=self._env.device, dtype=torch.long)
         expert_window = self._sample_expert_window_slice(
             env_ids_t,
