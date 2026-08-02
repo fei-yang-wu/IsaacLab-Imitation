@@ -763,6 +763,116 @@ class G1FullSurfaceObservationCfg(G1LatentObservationCfg):
     critic: CriticCfg = CriticCfg()
 
 
+@configclass
+class G1V2ObservationCfg:
+    """The single v2 observation surface (one env, built on demand).
+
+    Policy: the agent-published latent command, the full explicit command
+    superset, and the lean proprio set. Critic: latent command + single-frame
+    expert command + privileged state. ``reward_input`` stays as the parked
+    opt-in group for IPMD reward estimation.
+
+    Windowed command data IS the explicit motion command: the historical
+    ``expert_window`` / ``expert_state`` / ``expert_goal`` groups are gone,
+    and the policy command terms carry the window params (past/future steps,
+    synced from ``latent_patch_*``). With 0/0 they are exactly the
+    single-frame commands the actor reads; encoder surfaces set the window and
+    their agents read the same ``("policy", ...)`` terms.
+    """
+
+    @configclass
+    class PolicyCfg(ObsGroup):
+        """Actor observations: latent command + explicit command superset + proprio."""
+
+        latent_command = _latent_command_term(func=mdp.reference_latent_command)
+        # Explicit command superset, windowed: past/future steps are synced
+        # from `latent_patch_past_steps` / `latent_patch_future_steps`, so the
+        # same terms serve the single-frame explicit actor (0/0) and the
+        # windowed encoder surfaces. The `policy_*` funcs honor the chunk
+        # adapters (current slot) under `*_chunk_current_slot` modes.
+        expert_motion = ObsTerm(
+            func=mdp.policy_expert_motion_command,
+            params=_g1_expert_window_motion_obs_params(),
+        )
+        expert_anchor_pos_b = ObsTerm(
+            func=mdp.policy_expert_anchor_pos_b,
+            params=_g1_expert_window_anchor_obs_params(),
+            noise=Unoise(n_min=-0.25, n_max=0.25),
+        )
+        expert_anchor_ori_b = ObsTerm(
+            func=mdp.policy_expert_anchor_ori_b,
+            params=_g1_expert_window_anchor_obs_params(),
+            noise=Unoise(n_min=-0.05, n_max=0.05),
+        )
+        expert_motion_qpos = ObsTerm(
+            func=mdp.policy_expert_motion_qpos,
+            params=_g1_expert_window_motion_obs_params(),
+        )
+        expert_ee_pos_b = ObsTerm(
+            func=mdp.policy_expert_ee_pos_b,
+            params=_g1_expert_window_ee_obs_params(),
+        )
+        expert_ee_ori_b = ObsTerm(
+            func=mdp.policy_expert_ee_ori_b,
+            params=_g1_expert_window_ee_obs_params(),
+        )
+        expert_keypoint_pos_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_pos_b,
+            params=_g1_expert_window_keypoint_obs_params(),
+        )
+        expert_keypoint_ori_b = ObsTerm(
+            func=mdp.policy_expert_keypoint_ori_b,
+            params=_g1_expert_window_keypoint_obs_params(),
+        )
+        projected_gravity = _projected_gravity_term(
+            noise=Unoise(n_min=-0.05, n_max=0.05)
+        )
+        base_ang_vel = _base_ang_vel_term(noise=Unoise(n_min=-0.2, n_max=0.2))
+        joint_pos_rel = _joint_pos_rel_term(noise=Unoise(n_min=-0.01, n_max=0.01))
+        joint_vel_rel = _joint_vel_rel_term(noise=Unoise(n_min=-0.5, n_max=0.5))
+        last_action = _last_action_term()
+
+        def __post_init__(self):
+            self.enable_corruption = True
+            self.concatenate_terms = False
+
+    @configclass
+    class CriticCfg(ObsGroup):
+        """Critic observations: latent command + single-frame expert command + privileged state."""
+
+        latent_command = _latent_command_term(func=mdp.reference_latent_command)
+        expert_motion = _expert_motion_term(func=mdp.expert_motion_command)
+        expert_anchor_pos_b = _expert_anchor_pos_term(func=mdp.expert_anchor_pos_b)
+        expert_anchor_ori_b = _expert_anchor_ori_term(func=mdp.expert_anchor_ori_b)
+        # Explicit command superset (single-frame; the critic reads the
+        # command, not the encoder window). Pruned in latent command mode.
+        expert_motion_qpos = _expert_motion_qpos_term(
+            func=mdp.policy_expert_motion_qpos
+        )
+        expert_ee_pos_b = _expert_ee_pos_term(func=mdp.policy_expert_ee_pos_b)
+        expert_ee_ori_b = _expert_ee_ori_term(func=mdp.policy_expert_ee_ori_b)
+        expert_keypoint_pos_b = _expert_keypoint_pos_term(
+            func=mdp.policy_expert_keypoint_pos_b
+        )
+        expert_keypoint_ori_b = _expert_keypoint_ori_term(
+            func=mdp.policy_expert_keypoint_ori_b
+        )
+        body_pos = _body_pos_term()
+        body_ori = _body_ori_term()
+        base_lin_vel = _base_lin_vel_term()
+        base_ang_vel = _base_ang_vel_term()
+        joint_pos_rel = _joint_pos_rel_term()
+        joint_vel_rel = _joint_vel_rel_term()
+        last_action = _last_action_term()
+
+        def __post_init__(self):
+            self.concatenate_terms = False
+
+    policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
+    reward_input: RewardInputCfg = RewardInputCfg()
+
+
 # ---------------------------------------------------------------------------
 # Command-term pruning / whitelist constants and anchor tables.
 # ---------------------------------------------------------------------------
@@ -886,5 +996,31 @@ _LATENT_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
         "expert_keypoint_ori_b",
     ),
     "expert_goal": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+    "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
+}
+
+# Anchor-relative observation terms per group on the single v2 surface
+# (`G1V2ObservationCfg`). The policy carries the windowed explicit command
+# superset (anchors + EE + keypoint); the critic adds the robot body-pose
+# terms; the parked reward_input group keeps its anchor terms.
+_V2_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
+    "policy": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+    ),
+    "critic": (
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "body_pos",
+        "body_ori",
+    ),
     "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
 }

@@ -287,30 +287,22 @@ LATENT_ROWS: dict[str, dict] = {
 
 
 def _resolve_env_cfg(surface: str, overrides: list[str]):
-    """Resolve the env config for the requested v2 surface.
+    """Resolve the env config for a v2 surface.
 
-    ``lean`` is the flagship ``ImitationG1EnvCfg`` (policy + critic groups,
-    one ``command`` term); ``full`` is ``ImitationG1FullSurfaceEnvCfg`` (the
-    v1 observation layout plus the motion/skill/chunk command terms) used by
-    the explicit and reconstruction command surfaces. Overrides are applied
-    via ``from_dict`` (the cfg's own parsers handle list-form strings) and
-    the construction-time command-term refresh is re-run, mirroring the env
-    constructor's handling of late overrides.
+    Every v2 surface is the single configurable ``ImitationG1V2EnvCfg``
+    (latent default, explicit interfaces, chunk/packet interfaces, and the
+    windowed encoder surfaces are all knobs on the one class); the ``surface``
+    argument is kept for the rows' markers but resolves identically.
+    Overrides are applied via ``from_dict`` (the cfg's own parsers handle
+    list-form strings) and the construction-time resolution step is re-run,
+    mirroring the env constructor's handling of late overrides.
     """
-    if surface == "lean":
-        from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
-            ImitationG1EnvCfg,
-        )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+        ImitationG1V2EnvCfg,
+    )
 
-        env_cfg = ImitationG1EnvCfg()
-    elif surface == "full":
-        from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
-            ImitationG1FullSurfaceEnvCfg,
-        )
-
-        env_cfg = ImitationG1FullSurfaceEnvCfg()
-    else:
-        raise ValueError(f"Unknown v2 surface: {surface!r}")
+    del surface
+    env_cfg = ImitationG1V2EnvCfg()
 
     if overrides:
         import yaml
@@ -456,19 +448,44 @@ def check_row(row_name: str, row: dict, report: list[str]) -> None:
         agent_past = int(getattr(latent_learning, "patch_past_steps", 0))
         env_h = int(getattr(env_cfg, "latent_patch_future_steps", 0))
         env_past = int(getattr(env_cfg, "latent_patch_past_steps", 0))
-        # Rows that read expert_window observations must carry the matching
-        # window horizon; the hl_skill scheme reads the policy group only.
+        # Rows that read windowed command observations must carry the matching
+        # window horizon; the window lives on the policy command terms (the
+        # expert_window group is gone). The hl_skill scheme reads the policy
+        # group only (single-frame).
         reads_window = any(
-            grp == "expert_window" for grp, _term in (agent_cfg.policy.input_keys or [])
+            grp == "policy"
+            and term
+            in {
+                "expert_motion",
+                "expert_motion_qpos",
+                "expert_anchor_pos_b",
+                "expert_anchor_ori_b",
+                "expert_ee_pos_b",
+                "expert_ee_ori_b",
+                "expert_keypoint_pos_b",
+                "expert_keypoint_ori_b",
+            }
+            for grp, term in (agent_cfg.policy.input_keys or [])
         ) or any(
-            grp == "expert_window"
-            for grp, _term in (value_function.input_keys or [])
+            grp == "policy"
+            and term
+            in {
+                "expert_motion",
+                "expert_motion_qpos",
+                "expert_anchor_pos_b",
+                "expert_anchor_ori_b",
+                "expert_ee_pos_b",
+                "expert_ee_ori_b",
+                "expert_keypoint_pos_b",
+                "expert_keypoint_ori_b",
+            }
+            for grp, term in (value_function.input_keys or [])
             if value_function is not None
         )
         if reads_window:
             if env_h != agent_h or env_past != agent_past:
                 errors.append(
-                    f"window mismatch for expert_window reader: env (past={env_past}, "
+                    f"window mismatch for command-window reader: env (past={env_past}, "
                     f"future={env_h}) vs agent (past={agent_past}, future={agent_h})"
                 )
         # Command period (k) lives agent-side for latent schemes; which field

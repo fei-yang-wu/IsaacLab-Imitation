@@ -3,25 +3,25 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Future-window surfaces on the flat v2 full surface (migrated 2026-08-01).
+"""Future-window surfaces on the single v2 env (rebase 2026-08-02).
 
-Replaces the legacy ``variants.future_cvae`` classes (now deleted); their
-task ids are re-registered on the v2 env as ``Isaac-Imitation-G1-CVAE-v0``
-and ``Isaac-Imitation-G1-PerStepVQ-v0``.
+The encoders consume the windowed policy command terms
+(``("policy", "expert_motion")`` etc.); ``latent_patch_future_steps=9``
+widens the command window to the current plus nine future frames.
 """
 
 from isaaclab.utils.configclass import configclass
 
-from ..imitation_g1_env_v2 import ImitationG1FullSurfaceEnvCfg
+from ..imitation_g1_env_v2 import ImitationG1V2EnvCfg
 
 
 @configclass
-class ImitationG1FutureCVAESurfaceEnvCfg(ImitationG1FullSurfaceEnvCfg):
-    """Flat v2 full surface exposing the current plus nine future frames.
+class ImitationG1FutureCVAESurfaceEnvCfg(ImitationG1V2EnvCfg):
+    """Single v2 env exposing the current plus nine future command frames.
 
-    The future-window CVAE encoder consumes a ten-frame future window from
-    the expert_window group; the published 256-D command renews every control
-    step (``command_hold_steps=0``).
+    The future-window CVAE encoder consumes a ten-frame command window from
+    the policy group; the published 256-D command renews every control step
+    (``command_hold_steps=0``).
     """
 
     latent_command_dim: int = 256

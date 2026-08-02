@@ -90,14 +90,14 @@ PRIVILEGED_CRITIC_STATE_KEYS: list[tuple[str, str]] = [
 ]
 
 FULL_BODY_TRAJECTORY_COMMAND_KEYS: list[tuple[str, str]] = [
-    ("expert_window", "expert_motion"),
-    ("expert_window", "expert_anchor_pos_b"),
-    ("expert_window", "expert_anchor_ori_b"),
+    ("policy", "expert_motion"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
 ]
 
 EE_TRAJECTORY_COMMAND_KEYS: list[tuple[str, str]] = [
-    ("expert_window", "expert_ee_pos_b"),
-    ("expert_window", "expert_ee_ori_b"),
+    ("policy", "expert_ee_pos_b"),
+    ("policy", "expert_ee_ori_b"),
 ]
 
 COMMAND_SPACE_ALIASES: dict[str, str] = {
@@ -256,9 +256,9 @@ LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
 LATENT_PRIOR_INPUT_KEYS: list[tuple[str, str]] = []
 
 FUTURE_CVAE_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
-    ("expert_window", "expert_motion"),
-    ("expert_window", "expert_anchor_pos_b"),
-    ("expert_window", "expert_anchor_ori_b"),
+    ("policy", "expert_motion"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
 ]
 
 FUTURE_CVAE_PRIOR_INPUT_KEYS: list[tuple[str, str]] = [

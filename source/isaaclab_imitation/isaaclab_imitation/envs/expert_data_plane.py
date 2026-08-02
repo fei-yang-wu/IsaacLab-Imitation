@@ -2379,7 +2379,64 @@ class ExpertDataPlane:
                     )
                 value = window_terms_cache[cache_key].get(term_name)
             elif group_name in {"expert_state", "", "policy", "critic"}:
-                value = raw_state_terms.get(term_name)
+                if group_name == "policy" and term_name in {
+                    "expert_motion",
+                    "expert_motion_qpos",
+                    "expert_anchor_pos_b",
+                    "expert_anchor_ori_b",
+                    "expert_ee_pos_b",
+                    "expert_ee_ori_b",
+                    "expert_keypoint_pos_b",
+                    "expert_keypoint_ori_b",
+                }:
+                    # Windowed command keys (the encoder families read the
+                    # policy command terms): serve the windowed expert
+                    # command, mirroring the rollout side. The critic's
+                    # command terms stay single-frame (raw state below).
+                    if len(prefix) > 0:
+                        unknown_terms.append(term_name)
+                        continue
+                    if local_steps is None:
+                        logger.warning(
+                            "Expert mapper received policy command-window "
+                            "requests without trajectory-local steps."
+                        )
+                        return None
+                    if term_name in {"expert_ee_pos_b", "expert_ee_ori_b"}:
+                        reference_body_names = self._env._command_ee_body_names
+                    elif term_name in {
+                        "expert_keypoint_pos_b",
+                        "expert_keypoint_ori_b",
+                    }:
+                        reference_body_names = self._env._command_keypoint_body_names
+                    else:
+                        reference_body_names = ()
+                    cache_key = (
+                        int(past_steps),
+                        int(future_steps),
+                        self._expert_anchor_body_name,
+                        ("all",),
+                        reference_body_names,
+                    )
+                    if cache_key not in window_terms_cache:
+                        expert_window = self._sample_expert_window_slice(
+                            env_ids,
+                            local_steps,
+                            past_steps=int(past_steps),
+                            future_steps=int(future_steps),
+                        )
+                        window_terms_cache[cache_key] = self._build_expert_window_terms(
+                            expert_window,
+                            env_ids,
+                            context=context,
+                            past_steps=int(past_steps),
+                            joint_ids=slice(None),
+                            anchor_body_name=self._expert_anchor_body_name,
+                            reference_body_names=reference_body_names,
+                        )
+                    value = window_terms_cache[cache_key].get(term_name)
+                else:
+                    value = raw_state_terms.get(term_name)
                 if value is None and term_name in {
                     "expert_anchor_pos_b",
                     "expert_anchor_ori_b",
