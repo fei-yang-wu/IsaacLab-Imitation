@@ -3,16 +3,21 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""DEPRECATED module path -- import from ``common``/``v1``/``variants`` instead.
+"""DEPRECATED module path -- import from ``common``/``v1``/``surfaces`` instead.
 
 Kept as a pure re-export shim so historical imports, pickled configs, and
 recorded ``module:Class`` entry-point strings keep resolving. Everything this
 module used to define now lives in:
 
 - ``common.observations`` (latent surfaces + anchor table),
-- ``common.latent_env`` (the latent-lineage base / Legacy pin),
-- ``imitation_g1_env_v1`` (the Stable default) and
-  ``variants.{strict,sonic,goal,future_cvae}``.
+- ``common.latent_env`` (the latent-lineage base / frozen Strict parent),
+- ``imitation_g1_env_v1`` (the frozen Stable config),
+- ``variants.strict`` (frozen Strict pins) and
+  ``surfaces.{vqvae,future_cvae,goal,ablation,sonic}`` (flat v2 surfaces).
+
+The legacy ``variants.{sonic,goal,future_cvae,vqvae,ablation}`` classes are
+deleted (migrated to ``surfaces/`` on the flat v2 base); their historical
+names no longer resolve here.
 """
 
 from .common.latent_env import ImitationG1LatentEnvCfg
@@ -22,16 +27,6 @@ from .common.observations import (
     G1SonicLatentObservationCfg,
 )
 from .imitation_g1_env_v1 import ImitationG1EnvV1Cfg
-from .variants.future_cvae import (
-    ImitationG1LatentFutureCVAEEnvCfg,
-    ImitationG1LatentPerStepVQEnvCfg,
-)
-from .variants.goal import ImitationG1LatentGoalEnvCfg
-from .variants.sonic import (
-    ImitationG1LatentSonicEnvCfg,
-    ImitationG1LatentSonicNoHistoryEnvCfg,
-    ImitationG1LatentSonicOfficialFSQEnvCfg,
-)
 from .variants.strict import (
     ImitationG1LatentStrictEnvCfg,
     ImitationG1LatentStrictHistoryEnvCfg,
@@ -49,12 +44,6 @@ __all__ = [
     "ImitationG1EnvCfg",
     "G1SonicLatentObservationCfg",
     "ImitationG1LatentEnvCfg",
-    "ImitationG1LatentFutureCVAEEnvCfg",
-    "ImitationG1LatentGoalEnvCfg",
-    "ImitationG1LatentPerStepVQEnvCfg",
-    "ImitationG1LatentSonicEnvCfg",
-    "ImitationG1LatentSonicNoHistoryEnvCfg",
-    "ImitationG1LatentSonicOfficialFSQEnvCfg",
     "ImitationG1LatentStableEnvCfg",
     "ImitationG1LatentStrictEnvCfg",
     "ImitationG1LatentStrictHistoryEnvCfg",

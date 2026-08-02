@@ -52,6 +52,17 @@ def _group_terms(group) -> list[str]:
 
 def _layout(task_id: str) -> dict:
     cfg = _load_env_cfg(task_id)
+    # Record the env-construction layout: the flat v2 configs finalize their
+    # command-mode / whitelist / toggle derivation in resolve_late_overrides()
+    # (legacy v0/v1 surfaces in _refresh_command_observation_terms), which is
+    # what the env actually builds. The fixture is the fixed point either way.
+    resolve = getattr(cfg, "resolve_late_overrides", None)
+    if not callable(resolve):
+        refresh = getattr(cfg, "_refresh_command_observation_terms", None)
+        if callable(refresh):
+            refresh()
+    else:
+        resolve()
     groups = {}
     for field in dataclasses.fields(cfg.observations):
         group = getattr(cfg.observations, field.name)
