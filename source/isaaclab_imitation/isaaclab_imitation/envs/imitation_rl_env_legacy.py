@@ -1,6 +1,7 @@
 import logging
 import os as _os
 import shutil
+import warnings
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeAlias
@@ -240,7 +241,20 @@ class ImitationRLEnvLegacy(ManagerBasedRLEnv):
         return [entry for entry in entries if isinstance(entry, dict)]
 
     def __init__(self, cfg: Any, render_mode: str | None = None, **kwargs: Any) -> None:
-        """Initialize the simplified legacy ImitationRLEnv."""
+        """Initialize the simplified legacy ImitationRLEnv.
+
+        DEPRECATED (2026-08-01): this env class backs only the frozen v0/v1
+        task ids (``-G1-v0`` / ``-G1-v1`` / ``-G1-Latent-v0`` / Strict pins
+        and friends) for reproducibility. New work uses the flat v2 configs
+        with the v2 env (``ImitationRLEnv``, ``Isaac-Imitation-G1-v2``).
+        """
+        warnings.warn(
+            "ImitationRLEnvLegacy is DEPRECATED; it backs only the frozen "
+            "v0/v1 task ids. Use Isaac-Imitation-G1-v2 (ImitationRLEnv, flat "
+            "ImitationG1EnvCfg) for new work.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         # Get device
         device = cfg.sim.device
         num_envs = cfg.scene.num_envs
