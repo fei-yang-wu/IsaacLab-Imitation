@@ -262,7 +262,12 @@ class G1LatentObservationCfg:
 
 @configclass
 class G1SonicLatentObservationCfg(G1LatentObservationCfg):
-    """Latent command plus the 10-step proprioceptive histories used by SONIC."""
+    """Latent command plus the 10-step proprioceptive histories used by SONIC.
+
+    No-history-by-default convention (2026-08-01): every observation term is
+    declared history-free; this surface applies SONIC's 10-step proprio
+    histories in ``__post_init__`` instead of declaring them inline.
+    """
 
     @configclass
     class PolicyCfg(G1LatentObservationCfg.PolicyCfg):
@@ -277,49 +282,68 @@ class G1SonicLatentObservationCfg(G1LatentObservationCfg):
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
             noise=Unoise(n_min=-0.05, n_max=0.05),
-            history_length=10,
         )
         base_ang_vel = ObsTerm(
             func=mdp.base_ang_vel,
             noise=Unoise(n_min=-0.2, n_max=0.2),
-            history_length=10,
         )
         joint_pos_rel = ObsTerm(
             func=mdp.joint_pos_rel,
             params=_g1_canonical_joint_obs_params(),
             noise=Unoise(n_min=-0.01, n_max=0.01),
-            history_length=10,
         )
         joint_vel_rel = ObsTerm(
             func=mdp.joint_vel_rel,
             params=_g1_canonical_joint_obs_params(),
             noise=Unoise(n_min=-0.5, n_max=0.5),
-            history_length=10,
         )
-        last_action = ObsTerm(func=mdp.last_action, history_length=10)
+        last_action = ObsTerm(func=mdp.last_action)
 
     @configclass
     class CriticCfg(G1LatentObservationCfg.CriticCfg):
+        # Deleted: ASE-era terms no recipe's critic reads.
+        projected_gravity = None
+        joint_pos = None
+        joint_vel = None
         body_ori = ObsTerm(
             func=mdp.robot_body_ori_b,
             params=_g1_tracked_body_obs_params(),
         )
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, history_length=10)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, history_length=10)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
         joint_pos_rel = ObsTerm(
             func=mdp.joint_pos_rel,
             params=_g1_canonical_joint_obs_params(),
-            history_length=10,
         )
         joint_vel_rel = ObsTerm(
             func=mdp.joint_vel_rel,
             params=_g1_canonical_joint_obs_params(),
-            history_length=10,
         )
-        last_action = ObsTerm(func=mdp.last_action, history_length=10)
+        last_action = ObsTerm(func=mdp.last_action)
 
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
+
+    def __post_init__(self):
+        super().__post_init__()
+        # SONIC's 10-step proprio histories, applied post-init so the
+        # declarations stay history-free by default.
+        for term in (
+            self.policy.projected_gravity,
+            self.policy.base_ang_vel,
+            self.policy.joint_pos_rel,
+            self.policy.joint_vel_rel,
+            self.policy.last_action,
+        ):
+            term.history_length = 10
+        for term in (
+            self.critic.base_lin_vel,
+            self.critic.base_ang_vel,
+            self.critic.joint_pos_rel,
+            self.critic.joint_vel_rel,
+            self.critic.last_action,
+        ):
+            term.history_length = 10
 
 
 @configclass
@@ -333,6 +357,11 @@ class G1LeanLatentObservationCfg:
     sampler reads ``current_expert_macro_transition_batch`` (an env API), not
     the observation groups. Explicit / reconstruction command surfaces add
     their groups back via variant configs on top of this base.
+
+    Single-frame design (2026-08-01): every term is history-free. The SONIC
+    10-step proprio histories (a SONIC release design) and the ASE-era h3
+    critic histories are dropped; the 2026-07-21 history ablation found the
+    histories buy little at this repo's scale.
     """
 
     @configclass
@@ -343,26 +372,22 @@ class G1LeanLatentObservationCfg:
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
             noise=Unoise(n_min=-0.05, n_max=0.05),
-            history_length=10,
         )
         base_ang_vel = ObsTerm(
             func=mdp.base_ang_vel,
             noise=Unoise(n_min=-0.2, n_max=0.2),
-            history_length=10,
         )
         joint_pos_rel = ObsTerm(
             func=mdp.joint_pos_rel,
             params=_g1_canonical_joint_obs_params(),
             noise=Unoise(n_min=-0.01, n_max=0.01),
-            history_length=10,
         )
         joint_vel_rel = ObsTerm(
             func=mdp.joint_vel_rel,
             params=_g1_canonical_joint_obs_params(),
             noise=Unoise(n_min=-0.5, n_max=0.5),
-            history_length=10,
         )
-        last_action = ObsTerm(func=mdp.last_action, history_length=10)
+        last_action = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -393,22 +418,58 @@ class G1LeanLatentObservationCfg:
             func=mdp.robot_body_ori_b,
             params=_g1_tracked_body_obs_params(),
         )
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, history_length=10)
-        base_ang_vel = ObsTerm(func=mdp.base_ang_vel, history_length=10)
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
         joint_pos_rel = ObsTerm(
             func=mdp.joint_pos_rel,
             params=_g1_canonical_joint_obs_params(),
-            history_length=10,
         )
         joint_vel_rel = ObsTerm(
             func=mdp.joint_vel_rel,
             params=_g1_canonical_joint_obs_params(),
-            history_length=10,
         )
-        last_action = ObsTerm(func=mdp.last_action, history_length=10)
+        last_action = ObsTerm(func=mdp.last_action)
 
         def __post_init__(self):
             self.concatenate_terms = False
 
     policy: PolicyCfg = PolicyCfg()
+    critic: CriticCfg = CriticCfg()
+
+
+@configclass
+class G1FullSurfaceObservationCfg(G1LatentObservationCfg):
+    """The v1 latent observation layout, cleaned for the v2 full surface.
+
+    Same groups as the v1 latent surface (policy / critic / expert_state /
+    expert_window / expert_goal / reward_input) so the explicit and
+    reconstruction variants keep their command surfaces, with the v2
+    single-frame design applied to the critic: the ASE-era h3 histories are
+    dropped and the terms nothing reads (``projected_gravity`` /
+    ``joint_pos`` / ``joint_vel``, carried from the ASE base latent critic)
+    are deleted.
+    """
+
+    @configclass
+    class CriticCfg(G1LatentObservationCfg.CriticCfg):
+        # Deleted: ASE-era terms no recipe's critic reads.
+        projected_gravity = None
+        joint_pos = None
+        joint_vel = None
+        # Single-frame (the v2 design drops the ASE-era h3 histories).
+        body_ori = ObsTerm(
+            func=mdp.robot_body_ori_b,
+            params=_g1_tracked_body_obs_params(),
+        )
+        base_lin_vel = ObsTerm(func=mdp.base_lin_vel)
+        base_ang_vel = ObsTerm(func=mdp.base_ang_vel)
+        joint_pos_rel = ObsTerm(
+            func=mdp.joint_pos_rel,
+            params=_g1_canonical_joint_obs_params(),
+        )
+        joint_vel_rel = ObsTerm(
+            func=mdp.joint_vel_rel,
+            params=_g1_canonical_joint_obs_params(),
+        )
+
     critic: CriticCfg = CriticCfg()
