@@ -70,6 +70,29 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _split_override_tokens(raw: str) -> list[str]:
+    """Split comma-separated overrides, keeping bracketed list values intact."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in raw:
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+        if char == "," and depth == 0:
+            token = "".join(current).strip()
+            if token:
+                parts.append(token)
+            current = []
+            continue
+        current.append(char)
+    token = "".join(current).strip()
+    if token:
+        parts.append(token)
+    return parts
+
+
 def _apply_env_override(env_cfg: object, key: str, value: str) -> object:
     """Apply a dotted env.* override with YAML coercion (plain-setattr path)."""
     import yaml
@@ -80,7 +103,13 @@ def _apply_env_override(env_cfg: object, key: str, value: str) -> object:
     target = env_cfg
     for part in parts[:-1]:
         target = getattr(target, part)
-    setattr(target, parts[-1], yaml.safe_load(value))
+    try:
+        coerced = yaml.safe_load(value)
+    except yaml.YAMLError:
+        # List-form strings like "[a,b,c]" (Hydra convention) are kept raw;
+        # the cfg's prune/validation methods parse both forms themselves.
+        coerced = value
+    setattr(target, parts[-1], coerced)
     return env_cfg
 
 
@@ -111,10 +140,7 @@ def _capture(args: argparse.Namespace) -> None:
         use_fabric=True,
     )
     setattr(env_cfg, "lafan1_manifest_path", str(args.manifest.resolve()))
-    for override in args.env_overrides.split(","):
-        override = override.strip()
-        if not override:
-            continue
+    for override in _split_override_tokens(args.env_overrides):
         key, value = override.split("=", 1)
         env_cfg = _apply_env_override(env_cfg, key, value)
 
