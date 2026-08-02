@@ -38,8 +38,8 @@ from .common.actions import G1SonicActionsCfg
 from .common.constants import G1_29DOF_ISAACLAB_JOINT_NAMES, G1_TRACKED_BODY_NAMES
 from .common.events import G1SonicEventCfg
 from .common.observations_latent import (
+    G1FullSurfaceObservationCfg,
     G1LeanLatentObservationCfg,
-    G1SonicLatentObservationCfg,
     _LATENT_ANCHOR_TERM_NAMES_BY_GROUP,
 )
 from .common.presets import G1SonicRobotCfg
@@ -221,7 +221,7 @@ class ImitationG1FullSurfaceEnvCfg(ImitationG1EnvCfg):
     reward-input behavior. Base for the explicit and reconstruction variants.
     """
 
-    observations = G1SonicLatentObservationCfg()  # type: ignore
+    observations = G1FullSurfaceObservationCfg()  # type: ignore
 
     # pyrefly: ignore[bad-override-mutable-attribute]  # configclass override idiom
     commands: G1MotionCommandsCfg = G1MotionCommandsCfg()

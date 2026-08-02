@@ -331,13 +331,10 @@
         "expert_anchor_ori_b",
         "body_pos",
         "body_ori",
-        "projected_gravity",
         "base_lin_vel",
         "base_ang_vel",
         "joint_pos_rel",
         "joint_vel_rel",
-        "joint_pos",
-        "joint_vel",
         "last_action"
       ],
       "expert_goal": [
@@ -648,13 +645,10 @@
         "expert_anchor_ori_b",
         "body_pos",
         "body_ori",
-        "projected_gravity",
         "base_lin_vel",
         "base_ang_vel",
         "joint_pos_rel",
         "joint_vel_rel",
-        "joint_pos",
-        "joint_vel",
         "last_action"
       ],
       "expert_goal": [
@@ -725,13 +719,10 @@
         "expert_anchor_ori_b",
         "body_pos",
         "body_ori",
-        "projected_gravity",
         "base_lin_vel",
         "base_ang_vel",
         "joint_pos_rel",
         "joint_vel_rel",
-        "joint_pos",
-        "joint_vel",
         "last_action"
       ],
       "expert_goal": [
