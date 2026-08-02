@@ -20,9 +20,15 @@ from runtime_bootstrap import (
 
 
 strict_kitless = "--assert-kitless" in sys.argv
-if strict_kitless:
-    install_kit_import_guard()
 
+# NOTE: the Kit import guard goes up AFTER this import, mirroring
+# scripts/rlopt/train.py. Importing `isaaclab_tasks` walks every task package to
+# register the gym ids, and some of them (e.g. manipulation/assemble_trocar)
+# legitimately pull Kit-backed modules through lazy_loader. With the guard
+# already installed that walk dies, and lazy_loader reports the blocked import
+# as a bare `ModuleNotFoundError: No module named 'torch'` -- which is what
+# killed ICE job 5558033 23 s in. The guard's job is to keep Kit out of the
+# TRAINING path, so it is installed just before the heavy imports below.
 from isaaclab_tasks.utils import add_launcher_args
 
 parser = argparse.ArgumentParser(
@@ -334,6 +340,9 @@ parser.add_argument(
     help="Require a Newton configuration that never imports or starts Kit.",
 )
 add_launcher_args(parser)
+
+if strict_kitless:
+    install_kit_import_guard()
 args_cli, hydra_args = parser.parse_known_args()
 
 sys.argv = [sys.argv[0]] + hydra_args
