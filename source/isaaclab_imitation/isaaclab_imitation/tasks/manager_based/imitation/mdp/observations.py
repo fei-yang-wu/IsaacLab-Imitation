@@ -63,11 +63,25 @@ def expert_motion_command(
 
 
 def policy_expert_motion_command(
-    env: ImitationRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """Full-body command for the actor, optionally streamed from a chunk."""
+    """Full-body command for the actor, optionally streamed from a chunk.
+
+    In reference mode this is the windowed view of the explicit motion command
+    (past/future steps from the term params); with 0/0 it is exactly the
+    single-frame command. The same term therefore serves both the single-frame
+    actor and the windowed encoder surfaces.
+    """
     if env.policy_command_mode == "reference":
-        return expert_motion_command(env, asset_cfg)
+        return expert_window_motion(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            asset_cfg=asset_cfg,
+        )
     return env.current_full_body_tracker_command_term(
         "expert_motion",
         joint_ids=asset_cfg.joint_ids,
@@ -134,12 +148,20 @@ def expert_anchor_ori_b(
 
 def policy_expert_anchor_pos_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Actor anchor-position command, direct or streamed from a chunk."""
     if env.policy_command_mode == "reference":
-        return expert_anchor_pos_b(env, anchor_body_name, asset_cfg)
+        return expert_window_anchor_pos_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            anchor_body_name=anchor_body_name,
+            asset_cfg=asset_cfg,
+        )
     return env.current_full_body_tracker_command_term(
         "expert_anchor_pos_b",
         anchor_body_name=anchor_body_name,
@@ -148,12 +170,20 @@ def policy_expert_anchor_pos_b(
 
 def policy_expert_anchor_ori_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Actor anchor-orientation command, direct or streamed from a chunk."""
     if env.policy_command_mode == "reference":
-        return expert_anchor_ori_b(env, anchor_body_name, asset_cfg)
+        return expert_window_anchor_ori_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            anchor_body_name=anchor_body_name,
+            asset_cfg=asset_cfg,
+        )
     return env.current_full_body_tracker_command_term(
         "expert_anchor_ori_b",
         anchor_body_name=anchor_body_name,
@@ -272,16 +302,24 @@ def expert_window_anchor_ori_b(
 
 def policy_expert_motion_qpos(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Actor joint-position command (no velocities), direct or streamed.
 
     ``root_qpos`` drops the 29 joint-velocity channels the full-body packet
     carries, halving the joint payload. Its controller is trained on this space,
-    so the velocities are absent by design.
+    so the velocities are absent by design. In reference mode the term is the
+    windowed view (past/future from the term params; 0/0 = single frame).
     """
     if env.policy_command_mode == "reference":
-        return env.get_expert_motion_qpos_command(asset_cfg.joint_ids)
+        return expert_window_motion_qpos(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            asset_cfg=asset_cfg,
+        )
     return env.current_full_body_tracker_command_term(
         "expert_motion_qpos",
         joint_ids=asset_cfg.joint_ids,
@@ -290,6 +328,8 @@ def policy_expert_motion_qpos(
 
 def policy_expert_ee_pos_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     reference_body_names: tuple[str, ...] = (),
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -299,16 +339,16 @@ def policy_expert_ee_pos_b(
     Mirrors :func:`policy_expert_anchor_pos_b`. Under ``ee_chunk_current_slot``
     the tracker receives the slot of the held packet that is time-aligned with
     the current control step (the window is phase-shifted before slot zero is
-    taken), so a 5 Hz packet drives 50 Hz control one frame at a time.
+    taken), so a 5 Hz packet drives 50 Hz control one frame at a time. In
+    reference mode the term is the windowed view (0/0 = the single current
+    frame, exactly what the EE tracker saw during training).
     """
     del asset_cfg
     if env.policy_command_mode == "reference":
-        # Single current frame: exactly what the EE tracker saw during training
-        # (window params past=0/future=0 -> 4 bodies x 3 = 12 values).
         return expert_window_ee_pos_b(
             env,
-            past_steps=0,
-            future_steps=0,
+            past_steps=past_steps,
+            future_steps=future_steps,
             reference_body_names=reference_body_names,
             anchor_body_name=anchor_body_name,
         )
@@ -321,6 +361,8 @@ def policy_expert_ee_pos_b(
 
 def policy_expert_ee_ori_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     reference_body_names: tuple[str, ...] = (),
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -330,8 +372,8 @@ def policy_expert_ee_ori_b(
     if env.policy_command_mode == "reference":
         return expert_window_ee_ori_b(
             env,
-            past_steps=0,
-            future_steps=0,
+            past_steps=past_steps,
+            future_steps=future_steps,
             reference_body_names=reference_body_names,
             anchor_body_name=anchor_body_name,
         )
@@ -344,6 +386,8 @@ def policy_expert_ee_ori_b(
 
 def policy_expert_keypoint_pos_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     reference_body_names: tuple[str, ...] = (),
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -359,8 +403,8 @@ def policy_expert_keypoint_pos_b(
     if env.policy_command_mode == "reference":
         return expert_window_keypoint_pos_b(
             env,
-            past_steps=0,
-            future_steps=0,
+            past_steps=past_steps,
+            future_steps=future_steps,
             reference_body_names=reference_body_names,
             anchor_body_name=anchor_body_name,
         )
@@ -373,6 +417,8 @@ def policy_expert_keypoint_pos_b(
 
 def policy_expert_keypoint_ori_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     reference_body_names: tuple[str, ...] = (),
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
@@ -388,8 +434,8 @@ def policy_expert_keypoint_ori_b(
     if env.policy_command_mode == "reference":
         return expert_window_keypoint_ori_b(
             env,
-            past_steps=0,
-            future_steps=0,
+            past_steps=past_steps,
+            future_steps=future_steps,
             reference_body_names=reference_body_names,
             anchor_body_name=anchor_body_name,
         )

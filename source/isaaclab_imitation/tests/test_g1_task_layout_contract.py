@@ -270,15 +270,15 @@ REWARD_INPUT_TERMS = ["expert_motion", "expert_anchor_pos_b", "expert_anchor_ori
 def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     """-G1-v2 parks the IPMD reward-estimation (IRL) stack by default.
 
-    The reward_input group feeds only the IPMD reward estimator, so v2
-    defaults `enable_reward_input_observations=False` and drops the group;
-    v0/v1 keep it (pinned by the recorded-default test). The lean v2 surface
-    (2026-08-01) has no reward_input group at all, so the opt-in knob stays
-    inert there -- reward estimation would require the full surface; the
-    full surface keeps the v1 opt-in semantics.
+    The reward_input group feeds only the IPMD reward estimator, so the
+    single v2 env defaults `enable_reward_input_observations=False` and the
+    env-construction resolution drops the group; v0/v1 keep it (pinned by the
+    recorded-default test). The opt-in knob keeps the exact v0/v1 term list
+    when enabled before construction.
     """
     v2_cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
     assert v2_cfg.enable_reward_input_observations is False
+    v2_cfg.resolve_late_overrides()
     assert getattr(v2_cfg.observations, "reward_input", None) is None
 
     v1_cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
@@ -287,34 +287,19 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     v0_cfg = _load_env_cfg("Isaac-Imitation-G1-v0")
     assert _group_terms(v0_cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
-    # The lean v2 surface cannot restore a group it does not declare; the
-    # knob stays inert (reward estimation would need the full surface).
-    cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
-    cfg.from_dict({"enable_reward_input_observations": True})
-    cfg.resolve_late_overrides()
-    assert getattr(cfg.observations, "reward_input", None) is None
-
-    # The full surface keeps the v1 opt-in semantics: the env-construction
+    # The single v2 env keeps the v1 opt-in semantics: the env-construction
     # resolution drops the group at the default (parked) toggle and keeps the
     # exact v0/v1 term list when the knob is enabled before construction.
-    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
-        ImitationG1FullSurfaceEnvCfg,
-    )
-
-    parked_full = ImitationG1FullSurfaceEnvCfg()
-    parked_full.resolve_late_overrides()
-    assert parked_full.observations.reward_input is None
-
-    full_cfg = ImitationG1FullSurfaceEnvCfg()
-    full_cfg.enable_reward_input_observations = True
-    full_cfg.resolve_late_overrides()
-    assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
+    cfg.enable_reward_input_observations = True
+    cfg.resolve_late_overrides()
+    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
     for name in ("expert_anchor_pos_b", "expert_anchor_ori_b"):
-        term = getattr(full_cfg.observations.reward_input, name)
-        assert term.params["anchor_body_name"] == full_cfg.expert_anchor_body_name
+        term = getattr(cfg.observations.reward_input, name)
+        assert term.params["anchor_body_name"] == cfg.expert_anchor_body_name
     # Resolution stays a fixed point.
-    full_cfg.resolve_late_overrides()
-    assert _group_terms(full_cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    cfg.resolve_late_overrides()
+    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
 
 def test_reward_estimation_agent_switch_defaults_parked() -> None:

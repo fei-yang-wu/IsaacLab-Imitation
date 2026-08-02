@@ -254,7 +254,7 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         **_LATENT_STABLE_TASK_KWARGS,
-        "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v2:ImitationG1EnvCfg"),
+        "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v2:ImitationG1V2EnvCfg"),
         # PPO / SAC train on the explicit surfaces (vanilla input keys): pair
         # them with the full surface + `env.command_mode=explicit` +
         # `agent.ipmd.use_latent_command=false`-style overrides, or use the

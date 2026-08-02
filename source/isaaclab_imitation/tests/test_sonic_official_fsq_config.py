@@ -21,9 +21,9 @@ def test_official_sonic_fsq_encodes_one_future_window_and_renews_each_step() -> 
     assert latent.fsq_levels == [32] * 64
     assert latent.fsq_normalize_codes is True
     assert latent.posterior_input_keys == [
-        ("expert_window", "expert_motion"),
-        ("expert_window", "expert_anchor_pos_b"),
-        ("expert_window", "expert_anchor_ori_b"),
+        ("policy", "expert_motion"),
+        ("policy", "expert_anchor_pos_b"),
+        ("policy", "expert_anchor_ori_b"),
     ]
     assert latent.patch_past_steps == 0
     assert latent.patch_future_steps == 9

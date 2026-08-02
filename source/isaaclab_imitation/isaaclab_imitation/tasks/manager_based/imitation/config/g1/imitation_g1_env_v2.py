@@ -3,39 +3,48 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""``Isaac-Imitation-G1-v2``: the thin flat default G1 tracking environment (flagship).
+"""``Isaac-Imitation-G1-v2``: ONE configurable G1 tracking environment.
 
-The v2 default is the THINNEST surface, rebuilt from profiling the v1
-superset: exactly the observation groups the latent recipe reads (policy +
-critic only; no expert_window / expert_goal / expert_state / reward_input
-groups) and ONE command term named ``command``
-(:class:`~...mdp.commands.ReferenceCommandCfg`) that serves the
-agent-published latent command, owns the reset-start samplers, and owns the
-tracking metrics. The environment runs a single-compute step (one
-observation compute per control step, at the returned next-reference
-frame), so v2 is deliberately NOT bit-equivalent to the legacy env -- the
-discarded mid-step compute also drew observation noise, so v2 has its own
-fresh stochastic stream. Rewards, terminations, events, and actions are the
-same frozen SONIC recipe components as v1.
+Single env class (``ImitationG1V2EnvCfg``) that superseded the lean/full
+split on 2026-08-02. Every command type is DECLARED -- the latent
+``command`` term (serves the agent-published latent command, owns the
+reset-start samplers and the tracking metrics), the explicit ``motion``
+term (the 67-D explicit command behind ``command_manager.get_command("motion")``
+and the explicit-interface rows), and the held ``chunk`` term (streams a
+published packet slot-by-slot) -- and what is actually BUILT is selected by
+configuration at construction:
 
-Flat design (v2.1 consolidation, 2026-08-01): ``ImitationG1EnvCfg`` inherits
-ONLY the generic ``ImitationLearningEnvCfg`` base -- not the legacy
+- ``command_mode="latent"`` (default): the ``command`` term only.
+- ``command_mode="explicit"``: the ``motion`` term (plus ``chunk`` under a
+  ``*_chunk_current_slot`` ``policy_command_mode``).
+
+The observation surface is also single: policy (latent command + the full
+windowed explicit command superset + proprio) and critic (latent command +
+single-frame expert command + privileged state). The historical
+``expert_window`` group is GONE: windowed command data IS the explicit
+motion command, so the window params (``latent_patch_past_steps`` /
+``latent_patch_future_steps``) live on the policy command terms and the
+encoder families consume ``("policy", ...)`` directly. With 0/0 the terms
+are exactly the single-frame commands the explicit actor reads.
+
+The environment runs a single-compute step (one observation compute per
+control step, at the returned next-reference frame), so v2 is deliberately
+NOT bit-equivalent to the legacy env -- the discarded mid-step compute also
+drew observation noise, so v2 has its own fresh stochastic stream. Rewards,
+terminations, events, and actions are the same frozen SONIC recipe
+components as v1.
+
+Flat design: ``ImitationG1V2EnvCfg`` inherits ONLY the generic
+``ImitationLearningEnvCfg`` base -- not the legacy
 ``ImitationG1BaseTrackingEnvCfg`` machinery (deprecated, v0/v1-only, in
 ``common/tracking_env.py``). Every field this surface needs is declared
 here, and every derived adjustment happens in ONE deterministic step,
 ``resolve_late_overrides()``, which the env constructor calls after all
-Hydra / plain-setattr overrides have landed (manifest resolution, command
-mode / whitelist derivation, anchor + window + goal syncs, command-term
-width lockstep). No restore machinery, no from_dict monkey-patching, no
-defensive fallbacks: construction fails loudly on a missing manifest or an
-incoherent command selection.
-
-The full surface (explicit command terms, expert_window / expert_goal
-groups, the motion / skill / chunk command terms) is preserved as
-:class:`ImitationG1FullSurfaceEnvCfg`, the base for the explicit and
-reconstruction surfaces (``config/g1/surfaces/``); the task registration
-points at the flagship ``ImitationG1EnvCfg`` (the lean default) since
-2026-08-01.
+Hydra / plain-setattr overrides have landed (dataset preparation, command
+mode / whitelist derivation, group toggles, anchor + window syncs,
+command-term build and width lockstep). No restore machinery, no from_dict
+monkey-patching, no defensive fallbacks: construction fails loudly on a
+missing manifest or an incoherent command selection.
 """
 
 import copy
@@ -52,12 +61,10 @@ from ...motion_manifest import (
     load_lafan1_manifest,
     load_manifest_family,
 )
-from ... import mdp
 from ...mdp.commands import (
     HeldChunkCommandCfg,
     MotionCommandCfg,
     ReferenceCommandCfg,
-    SkillCommandCfg,
 )
 from .common.actions import G1SonicActionsCfg
 from .common.constants import (
@@ -69,13 +76,10 @@ from .common.constants import (
 )
 from .common.events import G1SonicEventCfg
 from .common.observations import (
-    G1FullSurfaceObservationCfg,
-    G1LeanLatentObservationCfg,
-    _DEFAULT_EXPERT_MACRO_STATE_TERMS,
-    _EXPERT_WINDOW_TERM_NAMES,
-    _LATENT_ANCHOR_TERM_NAMES_BY_GROUP,
+    G1V2ObservationCfg,
     _LATENT_MODE_DEFAULT_COMMAND_TERM_NAMES,
     _PRUNABLE_COMMAND_TERM_NAMES,
+    _V2_ANCHOR_TERM_NAMES_BY_GROUP,
 )
 from .common.presets import (
     G1ImitationContactSensorCfg,
@@ -96,66 +100,50 @@ _POLICY_CHUNK_COMMAND_MODES = (
     "ee_chunk_current_slot",
 )
 
-# The command-backed observation terms that the full v2 surface rebinds onto
-# CommandManager terms (same values, one producer): the baseline explicit
-# trio moves to the ``motion`` term and the agent-latent term moves to the
-# ``skill`` term. Only these; the ``policy_*`` chunk-adapter terms keep their
-# env funcs.
-_COMMAND_MANAGER_BACKED_TERM_FUNCS = {
-    "expert_motion": mdp.motion_command_joint,
-    "expert_anchor_pos_b": mdp.motion_command_anchor_pos_b,
-    "expert_anchor_ori_b": mdp.motion_command_anchor_ori_b,
-    "latent_command": mdp.skill_command,
-}
-
 
 @configclass
-class G1LeanCommandsCfg:
-    """The lean v2 default carries one command term, named ``command``."""
+class G1V2CommandsCfg:
+    """All v2 command terms declared; the env builds them on demand.
 
-    command: ReferenceCommandCfg = ReferenceCommandCfg(
+    Exactly one term owns the reset-start samplers and the tracking metrics
+    (``owns_reset=True``): ``command`` in latent mode, ``motion`` in explicit
+    mode. ``chunk`` exists only under a ``*_chunk_current_slot``
+    ``policy_command_mode`` (the CommandManager skips None entries).
+    """
+
+    command: ReferenceCommandCfg | None = ReferenceCommandCfg(
         anchor_body_name="pelvis",
         mpjpe_body_names=G1_TRACKED_BODY_NAMES.copy(),
         # The term owns reference reset-start sampling (same sampler semantics
-        # and cfg knobs as the full surface's `motion` term and v0/v1's
-        # env-inline path).
+        # and cfg knobs as the explicit `motion` term and v0/v1's env-inline
+        # path).
         owns_reset=True,
     )
 
-
-@configclass
-class G1MotionCommandsCfg:
-    """Command terms for the full v2 CommandManager surface."""
-
-    motion: MotionCommandCfg = MotionCommandCfg(
+    motion: MotionCommandCfg | None = MotionCommandCfg(
         anchor_body_name="pelvis",
         joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES.copy(),
         mpjpe_body_names=G1_TRACKED_BODY_NAMES.copy(),
         owns_reset=True,
     )
 
-    # Placeholder width: the env cfg wires `latent_command_dim` from its own
-    # field in `__post_init__` (and re-syncs it in the construction-time
-    # resolution so plain-setattr overrides of `env.latent_command_dim` land).
-    skill: SkillCommandCfg = SkillCommandCfg(latent_command_dim=258)
-
-    # Held explicit-chunk term. None on the default latent task: the env cfg
-    # instantiates it in `_sync_chunk_command_cfg` only when
-    # `policy_command_mode` is a `*_chunk_current_slot` adapter (the
-    # CommandManager skips None entries).
+    # Held explicit-chunk term. None unless `policy_command_mode` is a
+    # `*_chunk_current_slot` adapter (see `_sync_chunk_command_cfg`).
     chunk: HeldChunkCommandCfg | None = None
 
 
 @configclass
-class ImitationG1EnvCfg(ImitationLearningEnvCfg):
-    """Thin flat v2 default: lean latent observations + one ``command`` term.
+class ImitationG1V2EnvCfg(ImitationLearningEnvCfg):
+    """The single configurable v2 G1 tracking environment.
 
-    Observation surface: policy (agent-published latent command + SONIC
-    proprio histories) and critic (latent command + single-frame expert
-    command + privileged state) only. No windowed / goal / state /
-    reward-input groups -- nothing in the latent recipe reads them, and the
-    offline skill-encoder sampler consumes ``current_expert_macro_transition_batch``
-    (an env API), not the observation groups.
+    One env for every command surface: the latent default (policy + critic
+    groups, one ``command`` term), the explicit interfaces (FB / root+qpos /
+    EE / keypoint via ``command_mode=explicit`` +
+    ``command_observation_terms``), the chunk/packet interfaces
+    (``policy_command_mode=*_chunk_current_slot``), and the encoder surfaces
+    (windowed policy command terms read by the vqvae / cvae / per-step-vq /
+    sonic agents). What is built follows the knobs; nothing unused is
+    instantiated.
 
     Inherits only the generic ``ImitationLearningEnvCfg``; every G1-specific
     field, validation, and derivation lives in this file. Construction-time
@@ -166,24 +154,35 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
 
     # -- components (shared SONIC blocks from common) --
     actions = G1SonicActionsCfg()
-    observations = G1LeanLatentObservationCfg()
+    observations = G1V2ObservationCfg()  # type: ignore
     rewards = G1SonicRewardsCfg()  # type: ignore
     terminations = G1SonicTerminationsCfg()  # type: ignore
     events = G1SonicEventCfg()
     curriculum = None
 
-    # The single lean command term (latent buffer + reset ownership + metrics).
     # pyrefly: ignore[bad-override-mutable-attribute]  # configclass override idiom
-    commands: G1LeanCommandsCfg = G1LeanCommandsCfg()
+    commands: G1V2CommandsCfg = G1V2CommandsCfg()
 
-    # -- skill-conditioned command configuration --
+    # -- command configuration --
+    # Which command family feeds the actor: "explicit" prunes the
+    # agent-published `latent_command` term and keeps the explicit command
+    # terms selected by `command_observation_terms` (all of them when None);
+    # "latent" keeps `latent_command` plus, by default, the historical
+    # explicit baseline terms (expert_motion + anchors). Pair with the
+    # matching agent config: `agent.ipmd.use_latent_command` must agree
+    # (validated at training entry and by the command-matrix audit).
     command_mode: str = "latent"
     latent_command_dim: int = 258
-    # Future goal steps; unused by the lean surface (no expert_goal group) but
-    # inherited by the full surface's goal sync.
-    latent_goal_steps: int = 1
-    # The lean surface has no expert_goal / reward_input groups; the parked
-    # reward-estimation stack stays off.
+    # Optional whitelist of policy-group COMMAND terms to keep (see
+    # `_apply_command_mode`).
+    command_observation_terms: list[str] | None = None
+    command_observation_source: str = "reference"
+    policy_command_mode: str = "reference"
+    # Expert-window terms making up one DiffSR macro-state frame (consumed by
+    # the env API `current_expert_macro_transition_batch`, not an obs group).
+    expert_macro_state_terms: list[str] | None = None
+    # Master switch for the reward_input observation group (parked IPMD
+    # reward-estimation stack).
     enable_reward_input_observations: bool = False
 
     # -- reset / start-frame configuration (parsed once by the env) --
@@ -208,27 +207,6 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
     # The SONIC protocol anchors at the pelvis (v2 default, declared here
     # rather than derived).
     expert_anchor_body_name: str = "pelvis"
-
-    # -- command observation selection (see `_apply_command_mode`) --
-    # Which command family feeds the actor: "explicit" prunes the
-    # agent-published `latent_command` term and keeps the explicit command
-    # terms selected by `command_observation_terms` (all of them when None);
-    # "latent" keeps `latent_command` plus, by default, the historical
-    # explicit baseline terms (expert_motion + anchors). Pair with the
-    # matching agent config: `agent.ipmd.use_latent_command` must agree
-    # (validated at training entry and by the command-matrix audit).
-    command_observation_terms: list[str] | None = None
-    command_observation_source: str = "reference"
-    policy_command_mode: str = "reference"
-    # Expert-window terms making up one DiffSR macro-state frame. None keeps
-    # the full-body default (expert_motion 58 + anchor_pos 3 + anchor_ori 6).
-    expert_macro_state_terms: list[str] | None = None
-    # Optional whitelist of expert_window group terms to keep (see
-    # `_apply_expert_window_whitelist`).
-    expert_window_observation_terms: list[str] | None = None
-    # Master switch for the expert_goal observation group (where the surface
-    # has one).
-    enable_expert_goal_observations: bool = True
 
     # -- body / joint name tables --
     reference_joint_names: list[str] = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
@@ -275,16 +253,23 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
     _debug_rewards: bool = False
 
     # ------------------------------------------------------------------
-    # Anchor / observation-param tables (surface-specific).
+    # Anchor / pruning tables (this surface).
     # ------------------------------------------------------------------
 
     def _anchor_term_names_by_group(self) -> dict[str, tuple[str, ...]]:
-        # Only the critic carries anchor-relative terms on the lean surface.
-        return {"critic": ("expert_anchor_pos_b", "expert_anchor_ori_b")}
+        return _V2_ANCHOR_TERM_NAMES_BY_GROUP
 
     def _critic_prunable_command_term_names(self) -> tuple[str, ...]:
-        # No explicit command superset on the lean surface.
-        return ()
+        # The supplemental explicit terms the latent critic gained for
+        # explicit command mode; the latent critic contract terms
+        # (expert_motion + anchors) are never pruned.
+        return (
+            "expert_motion_qpos",
+            "expert_ee_pos_b",
+            "expert_ee_ori_b",
+            "expert_keypoint_pos_b",
+            "expert_keypoint_ori_b",
+        )
 
     def _set_anchor_body(self, anchor_body_name: str) -> None:
         """Point every anchor-relative observation term at one body."""
@@ -299,27 +284,48 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
                 if "anchor_body_name" in term.params:
                     term.params["anchor_body_name"] = anchor_body_name
 
-    def _sync_expert_window_observation_params(self) -> None:
-        # The lean surface has no expert_window group; the offline skill
-        # encoder samples via the env API, not this observation group.
-        return
+    def _sync_command_window_params(self) -> None:
+        """Sync the policy command terms' window to ``latent_patch_*``.
 
-    def _sync_expert_goal_observation_params(self) -> None:
-        # The lean surface has no expert_goal group.
-        return
-
-    def _sync_skill_command_cfg(self) -> None:
-        # No `skill` term on the lean surface.
-        return
-
-    def _sync_chunk_command_cfg(self) -> None:
-        # No `chunk` term on the lean surface.
-        return
-
-    def _rebind_command_manager_backed_terms(self) -> None:
-        # The lean command-backed terms are already the single-producer
-        # (env-func) forms; nothing to rebind.
-        return
+        Every windowed term in the policy group must appear here: the
+        observation manager evaluates the whole group each step, and an
+        unsynced term keeps its declaration-time 0/0 (single frame) while the
+        encoder surfaces expect the task's window. (Terms pruned to None by
+        `command_observation_terms` are skipped.)
+        """
+        past_steps = int(self.latent_patch_past_steps)
+        future_steps = int(self.latent_patch_future_steps)
+        policy = self.observations.policy
+        for term in (
+            policy.expert_motion,
+            policy.expert_motion_qpos,
+            policy.expert_anchor_pos_b,
+            policy.expert_anchor_ori_b,
+        ):
+            if term is None:
+                continue
+            term.params["past_steps"] = past_steps
+            term.params["future_steps"] = future_steps
+        for term in (
+            policy.expert_ee_pos_b,
+            policy.expert_ee_ori_b,
+        ):
+            if term is None:
+                continue
+            term.params["past_steps"] = past_steps
+            term.params["future_steps"] = future_steps
+            term.params["reference_body_names"] = tuple(self.command_ee_body_names)
+        for term in (
+            policy.expert_keypoint_pos_b,
+            policy.expert_keypoint_ori_b,
+        ):
+            if term is None:
+                continue
+            term.params["past_steps"] = past_steps
+            term.params["future_steps"] = future_steps
+            term.params["reference_body_names"] = tuple(
+                self.command_keypoint_body_names
+            )
 
     # ------------------------------------------------------------------
     # Input normalization (Hydra / from_dict path).
@@ -376,19 +382,6 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
                 raise ValueError(
                     "command_observation_terms must be a list of term names, "
                     "an '[a,b,c]' string, or null."
-                )
-
-        if "expert_window_observation_terms" in remaining:
-            # Same None-default gotcha as `command_observation_terms`.
-            value = remaining.pop("expert_window_observation_terms")
-            if value is None or isinstance(value, str):
-                self.expert_window_observation_terms = value
-            elif isinstance(value, (list, tuple)):
-                self.expert_window_observation_terms = [str(item) for item in value]
-            else:
-                raise ValueError(
-                    "expert_window_observation_terms must be a list of term "
-                    "names, an '[a,b,c]' string, or null."
                 )
 
         return remaining
@@ -524,12 +517,10 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
     def _apply_command_mode(self) -> None:
         """Apply the final ``command_mode`` + whitelist to the observation groups.
 
-        Single deterministic pass over the declared surfaces, run once per env
+        Single deterministic pass over the declared surface, run once per env
         construction (see :meth:`resolve_late_overrides`) after every override
-        has landed. Unlike the legacy machinery there is no restore step: the
-        v2 surfaces are declared complete and this pass only ever narrows them
-        (terms never pruned here are never reinstated; changing
-        ``command_observation_terms`` between constructions is a new env).
+        has landed. There is no restore step: the v2 surface is declared
+        complete and this pass only ever narrows it.
 
         - ``explicit``: prune ``latent_command`` (where the surface has one)
           and keep the policy command terms selected by
@@ -597,62 +588,67 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
                 if term is not None:
                     term.noise = None
 
-    def _apply_expert_window_whitelist(self) -> None:
-        """Apply the ``expert_window_observation_terms`` whitelist.
+    # ------------------------------------------------------------------
+    # Command-term build / sync.
+    # ------------------------------------------------------------------
 
-        None (the default) keeps every window term. A whitelist must cover the
-        active macro-state terms, because the env builds the skill/planner
-        macro state from this group; anything else a specific run reads from
-        the window is the caller's responsibility to keep.
+    def _build_command_terms(self) -> None:
+        """Build the command-term set the current configuration uses.
+
+        Exactly one term owns the reset-start samplers: ``command`` in latent
+        mode, ``motion`` in explicit mode (chunk modes keep ``motion`` as the
+        reset owner and add the held ``chunk`` term). The CommandManager
+        skips None entries, so unused terms cost nothing.
         """
-        window = getattr(self.observations, "expert_window", None)
-        if window is None:
-            return
-        whitelist = self._parse_whitelist(self.expert_window_observation_terms)
-        self.expert_window_observation_terms = whitelist
-        if whitelist is None:
-            return
-        keep = set(whitelist)
-        unknown = keep - set(_EXPERT_WINDOW_TERM_NAMES)
-        if unknown:
-            raise ValueError(
-                "expert_window_observation_terms names terms that are not "
-                f"expert_window terms: {sorted(unknown)}. Expected a subset "
-                f"of {sorted(_EXPERT_WINDOW_TERM_NAMES)}."
-            )
-        macro_terms = self.expert_macro_state_terms
-        if macro_terms is None:
-            macro_terms = _DEFAULT_EXPERT_MACRO_STATE_TERMS
+        if self.command_mode == "latent":
+            self.commands.motion = None
+            self.commands.chunk = None
         else:
-            macro_terms = tuple(self._parse_whitelist(macro_terms))
-        missing_macro = set(macro_terms) - keep
-        if missing_macro:
-            raise ValueError(
-                "expert_window_observation_terms must retain the active "
-                f"expert_macro_state_terms; missing {sorted(missing_macro)}."
-            )
-        for term_name in _EXPERT_WINDOW_TERM_NAMES:
-            if term_name not in keep and hasattr(window, term_name):
-                setattr(window, term_name, None)
-
-    # ------------------------------------------------------------------
-    # Command-term syncs.
-    # ------------------------------------------------------------------
+            self.commands.command = None
+            self._sync_chunk_command_cfg()
 
     def _sync_command_cfg(self) -> None:
-        """Wire the lean ``command`` term's width and anchor from the env fields.
+        """Wire the latent ``command`` term's width and anchor from the env fields.
 
         The ReferenceCommand serves the env's ``_agent_latent_command`` buffer
         (width ``latent_command_dim``) and computes its metrics against the
         env's expert anchor; both must match or construction fails loudly.
-        Idempotent. Inert on surfaces whose command set has no ``command``
-        term (e.g. the full surface with motion/skill/chunk).
+        Idempotent. Inert in explicit mode (no ``command`` term).
         """
         command = getattr(self.commands, "command", None)
         if command is None:
             return
         command.latent_command_dim = int(self.latent_command_dim)
         command.anchor_body_name = self.expert_anchor_body_name
+
+    def _sync_motion_command_cfg(self) -> None:
+        """Wire the explicit ``motion`` term's anchor from the env fields."""
+        motion = getattr(self.commands, "motion", None)
+        if motion is None:
+            return
+        motion.anchor_body_name = self.expert_anchor_body_name
+
+    def _sync_chunk_command_cfg(self) -> None:
+        """Instantiate/prune the ``chunk`` term from ``policy_command_mode``.
+
+        Only a ``*_chunk_current_slot`` mode streams the actor's command from
+        the env's held window, so only then does the adapter term exist. When
+        present, its knobs are wired in lockstep with the env fields the
+        held-window machinery reads: ``hold_steps`` from
+        ``command_hold_steps`` (HeldChunkCommand fails loudly on a mismatch),
+        the pinned 29-DoF joint order of the chunk-mode
+        ``policy_expert_motion_command`` observation term, and the expert
+        anchor body. Idempotent.
+        """
+        mode = str(self.policy_command_mode).strip().lower().replace("-", "_")
+        if mode not in _POLICY_CHUNK_COMMAND_MODES:
+            self.commands.chunk = None
+            return
+        if self.commands.chunk is None:
+            self.commands.chunk = HeldChunkCommandCfg()
+        self.commands.chunk.hold_steps = int(self.command_hold_steps)
+        self.commands.chunk.joint_names = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
+        self.commands.chunk.anchor_body_name = self.expert_anchor_body_name
 
     # ------------------------------------------------------------------
     # The single construction-time resolution step.
@@ -673,10 +669,11 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         can all arrive after ``__post_init__``. This is the ONE place those
         final field values are turned into the derived layout: dataset
         preparation, command-mode / whitelist derivation, group toggles,
-        anchor re-pointing, window/goal param syncs, and command-term width
-        lockstep. Idempotent: every step is deterministic and only narrows or
-        re-syncs, so calling it once per env construction is a fixed point.
-        Fails loudly on a missing manifest source or an incoherent selection.
+        anchor re-pointing, window syncs, and the command-term build with
+        width lockstep. Idempotent: every step is deterministic and only
+        narrows or re-syncs, so calling it once per env construction is a
+        fixed point. Fails loudly on a missing manifest source or an
+        incoherent selection.
         """
         self._prepare_dataset_config(
             dataset_path_explicit=dataset_path_explicit,
@@ -684,21 +681,15 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
             timing_explicit=timing_explicit,
         )
         self._apply_command_mode()
-        self._apply_expert_window_whitelist()
-        # Drop the expert_goal / reward_input groups when their toggles are off.
-        if not self.enable_expert_goal_observations:
-            if getattr(self.observations, "expert_goal", None) is not None:
-                self.observations.expert_goal = None
+        # Drop the reward_input group when its toggle is off (parked default).
         if not self.enable_reward_input_observations:
             if getattr(self.observations, "reward_input", None) is not None:
                 self.observations.reward_input = None
         self._set_anchor_body(self.expert_anchor_body_name)
-        self._sync_expert_window_observation_params()
-        self._sync_expert_goal_observation_params()
+        self._sync_command_window_params()
+        self._build_command_terms()
         self._sync_command_cfg()
-        self._sync_skill_command_cfg()
-        self._sync_chunk_command_cfg()
-        self._rebind_command_manager_backed_terms()
+        self._sync_motion_command_cfg()
 
     def __post_init__(self):
         super().__post_init__()
@@ -809,7 +800,7 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         # The SONIC pelvis protocol + legacy reset distribution: starts in
         # [0, 200], no full-trajectory adaptive-failure sampling,
         # failure_rate_max_over_mean=50 (declared defaults; re-anchor the
-        # declared observation surfaces and the reward terms to the pelvis).
+        # declared observation surface and the reward terms to the pelvis).
         self._set_anchor_body(self.expert_anchor_body_name)
         for term_name in (
             "motion_global_anchor_pos",
@@ -826,174 +817,20 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         # catch plain-setattr overrides; idempotent).
         self._prepare_dataset_config()
 
+        self._sync_command_window_params()
+        # NOTE: the command-term build (`_build_command_terms`) is NOT run
+        # here: post-init runs before any overrides land, and the build is
+        # destructive (it None's the inactive terms). Every command term stays
+        # declared until the env-construction resolution selects the active
+        # set from the final field values.
         self._sync_command_cfg()
+        self._sync_motion_command_cfg()
 
 
-@configclass
-class ImitationG1FullSurfaceEnvCfg(ImitationG1EnvCfg):
-    """Full v2 surface: the v1 observation layout plus the native command terms.
+def _imitation_g1_env_cfg_from_dict(self: ImitationG1V2EnvCfg, data: dict) -> None:
+    """``from_dict`` for the flat v2 config: normalize then strict-update.
 
-    The pre-thin-default v2 configuration: v1's complete observation groups
-    (expert_state / expert_window / expert_goal / reward_input plus the
-    explicit-command superset in policy/critic), the three command terms
-    (``motion`` / ``skill`` / ``chunk``), and the v1 env-backed metric and
-    reward-input behavior. Base for the explicit and reconstruction surfaces
-    (``config/g1/surfaces/``). Command-mode / whitelist selection is a
-    ``command_mode`` + ``command_observation_terms`` override resolved by the
-    same :meth:`ImitationG1EnvCfg.resolve_late_overrides` step.
-    """
-
-    observations = G1FullSurfaceObservationCfg()  # type: ignore
-
-    # pyrefly: ignore[bad-override-mutable-attribute]  # configclass override idiom
-    commands: G1MotionCommandsCfg = G1MotionCommandsCfg()
-
-    def _anchor_term_names_by_group(self) -> dict[str, tuple[str, ...]]:
-        # The v1 latent anchor table (policy/critic body-pose + anchor terms,
-        # expert_state/window/goal anchor terms).
-        return _LATENT_ANCHOR_TERM_NAMES_BY_GROUP
-
-    def _critic_prunable_command_term_names(self) -> tuple[str, ...]:
-        # The supplemental explicit terms the latent critic gained for
-        # explicit command mode (v1 behavior).
-        return (
-            "expert_motion_qpos",
-            "expert_ee_pos_b",
-            "expert_ee_ori_b",
-            "expert_keypoint_pos_b",
-            "expert_keypoint_ori_b",
-        )
-
-    def _sync_expert_window_observation_params(self) -> None:
-        """Sync every expert_window term to the latent patch window."""
-        past_steps = int(self.latent_patch_past_steps)
-        future_steps = int(self.latent_patch_future_steps)
-        # Every term in the expert_window group must appear here. A term left
-        # out keeps its declaration-time past/future steps (0/0 -> a 1-step
-        # request) while the rest follow the task's window, and the observation
-        # manager evaluates the whole group regardless of which terms the macro
-        # state selects -- so an unsynced term raises "Planner command window
-        # mismatch" on any task with a multi-step window, even when nothing
-        # reads it. (Terms pruned to None by `expert_window_observation_terms`
-        # are skipped.)
-        for term in (
-            self.observations.expert_window.expert_motion,
-            self.observations.expert_window.expert_motion_qpos,
-            self.observations.expert_window.expert_anchor_pos_b,
-            self.observations.expert_window.expert_anchor_ori_b,
-        ):
-            if term is None:
-                continue
-            term.params["past_steps"] = past_steps
-            term.params["future_steps"] = future_steps
-        for term in (
-            self.observations.expert_window.expert_ee_pos_b,
-            self.observations.expert_window.expert_ee_ori_b,
-        ):
-            if term is None:
-                continue
-            term.params["past_steps"] = past_steps
-            term.params["future_steps"] = future_steps
-            term.params["reference_body_names"] = tuple(self.command_ee_body_names)
-        for term in (
-            self.observations.expert_window.expert_keypoint_pos_b,
-            self.observations.expert_window.expert_keypoint_ori_b,
-        ):
-            if term is None:
-                continue
-            term.params["past_steps"] = past_steps
-            term.params["future_steps"] = future_steps
-            term.params["reference_body_names"] = tuple(
-                self.command_keypoint_body_names
-            )
-
-    def _sync_expert_goal_observation_params(self) -> None:
-        goal_steps = int(self.latent_goal_steps)
-        if goal_steps < 0:
-            raise ValueError("latent_goal_steps must be >= 0.")
-        # The group is None when `enable_expert_goal_observations=False`
-        # dropped it; nothing to sync then.
-        if getattr(self.observations, "expert_goal", None) is None:
-            return
-        for term in (
-            self.observations.expert_goal.expert_motion,
-            self.observations.expert_goal.expert_anchor_pos_b,
-            self.observations.expert_goal.expert_anchor_ori_b,
-        ):
-            term.params["goal_steps"] = goal_steps
-
-    def _sync_skill_command_cfg(self) -> None:
-        """Wire the ``skill`` term's width from the env's latent command dim.
-
-        The SkillCommand adapter serves the env's ``_agent_latent_command``
-        buffer, whose width the env derives from ``cfg.latent_command_dim``;
-        the term cfg must carry the same value or SkillCommand fails loudly at
-        construction. Idempotent.
-        """
-        self.commands.skill.latent_command_dim = int(self.latent_command_dim)
-
-    def _sync_chunk_command_cfg(self) -> None:
-        """Instantiate/prune the ``chunk`` term from ``policy_command_mode``.
-
-        Only a ``*_chunk_current_slot`` mode streams the actor's command from
-        the env's held window, so only then does the adapter term exist; the
-        default latent task keeps ``chunk=None`` (the CommandManager skips
-        None entries). When present, its knobs are wired in lockstep with the
-        env fields the held-window machinery reads: ``hold_steps`` from
-        ``command_hold_steps`` (HeldChunkCommand fails loudly on a mismatch),
-        the pinned 29-DoF joint order of the chunk-mode
-        ``policy_expert_motion_command`` observation term, and the expert
-        anchor body. Idempotent.
-        """
-        mode = str(self.policy_command_mode).strip().lower().replace("-", "_")
-        if mode not in _POLICY_CHUNK_COMMAND_MODES:
-            self.commands.chunk = None
-            return
-        if self.commands.chunk is None:
-            self.commands.chunk = HeldChunkCommandCfg()
-        self.commands.chunk.hold_steps = int(self.command_hold_steps)
-        self.commands.chunk.joint_names = G1_29DOF_ISAACLAB_JOINT_NAMES.copy()
-        self.commands.chunk.anchor_body_name = self.expert_anchor_body_name
-
-    def _rebind_command_manager_backed_terms(self) -> None:
-        """Serve the command-backed observation terms from CommandManager terms.
-
-        Same values as the v1 env-backed funcs (baseline explicit trio ->
-        ``motion``, ``latent_command`` -> ``skill``), but with the
-        CommandManager term as the single producer. The new funcs take no
-        params, so the old ``asset_cfg``/``anchor_body_name`` params are
-        dropped; each term's noise (and everything else) is preserved.
-        Idempotent. Terms pruned to None (e.g. ``latent_command`` under
-        ``command_mode=explicit``) are skipped.
-        """
-        for group_name in ("policy", "critic"):
-            group = getattr(self.observations, group_name, None)
-            if group is None:
-                continue
-            for term_name, func in _COMMAND_MANAGER_BACKED_TERM_FUNCS.items():
-                term = getattr(group, term_name, None)
-                if term is None:
-                    continue
-                term.func = func
-                term.params = {}
-
-    def __post_init__(self):
-        super().__post_init__()
-        # The flagship post-init no-ops the goal sync; the full surface has the
-        # expert_goal group, so restore the goal_steps wiring.
-        self._sync_expert_goal_observation_params()
-        # Keep the command term's anchor in lockstep with the env protocol's
-        # expert anchor (pelvis).
-        self.commands.motion.anchor_body_name = self.expert_anchor_body_name
-        self._sync_skill_command_cfg()
-        self._sync_chunk_command_cfg()
-        self._rebind_command_manager_backed_terms()
-
-
-def _imitation_g1_env_cfg_from_dict(self: ImitationG1EnvCfg, data: dict) -> None:
-    """``from_dict`` for the flat v2 configs: normalize then strict-update.
-
-    Bound in place of the configclass default on the concrete classes below.
+    Bound in place of the configclass default on the concrete class below.
     Normalizes the optional None-default fields (`_normalize_optional_none_overrides`)
     so Hydra ``env.*`` CLI overrides can reach them through the strict
     ``from_dict`` path, then delegates the rest of the update to the base
@@ -1007,18 +844,20 @@ def _imitation_g1_env_cfg_from_dict(self: ImitationG1EnvCfg, data: dict) -> None
     ImitationLearningEnvCfg.from_dict(self, data)
 
 
-# Bind the normalization `from_dict` on every concrete (registered) flat class.
-ImitationG1EnvCfg.from_dict = _imitation_g1_env_cfg_from_dict  # type: ignore[assignment]
-ImitationG1FullSurfaceEnvCfg.from_dict = _imitation_g1_env_cfg_from_dict  # type: ignore[assignment]
+# Bind the normalization `from_dict` on the concrete (registered) class.
+ImitationG1V2EnvCfg.from_dict = _imitation_g1_env_cfg_from_dict  # type: ignore[assignment]
 
-# Back-compat alias: configs recorded against the pre-flip
-# `imitation_g1_env_v2:ImitationG1EnvV2Cfg` entry point keep resolving.
-ImitationG1EnvV2Cfg = ImitationG1EnvCfg
+# Back-compat aliases: configs recorded against the pre-merge names
+# (`imitation_g1_env_v2:ImitationG1EnvCfg` / `ImitationG1EnvV2Cfg` /
+# `ImitationG1FullSurfaceEnvCfg`) keep resolving.
+ImitationG1EnvCfg = ImitationG1V2EnvCfg
+ImitationG1EnvV2Cfg = ImitationG1V2EnvCfg
+ImitationG1FullSurfaceEnvCfg = ImitationG1V2EnvCfg
 
 __all__ = [
-    "G1LeanCommandsCfg",
-    "G1MotionCommandsCfg",
+    "G1V2CommandsCfg",
     "ImitationG1EnvCfg",
     "ImitationG1EnvV2Cfg",
     "ImitationG1FullSurfaceEnvCfg",
+    "ImitationG1V2EnvCfg",
 ]

@@ -40,13 +40,13 @@ LATENT_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "last_action"),
 ]
 
-# Posterior consumes the temporally-extended expert window already published by
-# the env via the ``expert_window`` observation group; raising
+# Posterior consumes the temporally-extended command window already published
+# by the env through the policy command terms; raising
 # ``latent_patch_past_steps`` (set in __post_init__) widens the encoder context.
 LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
-    ("expert_window", "expert_motion"),
-    ("expert_window", "expert_anchor_pos_b"),
-    ("expert_window", "expert_anchor_ori_b"),
+    ("policy", "expert_motion"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
 ]
 
 LATENT_PRIOR_INPUT_KEYS: list[tuple[str, str]] = []
