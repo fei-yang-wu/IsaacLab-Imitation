@@ -192,7 +192,7 @@ class MotionCommand(CommandTerm):
         """
         env = self._imitation_env()
         tm = env.trajectory_manager
-        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
+        env_ids_tm = env_ids.to(device=tm.state_device, dtype=torch.long)
         if env._random_reset_full_trajectory:
             if self._adaptive_failure_reset_sampler is None:
                 raise RuntimeError("Adaptive failure reset sampler is not enabled.")
@@ -245,13 +245,13 @@ class MotionCommand(CommandTerm):
         env = self._imitation_env()
         tm = env.trajectory_manager
         env_ids_device = env_ids.to(device=env.device, dtype=torch.long)
-        env_ids_tm = env_ids.to(device=tm._state_device, dtype=torch.long)
+        env_ids_tm = env_ids.to(device=tm.state_device, dtype=torch.long)
         failed_mask = self._reset_tracking_failure_mask().index_select(
             0, env_ids_device
         )
         if not torch.any(failed_mask):
             return
-        failed_mask_tm = failed_mask.to(device=tm._state_device)
+        failed_mask_tm = failed_mask.to(device=tm.state_device)
         sampler.record_failures(
             tm.env_traj_rank.index_select(0, env_ids_tm)[failed_mask_tm],
             env._current_reference_local_step.index_select(0, env_ids_device)[
@@ -280,10 +280,10 @@ class MotionCommand(CommandTerm):
         env._adaptive_reset_weight_fn = weight_fn
         env._reset_start_mode = StartFrameSampler.ADAPTIVE
         self._start_frame_sampler = StartFrameSampler(
-            env.trajectory_manager._length,
+            env.trajectory_manager.length,
             mode="adaptive",
             weight_fn=weight_fn,
-            device=env.trajectory_manager._state_device,
+            device=env.trajectory_manager.state_device,
         )
 
     def _reset_tracking_failure_mask(self) -> torch.Tensor:
@@ -329,7 +329,7 @@ class MotionCommand(CommandTerm):
         tm = env.trajectory_manager
         if env._random_reset_full_trajectory or env._reset_start_mode == "adaptive":
             self._adaptive_failure_reset_sampler = SonicAdaptiveResetSampler(
-                tm._length,
+                tm.length,
                 bin_size=env._adaptive_failure_reset_bin_size,
                 sequence_length_agnostic=(
                     env._adaptive_failure_reset_sequence_length_agnostic
@@ -365,19 +365,19 @@ class MotionCommand(CommandTerm):
                         "sampler or a custom `cfg.adaptive_reset_weight_fn`."
                     )
                 self._start_frame_sampler = StartFrameSampler(
-                    tm._length,
+                    tm.length,
                     mode="adaptive",
                     weight_fn=weight_fn,
-                    device=tm._state_device,
+                    device=tm.state_device,
                 )
             else:
                 self._start_frame_sampler = StartFrameSampler(
-                    tm._length,
+                    tm.length,
                     mode=mode,
                     fixed_step=env._reference_start_frame,
                     random_step_min=env._random_reset_step_min,
                     random_step_max=env._random_reset_step_max,
-                    device=tm._state_device,
+                    device=tm.state_device,
                 )
         # Single-instance guarantee (the aliasing invariant): exactly one
         # sampler instance set exists. The legacy env's inline record hooks
