@@ -65,13 +65,7 @@ parser.add_argument(
     choices=[
         "PPO",
         "SAC",
-        "FASTSAC",
         "IPMD",
-        "IPMD_SR",
-        "IPMD_BILINEAR",
-        "GAIL",
-        "AMP",
-        "ASE",
     ],
 )
 parser.add_argument("--checkpoint", type=Path, required=True)
@@ -280,7 +274,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipm
     command_space_policy_input_keys,
 )
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
+from rlopt.agent import IPMD, PPO, SAC
 from tensordict.nn import InteractionType
 from torchrl.envs import Compose, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
@@ -362,25 +356,13 @@ def _disable_tracking_terminations(terminations: Any) -> list[str]:
 ALGORITHM_CLASS_MAP = {
     "PPO": PPO,
     "SAC": SAC,
-    "FASTSAC": FastSAC,
     "IPMD": IPMD,
-    "IPMD_SR": IPMDSR,
-    "IPMD_BILINEAR": IPMDBilinear,
-    "GAIL": GAIL,
-    "AMP": AMP,
-    "ASE": ASE,
 }
 
 ENTRY_POINT_ALGORITHM_MAP = {
     "rlopt_ppo_cfg_entry_point": "PPO",
     "rlopt_sac_cfg_entry_point": "SAC",
-    "rlopt_fastsac_cfg_entry_point": "FASTSAC",
     "rlopt_ipmd_cfg_entry_point": "IPMD",
-    "rlopt_ipmd_sr_cfg_entry_point": "IPMD_SR",
-    "rlopt_ipmd_bilinear_cfg_entry_point": "IPMD_BILINEAR",
-    "rlopt_gail_cfg_entry_point": "GAIL",
-    "rlopt_amp_cfg_entry_point": "AMP",
-    "rlopt_ase_cfg_entry_point": "ASE",
 }
 
 

@@ -255,6 +255,16 @@ gym.register(
     kwargs={
         **_LATENT_STABLE_TASK_KWARGS,
         "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v2:ImitationG1EnvCfg"),
+        # PPO / SAC train on the explicit surfaces (vanilla input keys): pair
+        # them with the full surface + `env.command_mode=explicit` +
+        # `agent.ipmd.use_latent_command=false`-style overrides, or use the
+        # vanilla `-G1-v0` / `-G1-Strict-v0` pins. The default stays IPMD.
+        "rlopt_ppo_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig"
+        ),
+        "rlopt_sac_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
+        ),
     },
 )
 

@@ -20,24 +20,12 @@ logger = logging.getLogger(__name__)
 ALGORITHMS = (
     "PPO",
     "SAC",
-    "FASTSAC",
     "IPMD",
-    "IPMD_SR",
-    "IPMD_BILINEAR",
-    "GAIL",
-    "AMP",
-    "ASE",
 )
 ENTRY_POINT_ALGORITHM_MAP = {
     "rlopt_ppo_cfg_entry_point": "PPO",
     "rlopt_sac_cfg_entry_point": "SAC",
-    "rlopt_fastsac_cfg_entry_point": "FASTSAC",
     "rlopt_ipmd_cfg_entry_point": "IPMD",
-    "rlopt_ipmd_sr_cfg_entry_point": "IPMD_SR",
-    "rlopt_ipmd_bilinear_cfg_entry_point": "IPMD_BILINEAR",
-    "rlopt_gail_cfg_entry_point": "GAIL",
-    "rlopt_amp_cfg_entry_point": "AMP",
-    "rlopt_ase_cfg_entry_point": "ASE",
 }
 
 
