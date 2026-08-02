@@ -707,7 +707,7 @@ This repo is easier to work on with terminal-first tooling than with heavy IDE i
 Recommended tools:
 
 - `ruff` for linting and formatting
-- `pyrefly` for type and import checking
+- `ty` for type and import checking
 - `pytest` for focused unit tests
 
 Pixi owns the development tools in `pixi.toml`. Prefer `pixi run` for
@@ -755,11 +755,13 @@ For a minimal IPMD training smoke on the Unitree Dance102 manifest:
 pixi run -e isaaclab smoke-ipmd
 ```
 
-`pyrefly` is configured by [source/isaaclab_imitation/pyproject.toml](source/isaaclab_imitation/pyproject.toml) and
-already includes the import roots for this repo plus dependency checkouts such as `IsaacLab`, `RLOpt`, and
+`ty` is configured by [ty.toml](ty.toml) at the repo root, which
+mirrors the module-resolution layout previously used by `pyrefly.toml`: it
+points ty at the `isaaclab` Pixi environment and includes the import roots for
+this repo plus dependency checkouts such as `IsaacLab`, `RLOpt`, and
 `ImitationLearningTools`.
 
-For VS Code, prefer the Ruff extension and terminal-based `pyrefly` checks. Pylance is not the recommended workflow for
+For VS Code, prefer the Ruff and ty extensions and terminal-based `ty` checks. Pylance is not the recommended workflow for
 this workspace because the Isaac / Omniverse dependency tree is large, generated settings tend to drift, and static
 analysis is more reliable here when driven from the checked-in repo configuration.
 
@@ -772,7 +774,7 @@ pixi run pre-commit run --all-files
 ```
 
 Note that the current hook set is inherited from upstream Isaac Lab conventions. For day-to-day work in this repo,
-`ruff` and `pyrefly` are the recommended feedback loop.
+`ruff` and `ty` are the recommended feedback loop.
 
 ## Cluster note
 

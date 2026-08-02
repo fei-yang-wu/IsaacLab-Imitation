@@ -9,7 +9,7 @@ version = "0.1.0"
 [tasks]
 lint = "ruff check ."
 format-check = "ruff format --check ."
-typecheck = "pyrefly check"
+typecheck = "ty check"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
 test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py tests/test_hl_skill_encoder.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
 test-runtime-bootstrap = "pytest -q source/isaaclab_imitation/tests/test_rlopt_runtime_bootstrap.py"
@@ -50,6 +50,7 @@ rlopt = { path = "./RLOpt", editable = true }
 iltools = { path = "./ImitationLearningTools", editable = true }
 imitation-experiments = { path = "./source/imitation_experiments", editable = true }
 sentence-transformers = ">=5.5.1, <6"
+ty = ">=0.0.65, <0.0.66"
 
 [feature.isaaclab.pypi-options]
 extra-index-urls = ["https://pypi.nvidia.com"]

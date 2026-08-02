@@ -88,6 +88,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max_iterations", type=int, default=None, help="Training rollout iterations."
     )
+    parser.add_argument(
+        "--profile_iterations",
+        action="store_true",
+        default=False,
+        help=(
+            "Synchronize CUDA at phase boundaries and report timings for every "
+            "training iteration."
+        ),
+    )
     parser.add_argument("--export_io_descriptors", action="store_true", default=False)
     parser.add_argument(
         "--algo",

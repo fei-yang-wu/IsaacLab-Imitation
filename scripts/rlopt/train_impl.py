@@ -283,6 +283,8 @@ def train(
         agent_cfg.trainer = TrainerConfig()
     if args_cli.log_interval is not None:
         agent_cfg.trainer.log_interval = max(1, int(args_cli.log_interval))
+    if args_cli.profile_iterations:
+        agent_cfg.trainer.profile_iterations = True
     agent_cfg.collector.frames_per_batch *= env_cfg.scene.num_envs
     # Keep the on-policy rollout buffer and minibatching consistent when num_envs
     # or the per-env horizon (collector.frames_per_batch) differ from the config
