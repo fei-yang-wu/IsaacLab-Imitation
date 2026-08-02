@@ -15,7 +15,7 @@ from isaaclab.utils.configclass import configclass
 from ..common.actions import G1SonicActionsCfg
 from ..common.events import G1SonicEventCfg
 from ..common.latent_env import ImitationG1LatentEnvCfg
-from ..common.observations_latent import (
+from ..common.observations import (
     G1LatentObservationCfg,
     G1SonicLatentObservationCfg,
 )

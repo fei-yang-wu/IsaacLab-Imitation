@@ -13,7 +13,7 @@ contribute only the observation surface and command configuration.
 from isaaclab.utils.configclass import configclass
 
 from ..common.latent_env import ImitationG1LatentEnvCfg
-from ..common.observations_latent import G1SonicLatentObservationCfg
+from ..common.observations import G1SonicLatentObservationCfg
 from ..common.terminations import G1SonicTerminationsCfg
 from ..common.tracking_env import (
     ImitationG1BaseTrackingEnvCfg,

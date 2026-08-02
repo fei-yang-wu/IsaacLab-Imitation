@@ -37,7 +37,7 @@ from ...mdp.commands import (
 from .common.actions import G1SonicActionsCfg
 from .common.constants import G1_29DOF_ISAACLAB_JOINT_NAMES, G1_TRACKED_BODY_NAMES
 from .common.events import G1SonicEventCfg
-from .common.observations_latent import (
+from .common.observations import (
     G1FullSurfaceObservationCfg,
     G1LeanLatentObservationCfg,
     _LATENT_ANCHOR_TERM_NAMES_BY_GROUP,
