@@ -3,8 +3,8 @@ from __future__ import annotations
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
     G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig,
 )
-from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_latent_env_cfg import (
-    ImitationG1LatentSonicOfficialFSQEnvCfg,
+from isaaclab_imitation.tasks.manager_based.imitation.config.g1.surfaces.sonic import (
+    ImitationG1SonicOfficialFSQSurfaceEnvCfg,
 )
 
 
@@ -44,7 +44,7 @@ def test_official_sonic_fsq_encodes_one_future_window_and_renews_each_step() -> 
 
 
 def test_official_sonic_fsq_environment_exposes_ten_advancing_frames() -> None:
-    cfg = ImitationG1LatentSonicOfficialFSQEnvCfg()
+    cfg = ImitationG1SonicOfficialFSQSurfaceEnvCfg()
 
     assert cfg.latent_command_dim == 64
     assert cfg.latent_patch_past_steps == 0

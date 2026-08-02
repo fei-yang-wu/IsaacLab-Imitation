@@ -3,44 +3,26 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Non-default G1 env variants, one file per variant family.
+"""Frozen legacy G1 env variants (v0/v1 lineage only, 2026-08-01).
 
-- ``strict``: strict SONIC terminations on the legacy scaffolding
-  (explicit and latent pins, plus the history ablation).
-- ``sonic``: the SONIC release recipe (deprecated defaults, official FSQ).
-- ``goal`` / ``future_cvae`` / ``vqvae``: LafanTrack-lineage latent command
-  studies.
-- ``ablation``: the strict-protocol reconstruction-ablation surface.
+Only ``strict`` survives here, as the frozen Strict-recipe pins
+(``-G1-Strict-v0``, ``-G1-Latent-Strict-v0``, ``-G1-Latent-History-v0``).
+The sonc / goal / future_cvae / vqvae / ablation families migrated to the
+flat v2 base and now live in ``../surfaces/`` (their legacy classes were
+deleted with their old task ids).
+
+Do not add new variants here -- new surfaces go to ``../surfaces/`` on the
+flat v2 full surface base.
 """
 
-from .ablation import ImitationG1LatentAblationEnvCfg
-from .future_cvae import (
-    ImitationG1LatentFutureCVAEEnvCfg,
-    ImitationG1LatentPerStepVQEnvCfg,
-)
-from .goal import ImitationG1LatentGoalEnvCfg
-from .sonic import (
-    ImitationG1LatentSonicEnvCfg,
-    ImitationG1LatentSonicNoHistoryEnvCfg,
-    ImitationG1LatentSonicOfficialFSQEnvCfg,
-)
 from .strict import (
     ImitationG1LatentStrictEnvCfg,
     ImitationG1LatentStrictHistoryEnvCfg,
     ImitationG1StrictTrackEnvCfg,
 )
-from .vqvae import ImitationG1LatentVQVAEEnvCfg
 
 __all__ = [
-    "ImitationG1LatentAblationEnvCfg",
-    "ImitationG1LatentFutureCVAEEnvCfg",
-    "ImitationG1LatentPerStepVQEnvCfg",
-    "ImitationG1LatentGoalEnvCfg",
-    "ImitationG1LatentSonicEnvCfg",
-    "ImitationG1LatentSonicNoHistoryEnvCfg",
-    "ImitationG1LatentSonicOfficialFSQEnvCfg",
     "ImitationG1LatentStrictEnvCfg",
     "ImitationG1LatentStrictHistoryEnvCfg",
     "ImitationG1StrictTrackEnvCfg",
-    "ImitationG1LatentVQVAEEnvCfg",
 ]
