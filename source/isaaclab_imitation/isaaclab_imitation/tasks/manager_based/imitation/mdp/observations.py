@@ -192,6 +192,16 @@ def skill_command(env: ImitationRLEnv) -> torch.Tensor:
     return env.command_manager.get_command("skill")
 
 
+def reference_latent_command(env: ImitationRLEnv) -> torch.Tensor:
+    """Agent-published latent command via the lean ``command`` term.
+
+    The v2 lean surface uses one command term named ``command`` (which serves
+    the agent-latent buffer, owns the reset-start samplers, and owns the
+    tracking metrics); this is its observation view.
+    """
+    return env.command_manager.get_command("command")
+
+
 def expert_window_motion(
     env: ImitationRLEnv,
     past_steps: int = 1,

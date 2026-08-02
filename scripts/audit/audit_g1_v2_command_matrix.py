@@ -175,6 +175,7 @@ LATENT_ROWS: dict[str, dict] = {
         "spectral": "sonic_fsq",
     },
     "future_cvae": {
+        "surface": "full",
         "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentFutureCVAERLOptIPMDConfig",
         "h": 9,
         "k": 10,
@@ -187,6 +188,7 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "future_cvae",
     },
     "per_step_vq": {
+        "surface": "full",
         "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentPerStepVQRLOptIPMDConfig",
         "h": 9,
         "k": 1,
@@ -199,6 +201,7 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "per_step_vq_sequence",
     },
     "vqvae_fsq": {
+        "surface": "full",
         "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_vqvae_cfg:G1ImitationLatentRLOptIPMDVQVAEConfig",
         "h": 0,
         "k": 30,
@@ -211,6 +214,7 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "patch_vqvae",
     },
     "vqvae_vq": {
+        "surface": "full",
         "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_vqvae_cfg:G1ImitationLatentRLOptIPMDVQVAEConfig",
         "h": 0,
         "k": 30,
@@ -223,6 +227,7 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "patch_vqvae",
     },
     "ae": {
+        "surface": "full",
         "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
         "h": 9,
         "k": 10,
@@ -241,6 +246,7 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "patch_autoencoder",
     },
     "vae": {
+        "surface": "full",
         "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig",
         "h": 9,
         "k": 10,
@@ -260,6 +266,7 @@ LATENT_ROWS: dict[str, dict] = {
         "recon_method": "patch_autoencoder",
     },
     "sonic_official_fsq": {
+        "surface": "full",
         "agent": "isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg:G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig",
         "h": 9,
         "k": 1,
@@ -279,16 +286,58 @@ LATENT_ROWS: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 
 
-def _resolve_env_cfg(overrides: list[str]):
-    from isaaclab_tasks.utils import resolve_task_config
+def _resolve_env_cfg(surface: str, overrides: list[str]):
+    """Resolve the env config for the requested v2 surface.
 
-    original_argv = sys.argv
-    sys.argv = ["audit_g1_v2_command_matrix"] + overrides
-    try:
-        env_cfg, _default_agent = resolve_task_config(_TASK, _AGENT_KEY)
-        return env_cfg
-    finally:
-        sys.argv = original_argv
+    ``lean`` is the flagship ``ImitationG1EnvCfg`` (policy + critic groups,
+    one ``command`` term); ``full`` is ``ImitationG1FullSurfaceEnvCfg`` (the
+    v1 observation layout plus the motion/skill/chunk command terms) used by
+    the explicit and reconstruction command surfaces. Overrides are applied
+    via ``from_dict`` (the cfg's own parsers handle list-form strings) and
+    the construction-time command-term refresh is re-run, mirroring the env
+    constructor's handling of late overrides.
+    """
+    if surface == "lean":
+        from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+            ImitationG1EnvCfg,
+        )
+
+        env_cfg = ImitationG1EnvCfg()
+    elif surface == "full":
+        from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+            ImitationG1FullSurfaceEnvCfg,
+        )
+
+        env_cfg = ImitationG1FullSurfaceEnvCfg()
+    else:
+        raise ValueError(f"Unknown v2 surface: {surface!r}")
+
+    if overrides:
+        import yaml
+
+        from_dict: dict = {}
+        for override in overrides:
+            key, value = override.split("=", 1)
+            if key.startswith("agent."):
+                # Agent-side overrides are applied to the agent cfg separately.
+                continue
+            if key.startswith("env."):
+                key = key[len("env.") :]
+            parts = key.split(".")
+            target = from_dict
+            for part in parts[:-1]:
+                target = target.setdefault(part, {})
+            try:
+                target[parts[-1]] = yaml.safe_load(value)
+            except yaml.YAMLError:
+                # List-form strings like "[a,b,c]" are kept raw; the cfg's
+                # prune/validation methods parse both forms themselves.
+                target[parts[-1]] = value
+        env_cfg.from_dict(from_dict)
+    refresh = getattr(env_cfg, "_refresh_command_observation_terms", None)
+    if callable(refresh):
+        refresh()
+    return env_cfg
 
 
 def _resolve_agent_cfg(import_path: str, overrides: list[str]):
@@ -352,9 +401,11 @@ def check_row(row_name: str, row: dict, report: list[str]) -> None:
 
     errors: list[str] = []
     env_overrides = list(row.get("env_overrides", []))
-    agent_overrides = list(row.get("agent_overrides", []))
+    agent_overrides = list(row.get("agent_overrides", [])) + [
+        override for override in env_overrides if override.startswith("agent.")
+    ]
     try:
-        env_cfg = _resolve_env_cfg(env_overrides)
+        env_cfg = _resolve_env_cfg(str(row.get("surface", "lean")), env_overrides)
     except Exception as exc:  # pragma: no cover - failure surfaced in report
         report.append(f"[FAIL] {row_name}: env resolution: {type(exc).__name__}: {exc}")
         return
@@ -489,24 +540,14 @@ def _construct_row(row_name: str, row: dict) -> int:
     import gymnasium as gym
     import isaaclab_tasks  # noqa: F401
     import torch
-    from isaaclab_tasks.utils import parse_env_cfg
 
     import isaaclab_imitation.tasks  # noqa: F401
 
     status = 1
     env = None
     try:
-        # Row env knobs go through the real Hydra path (sys.argv overrides);
-        # the manifest is applied by plain setattr AFTER parse_env_cfg because
-        # the Hydra path swallows `env.lafan1_manifest_path=...` (the base cfg
-        # defaults it to None). The env's construction-time manifest resolver
-        # then fills loader_kwargs from it.
-        original_argv = sys.argv
-        sys.argv = ["audit_g1_v2_command_matrix"] + list(row.get("env_overrides", []))
-        try:
-            env_cfg = parse_env_cfg(_TASK, device="cuda:0", num_envs=4, use_fabric=True)
-        finally:
-            sys.argv = original_argv
+        surface = str(row.get("surface", "lean"))
+        env_cfg = _resolve_env_cfg(surface, list(row.get("env_overrides", [])))
         manifest = Path("./data/unitree/manifests/g1_unitree_dance102_manifest.json")
         setattr(env_cfg, "lafan1_manifest_path", str(manifest.resolve()))
         env = gym.make(_TASK, cfg=env_cfg)
@@ -593,6 +634,7 @@ def main() -> None:
                     "isaaclab_imitation.tasks.manager_based.imitation.config.g1."
                     "agents.rlopt_ipmd_cfg:G1ImitationRLOptIPMDConfig"
                 ),
+                "surface": "full",
                 "h": h,
                 "k": k,
                 "env_overrides": env_overrides,
