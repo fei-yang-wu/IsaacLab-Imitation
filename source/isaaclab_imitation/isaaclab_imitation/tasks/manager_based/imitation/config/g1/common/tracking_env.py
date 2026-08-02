@@ -3,13 +3,26 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Shared G1 tracking env machinery (the base class, recipes, Hydra plumbing).
+"""DEPRECATED (v0/v1-only, 2026-08-01): shared G1 tracking env machinery.
 
-Architecture: three recipes x pure command configuration. A *recipe* is the
-reward/termination/reset design and is the only axis with separate env
-classes; the latent-vs-explicit command choice is configuration
-(``command_mode`` + ``command_observation_terms`` on the env,
-``ipmd.use_latent_command`` / ``command_components`` on the agent).
+This module now backs ONLY the frozen legacy recipes: ``-G1-v0`` /
+``-G1-LafanTrack-v0`` (LafanTrack), ``-G1-v1`` / ``-G1-Latent-v0`` (Stable),
+``-G1-Strict-v0`` / ``-G1-Latent-Strict-v0`` (Strict), and the frozen latent
+variants. The v2 flagship (``imitation_g1_env_v2.ImitationG1EnvCfg``) is
+fully flat: it inherits only ``ImitationLearningEnvCfg`` and does NOT use
+any machinery from this module. Do not build new configs on
+``ImitationG1BaseTrackingEnvCfg``.
+
+Everything in this module is frozen for reproducibility -- do not change the
+behavior of any legacy pin here. New work goes to ``imitation_g1_env_v2.py``
+(flat flagship + full surface) or ``config/g1/surfaces/`` (flat surface
+configs on the v2 base).
+
+Historical architecture (pre-v2.1): three recipes x pure command
+configuration. A *recipe* is the reward/termination/reset design and is the
+only axis with separate env classes; the latent-vs-explicit command choice
+is configuration (``command_mode`` + ``command_observation_terms`` on the
+env, ``ipmd.use_latent_command`` / ``command_components`` on the agent).
 
 - **LafanTrack** (``imitation_g1_env_v0.ImitationG1LafanTrackEnvCfg``,
   ``Isaac-Imitation-G1-v0``): the original torso-anchored, loose-termination
@@ -17,23 +30,22 @@ classes; the latent-vs-explicit command choice is configuration
 - **Strict** (``_apply_strict_recipe``): strict SONIC termination functions on
   the legacy scaffolding (pelvis anchor, [0, 200] reset starts, no
   curriculum). Pins live in ``variants/strict.py``.
-- **Stable** (``imitation_g1_env_v2.ImitationG1EnvCfg``,
-  ``Isaac-Imitation-G1-v2``): the SONIC release recipe with this repo's
-  legacy reset distribution -- the current default (2026-08-01 onward; the
-  frozen v1 config is ``imitation_g1_env_v1.ImitationG1EnvV1Cfg`` under
-  ``Isaac-Imitation-G1-v1``). The flagship class name follows the newest
-  release.
+- **Stable** (``imitation_g1_env_v1.ImitationG1EnvV1Cfg``,
+  ``Isaac-Imitation-G1-v1``): the SONIC release recipe with this repo's
+  legacy reset distribution -- frozen as the default from 2026-07-27 until
+  2026-08-01, when ``-G1-v2`` superseded it.
 
-``ImitationG1BaseTrackingEnvCfg`` carries everything every G1 task shares:
-the vanilla component defaults, the LAFAN1 dataset/manifest resolution, the
-table-driven anchor re-pointing (``_set_anchor_body``), and the command-term
-pruning/restoration for ``command_mode``. Release files
+``ImitationG1BaseTrackingEnvCfg`` carries everything the legacy G1 tasks
+share: the vanilla component defaults, the LAFAN1 dataset/manifest
+resolution, the table-driven anchor re-pointing (``_set_anchor_body``), and
+the command-term pruning/restoration for ``command_mode``. Release files
 (``imitation_g1_env_v*.py``) and variant files compose it with components
 from ``common``; the recipe helpers (``_apply_pelvis_protocol``,
 ``_apply_strict_recipe``) keep the shared protocol deltas in one place.
 """
 
 import copy
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -77,7 +89,13 @@ from .terminations import G1TerminationsCfg
 
 @configclass
 class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
-    """Shared 29-DoF G1 tracking config aligned with Unitree mimic tracking settings."""
+    """DEPRECATED: shared 29-DoF G1 tracking config (frozen v0/v1 lineage).
+
+    Constructing this class (directly or via any legacy v0/v1/variant pin)
+    emits a ``DeprecationWarning``: the v2 flagship ``ImitationG1EnvCfg``
+    (``imitation_g1_env_v2.py``) superseded this machinery on 2026-08-01 and
+    is fully flat -- do not build new configs on this base.
+    """
 
     actions = G1ActionsCfg()
     observations = G1ObservationCfg()
@@ -302,6 +320,19 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
 
     def __post_init__(self) -> None:
         super().__post_init__()  # type: ignore
+
+        # Deprecation (2026-08-01): legacy v0/v1 lineage only; the v2 flagship
+        # is flat (imitation_g1_env_v2.py) and never touches this class.
+        warnings.warn(
+            "ImitationG1BaseTrackingEnvCfg (and every v0/v1/variant config "
+            "built on it) is DEPRECATED. Use the flat v2 configs: "
+            "imitation_g1_env_v2.ImitationG1EnvCfg (lean default) or "
+            "ImitationG1FullSurfaceEnvCfg (full surface); legacy ids "
+            "(-G1-v0/-G1-v1/-G1-Latent-v0/...) stay registered only for "
+            "frozen reproductions.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         robot_preset = G1ImitationRobotCfg()
         for variant in (

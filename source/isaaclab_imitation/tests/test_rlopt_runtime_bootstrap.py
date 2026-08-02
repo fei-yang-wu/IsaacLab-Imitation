@@ -103,7 +103,7 @@ def test_newton_robot_asset_preflight(tmp_path):
             )
         ),
     )
-    with pytest.raises(FileNotFoundError, match="preconverted G1 USD"):
+    with pytest.raises(FileNotFoundError, match="G1 USD root layer"):
         module._validate_newton_robot_asset(root)
     (tmp_path / "g1.usd").touch()
     module._validate_newton_robot_asset(root)
