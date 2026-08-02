@@ -50,7 +50,6 @@ from ...motion_manifest import (
     dataset_path_from_entries,
     infer_npz_manifest_control_freq,
     load_lafan1_manifest,
-    load_lafan1_manifest_loader_options,
     load_manifest_family,
 )
 from ... import mdp
@@ -210,7 +209,7 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
     # rather than derived).
     expert_anchor_body_name: str = "pelvis"
 
-    # -- command observation selection (see `_derive_command_terms`) --
+    # -- command observation selection (see `_apply_command_mode`) --
     # Which command family feeds the actor: "explicit" prunes the
     # agent-published `latent_command` term and keeps the explicit command
     # terms selected by `command_observation_terms` (all of them when None);
@@ -300,18 +299,6 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
                 if "anchor_body_name" in term.params:
                     term.params["anchor_body_name"] = anchor_body_name
 
-    def _set_reward_anchor_body(self, anchor_body_name: str) -> None:
-        """Point the anchor-relative reward terms at one body."""
-        for term_name in (
-            "motion_global_anchor_pos",
-            "motion_global_anchor_ori",
-            "motion_body_pos",
-            "motion_body_ori",
-        ):
-            getattr(self.rewards, term_name).params["anchor_body_name"] = (
-                anchor_body_name
-            )
-
     def _sync_expert_window_observation_params(self) -> None:
         # The lean surface has no expert_window group; the offline skill
         # encoder samples via the env API, not this observation group.
@@ -338,7 +325,7 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
     # Input normalization (Hydra / from_dict path).
     # ------------------------------------------------------------------
 
-    def _apply_optional_hydra_overrides(self, data: Mapping) -> dict:
+    def _normalize_optional_none_overrides(self, data: Mapping) -> dict:
         """Normalize optional None-default fields before the strict updater.
 
         ``configclass.from_dict`` rejects `None -> str` transitions (the
@@ -379,7 +366,7 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
 
         if "command_observation_terms" in remaining:
             # Store both the None and the raw "[a,b,c]" string forms;
-            # `_derive_command_terms` parses both.
+            # `_apply_command_mode` parses both.
             value = remaining.pop("command_observation_terms")
             if value is None or isinstance(value, str):
                 self.command_observation_terms = value
@@ -407,126 +394,75 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         return remaining
 
     # ------------------------------------------------------------------
-    # Manifest resolution (fail-fast; idempotent).
+    # Dataset / manifest preparation (fail-fast; idempotent).
     # ------------------------------------------------------------------
 
-    def _lafan_source_entries(self) -> list[dict[str, object]]:
-        try:
-            entries = self.loader_kwargs["dataset"]["trajectories"]["lafan1_csv"]
-        except Exception as err:
-            raise ValueError(
-                "loader_kwargs must define dataset.trajectories.lafan1_csv with at least one source entry."
-            ) from err
-        if not isinstance(entries, list) or len(entries) == 0:
-            raise ValueError(
-                "loader_kwargs.dataset.trajectories.lafan1_csv must be a non-empty list."
-            )
-        return entries
-
-    def _validate_source_path(self, source_path: object) -> None:
-        path = pathlib.Path(str(source_path)).expanduser().resolve()
-        if not path.is_file():
-            raise FileNotFoundError(
-                "LAFAN1 motion source is missing. "
-                f"Expected: {path}. "
-                "Set `lafan1_manifest_path` to a manifest that points at repo-local NPZ motions."
-            )
-        if self.require_npz_body_states and path.suffix.lower() != ".npz":
-            raise ValueError(
-                "This tracking env requires an npz source with body states "
-                "(body_pos_w/body_quat_w/body_lin_vel_w/body_ang_vel_w). "
-                f"Got: {path}. "
-                "Generate repo-local NPZ files before loading this manifest."
-            )
-
-    def _normalize_sequence_overrides(self) -> None:
-        if self.motions is not None:
-            self.motions = list(self.motions)
-        if self.trajectories is not None:
-            self.trajectories = list(self.trajectories)
-
-    def _validate_reset_schedule(self) -> None:
-        allowed_reset_schedules = {"random", "sequential", "round_robin"}
-        self.reset_schedule = self.reset_schedule.strip().lower()
-        if self.reset_schedule not in allowed_reset_schedules:
-            raise ValueError(
-                f"Unsupported reset_schedule='{self.reset_schedule}'. "
-                f"Allowed values: {sorted(allowed_reset_schedules)}."
-            )
-
-    def _validate_lafan_source_entries(
-        self, source_entries: list[dict[str, object]]
-    ) -> None:
-        for source in source_entries:
-            source_path = pathlib.Path(str(source["path"])).expanduser().resolve()
-            source["path"] = str(source_path)
-            self._validate_source_path(source_path)
-
-    def _set_control_frequency(self, control_freq: float) -> None:
-        control_freq = float(control_freq)
-        if control_freq <= 0.0:
-            raise ValueError("control_freq must be positive.")
-
-        def _integer_timing_for(
-            physics_fps: float,
-        ) -> tuple[float, int] | None:
-            if physics_fps <= 0.0:
-                return None
-            decimation = max(int(round(physics_fps / control_freq)), 1)
-            actual_control_freq = physics_fps / decimation
-            if abs(actual_control_freq - control_freq) <= 1.0e-6:
-                return 1.0 / physics_fps, decimation
-            return None
-
-        current_physics_fps = 1.0 / float(self.sim.dt)
-        timing = _integer_timing_for(current_physics_fps)
-        if timing is None:
-            timing = _integer_timing_for(float(self.preferred_manifest_physics_fps))
-        if timing is None:
-            timing = (1.0 / control_freq, 1)
-
-        self.sim.dt, self.decimation = timing
-        self.sim.render_interval = self.decimation
-        if self.scene.contact_forces is not None:
-            _set_contact_sensor_update_period(self.scene.contact_forces, self.sim.dt)
-
-    def _sync_control_rate_to_manifest_entries(
-        self,
-        source_entries: list[dict[str, object]],
-        *,
-        timing_explicit: bool = False,
-    ) -> None:
-        if timing_explicit or not bool(self.sync_control_rate_to_manifest):
-            return
-        control_freq = infer_npz_manifest_control_freq(source_entries)
-        if control_freq is None:
-            return
-        self._set_control_frequency(control_freq)
-
-    def _resolve_manifest_config(
+    def _prepare_dataset_config(
         self,
         *,
         dataset_path_explicit: bool = False,
         motions_explicit: bool = False,
         timing_explicit: bool = False,
     ) -> None:
+        """Normalize the dataset fields, then resolve the manifest when set.
+
+        Runs at construction (post-init and again at env construction, where
+        late plain-setattr overrides land). Without a manifest it only
+        normalizes; with one it rebuilds ``loader_kwargs`` / ``dataset_path``
+        / ``motions`` from the manifest entries and validates every source
+        file exists and is an NPZ with body states.
+        """
+        self.loader_kwargs = copy.deepcopy(self.loader_kwargs)
+        if self.motions is not None:
+            self.motions = list(self.motions)
+        if self.trajectories is not None:
+            self.trajectories = list(self.trajectories)
+        self.reset_schedule = self.reset_schedule.strip().lower()
+        if self.reset_schedule not in {"random", "sequential", "round_robin"}:
+            raise ValueError(
+                f"Unsupported reset_schedule='{self.reset_schedule}'. "
+                "Allowed values: ['random', 'sequential', 'round_robin']."
+            )
         if self.lafan1_manifest_path is None:
             return
 
         _, manifest_entries = load_lafan1_manifest(self.lafan1_manifest_path)
-        manifest_loader_options = load_lafan1_manifest_loader_options(
-            self.lafan1_manifest_path
-        )
-        loader_chunk_size = self.lafan1_loader_chunk_size
-        if loader_chunk_size is None:
-            loader_chunk_size = manifest_loader_options.get("chunk_size")
-        loader_shard_size = self.lafan1_loader_shard_size
-        if loader_shard_size is None:
-            loader_shard_size = manifest_loader_options.get("shard_size")
-        self._sync_control_rate_to_manifest_entries(
-            manifest_entries,
-            timing_explicit=timing_explicit,
-        )
+
+        if not timing_explicit and self.sync_control_rate_to_manifest:
+            control_freq = infer_npz_manifest_control_freq(manifest_entries)
+            if control_freq is not None:
+                if control_freq <= 0.0:
+                    raise ValueError("control_freq must be positive.")
+
+                # Keep sim.dt / decimation an integer fit to the manifest's
+                # control rate, preferring the current physics rate, then the
+                # preferred manifest physics rate, then a 1:1 fallback.
+                def _integer_timing_for(
+                    physics_fps: float,
+                ) -> tuple[float, int] | None:
+                    if physics_fps <= 0.0:
+                        return None
+                    decimation = max(int(round(physics_fps / control_freq)), 1)
+                    actual_control_freq = physics_fps / decimation
+                    if abs(actual_control_freq - control_freq) <= 1.0e-6:
+                        return 1.0 / physics_fps, decimation
+                    return None
+
+                current_physics_fps = 1.0 / float(self.sim.dt)
+                timing = _integer_timing_for(current_physics_fps)
+                if timing is None:
+                    timing = _integer_timing_for(
+                        float(self.preferred_manifest_physics_fps)
+                    )
+                if timing is None:
+                    timing = (1.0 / control_freq, 1)
+                self.sim.dt, self.decimation = timing
+                self.sim.render_interval = self.decimation
+                if self.scene.contact_forces is not None:
+                    _set_contact_sensor_update_period(
+                        self.scene.contact_forces, self.sim.dt
+                    )
+
         self.loader_type = "lafan1_csv"
         self.loader_kwargs = build_lafan1_loader_kwargs(
             entries=manifest_entries,
@@ -552,22 +488,27 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         else:
             self.motions = [str(entry["name"]) for entry in manifest_entries]
 
-        self._validate_lafan_source_entries(
-            self.loader_kwargs["dataset"]["trajectories"]["lafan1_csv"]
-        )
+        for source in self.loader_kwargs["dataset"]["trajectories"]["lafan1_csv"]:
+            source_path = pathlib.Path(str(source["path"])).expanduser().resolve()
+            source["path"] = str(source_path)
+            if not source_path.is_file():
+                raise FileNotFoundError(
+                    "LAFAN1 motion source is missing. "
+                    f"Expected: {source_path}. "
+                    "Set `lafan1_manifest_path` to a manifest that points at "
+                    "repo-local NPZ motions."
+                )
+            if self.require_npz_body_states and source_path.suffix.lower() != ".npz":
+                raise ValueError(
+                    "This tracking env requires an npz source with body states "
+                    "(body_pos_w/body_quat_w/body_lin_vel_w/body_ang_vel_w). "
+                    f"Got: {source_path}. "
+                    "Generate repo-local NPZ files before loading this manifest."
+                )
 
     # ------------------------------------------------------------------
     # Command-mode / whitelist derivation (single deterministic pass).
     # ------------------------------------------------------------------
-
-    def _normalized_command_mode(self) -> str:
-        mode = str(self.command_mode).strip().lower()
-        if mode not in {"latent", "explicit"}:
-            raise ValueError(
-                f"Unsupported command_mode={self.command_mode!r}; expected "
-                "'latent' or 'explicit'."
-            )
-        return mode
 
     @staticmethod
     def _parse_whitelist(value: list[str] | str | None) -> list[str] | None:
@@ -580,7 +521,7 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
             ]
         return [str(item) for item in value]
 
-    def _derive_command_terms(self) -> None:
+    def _apply_command_mode(self) -> None:
         """Apply the final ``command_mode`` + whitelist to the observation groups.
 
         Single deterministic pass over the declared surfaces, run once per env
@@ -598,7 +539,12 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
           baseline terms (``expert_motion`` + anchors when None -- the
           historical latent default).
         """
-        mode = self._normalized_command_mode()
+        mode = str(self.command_mode).strip().lower()
+        if mode not in {"latent", "explicit"}:
+            raise ValueError(
+                f"Unsupported command_mode={self.command_mode!r}; expected "
+                "'latent' or 'explicit'."
+            )
         self.command_mode = mode
         policy = self.observations.policy
         critic = getattr(self.observations, "critic", None)
@@ -651,13 +597,6 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
                 if term is not None:
                     term.noise = None
 
-    def _effective_expert_macro_state_terms(self) -> tuple[str, ...]:
-        """The expert_window terms the DiffSR macro state currently selects."""
-        terms = self.expert_macro_state_terms
-        if terms is None:
-            return _DEFAULT_EXPERT_MACRO_STATE_TERMS
-        return tuple(self._parse_whitelist(terms))
-
     def _apply_expert_window_whitelist(self) -> None:
         """Apply the ``expert_window_observation_terms`` whitelist.
 
@@ -681,7 +620,12 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
                 f"expert_window terms: {sorted(unknown)}. Expected a subset "
                 f"of {sorted(_EXPERT_WINDOW_TERM_NAMES)}."
             )
-        missing_macro = set(self._effective_expert_macro_state_terms()) - keep
+        macro_terms = self.expert_macro_state_terms
+        if macro_terms is None:
+            macro_terms = _DEFAULT_EXPERT_MACRO_STATE_TERMS
+        else:
+            macro_terms = tuple(self._parse_whitelist(macro_terms))
+        missing_macro = set(macro_terms) - keep
         if missing_macro:
             raise ValueError(
                 "expert_window_observation_terms must retain the active "
@@ -690,15 +634,6 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         for term_name in _EXPERT_WINDOW_TERM_NAMES:
             if term_name not in keep and hasattr(window, term_name):
                 setattr(window, term_name, None)
-
-    def _apply_goal_and_reward_toggles(self) -> None:
-        """Drop the expert_goal / reward_input groups when their toggles are off."""
-        if not bool(self.enable_expert_goal_observations):
-            if getattr(self.observations, "expert_goal", None) is not None:
-                self.observations.expert_goal = None
-        if not bool(self.enable_reward_input_observations):
-            if getattr(self.observations, "reward_input", None) is not None:
-                self.observations.reward_input = None
 
     # ------------------------------------------------------------------
     # Command-term syncs.
@@ -736,24 +671,27 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         plain ``setattr`` on the config (and ``from_dict`` for non-dotted
         args), so manifest paths, command modes, whitelists, and window knobs
         can all arrive after ``__post_init__``. This is the ONE place those
-        final field values are turned into the derived layout: manifest
-        resolution, command-mode / whitelist derivation, group toggles,
+        final field values are turned into the derived layout: dataset
+        preparation, command-mode / whitelist derivation, group toggles,
         anchor re-pointing, window/goal param syncs, and command-term width
         lockstep. Idempotent: every step is deterministic and only narrows or
         re-syncs, so calling it once per env construction is a fixed point.
         Fails loudly on a missing manifest source or an incoherent selection.
         """
-        self.loader_kwargs = copy.deepcopy(self.loader_kwargs)
-        self._normalize_sequence_overrides()
-        self._validate_reset_schedule()
-        self._resolve_manifest_config(
+        self._prepare_dataset_config(
             dataset_path_explicit=dataset_path_explicit,
             motions_explicit=motions_explicit,
             timing_explicit=timing_explicit,
         )
-        self._derive_command_terms()
+        self._apply_command_mode()
         self._apply_expert_window_whitelist()
-        self._apply_goal_and_reward_toggles()
+        # Drop the expert_goal / reward_input groups when their toggles are off.
+        if not self.enable_expert_goal_observations:
+            if getattr(self.observations, "expert_goal", None) is not None:
+                self.observations.expert_goal = None
+        if not self.enable_reward_input_observations:
+            if getattr(self.observations, "reward_input", None) is not None:
+                self.observations.reward_input = None
         self._set_anchor_body(self.expert_anchor_body_name)
         self._sync_expert_window_observation_params()
         self._sync_expert_goal_observation_params()
@@ -871,17 +809,22 @@ class ImitationG1EnvCfg(ImitationLearningEnvCfg):
         # The SONIC pelvis protocol + legacy reset distribution: starts in
         # [0, 200], no full-trajectory adaptive-failure sampling,
         # failure_rate_max_over_mean=50 (declared defaults; re-anchor the
-        # declared surfaces and the reward terms to the pelvis anchor).
+        # declared observation surfaces and the reward terms to the pelvis).
         self._set_anchor_body(self.expert_anchor_body_name)
-        self._set_reward_anchor_body(self.expert_anchor_body_name)
+        for term_name in (
+            "motion_global_anchor_pos",
+            "motion_global_anchor_ori",
+            "motion_body_pos",
+            "motion_body_ori",
+        ):
+            getattr(self.rewards, term_name).params["anchor_body_name"] = (
+                self.expert_anchor_body_name
+            )
 
-        # Manifest resolution at construction time so the cfg is
-        # self-consistent as soon as it exists (the env re-resolves later to
+        # Dataset preparation at construction time so the cfg is
+        # self-consistent as soon as it exists (the env re-runs it later to
         # catch plain-setattr overrides; idempotent).
-        self.loader_kwargs = copy.deepcopy(self.loader_kwargs)
-        self._normalize_sequence_overrides()
-        self._validate_reset_schedule()
-        self._resolve_manifest_config()
+        self._prepare_dataset_config()
 
         self._sync_command_cfg()
 
@@ -1051,7 +994,7 @@ def _imitation_g1_env_cfg_from_dict(self: ImitationG1EnvCfg, data: dict) -> None
     """``from_dict`` for the flat v2 configs: normalize then strict-update.
 
     Bound in place of the configclass default on the concrete classes below.
-    Normalizes the optional None-default fields (`_apply_optional_hydra_overrides`)
+    Normalizes the optional None-default fields (`_normalize_optional_none_overrides`)
     so Hydra ``env.*`` CLI overrides can reach them through the strict
     ``from_dict`` path, then delegates the rest of the update to the base
     implementation. Derived layout (manifest, command-mode pruning, syncs) is
@@ -1059,7 +1002,7 @@ def _imitation_g1_env_cfg_from_dict(self: ImitationG1EnvCfg, data: dict) -> None
     once, at env construction.
     """
     if isinstance(data, Mapping):
-        data = self._apply_optional_hydra_overrides(data)
+        data = self._normalize_optional_none_overrides(data)
 
     ImitationLearningEnvCfg.from_dict(self, data)
 
