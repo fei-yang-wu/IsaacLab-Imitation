@@ -11,19 +11,19 @@ composes two owned components instead of carrying a ~5,000-line monolith:
   frame refresh, alignment transforms, expert window / goal building, expert
   batch / macro-transition sampling, the parked reward-input cache, the MPJPE
   metric computation, and the offline-dataset mapper params.
-- :class:`~isaaclab_imitation.envs.command_plane.LatentCommandBuffer` and
-  :class:`~isaaclab_imitation.envs.command_plane.HeldCommandPlane`: the
-  agent-published latent buffer and the held explicit-chunk publish surface.
+- the two command terms of the declared command interface
+  (``tasks/manager_based/imitation/command_interface.py``): the ``reference``
+  channel (selection, reset-start sampling, tracking metrics, component
+  emission) and the single ``actor`` channel (latent, explicit, or chunk),
+  which own their own buffers and publish surfaces.
 
 The env keeps every public name the mdp funcs, the command terms, the RLOpt
 wrapper, and the ``imitation_experiments`` planners call (``trajectory_manager``,
-``current_expert_frame``, the ``_get_*_fast`` accessors, the publish surface,
-the three RLOpt-discovered expert samplers, ...) as thin delegators or as
-thinly orchestrated methods, with the same lifecycle ordering as the legacy
-env so the v2 surface is behaviorally equivalent.
+``current_expert_frame``, the ``_get_*_fast`` accessors, the expert samplers,
+...) as thin delegators or as thinly orchestrated methods.
 
 Excluded from the v2 env (legacy-only): the hand-rolled ``Metrics/mpjpe_mm*``
-logging channel (the ``motion`` command term owns ``Metrics/motion/*``), the
+logging channel (the reference channel owns ``Metrics/reference/*``), the
 diagnostic command trace, and the marker/visualizer tooling. Reference
 replay (``replay_reference`` / ``replay_only`` and the replay-target cursor
 sync) IS supported, ported from the legacy env.
@@ -32,7 +32,7 @@ sync) IS supported, ported from the legacy env.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import isaaclab.utils.math as math_utils
@@ -41,6 +41,10 @@ import torch
 from isaaclab.assets import Articulation
 from isaaclab.envs.common import VecEnvStepReturn
 from isaaclab.envs.manager_based_rl_env import ManagerBasedRLEnv
+from isaaclab_imitation.contracts.command_channels import (
+    ACTOR_TERM_NAME,
+    REFERENCE_TERM_NAME,
+)
 from isaaclab_imitation.contracts.causal_planner_observation import (
     CAUSAL_PLANNER_FRAME_DIM,
     CausalPlannerHistory,
@@ -49,42 +53,12 @@ from isaaclab_imitation.contracts.causal_planner_observation import (
 )
 from tensordict import TensorDict
 
-from .command_plane import HeldCommandPlane, LatentCommandBuffer
 from .expert_data_plane import ExpertDataPlane
+from .imitation_interface import ImitationEnvInterface
 
 logger = logging.getLogger(__name__)
 
 _CAUSAL_PLANNER_HISTORY_STEPS = 9
-
-_COMMAND_OBSERVATION_SOURCES = frozenset({"reference", "planner", "planner_oracle"})
-_POLICY_COMMAND_MODES = frozenset(
-    {
-        "reference",
-        "explicit_chunk_current_slot",
-        "full_body_chunk_current_slot",
-        "ee_chunk_current_slot",
-    }
-)
-
-
-def _normalize_command_observation_source(value: str) -> str:
-    source = str(value).strip().lower().replace("-", "_")
-    if source not in _COMMAND_OBSERVATION_SOURCES:
-        raise ValueError(
-            f"Unsupported command_observation_source={value!r}; "
-            f"expected one of {sorted(_COMMAND_OBSERVATION_SOURCES)}."
-        )
-    return source
-
-
-def _normalize_policy_command_mode(value: str) -> str:
-    mode = str(value).strip().lower().replace("-", "_")
-    if mode not in _POLICY_COMMAND_MODES:
-        raise ValueError(
-            f"Unsupported policy_command_mode={value!r}; "
-            f"expected one of {sorted(_POLICY_COMMAND_MODES)}."
-        )
-    return mode
 
 
 class ImitationRLEnv(ManagerBasedRLEnv):
@@ -130,9 +104,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             # default resolution would silently replace an explicit cache and
             # motion subset.
             configured_dataset_path = getattr(cfg, "dataset_path", None)
-            default_dataset_path = getattr(
-                type(cfg), "dataset_path", "data/lafan1/g1/"
-            )
+            default_dataset_path = getattr(type(cfg), "dataset_path", "data/lafan1/g1/")
             resolve(
                 dataset_path_explicit=(
                     configured_dataset_path is not None
@@ -173,116 +145,31 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             if callable(refresh_command_terms):
                 refresh_command_terms()
 
-        # Reset / start-frame configuration (cluster K: the env parses these
-        # once; on v2 the `motion` command term owns the reset-start samplers
-        # and reads the parsed knobs back through the env attributes).
-        reference_start_frame = int(getattr(cfg, "reference_start_frame", 0))
-        if reference_start_frame < 0:
-            raise ValueError("reference_start_frame must be >= 0.")
-        self._reference_start_frame = reference_start_frame
-        self._latent_patch_past_steps = int(getattr(cfg, "latent_patch_past_steps", 0))
-        self._latent_patch_future_steps = int(
-            getattr(cfg, "latent_patch_future_steps", 0)
+        # The declared command interface is the whole command surface. The
+        # environment derives only what its data plane and reset path need;
+        # the terms read the interface themselves.
+        command_interface = cfg.command_interface
+        reference_channel = command_interface.reference
+        self._reference_start_frame = int(reference_channel.selection.start_frame)
+        self._command_ee_body_names = tuple(
+            str(name) for name in reference_channel.ee_body_names
         )
-        if self._latent_patch_past_steps < 0 or self._latent_patch_future_steps < 0:
-            raise ValueError("latent patch window steps must be >= 0.")
+        self._command_keypoint_body_names = tuple(
+            str(name) for name in reference_channel.keypoint_body_names
+        )
+        # Window the offline expert-batch mapper serves policy command keys at:
+        # the skill encoder's view when there is one, else the actor's own.
+        past_steps, future_steps = command_interface.expert_batch_window()
+        self._latent_patch_past_steps = int(past_steps)
+        self._latent_patch_future_steps = int(future_steps)
         self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
         if self._latent_goal_steps < 0:
             raise ValueError("latent_goal_steps must be >= 0.")
-        self._random_reset_step_min = int(getattr(cfg, "random_reset_step_min", 0))
-        self._random_reset_step_max = int(getattr(cfg, "random_reset_step_max", 0))
-        self._random_reset_full_trajectory = bool(
-            getattr(cfg, "random_reset_full_trajectory", False)
-        )
-        self._reset_start_mode = (
-            str(getattr(cfg, "reset_start_mode", "auto")).strip().lower()
-        )
-        if self._reset_start_mode not in ("auto", "fixed", "random", "adaptive"):
-            raise ValueError(
-                "reset_start_mode must be one of 'auto', 'fixed', 'random', "
-                f"'adaptive'; got {self._reset_start_mode!r}."
-            )
-        # Optional custom adaptive weight function (see StartFrameSampler). A
-        # callable (trajectory_ranks, frame_steps) -> non-negative weights,
-        # attached as `cfg.adaptive_reset_weight_fn`; falls back to the SONIC
-        # failure-weight function when None.
-        self._adaptive_reset_weight_fn = getattr(cfg, "adaptive_reset_weight_fn", None)
-        self._adaptive_failure_reset_uniform_ratio = float(
-            getattr(cfg, "adaptive_failure_reset_uniform_ratio", 0.1)
-        )
-        self._adaptive_failure_reset_bin_size = int(
-            getattr(cfg, "adaptive_failure_reset_bin_size", 50)
-        )
-        self._adaptive_failure_reset_sequence_length_agnostic = bool(
-            getattr(cfg, "adaptive_failure_reset_sequence_length_agnostic", True)
-        )
-        self._adaptive_failure_reset_init_num_failures = float(
-            getattr(cfg, "adaptive_failure_reset_init_num_failures", 1.0)
-        )
-        self._adaptive_failure_reset_pre_failure_window = int(
-            getattr(cfg, "adaptive_failure_reset_pre_failure_window", 200)
-        )
-        self._adaptive_failure_reset_failure_rate_max_over_mean = float(
-            getattr(
-                cfg,
-                "adaptive_failure_reset_failure_rate_max_over_mean",
-                50.0,
-            )
-        )
-        if self._random_reset_step_min < 0:
-            raise ValueError("random_reset_step_min must be >= 0.")
-        if self._random_reset_step_max < self._random_reset_step_min:
-            raise ValueError("random_reset_step_max must be >= random_reset_step_min.")
-        if not 0.0 <= self._adaptive_failure_reset_uniform_ratio <= 1.0:
-            raise ValueError("adaptive_failure_reset_uniform_ratio must be in [0, 1].")
 
         # Phase 1 of the data plane: dataset load, trajectory manager, first
         # reference frame. Runs before `super().__init__` (which builds the
         # managers), exactly where the legacy env loads its reference data.
         self.expert_data_plane = ExpertDataPlane(cfg, self)
-
-        # Command-plane buffers (agent-published latent + held chunk windows).
-        # Allocated before `super().__init__` so the command terms constructed
-        # inside `load_managers()` can validate against them.
-        self._agent_latent_dim = int(getattr(cfg, "latent_command_dim", 16))
-        self.latent_command_buffer = LatentCommandBuffer(
-            num_envs, self._agent_latent_dim, device
-        )
-        self._command_ee_body_names = tuple(
-            str(name) for name in getattr(cfg, "command_ee_body_names", ())
-        )
-        self._command_keypoint_body_names = tuple(
-            str(name) for name in getattr(cfg, "command_keypoint_body_names", ())
-        )
-        self._command_observation_source = _normalize_command_observation_source(
-            getattr(cfg, "command_observation_source", "reference")
-        )
-        self._policy_command_mode = _normalize_policy_command_mode(
-            getattr(cfg, "policy_command_mode", "reference")
-        )
-        self._command_hold_steps = int(getattr(cfg, "command_hold_steps", 0))
-        if self._command_hold_steps < 0:
-            raise ValueError("command_hold_steps must be >= 0.")
-        if self._command_hold_steps > 0 and self._latent_patch_past_steps > 0:
-            raise ValueError(
-                "command_hold_steps requires latent_patch_past_steps == 0; "
-                "held chunk consumption is only defined for future-only windows."
-            )
-        self._agent_trajectory_command_window_steps = (
-            HeldCommandPlane.command_window_steps_from_offsets(
-                self._latent_patch_past_steps,
-                self._latent_patch_future_steps,
-            )
-        )
-        self.held_command_plane = HeldCommandPlane(
-            self,
-            num_envs=num_envs,
-            device=device,
-            window_steps=self._agent_trajectory_command_window_steps,
-            num_joints=len(self.reference_joint_names),
-            num_ee_bodies=len(self._command_ee_body_names),
-            num_keypoint_bodies=len(self._command_keypoint_body_names),
-        )
 
         self.replay_reference = getattr(cfg, "replay_reference", False)
         self.replay_only = getattr(cfg, "replay_only", False)
@@ -306,16 +193,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self.expert_data_plane.finalize(self.scene, self.robot)
         self._initialize_causal_planner_history()
 
-        # The v2 env's reset/sampling path is fully absorbed into the
-        # `motion` command term; require it so `step` / `_reset_idx` never
-        # fall into the legacy inline branches.
-        self._motion_reset_owner = self._motion_command_reset_owner()
-        if self._motion_reset_owner is None:
-            raise RuntimeError(
-                "ImitationRLEnvV2 requires the `motion` command term with "
-                "owns_reset=True: the term owns the reset-start samplers and "
-                "the adaptive-failure bookkeeping (see MotionCommand)."
-            )
+        # Reference selection, reset-start sampling, and the adaptive-failure
+        # bookkeeping live on the reference channel; the environment only calls
+        # them at the timing-critical points below.
+        self._reference_term = self.reference_command
 
     # ------------------------------------------------------------------
     # ExpertDataPlane delegators (name-identical to the legacy env).
@@ -637,391 +518,37 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
 
     # ------------------------------------------------------------------
-    # Command-plane delegators (publish surface).
+    # Command-channel access (the two terms own their state).
     # ------------------------------------------------------------------
 
     @property
-    def _agent_latent_command(self) -> torch.Tensor:
-        return self.latent_command_buffer.get()
-
-    def get_agent_latent_command(
-        self, env_ids: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        return self.latent_command_buffer.get(env_ids)
-
-    def set_agent_latent_command(
-        self, latent_command: torch.Tensor, env_ids: torch.Tensor | None = None
-    ) -> None:
-        self.latent_command_buffer.set(latent_command, env_ids=env_ids)
-
-    def reset_agent_latent_command(self, env_ids: torch.Tensor | None = None) -> None:
-        self.latent_command_buffer.reset(env_ids)
+    def imitation_interface(self) -> ImitationEnvInterface:
+        """The capability surface RLOpt resolves (expert data + publication)."""
+        interface = getattr(self, "_imitation_interface", None)
+        if interface is None:
+            interface = ImitationEnvInterface(self)
+            self._imitation_interface = interface
+        return interface
 
     @property
-    def _agent_trajectory_command_terms(self) -> dict[str, torch.Tensor]:
-        return self.held_command_plane.terms
-
-    def get_agent_trajectory_command_term(
-        self, term_name: str, env_ids: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        return self.held_command_plane.get_term(term_name, env_ids=env_ids)
-
-    def set_agent_trajectory_command(
-        self,
-        command_terms: Mapping[str, torch.Tensor],
-        env_ids: torch.Tensor | None = None,
-    ) -> None:
-        self.held_command_plane.set_command(command_terms, env_ids=env_ids)
-
-    def set_agent_full_body_trajectory_command(
-        self,
-        *,
-        expert_motion: torch.Tensor,
-        expert_anchor_pos_b: torch.Tensor,
-        expert_anchor_ori_b: torch.Tensor,
-        env_ids: torch.Tensor | None = None,
-    ) -> None:
-        self.held_command_plane.set_full_body_command(
-            expert_motion=expert_motion,
-            expert_anchor_pos_b=expert_anchor_pos_b,
-            expert_anchor_ori_b=expert_anchor_ori_b,
-            env_ids=env_ids,
-        )
-
-    def set_agent_ee_trajectory_command(
-        self,
-        *,
-        expert_ee_pos_b: torch.Tensor,
-        expert_ee_ori_b: torch.Tensor,
-        env_ids: torch.Tensor | None = None,
-    ) -> None:
-        self.held_command_plane.set_ee_command(
-            expert_ee_pos_b=expert_ee_pos_b,
-            expert_ee_ori_b=expert_ee_ori_b,
-            env_ids=env_ids,
-        )
-
-    def reset_agent_trajectory_command(
-        self, env_ids: torch.Tensor | None = None
-    ) -> None:
-        self.held_command_plane.reset(env_ids)
-
-    def set_planner_command_provider(self, provider: Any) -> None:
-        self.held_command_plane.set_planner_command_provider(provider)
-
-    def capture_held_command_anchor(
-        self,
-        anchor_body_name: str = "torso_link",
-        env_ids: torch.Tensor | None = None,
-    ) -> None:
-        self.held_command_plane.capture_held_command_anchor(
-            anchor_body_name, env_ids=env_ids
-        )
-
-    def _command_hold_phase(self) -> torch.Tensor:
-        return self.held_command_plane.hold_phase()
+    def reference_command(self):
+        """The always-present reference channel term."""
+        return self.command_manager.get_term(REFERENCE_TERM_NAME)
 
     @property
-    def policy_command_mode(self) -> str:
-        """Return the adapter used for low-level policy command observations."""
-        return self._policy_command_mode
-
-    # ------------------------------------------------------------------
-    # Command-window orchestration (composes the planes).
-    # ------------------------------------------------------------------
-
-    def _validate_command_window_request(
-        self,
-        *,
-        past_steps: int,
-        future_steps: int,
-    ) -> None:
-        requested_steps = HeldCommandPlane.command_window_steps_from_offsets(
-            past_steps,
-            future_steps,
-        )
-        if requested_steps != self._agent_trajectory_command_window_steps:
-            raise ValueError(
-                "Planner command window mismatch. "
-                f"Configured planner command has {self._agent_trajectory_command_window_steps} steps, "
-                f"but observation requested {requested_steps} steps."
-            )
-
-    def get_current_command_window_term(
-        self,
-        term_name: str,
-        *,
-        past_steps: int,
-        future_steps: int,
-        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
-        anchor_body_name: str = "torso_link",
-        reference_body_names: Sequence[str] = (),
-        env_ids: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        source = self._command_observation_source
-        hold_steps = int(self._command_hold_steps)
-        if source == "reference":
-            if hold_steps <= 0:
-                return self.get_current_expert_window_term(
-                    term_name=term_name,
-                    past_steps=past_steps,
-                    future_steps=future_steps,
-                    joint_ids=joint_ids,
-                    anchor_body_name=anchor_body_name,
-                    reference_body_names=reference_body_names,
-                    env_ids=env_ids,
-                )
-            return self._held_reference_command_window_term(
-                term_name,
-                past_steps=past_steps,
-                future_steps=future_steps,
-                joint_ids=joint_ids,
-                anchor_body_name=anchor_body_name,
-                reference_body_names=reference_body_names,
-                env_ids=env_ids,
-            )
-
-        self._validate_command_window_request(
-            past_steps=past_steps,
-            future_steps=future_steps,
-        )
-        if source == "planner_oracle":
-            value = self.get_current_expert_window_term(
-                term_name=term_name,
-                past_steps=past_steps,
-                future_steps=future_steps,
-                joint_ids=joint_ids,
-                anchor_body_name=anchor_body_name,
-                reference_body_names=reference_body_names,
-            )
-            if hold_steps <= 0:
-                self.set_agent_trajectory_command({term_name: value})
-            else:
-                renew_ids = torch.nonzero(
-                    self._command_hold_phase() == 0, as_tuple=False
-                ).flatten()
-                if renew_ids.numel() > 0:
-                    self.set_agent_trajectory_command(
-                        {term_name: value.index_select(0, renew_ids)},
-                        env_ids=renew_ids,
-                    )
-        elif source == "planner" and hold_steps > 0:
-            # Give a registered planner the same in-step publication contract
-            # as planner_oracle above, so its packet is expressed in the
-            # anchor frame of the step that consumes it rather than one step
-            # early.
-            self.held_command_plane.maybe_fill_from_planner_provider(
-                self._command_hold_phase()
-            )
-
-        # Observation tensors must not alias the mutable planner command
-        # buffers: resets and subsequent planner publishes update those
-        # buffers in-place.
-        value = self.get_agent_trajectory_command_term(term_name).clone()
-        if hold_steps > 0:
-            phase = self._command_hold_phase()
-            self.held_command_plane.update_held_command_anchor_pose(
-                anchor_body_name, phase
-            )
-            value = HeldCommandPlane.shift_window_by_phase(
-                value,
-                phase,
-                window_steps=self._agent_trajectory_command_window_steps,
-            )
-            value = self.held_command_plane.reexpress_window_in_current_anchor_frame(
-                value,
-                term_name=term_name,
-                anchor_body_name=anchor_body_name,
-                window_steps=self._agent_trajectory_command_window_steps,
-            )
-        if env_ids is None:
-            return value
-        env_ids = env_ids.to(device=self.device, dtype=torch.long)
-        return value.index_select(0, env_ids)
-
-    def _held_reference_command_window_term(
-        self,
-        term_name: str,
-        *,
-        past_steps: int,
-        future_steps: int,
-        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
-        anchor_body_name: str = "torso_link",
-        reference_body_names: Sequence[str] = (),
-        env_ids: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Reference command windows under the held-chunk contract.
-
-        Matches what standard VLA-WBC middleware would provide from a chunk
-        planner running once per ``command_hold_steps``: command *content* is
-        limited to the frames known at the last renewal (fresh lookahead
-        shrinks toward the hold boundary, tail-padded with the boundary
-        frame), while coordinates are re-expressed in the robot's current
-        anchor frame every control step, exactly like odometry-based target
-        re-expression on a real stack.
-        """
-        if int(past_steps) != 0:
-            raise ValueError(
-                "command_hold_steps requires past_steps == 0 command windows."
-            )
-        fresh = self.get_current_expert_window_term(
-            term_name=term_name,
-            past_steps=0,
-            future_steps=int(future_steps),
-            joint_ids=joint_ids,
-            anchor_body_name=anchor_body_name,
-            reference_body_names=reference_body_names,
-        )
-        value = HeldCommandPlane.clamp_window_to_hold_boundary(
-            fresh, self._command_hold_phase(), window_steps=int(future_steps) + 1
-        )
-        if env_ids is None:
-            return value
-        env_ids = env_ids.to(device=self.device, dtype=torch.long)
-        return value.index_select(0, env_ids)
-
-    def current_full_body_tracker_command_term(
-        self,
-        term_name: str,
-        *,
-        joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
-        anchor_body_name: str = "torso_link",
-        reference_body_names: Sequence[str] = (),
-        env_ids: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Consume the current frame of a held full-body command chunk.
-
-        The existing window path first shifts the held packet by each
-        environments command phase and re-expresses anchor terms in the live
-        robot frame. Selecting slot zero here therefore exposes the exact
-        67-D command contract expected by the vanilla 50 Hz tracker.
-        """
-        if self._policy_command_mode not in (
-            "explicit_chunk_current_slot",
-            "full_body_chunk_current_slot",
-            "ee_chunk_current_slot",
-        ):
-            raise RuntimeError(
-                "Chunk slot adapter requested while policy_command_mode="
-                f"{self._policy_command_mode!r}."
-            )
-        if self._command_observation_source not in {"planner", "planner_oracle"}:
-            raise RuntimeError(
-                "full_body_chunk_current_slot requires command_observation_source "
-                "to be planner or planner_oracle."
-            )
-        if self._latent_patch_past_steps != 0:
-            raise RuntimeError(
-                "full_body_chunk_current_slot requires latent_patch_past_steps=0."
-            )
-        if self._command_hold_steps <= 0:
-            raise RuntimeError(
-                "full_body_chunk_current_slot requires command_hold_steps>0."
-            )
-
-        future_steps = int(self._latent_patch_future_steps)
-        window_steps = future_steps + 1
-        if window_steps < self._command_hold_steps:
-            raise RuntimeError(
-                "full_body_chunk_current_slot requires at least one command "
-                "frame per held control step: "
-                f"window_steps={window_steps}, hold_steps={self._command_hold_steps}."
-            )
-        value = self.get_current_command_window_term(
-            term_name=term_name,
-            past_steps=0,
-            future_steps=future_steps,
-            joint_ids=joint_ids,
-            anchor_body_name=anchor_body_name,
-            reference_body_names=reference_body_names,
-            env_ids=env_ids,
-        )
-        if value.ndim != 2 or int(value.shape[1]) % window_steps != 0:
-            raise RuntimeError(
-                f"Invalid streamed command term {term_name!r} shape "
-                f"{tuple(value.shape)} for window_steps={window_steps}."
-            )
-        frame_width = int(value.shape[1]) // window_steps
-        if term_name in ("expert_motion", "expert_motion_qpos"):
-            # ``joint_ids`` defaults to slice(None), for which the fast lookup
-            # returns the slice itself rather than an index tensor -- that is
-            # every reference joint, which is what the window path selects too.
-            joint_ids_t = self._get_joint_ids_tensor_fast(joint_ids)
-            num_joints = (
-                len(self.reference_joint_names)
-                if isinstance(joint_ids_t, slice)
-                else int(joint_ids_t.numel())
-            )
-            # expert_motion carries positions AND velocities; expert_motion_qpos
-            # is the position half only.
-            expected_frame_width = num_joints * (
-                2 if term_name == "expert_motion" else 1
-            )
-        elif term_name == "expert_anchor_pos_b":
-            expected_frame_width = 3
-        elif term_name == "expert_anchor_ori_b":
-            expected_frame_width = 6
-        elif term_name in ("expert_ee_pos_b", "expert_ee_ori_b"):
-            # One 3-vector / rot6d per referenced end-effector body.
-            n_bodies = max(int(len(reference_body_names)), 1)
-            expected_frame_width = n_bodies * (
-                3 if term_name == "expert_ee_pos_b" else 6
-            )
-        elif term_name in ("expert_keypoint_pos_b", "expert_keypoint_ori_b"):
-            # Position and orientation are independent components, so a config
-            # may select point targets or complete keypoint poses.
-            n_bodies = max(int(len(reference_body_names)), 1)
-            expected_frame_width = n_bodies * (
-                3 if term_name == "expert_keypoint_pos_b" else 6
-            )
-        else:
-            raise KeyError(f"Unsupported chunk tracker command term {term_name!r}.")
-        if frame_width != expected_frame_width:
-            raise RuntimeError(
-                f"Streamed command term {term_name!r} has per-frame width "
-                f"{frame_width}, expected {expected_frame_width}."
-            )
-        return value.reshape(value.shape[0], window_steps, frame_width)[:, 0, :]
-
-    # ------------------------------------------------------------------
-    # Reset / adaptive-failure sampling (cluster K, env-owned).
-    # ------------------------------------------------------------------
-
-    def _motion_command_reset_owner(self) -> Any | None:
-        """The active command term that owns reset-start sampling (v2).
-
-        Any command term with ``owns_reset=True`` qualifies: the lean
-        ``command`` term on the default surface, or the ``motion`` term on the
-        full explicit surface. Exactly one such term exists per config.
-        """
-        command_manager = getattr(self, "command_manager", None)
-        if command_manager is None:
-            return None
-        for term_name in getattr(command_manager, "active_terms", ()):
-            term = command_manager.get_term(term_name)
-            if getattr(term.cfg, "owns_reset", False):
-                return term
-        return None
+    def actor_command(self):
+        """The single actor command term (latent, explicit, or chunk)."""
+        return self.command_manager.get_term(ACTOR_TERM_NAME)
 
     def set_adaptive_reset_weight_fn(self, weight_fn: Any) -> None:
-        """Provide a custom adaptive starting-frame weight function.
+        """Install a custom adaptive start-frame weight function.
 
-        Delegates to the owning ``motion`` command term, which owns the
-        ``StartFrameSampler`` instance. The callable must accept
-        ``(trajectory_ranks, frame_steps)`` tensors and return one
-        non-negative weight per (rank, step) pair, as expected by
-        ``iltools.datasets.reset_sampling.StartFrameSampler``. It replaces
-        the SONIC failure-weight function and switches the term to
-        ``reset_start_mode='adaptive'`` (trajectory ranks still come from the
-        manager's reset schedule).
+        Delegates to the reference channel, which owns the ``StartFrameSampler``.
+        The callable takes ``(trajectory_ranks, frame_steps)`` and returns one
+        non-negative weight per pair, as expected by
+        ``iltools.datasets.reset_sampling.StartFrameSampler``.
         """
-        owner = getattr(self, "_motion_reset_owner", None)
-        if owner is None:
-            raise RuntimeError(
-                "set_adaptive_reset_weight_fn requires the `motion` command "
-                "term with owns_reset=True."
-            )
-        owner.set_weight_fn(weight_fn)
+        self.reference_command.set_weight_fn(weight_fn)
 
     # ------------------------------------------------------------------
     # Causal planner observation surface (robot-only, no expert reads).
@@ -1392,17 +919,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Isaac Lab 3.0 hands out int32 env indices; normalize once here.
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
 
-        # Reset trajectory tracking (reassigns trajectories and resets steps).
-        # The `motion` command term owns the reset-start samplers AND the
-        # adaptive-failure bookkeeping; failure bins are recorded here, at
-        # the same point the legacy env-inline path recorded them (before
-        # `super()._reset_idx`, whose reset-mode events read the reference at
-        # the new cursor), then the term applies its samplers.
-        motion_reset_owner = self._motion_reset_owner
-        motion_reset_owner.record_failures(env_ids)
-        motion_reset_owner.resample_reference(env_ids)
-        self.reset_agent_latent_command(env_ids)
-        self.reset_agent_trajectory_command(env_ids)
+        # Reset reference tracking (reassigns trajectories and resets steps).
+        # The reference channel owns the reset-start samplers AND the
+        # adaptive-failure bookkeeping; failure bins are recorded here, the
+        # last point at which the cursor still belongs to the ending episode,
+        # and selection runs before `super()._reset_idx`, whose reset-mode
+        # events read the reference at the new cursor. The actor command's own
+        # reset (zeroing a stale published command) happens inside
+        # `command_manager.reset`, which `super()._reset_idx` triggers.
+        self._reference_term.record_failures(env_ids)
+        self._reference_term.resample_reference(env_ids)
 
         # Refresh only the resetting rows before reset events consume
         # current_expert_frame.
@@ -1449,9 +975,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # Get next reference data point (advance=True to move to next step)
         self._refresh_current_expert_frame(advance=True)
         # Record the pre-step cursor as a visit in the SONIC failure sampler
-        # (the reset-owning command term owns the sampler; the timing-critical
-        # call site stays here, before the physics step).
-        self._motion_reset_owner.record_visits()
+        # (the reference channel owns the sampler; the timing-critical call
+        # site stays here, before the physics step).
+        self._reference_term.record_visits()
         self._step_core(action)
         rollout_state_log = self._compute_rollout_reference_state_log()
         if rollout_state_log:
@@ -1596,7 +1122,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # increments to t+1. This avoids double-advance while keeping reward
         # computation aligned with frame t.
         self._refresh_current_expert_frame(advance=True)
-        self._motion_reset_owner.record_visits()
+        self._reference_term.record_visits()
         self._replay_reference()
         self.scene.update(dt=0.0)
 

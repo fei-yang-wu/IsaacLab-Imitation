@@ -234,20 +234,17 @@ _SONIC_OFFICIAL_FSQ_V2_TASK_KWARGS = {
 # old kwargs below). No `Latent` tag: under the recipe x command-config
 # architecture the command space is configuration, not identity. Defaults to
 # the latent 258-D command (the class default; unlike explicit `-G1-v0`);
-# select vanilla with `env.command_mode=explicit` +
-# `env.command_observation_terms` + `agent.ipmd.use_latent_command=false` +
-# `agent.command_components`. Cite this id in protocols, gates, and paper
-# commands so recorded runs and checkpoints stay reproducible even after a
-# newer vN becomes the default.
+# the explicit and planner-packet rows are the `-Explicit-v2` / `-Chunk-v2`
+# surfaces below. Cite this id in protocols, gates, and paper commands so
+# recorded runs and checkpoints stay reproducible even after a newer vN
+# becomes the default.
 #
-# The v2 surface: the v1 config plus the CommandManager increment -- a native
-# `motion` command term (`mdp.MotionCommandCfg`) that exposes the 67-D
-# explicit tracking command via `command_manager.get_command("motion")` and
-# logs `Metrics/motion/...` natively, and a `skill` term serving the
-# agent-latent buffer. The env entry point is the composed flagship
-# `ImitationRLEnv` (ExpertDataPlane + command planes); behavior is verified
-# identical to the legacy env under the same cfg by the fixed-seed A/B
-# certificate (`scripts/audit/certify_v2_env_equivalence.py`).
+# The v2 surface: one declared command interface (see
+# `tasks/manager_based/imitation/command_interface.py`) -- the always-present
+# dataset-backed `reference` channel (selection, reset-start sampling,
+# `Metrics/reference/...`, the privileged critic view) plus one `actor`
+# channel. The env entry point is the composed flagship `ImitationRLEnv`
+# (ExpertDataPlane + the two command terms).
 gym.register(
     id="Isaac-Imitation-G1-v2",
     entry_point="isaaclab_imitation.envs:ImitationRLEnv",
@@ -264,6 +261,45 @@ gym.register(
         ),
         "rlopt_sac_cfg_entry_point": (
             f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
+        ),
+    },
+)
+
+# The explicit / oracle row of the interface comparison: the same v2
+# environment with `command_interface.actor` set to the explicit channel, so
+# the actor reads the reference command directly. Select a command space by
+# its components, e.g.
+# `env.command_interface.actor.components='[joint_qpos,root_pos,root_ori]'`.
+gym.register(
+    id="Isaac-Imitation-G1-Explicit-v2",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        **_LATENT_STABLE_TASK_KWARGS,
+        "env_cfg_entry_point": (
+            f"{__name__}.surfaces.explicit:ImitationG1ExplicitSurfaceEnvCfg"
+        ),
+        "rlopt_ppo_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig"
+        ),
+        "rlopt_sac_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
+        ),
+    },
+)
+
+# The planner-packet row: one ten-frame packet per 5 Hz hold window, consumed
+# one phase-aligned slot per 50 Hz control step. Defaults to the oracle
+# self-fill (`source=reference`) used to train and certify the streamed
+# interface; a planner run sets `env.command_interface.actor.source=external`.
+gym.register(
+    id="Isaac-Imitation-G1-Chunk-v2",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        **_LATENT_STABLE_TASK_KWARGS,
+        "env_cfg_entry_point": (
+            f"{__name__}.surfaces.explicit:ImitationG1ChunkSurfaceEnvCfg"
         ),
     },
 )

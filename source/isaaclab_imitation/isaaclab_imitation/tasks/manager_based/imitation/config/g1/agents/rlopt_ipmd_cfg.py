@@ -2,6 +2,15 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_imitation.envs.rlopt import IPMDRLOptConfig
 
+from ....command_interface import (
+    actor_input_keys,
+    command_space_components,
+    component_term_names,
+    critic_input_keys,
+    encoder_command_keys,
+    normalize_command_components,
+)
+
 VANILLA_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_motion"),
     ("policy", "expert_anchor_pos_b"),
@@ -101,133 +110,60 @@ EE_TRAJECTORY_COMMAND_KEYS: list[tuple[str, str]] = [
 ]
 
 COMMAND_SPACE_ALIASES: dict[str, str] = {
-    "single_frame_full_body": "single_frame_full_body",
-    "single_frame_ee": "single_frame_ee",
+    "single_frame_full_body": "full_body",
+    "single_frame_ee": "ee",
     "root_qpos": "root_qpos",
     "root_points5": "root_points5",
     "root_points5_pose": "root_points5_pose",
     "root_keypoints5_pose": "root_points5_pose",
-    "single_frame": "single_frame_full_body",
-    "vanilla": "single_frame_full_body",
-    "full_state": "single_frame_full_body",
-    "full_body": "single_frame_full_body",
-    "full_body_trajectory": "full_body_trajectory",
-    "full_state_trajectory": "full_body_trajectory",
-    "whole_body_trajectory": "full_body_trajectory",
-    "full_traj": "full_body_trajectory",
-    "ee_trajectory": "ee_trajectory",
-    "end_effector_trajectory": "ee_trajectory",
-    "end_effector": "ee_trajectory",
-    "ee_pose_trajectory": "ee_trajectory",
+    "single_frame": "full_body",
+    "vanilla": "full_body",
+    "full_state": "full_body",
+    "full_body": "full_body",
+    "full_body_trajectory": "full_body",
+    "full_state_trajectory": "full_body",
+    "whole_body_trajectory": "full_body",
+    "full_traj": "full_body",
+    "ee_trajectory": "ee",
+    "end_effector_trajectory": "ee",
+    "end_effector": "ee",
+    "ee_pose_trajectory": "ee",
+    "ee": "ee",
 }
+"""Historical command-space labels, mapped onto the interface's component sets.
 
-# Atomic command components are canonicalized in this order. The config selects
-# a set, not a concatenation order, so spelling the same ablation in a different
-# YAML order cannot silently change a checkpoint's actor contract.
-COMMAND_COMPONENT_ORDER: tuple[str, ...] = (
-    "joint_qpos_qvel",
-    "joint_qpos",
-    "keypoint_pos",
-    "keypoint_ori",
-    "ee_pos",
-    "ee_ori",
-    "root_pos",
-    "root_ori",
-)
-
-COMMAND_COMPONENT_TERM_NAMES: dict[str, str] = {
-    "joint_qpos_qvel": "expert_motion",
-    "joint_qpos": "expert_motion_qpos",
-    "keypoint_pos": "expert_keypoint_pos_b",
-    "keypoint_ori": "expert_keypoint_ori_b",
-    "ee_pos": "expert_ee_pos_b",
-    "ee_ori": "expert_ee_ori_b",
-    "root_pos": "expert_anchor_pos_b",
-    "root_ori": "expert_anchor_ori_b",
-}
-
-COMMAND_COMPONENT_ALIASES: dict[str, str] = {
-    **{name: name for name in COMMAND_COMPONENT_ORDER},
-    "qpos_qvel": "joint_qpos_qvel",
-    "full_joint_state": "joint_qpos_qvel",
-    "qpos": "joint_qpos",
-    "keypoint_position": "keypoint_pos",
-    "keypoint_orientation": "keypoint_ori",
-    "ee_position": "ee_pos",
-    "ee_orientation": "ee_ori",
-    "root_position": "root_pos",
-    "root_orientation": "root_ori",
-}
-
-COMMAND_SPACE_COMPONENT_PRESETS: dict[str, tuple[str, ...]] = {
-    "single_frame_full_body": ("joint_qpos_qvel", "root_pos", "root_ori"),
-    "single_frame_ee": ("ee_pos", "ee_ori"),
-    "root_qpos": ("joint_qpos", "root_pos", "root_ori"),
-    "root_points5": ("keypoint_pos", "root_pos", "root_ori"),
-    "root_points5_pose": (
-        "keypoint_pos",
-        "keypoint_ori",
-        "root_pos",
-        "root_ori",
-    ),
-}
+A command space is a *label* for a component tuple; the component vocabulary
+itself lives in ``tasks/manager_based/imitation/command_components.py`` and the
+environment config decides the actual selection.
+"""
 
 
-def normalize_command_components(
-    command_components: list[str] | tuple[str, ...] | str,
-) -> tuple[str, ...]:
-    """Validate and canonically order an explicit command component set.
-
-    Accepts a ``"[a,b,c]"``/``"a,b,c"`` string form as well: Isaac Lab's
-    strict config updater passes a Hydra CLI override for a ``None``-default
-    field through as the raw string (same gotcha as
-    ``env.expert_macro_state_terms``).
-    """
-    if isinstance(command_components, str):
-        command_components = [
-            part
-            for part in command_components.strip().strip("[]").split(",")
-            if part.strip()
-        ]
-    normalized: list[str] = []
-    for raw_name in command_components:
-        name = str(raw_name).strip().lower().replace("-", "_")
-        try:
-            normalized.append(COMMAND_COMPONENT_ALIASES[name])
-        except KeyError as err:
-            raise ValueError(
-                f"Unsupported command component {raw_name!r}. Expected a subset "
-                f"of {list(COMMAND_COMPONENT_ORDER)}."
-            ) from err
-    if not normalized:
-        raise ValueError("command_components must select at least one component.")
-    duplicates = sorted({name for name in normalized if normalized.count(name) > 1})
-    if duplicates:
-        raise ValueError(f"command_components contains duplicates: {duplicates}.")
-    if {"joint_qpos_qvel", "joint_qpos"}.issubset(normalized):
+def normalize_command_space(command_space: str) -> str:
+    normalized = str(command_space).strip().lower().replace("-", "_")
+    try:
+        return COMMAND_SPACE_ALIASES[normalized]
+    except KeyError as err:
         raise ValueError(
-            "joint_qpos_qvel and joint_qpos are mutually exclusive command components."
-        )
-    selected = set(normalized)
-    return tuple(name for name in COMMAND_COMPONENT_ORDER if name in selected)
+            f"Unsupported command_space={command_space!r}. "
+            f"Expected one of {sorted(set(COMMAND_SPACE_ALIASES.values()))}."
+        ) from err
+
+
+def command_space_component_names(command_space: str) -> tuple[str, ...]:
+    """Component tuple behind a named command space."""
+    return command_space_components(normalize_command_space(command_space))
 
 
 def command_component_input_keys(
-    command_components: list[str] | tuple[str, ...],
-    *,
-    observation_group: str = "policy",
+    command_components, *, observation_group: str = "policy"
 ) -> list[tuple[str, str]]:
-    """Build ordered observation keys for a composable explicit command."""
+    """Ordered observation keys for a composable explicit command."""
     return [
-        (str(observation_group), COMMAND_COMPONENT_TERM_NAMES[name])
-        for name in normalize_command_components(command_components)
+        (str(observation_group), name)
+        for name in component_term_names(
+            normalize_command_components(command_components)
+        )
     ]
-
-
-def command_space_components(command_space: str) -> tuple[str, ...] | None:
-    """Return the composable form of a legacy single-frame command preset."""
-    normalized = normalize_command_space(command_space)
-    return COMMAND_SPACE_COMPONENT_PRESETS.get(normalized)
 
 
 LATENT_POLICY_INPUT_KEYS: list[tuple[str, str]] = [
@@ -342,72 +278,42 @@ def apply_reward_estimation_switch(
     ipmd.reward_param_weight_decay_coeff = 0.0
 
 
-def normalize_command_space(command_space: str) -> str:
-    normalized = str(command_space).strip().lower().replace("-", "_")
-    try:
-        return COMMAND_SPACE_ALIASES[normalized]
-    except KeyError as err:
-        raise ValueError(
-            f"Unsupported command_space={command_space!r}. "
-            f"Expected one of {sorted(set(COMMAND_SPACE_ALIASES.values()))}."
-        ) from err
-
-
 def command_space_policy_input_keys(
     command_space: str,
     command_components: list[str] | tuple[str, ...] | None = None,
 ) -> list[tuple[str, str]]:
-    if command_components is not None:
-        return list(
-            command_component_input_keys(command_components) + PROPRIO_POLICY_INPUT_KEYS
-        )
-    command_space = normalize_command_space(command_space)
-    if command_space == "single_frame_full_body":
-        return list(VANILLA_POLICY_INPUT_KEYS)
-    if command_space == "full_body_trajectory":
-        return list(FULL_BODY_TRAJECTORY_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
-    if command_space == "ee_trajectory":
-        return list(EE_TRAJECTORY_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
-    if command_space == "single_frame_ee":
-        # Chunked EE: the actor consumes one 36-value frame (the phase-aligned
-        # slot of the held packet), exactly as during training.
-        return list(SINGLE_FRAME_EE_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
-    if command_space == "root_qpos":
-        return list(ROOT_QPOS_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
-    if command_space == "root_points5":
-        return list(ROOT_POINTS5_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
-    if command_space == "root_points5_pose":
-        return list(ROOT_POINTS5_POSE_COMMAND_KEYS + PROPRIO_POLICY_INPUT_KEYS)
-    raise AssertionError(f"Unhandled command space: {command_space}")
+    """Actor keys of an UNBOUND agent config (a label, not the authority).
+
+    The environment's command interface is the authority; this is what an agent
+    config resolves to before it is bound to one (an audit constructing an agent
+    alone, a checkpoint inspected without its task).
+    """
+    components = (
+        command_components
+        if command_components is not None
+        else command_space_component_names(command_space)
+    )
+    return list(command_component_input_keys(components) + PROPRIO_POLICY_INPUT_KEYS)
 
 
 def command_space_critic_input_keys(
     command_space: str,
     command_components: list[str] | tuple[str, ...] | None = None,
 ) -> list[tuple[str, str]]:
-    if command_components is not None:
-        # Actor and critic command entries have the same numerical values but
-        # remain separate observation groups; privileged state is critic-only.
-        return list(
-            command_component_input_keys(command_components, observation_group="critic")
-            + PRIVILEGED_CRITIC_STATE_KEYS
-        )
-    command_space = normalize_command_space(command_space)
-    if command_space == "single_frame_full_body":
-        return list(VANILLA_CRITIC_INPUT_KEYS)
-    if command_space == "full_body_trajectory":
-        return list(FULL_BODY_TRAJECTORY_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
-    if command_space == "ee_trajectory":
-        return list(EE_TRAJECTORY_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
-    if command_space == "single_frame_ee":
-        return list(SINGLE_FRAME_EE_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
-    if command_space == "root_qpos":
-        return list(ROOT_QPOS_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
-    if command_space == "root_points5":
-        return list(ROOT_POINTS5_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
-    if command_space == "root_points5_pose":
-        return list(ROOT_POINTS5_POSE_COMMAND_KEYS + PRIVILEGED_CRITIC_STATE_KEYS)
-    raise AssertionError(f"Unhandled command space: {command_space}")
+    """Critic keys of an UNBOUND agent config.
+
+    Actor and critic command entries carry the same values but stay separate
+    observation groups; privileged state is critic-only.
+    """
+    components = (
+        command_components
+        if command_components is not None
+        else command_space_component_names(command_space)
+    )
+    return list(
+        command_component_input_keys(components, observation_group="critic")
+        + PRIVILEGED_CRITIC_STATE_KEYS
+    )
 
 
 @configclass
@@ -422,12 +328,54 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
     # without adding an enum arm in Python.
     command_components: list[str] | None = None
     command_spec_name: str = ""
+    # Set by `bind_command_interface(agent_cfg, env_cfg)` at training / play
+    # entry. When present it is the AUTHORITY on every command input key and on
+    # whether the actor consumes a latent; the `command_space` /
+    # `command_components` fields degrade to run labels.
+    _command_interface = None
     # Declares that this run trains the IPMD reward estimator (IRL) and
     # therefore requires the env's reward_input observation group. False (the
     # default) parks the stack: see `apply_reward_estimation_switch`.
     reward_estimation: bool = False
 
+    def _policy_proprio_keys(self) -> list[tuple[str, str]]:
+        """Proprioception the actor reads, after its one command source."""
+        return list(PROPRIO_POLICY_INPUT_KEYS)
+
+    def _critic_privileged_keys(self) -> list[tuple[str, str]]:
+        """Privileged state the critic reads, after its command view."""
+        return list(PRIVILEGED_CRITIC_STATE_KEYS)
+
+    def _sync_bound_input_keys(self, interface) -> None:
+        """Derive every input key from the environment's command interface.
+
+        The interface knows what the actor's one command source is, what the
+        critic may additionally see, and what window the skill encoder reads --
+        so nothing here restates it.
+        """
+        self.ipmd.use_latent_command = interface.is_latent()
+        self.policy.input_keys = actor_input_keys(
+            interface, proprio_keys=self._policy_proprio_keys()
+        )
+        if self.value_function is not None:
+            self.value_function.input_keys = critic_input_keys(
+                interface, privileged_keys=self._critic_privileged_keys()
+            )
+        encoder_keys = encoder_command_keys(interface)
+        if encoder_keys:
+            self.ipmd.latent_learning.posterior_input_keys = list(encoder_keys)
+        if not self.command_spec_name:
+            self.command_spec_name = "__".join(
+                (interface.actor_kind(),) + interface.actor_components()
+            )
+
     def sync_input_keys(self) -> None:
+        interface = self._command_interface
+        if interface is not None:
+            self._sync_bound_input_keys(interface)
+            apply_reward_estimation_switch(self)
+            self._sync_latent_command_wiring(bool(self.ipmd.use_latent_command))
+            return
         use_latent_command = bool(self.ipmd.use_latent_command)
         components: tuple[str, ...] | None = None
         if self.command_components is None:
@@ -460,6 +408,10 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
             LATENT_POSTERIOR_INPUT_KEYS
         )
         self.ipmd.latent_learning.prior_input_keys = list(LATENT_PRIOR_INPUT_KEYS)
+        self._sync_latent_command_wiring(use_latent_command)
+
+    def _sync_latent_command_wiring(self, use_latent_command: bool) -> None:
+        """Latent-command plumbing that follows from the actor's kind."""
         self.ipmd.latent_key = ("policy", "latent_command")
         self.ipmd.use_latent_command = use_latent_command
         if not use_latent_command and str(self.ipmd.command_source) in (
@@ -668,12 +620,19 @@ class G1ImitationLatentSonicRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
 
     sonic_release_optimizer: bool = False
 
+    def _policy_proprio_keys(self) -> list[tuple[str, str]]:
+        """SONIC's actor proprioception: the base set plus projected gravity."""
+        return [("policy", "projected_gravity"), *PROPRIO_POLICY_INPUT_KEYS]
+
     def sync_input_keys(self) -> None:
         super().sync_input_keys()
+        if self._command_interface is not None:
+            # The bound path already used this class's proprio contract.
+            return
         if not bool(self.ipmd.use_latent_command):
-            # Explicit command mode (env.command_mode=explicit): keep the base
-            # class's command_space / command_components key selection instead
-            # of forcing the SONIC latent contract. Latent runs are unchanged.
+            # Explicit command mode: keep the base class's command_space /
+            # command_components key selection instead of forcing the SONIC
+            # latent contract. Latent runs are unchanged.
             return
         self.policy.input_keys = list(SONIC_LATENT_POLICY_INPUT_KEYS)
         if self.value_function is not None:

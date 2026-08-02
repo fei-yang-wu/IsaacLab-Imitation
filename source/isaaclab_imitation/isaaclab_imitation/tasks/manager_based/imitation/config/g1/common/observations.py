@@ -24,12 +24,9 @@ The surfaces differ only in membership and profiles:
 - :class:`G1SonicLatentObservationCfg` -- SONIC's 10-step proprio histories,
   applied in ``__post_init__`` (no-history-by-default convention), with the
   ASE-era dead critic terms deleted.
-- :class:`G1LeanLatentObservationCfg` -- the thin v2 default: policy +
-  critic only, single-frame, no windowed / goal / state / reward-input
-  groups.
-- :class:`G1FullSurfaceObservationCfg` -- the v1 layout with the v2
-  cleaning (single-frame critic, ASE-era terms deleted); base for the
-  explicit / reconstruction variants.
+- :class:`G1V2ObservationCfg` -- the single v2 surface: policy + critic (plus
+  the parked ``reward_input`` group), every command term read through the
+  declared command interface's two channels.
 """
 
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -39,6 +36,7 @@ from isaaclab.utils.configclass import configclass
 from isaaclab.utils.noise import UniformNoiseCfg as Unoise
 
 from .... import mdp
+from ....command_components import LATENT_COMMAND_TERM_NAME
 from .constants import (
     G1_29DOF_ISAACLAB_JOINT_NAMES,
     G1_EE_BODY_NAMES,
@@ -285,6 +283,25 @@ def _reward_input_anchor_pos_term() -> ObsTerm:
 
 def _reward_input_anchor_ori_term() -> ObsTerm:
     return ObsTerm(func=mdp.expert_anchor_ori_b, params=_g1_expert_anchor_obs_params())
+
+
+def _command_component_term(
+    component: str,
+    *,
+    channel: str = "actor",
+    noise: Unoise | None = None,
+) -> ObsTerm:
+    """One command component read through a command channel (the v2 surface).
+
+    ``channel`` and the window are rewritten from the declared command
+    interface at environment construction, so the values here are only the
+    declaration's defaults; ``noise`` is the surface's own profile.
+    """
+    return ObsTerm(
+        func=mdp.command_component,
+        params={"channel": channel, "component": component},
+        noise=noise,
+    )
 
 
 def _latent_command_term(func=mdp.agent_latent_command) -> ObsTerm:
@@ -677,153 +694,41 @@ class G1SonicLatentObservationCfg(G1LatentObservationCfg):
 
 
 @configclass
-class G1LeanLatentObservationCfg:
-    """Thinnest v2 observation surface: exactly the actor and critic inputs.
-
-    The lean v2 default declares ONLY the policy and critic groups, and only
-    the terms the latent recipe actually reads (see the agent's input keys).
-    The windowed / goal / state / reward-input groups are deliberately absent:
-    nothing in the latent default consumes them, and the offline skill-encoder
-    sampler reads ``current_expert_macro_transition_batch`` (an env API), not
-    the observation groups. Explicit / reconstruction command surfaces add
-    their groups back via variant configs on top of this base.
-
-    Single-frame design (2026-08-01): every term is history-free. The SONIC
-    10-step proprio histories (a SONIC release design) and the ASE-era h3
-    critic histories are dropped; the 2026-07-21 history ablation found the
-    histories buy little at this repo's scale.
-    """
-
-    @configclass
-    class PolicyCfg(ObsGroup):
-        """Actor observations: the agent-published latent command + proprio."""
-
-        latent_command = _latent_command_term(func=mdp.reference_latent_command)
-        projected_gravity = _projected_gravity_term(
-            noise=Unoise(n_min=-0.05, n_max=0.05)
-        )
-        base_ang_vel = _base_ang_vel_term(noise=Unoise(n_min=-0.2, n_max=0.2))
-        joint_pos_rel = _joint_pos_rel_term(noise=Unoise(n_min=-0.01, n_max=0.01))
-        joint_vel_rel = _joint_vel_rel_term(noise=Unoise(n_min=-0.5, n_max=0.5))
-        last_action = _last_action_term()
-
-        def __post_init__(self):
-            self.enable_corruption = True
-            self.concatenate_terms = False
-
-    @configclass
-    class CriticCfg(ObsGroup):
-        """Critic observations: latent command + single-frame expert command + privileged state."""
-
-        latent_command = _latent_command_term(func=mdp.reference_latent_command)
-        expert_motion = _expert_motion_term(func=mdp.expert_motion_command)
-        expert_anchor_pos_b = _expert_anchor_pos_term(func=mdp.expert_anchor_pos_b)
-        expert_anchor_ori_b = _expert_anchor_ori_term(func=mdp.expert_anchor_ori_b)
-        body_pos = _body_pos_term()
-        body_ori = _body_ori_term()
-        base_lin_vel = _base_lin_vel_term()
-        base_ang_vel = _base_ang_vel_term()
-        joint_pos_rel = _joint_pos_rel_term()
-        joint_vel_rel = _joint_vel_rel_term()
-        last_action = _last_action_term()
-
-        def __post_init__(self):
-            self.concatenate_terms = False
-
-    policy: PolicyCfg = PolicyCfg()
-    critic: CriticCfg = CriticCfg()
-
-
-@configclass
-class G1FullSurfaceObservationCfg(G1LatentObservationCfg):
-    """The v1 latent observation layout, cleaned for the v2 full surface.
-
-    Same groups as the v1 latent surface (policy / critic / expert_state /
-    expert_window / expert_goal / reward_input) so the explicit and
-    reconstruction variants keep their command surfaces, with the v2
-    single-frame design applied to the critic: the ASE-era h3 histories are
-    dropped and the terms nothing reads (``projected_gravity`` /
-    ``joint_pos`` / ``joint_vel``, carried from the ASE base latent critic)
-    are deleted.
-    """
-
-    @configclass
-    class CriticCfg(G1LatentObservationCfg.CriticCfg):
-        # Deleted: ASE-era terms no recipe's critic reads.
-        projected_gravity = None
-        joint_pos = None
-        joint_vel = None
-        # Single-frame (the v2 design drops the ASE-era h3 histories).
-        body_ori = _body_ori_term()
-        base_lin_vel = _base_lin_vel_term()
-        base_ang_vel = _base_ang_vel_term()
-        joint_pos_rel = _joint_pos_rel_term()
-        joint_vel_rel = _joint_vel_rel_term()
-
-    critic: CriticCfg = CriticCfg()
-
-
-@configclass
 class G1V2ObservationCfg:
-    """The single v2 observation surface (one env, built on demand).
+    """The single v2 observation surface: two groups, two command channels.
 
-    Policy: the agent-published latent command, the full explicit command
-    superset, and the lean proprio set. Critic: latent command + single-frame
-    expert command + privileged state. ``reward_input`` stays as the parked
-    opt-in group for IPMD reward estimation.
+    Both groups declare every command component term; which ones survive, which
+    channel each reads, and at what window is derived by the environment's
+    ``CommandInterfaceCfg`` (``command_interface.apply_to_observations``) at
+    construction. The declaration is therefore the complete surface and the
+    resolution only ever narrows it.
 
-    Windowed command data IS the explicit motion command: the historical
-    ``expert_window`` / ``expert_state`` / ``expert_goal`` groups are gone,
-    and the policy command terms carry the window params (past/future steps,
-    synced from ``latent_patch_*``). With 0/0 they are exactly the
-    single-frame commands the actor reads; encoder surfaces set the window and
-    their agents read the same ``("policy", ...)`` terms.
+    Policy: the actor's command (the latent command, or the explicit /
+    chunk component terms) plus -- for a latent recipe -- the encoder's windowed
+    reference view, plus the lean proprio set. Critic: its command view (which
+    may span both channels) plus privileged state. ``reward_input`` stays the
+    parked opt-in group for IPMD reward estimation.
+
+    Single-frame design (2026-08-01): every proprio term is history-free.
     """
 
     @configclass
     class PolicyCfg(ObsGroup):
-        """Actor observations: latent command + explicit command superset + proprio."""
+        """Actor observations: command terms + proprio."""
 
-        latent_command = _latent_command_term(func=mdp.reference_latent_command)
-        # Explicit command superset, windowed: past/future steps are synced
-        # from `latent_patch_past_steps` / `latent_patch_future_steps`, so the
-        # same terms serve the single-frame explicit actor (0/0) and the
-        # windowed encoder surfaces. The `policy_*` funcs honor the chunk
-        # adapters (current slot) under `*_chunk_current_slot` modes.
-        expert_motion = ObsTerm(
-            func=mdp.policy_expert_motion_command,
-            params=_g1_expert_window_motion_obs_params(),
+        latent_command = _command_component_term(LATENT_COMMAND_TERM_NAME)
+        expert_motion = _command_component_term("joint_qpos_qvel")
+        expert_anchor_pos_b = _command_component_term(
+            "root_pos", noise=Unoise(n_min=-0.25, n_max=0.25)
         )
-        expert_anchor_pos_b = ObsTerm(
-            func=mdp.policy_expert_anchor_pos_b,
-            params=_g1_expert_window_anchor_obs_params(),
-            noise=Unoise(n_min=-0.25, n_max=0.25),
+        expert_anchor_ori_b = _command_component_term(
+            "root_ori", noise=Unoise(n_min=-0.05, n_max=0.05)
         )
-        expert_anchor_ori_b = ObsTerm(
-            func=mdp.policy_expert_anchor_ori_b,
-            params=_g1_expert_window_anchor_obs_params(),
-            noise=Unoise(n_min=-0.05, n_max=0.05),
-        )
-        expert_motion_qpos = ObsTerm(
-            func=mdp.policy_expert_motion_qpos,
-            params=_g1_expert_window_motion_obs_params(),
-        )
-        expert_ee_pos_b = ObsTerm(
-            func=mdp.policy_expert_ee_pos_b,
-            params=_g1_expert_window_ee_obs_params(),
-        )
-        expert_ee_ori_b = ObsTerm(
-            func=mdp.policy_expert_ee_ori_b,
-            params=_g1_expert_window_ee_obs_params(),
-        )
-        expert_keypoint_pos_b = ObsTerm(
-            func=mdp.policy_expert_keypoint_pos_b,
-            params=_g1_expert_window_keypoint_obs_params(),
-        )
-        expert_keypoint_ori_b = ObsTerm(
-            func=mdp.policy_expert_keypoint_ori_b,
-            params=_g1_expert_window_keypoint_obs_params(),
-        )
+        expert_motion_qpos = _command_component_term("joint_qpos")
+        expert_ee_pos_b = _command_component_term("ee_pos")
+        expert_ee_ori_b = _command_component_term("ee_ori")
+        expert_keypoint_pos_b = _command_component_term("keypoint_pos")
+        expert_keypoint_ori_b = _command_component_term("keypoint_ori")
         projected_gravity = _projected_gravity_term(
             noise=Unoise(n_min=-0.05, n_max=0.05)
         )
@@ -838,24 +743,25 @@ class G1V2ObservationCfg:
 
     @configclass
     class CriticCfg(ObsGroup):
-        """Critic observations: latent command + single-frame expert command + privileged state."""
+        """Critic observations: its command view + privileged state.
 
-        latent_command = _latent_command_term(func=mdp.reference_latent_command)
-        expert_motion = _expert_motion_term(func=mdp.expert_motion_command)
-        expert_anchor_pos_b = _expert_anchor_pos_term(func=mdp.expert_anchor_pos_b)
-        expert_anchor_ori_b = _expert_anchor_ori_term(func=mdp.expert_anchor_ori_b)
-        # Explicit command superset (single-frame; the critic reads the
-        # command, not the encoder window). Pruned in latent command mode.
-        expert_motion_qpos = _expert_motion_qpos_term(
-            func=mdp.policy_expert_motion_qpos
+        Command terms here are noise-free and single-frame: the critic reads the
+        reference channel directly (and the latent command when the actor
+        publishes one), not the actor's windowed view.
+        """
+
+        latent_command = _command_component_term(LATENT_COMMAND_TERM_NAME)
+        expert_motion = _command_component_term("joint_qpos_qvel", channel="reference")
+        expert_anchor_pos_b = _command_component_term("root_pos", channel="reference")
+        expert_anchor_ori_b = _command_component_term("root_ori", channel="reference")
+        expert_motion_qpos = _command_component_term("joint_qpos", channel="reference")
+        expert_ee_pos_b = _command_component_term("ee_pos", channel="reference")
+        expert_ee_ori_b = _command_component_term("ee_ori", channel="reference")
+        expert_keypoint_pos_b = _command_component_term(
+            "keypoint_pos", channel="reference"
         )
-        expert_ee_pos_b = _expert_ee_pos_term(func=mdp.policy_expert_ee_pos_b)
-        expert_ee_ori_b = _expert_ee_ori_term(func=mdp.policy_expert_ee_ori_b)
-        expert_keypoint_pos_b = _expert_keypoint_pos_term(
-            func=mdp.policy_expert_keypoint_pos_b
-        )
-        expert_keypoint_ori_b = _expert_keypoint_ori_term(
-            func=mdp.policy_expert_keypoint_ori_b
+        expert_keypoint_ori_b = _command_component_term(
+            "keypoint_ori", channel="reference"
         )
         body_pos = _body_pos_term()
         body_ori = _body_ori_term()
@@ -1000,27 +906,11 @@ _LATENT_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
 }
 
 # Anchor-relative observation terms per group on the single v2 surface
-# (`G1V2ObservationCfg`). The policy carries the windowed explicit command
-# superset (anchors + EE + keypoint); the critic adds the robot body-pose
-# terms; the parked reward_input group keeps its anchor terms.
+# (`G1V2ObservationCfg`). Command terms are absent by design: they read the
+# command channels, whose anchor body is declared once on the reference channel
+# (`ReferenceChannelCfg.anchor_body_name`). Only the robot-side body terms and
+# the parked reward_input group still carry an `anchor_body_name` param.
 _V2_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
-    "policy": (
-        "expert_anchor_pos_b",
-        "expert_anchor_ori_b",
-        "expert_ee_pos_b",
-        "expert_ee_ori_b",
-        "expert_keypoint_pos_b",
-        "expert_keypoint_ori_b",
-    ),
-    "critic": (
-        "expert_anchor_pos_b",
-        "expert_anchor_ori_b",
-        "expert_ee_pos_b",
-        "expert_ee_ori_b",
-        "expert_keypoint_pos_b",
-        "expert_keypoint_ori_b",
-        "body_pos",
-        "body_ori",
-    ),
+    "critic": ("body_pos", "body_ori"),
     "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
 }

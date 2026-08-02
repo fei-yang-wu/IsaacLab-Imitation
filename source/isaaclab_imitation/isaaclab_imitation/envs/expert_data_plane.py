@@ -282,29 +282,28 @@ class ExpertDataPlane:
                 "loader_kwargs must be provided to create a new dataset."
             )
 
-        # Map assignment_strategy to reset_schedule (for backward compatibility)
-        assignment_strategy = getattr(cfg, "assignment_strategy", None)
-        reset_schedule = getattr(cfg, "reset_schedule", None)
-        if reset_schedule is None and assignment_strategy is not None:
-            # Map old assignment_strategy to new reset_schedule
-            mapping = {
-                "random": ResetSchedule.RANDOM,
-                "sequential": ResetSchedule.SEQUENTIAL,
-                "round_robin": ResetSchedule.ROUND_ROBIN,
-            }
-            reset_schedule = mapping.get(assignment_strategy, ResetSchedule.RANDOM)
-        if reset_schedule is None:
-            reset_schedule = ResetSchedule.RANDOM
-        # Get other config options
+        # Trajectory selection is declared on the reference command channel:
+        # the schedule (including the `custom` selector an evaluation driver or
+        # per-goal collector supplies) and the start frame come from there, so
+        # nothing about which motion an env resets onto is decided here.
+        reference_channel = cfg.command_interface.reference
+        selection = reference_channel.selection
+        reset_schedule = str(selection.schedule)
+        custom_reset_fn = selection.custom_fn
+        if reset_schedule == ResetSchedule.CUSTOM and custom_reset_fn is None:
+            raise ValueError(
+                "The reference channel declares schedule='custom' without a "
+                "custom_fn(env_ids, num_trajectories) selector."
+            )
         wrap_steps = getattr(cfg, "wrap_steps", False)
         # The env parses the reset-start frame once (`_reference_start_frame`);
         # the trajectory manager's initial cursor uses the same value.
         reference_start_frame = env._reference_start_frame
-        self._expert_anchor_body_name = str(
-            getattr(cfg, "expert_anchor_body_name", "torso_link")
-        ).strip()
+        self._expert_anchor_body_name = str(reference_channel.anchor_body_name).strip()
         if not self._expert_anchor_body_name:
-            raise ValueError("expert_anchor_body_name must be non-empty.")
+            raise ValueError(
+                "The reference command channel's anchor_body_name must be non-empty."
+            )
 
         reference_joint_names = list(getattr(cfg, "reference_joint_names", []))
         target_joint_names = list(getattr(cfg, "target_joint_names", []))
@@ -347,6 +346,7 @@ class ExpertDataPlane:
             traj_info=traj_info,
             num_envs=num_envs,
             reset_schedule=reset_schedule,
+            custom_reset_fn=custom_reset_fn,
             reset_start_step=reference_start_frame,
             wrap_steps=wrap_steps,
             device=device,
@@ -577,7 +577,9 @@ class ExpertDataPlane:
         delegates the per-step computation to :meth:`_compute_mpjpe_metric`,
         so this resolves only the measurement body set.
         """
-        body_names = list(getattr(self._env.cfg, "mpjpe_metric_body_names", []) or [])
+        body_names = list(
+            self._env.cfg.command_interface.reference.mpjpe_body_names or []
+        )
         self._mpjpe_metric_body_names: list[str] = []
         self._mpjpe_metric_body_ids: torch.Tensor | None = None
         if not body_names:

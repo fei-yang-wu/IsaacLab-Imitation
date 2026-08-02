@@ -31,13 +31,12 @@ class ImitationG1AblationSurfaceEnvCfg(ImitationG1V2EnvCfg):
 
     terminations = G1SonicTerminationsCfg()  # type: ignore
     curriculum = None
-    latent_command_dim: int = 66
 
     def __post_init__(self):
         super().__post_init__()
-        self.latent_patch_past_steps = 0
-        self.latent_patch_future_steps = 9
-        self.command_hold_steps = 0
+        self.command_interface.actor.dim = 66
+        self.command_interface.encoder.past_steps = 0
+        self.command_interface.encoder.future_steps = 9
 
 
 __all__ = ["ImitationG1AblationSurfaceEnvCfg"]

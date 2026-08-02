@@ -20,6 +20,11 @@ from .causal_planner_observation import (
     build_causal_planner_frame,
     causal_planner_observation_spec,
 )
+from .command_channels import (
+    ACTOR_TERM_NAME,
+    COMMAND_CHANNEL_NAMES,
+    REFERENCE_TERM_NAME,
+)
 from .command_publisher import (
     ChunkCommandPublisher,
     CommandPublisher,
@@ -29,6 +34,9 @@ from .command_publisher import (
 from .planner_publish_schedule import planner_renew_env_ids
 
 __all__ = [
+    "ACTOR_TERM_NAME",
+    "COMMAND_CHANNEL_NAMES",
+    "REFERENCE_TERM_NAME",
     "CAUSAL_PLANNER_FEATURE_WIDTHS",
     "CAUSAL_PLANNER_FRAME_DIM",
     "CAUSAL_PLANNER_OBSERVATION_VERSION",
