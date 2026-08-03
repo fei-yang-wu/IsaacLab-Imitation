@@ -20,7 +20,7 @@ set -euo pipefail
 # `rlopt_ipmd_tuned_cfg_entry_point` (`G1ImitationTunedRLOptIPMDConfig`), which
 # is the campaign's measured champion: kl_adapt_step=iteration, desired_kl=0.02,
 # entropy_coeff=0, input normalization on both nets, silu, [1024,1024,512],
-# gamma=0.97, and `collector.frames_per_batch=6`. Selecting it by entry point
+# gamma=0.97, and `collector.frames_per_batch=24` (inherited). Selecting it by entry point
 # rather than by a copied override list means this launcher cannot drift from
 # the recipe. The environment half does NOT live on the agent config and must
 # still be passed; it is `ENV_RECIPE_OVERRIDES` below.
@@ -90,12 +90,21 @@ LATENT_COMMAND_DIM=$((Z_DIM + 2))
 LATENT_HOLD_STEPS="${LATENT_HOLD_STEPS:-10}"
 
 # --- Geometry -----------------------------------------------------------------
-# ROLLOUT_STEPS must match `G1ImitationTunedRLOptIPMDConfig.collector.frames_per_batch`.
-# MINIBATCH is NOT set by that class (it inherits 24576); 18432 is what every
+# ROLLOUT_STEPS is NOT passed to the agent -- the recipe owns it. It is declared
+# only to size the wall-clock segment and name the run, and `check_gates` asserts
+# it equals what the recipe resolves.
+#
+# 24 is inherited from the base contract. The 2026-08-02 screen ranked 6 first at
+# 23 training minutes, but that is an early-progress ranking and a short rollout
+# adapts faster out of the gate regardless of where it converges. gamma 0.97 with
+# gae_lambda 0.95 gives a 12.7-step GAE horizon, and a length-n rollout captures
+# only 1 - 0.9215^n of the advantage weight (39% at 6, 86% at 24).
+#
+# MINIBATCH is NOT set by the recipe (it inherits 24576); 18432 is what every
 # screen arm ran, and update density is epochs / mini_batch_size, so changing it
 # changes optimizer work per frame.
 TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-12288}"
-ROLLOUT_STEPS="${ROLLOUT_STEPS:-6}"
+ROLLOUT_STEPS="${ROLLOUT_STEPS:-24}"
 MINIBATCH_SIZE="${MINIBATCH_SIZE:-18432}"
 FRAMES_PER_BATCH=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
 FRAME_CAP="${FRAME_CAP:-5000000000}"
@@ -244,7 +253,6 @@ cmd=(./docker/cluster/cluster_interface.sh -c ice_runtime job
     agent.ipmd.hl_skill_anchor_coeff=0.01
     agent.ipmd.hl_skill_offline_diffsr_coeff=1.0
     agent.ipmd.hl_skill_lr=3e-05
-    "agent.collector.frames_per_batch=${ROLLOUT_STEPS}"
     "agent.loss.mini_batch_size=${MINIBATCH_SIZE}"
     "agent.save_interval=${SAVE_INTERVAL}"
     agent.logger.backend=wandb agent.logger.video=false

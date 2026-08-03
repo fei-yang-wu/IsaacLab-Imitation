@@ -47,6 +47,14 @@ fail() { echo "[FATAL] $*" >&2; exit 1; }
 
 SEED="${SEED:-0}"
 TASK_NAME="${TASK_NAME:-Isaac-Imitation-G1-v2}"
+# Select the tuned recipe by ENTRY POINT. `Isaac-Imitation-G1-v2` registers the
+# base Sonic contract under `rlopt_ipmd_cfg_entry_point`, deliberately, so that
+# earlier runs keep resolving what they resolved; the tuned recipe is a separate
+# registered alternative. This launcher used to reconstruct it from a copied
+# override list instead, which is how it shipped two 5B runs at the wrong
+# rollout on 2026-08-03 -- the copy said 12, the class said 6, and nothing
+# compared them. Copying a config is the bug; selecting it is not.
+AGENT_ENTRY_POINT="${AGENT_ENTRY_POINT:-rlopt_ipmd_tuned_cfg_entry_point}"
 HORIZON_STEPS="${HORIZON_STEPS:-10}"
 Z_DIM="${Z_DIM:-256}"
 LATENT_COMMAND_DIM=$((Z_DIM + 2))
@@ -55,38 +63,37 @@ NJMAX="${NJMAX:-320}"
 NCONMAX="${NCONMAX:-40}"
 
 # --- Geometry -----------------------------------------------------------------
-# ROLLOUT_STEPS is 6, NOT the 12 this campaign started from. It has to equal
-# `G1ImitationTunedRLOptIPMDConfig.collector.frames_per_batch`, because this
-# launcher reconstructs the tuned recipe from the copied TUNED_OVERRIDES list
-# below rather than selecting it by entry point -- `Isaac-Imitation-G1-v2`
-# registers the *base* SonicRLOptIPMD config, so nothing here inherits the tuned
-# value and a stale number is applied silently.
+# ROLLOUT_STEPS is NOT passed to the agent. It is declared here only to size the
+# wall-clock segment (FRAMES_PER_BATCH below) and to name the run, and it must
+# equal what the recipe actually resolves -- `check_gates` asserts that rather
+# than trusting this comment.
 #
-# 6 was measured at +7.3% return and +6.8% episode length at unchanged MPJPE
-# against a byte-identical config (screen arms s1 vs r0): halving the batch
-# doubles the iterations, so twice the LR-controller adaptations and half the
-# policy drift between the collecting policy and the last update on a batch.
-#
-# This default said 12 until 2026-08-03 and two 5B runs were launched with it
-# before the drift was spotted. If you change the tuned class, change this too.
+# 24 comes from the base contract, which the tuned class inherits. The screen
+# ranked 6 first, at 23 training minutes; that ranking is real but it is an
+# early-progress ranking, and a short rollout recollects more often so it adapts
+# faster out of the gate regardless of where it ends up. With gamma 0.97 and
+# gae_lambda 0.95 the GAE horizon is 12.7 steps, and a length-n rollout captures
+# only 1 - 0.9215^n of the advantage weight: 39% at 6, 63% at 12, 86% at 24. At
+# a 5B-frame budget the unbiased advantage estimate is worth more than the early
+# rate.
 TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-12288}"
-ROLLOUT_STEPS="${ROLLOUT_STEPS:-6}"
+ROLLOUT_STEPS="${ROLLOUT_STEPS:-24}"
 MINIBATCH_SIZE="${MINIBATCH_SIZE:-18432}"
 FRAMES_PER_BATCH=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
 FRAME_CAP="${FRAME_CAP:-5000000000}"
 COMPLETED_FRAMES="${COMPLETED_FRAMES:-0}"
 TRAIN_CHECKPOINT="${TRAIN_CHECKPOINT:-}"
 
-# 62,406 fps measured at 100M (screen arm p4). Kept a margin below it: finishing
-# a segment early costs one extra submission, overrunning costs everything since
-# the last save.
+# 62,406 fps measured at 100M (screen arm p4), at rollout 12. Kept a margin
+# below it: finishing a segment early costs one extra submission, overrunning
+# costs everything since the last save.
 #
-# That measurement was taken at rollout 12. At rollout 6 the optimizer work per
-# frame is unchanged -- update density is `epochs / mini_batch_size` and does not
-# involve the batch size -- but there are twice as many iterations, so the fixed
-# per-iteration cost (logging, LR adaptation, sync) doubles. The 7% margin here
-# is expected to absorb that; read the real rate off segment 1 and raise this for
-# later segments rather than trusting it twice.
+# At rollout 24 the optimizer work per frame is unchanged -- update density is
+# `epochs / mini_batch_size` and does not involve the batch size -- and there are
+# HALF as many iterations, so the fixed per-iteration cost (logging, LR
+# adaptation, sync) halves. The real rate should therefore be at or above the
+# rollout-12 figure; read it off segment 1 and raise this for segment 2 rather
+# than trusting an estimate twice.
 SEGMENT_FPS="${SEGMENT_FPS:-58000}"
 SEGMENT_WALL_S="${SEGMENT_WALL_S:-57540}"      # 15:59:00
 SEGMENT_STARTUP_S="${SEGMENT_STARTUP_S:-900}"
@@ -115,26 +122,41 @@ WANDB_GROUP="${WANDB_GROUP:-tuned-5b}"
 WANDB_TAGS="${WANDB_TAGS:-sr,det,v2,lafan1,tuned,5b}"
 EXCLUDE_NODES="${EXCLUDE_NODES:-atl1-1-03-010-15-0,atl1-1-03-013-13-0}"
 
-# --- The tuned configuration --------------------------------------------------
-# Every entry below is a screen result, not a guess. The two marked (code)
-# require changes carried on this branch.
+# --- The environment half of the recipe ----------------------------------------
+# ONLY env-side settings belong here. Everything agent-side (KL rule, desired_kl,
+# entropy, input normalization, activations, widths, gamma, rollout) now arrives
+# via AGENT_ENTRY_POINT and must NOT be restated -- restating it is what let the
+# launcher and the class disagree.
 TUNED_OVERRIDES=(
-    agent.optim.kl_adapt_step=iteration        # (code) KL rule per iteration, not per minibatch
-    agent.optim.desired_kl=0.02                # peaked; 0.04 measured worse
-    agent.ppo.entropy_coeff=0.0                # re-confirmed on the final base
-    agent.policy.normalize_input=true          # latent command already excluded by config
-    agent.value_function.normalize_input=true
-    agent.policy.activation_fn=silu
-    agent.value_function.activation_fn=silu
-    "agent.policy.num_cells=[1024,1024,512]"
-    "agent.value_function.num_cells=[1024,1024,512]"
-    agent.loss.gamma=0.97
     env.rewards.action_rate_l2.weight=0.0
     env.rewards.tracking_reward_points.weight=4.0   # rescales return; see header
     env.enable_termination_curriculum=true          # (code)
     env.termination_curriculum_start_frames=5000000
     env.termination_curriculum_end_frames=30000000
 )
+
+check_rollout_matches_recipe() {
+    # The recipe owns the rollout; ROLLOUT_STEPS here only sizes the wall-clock
+    # segment and names the run. If the two disagree the segment arithmetic is
+    # wrong and the run is mislabelled, so this checks rather than assumes --
+    # a stale copy of this number is exactly what shipped two 5B runs at the
+    # wrong geometry on 2026-08-03.
+    local cfg owners resolved
+    cfg="${REPO_ROOT}/source/isaaclab_imitation/isaaclab_imitation/tasks/manager_based/imitation/config/g1/agents/rlopt_ipmd_cfg.py"
+    [ -r "${cfg}" ] || fail "cannot read ${cfg}"
+
+    # Every class that assigns the rollout, with its value. The tuned recipe must
+    # not be among them: it inherits, so the rollout has one definition.
+    owners="$(awk '/^class /{cls=$2} /self\.collector\.frames_per_batch *=/{sub(/\(.*/,"",cls); print cls, $NF}' "${cfg}")"
+    grep -q '^G1ImitationTunedRLOptIPMDConfig ' <<<"${owners}" \
+        && fail "G1ImitationTunedRLOptIPMDConfig sets collector.frames_per_batch; it must inherit."
+    [ "$(wc -l <<<"${owners}")" -eq 1 ] \
+        || fail "expected exactly one rollout definition in ${cfg}, found:"$'\n'"${owners}"
+    resolved="$(awk '{print $2}' <<<"${owners}")"
+    [ "${resolved}" = "${ROLLOUT_STEPS}" ] \
+        || fail "ROLLOUT_STEPS=${ROLLOUT_STEPS} but the recipe resolves ${resolved}."
+    echo "[PASS] rollout ${ROLLOUT_STEPS} matches the recipe ($(awk '{print $1}' <<<"${owners}"))"
+}
 
 ssh_ice() { ssh -o BatchMode=yes -o ConnectTimeout=10 ice "$@"; }
 
@@ -163,6 +185,8 @@ check_gates() {
         || fail "v2 env config lacks enable_termination_curriculum."
     echo "[PASS] tuned-recipe code changes present in the working tree"
 }
+
+check_rollout_matches_recipe
 
 remaining=$((FRAME_CAP - COMPLETED_FRAMES))
 (( remaining > 0 )) || { echo "[INFO] ${RUN_TAG} already at FRAME_CAP."; exit 0; }
@@ -193,7 +217,8 @@ export CLUSTER_SLURM_JOB_NAME_PREFIX="tuned5b"
 
 cmd=(./docker/cluster/cluster_interface.sh -c ice_runtime job
     --task "${TASK_NAME}" --num_envs "${TRAIN_NUM_ENVS}" --headless --assert-kitless
-    --algo IPMD --seed "${SEED}" --max_iterations "${max_iterations}"
+    --algo IPMD --agent "${AGENT_ENTRY_POINT}"
+    --seed "${SEED}" --max_iterations "${max_iterations}"
     --kit_args=--/app/extensions/fsWatcherEnabled=false
     "${checkpoint_args[@]}"
     physics=newton_mjwarp
@@ -218,7 +243,6 @@ cmd=(./docker/cluster/cluster_interface.sh -c ice_runtime job
     agent.ipmd.hl_skill_anchor_coeff=0.01
     agent.ipmd.hl_skill_offline_diffsr_coeff=1.0
     agent.ipmd.hl_skill_lr=3e-05
-    "agent.collector.frames_per_batch=${ROLLOUT_STEPS}"
     "agent.loss.mini_batch_size=${MINIBATCH_SIZE}"
     "agent.save_interval=${SAVE_INTERVAL}"
     agent.logger.backend=wandb agent.logger.video=false

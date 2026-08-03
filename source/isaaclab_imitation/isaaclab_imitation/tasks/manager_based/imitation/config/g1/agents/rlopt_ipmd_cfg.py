@@ -721,28 +721,21 @@ class G1ImitationTunedRLOptIPMDConfig(G1ImitationLatentSonicRLOptIPMDConfig):
 
     Every value below is a measured screen result. What is deliberately NOT here:
 
-    * **Environment count and batch size.** 12288 environments is unchanged, and
-      raising the count does not help: `s3` (20480 x 6) and `q2` (24576 x 6) do
-      not beat `s1` (12288 x 6).
+    * **Geometry.** 12288 environments x 24 rollout steps, both inherited from
+      the base contract rather than set here, so the geometry has one
+      definition. Raising the environment count does not help: `s3` (20480 x 6)
+      and `q2` (24576 x 6) do not beat `s1` (12288 x 6).
 
-    What IS changed, and is easy to miss because an earlier revision of this
-    docstring said the opposite:
-
-    * **Rollout length: 12 -> 6** (``collector.frames_per_batch`` below). Scored
-      at 23 training-minutes -- a mark every arm in the campaign reached, so
-      nothing is clamped to its endpoint -- `s1` (6) beats `r0` (12) by **+7.3%
-      return and +6.8% episode length at unchanged MPJPE**, and the two differ in
-      that field and nothing else, verified field by field. The optimum is broad
-      across 4-6 and collapses at 3, where the GAE horizon (gamma 0.97, lambda
-      0.95) is too short. Single seed; the one seed-repeat in this campaign put
-      run-to-run spread near 2%, so 7% is outside it, but this specific
-      comparison has not been replicated.
-
-      This bullet previously claimed geometry was unchanged at 12, on a reading
-      that scored arms at a mark some had not reached -- which clamps the short
-      runs to their final value and flatters them. The code below has set 6
-      since the campaign concluded; the text had not caught up, and a launcher
-      trusting the text over the code shipped two 5B runs at 12 on 2026-08-03.
+      Rollout length is the one place this class deliberately does **not** take
+      the screen's answer. The screen ranked `s1` (6) over `r0` (12) by +7.3%
+      return at 23 training minutes; that measurement stands, but every arm was
+      scored on early progress, which structurally favours a short rollout --
+      it recollects more often and so adapts faster out of the gate. With
+      gamma 0.97 and gae_lambda 0.95, the GAE horizon is 12.7 steps and a
+      length-n rollout sees only 1 - 0.9215^n of the advantage weight
+      (6 -> 39%, 12 -> 63%, 24 -> 86%), so 6 truncates credit assignment below
+      half its window. At a 5B-frame budget the unbiased advantage is worth
+      more than the early rate. See ``__post_init__`` for the full argument.
     * **More optimizer work.** Raising updates-per-frame lost in five separate
       arms across four bases. `epochs / mini_batch_size` is the update density
       and does not involve the batch size at all.
@@ -784,24 +777,42 @@ class G1ImitationTunedRLOptIPMDConfig(G1ImitationLatentSonicRLOptIPMDConfig):
         # Horizon 100 -> 33 control steps at 50 Hz. Mixed on the pre-tuning base
         # and a win on this one; interactions in this stack are real.
         self.loss.gamma = 0.97
-        # Rollout 12 -> 6 steps per environment. Scored at a wall-clock mark every
-        # arm in the campaign reached, this is worth +7.3% return and +6.8%
-        # episode length against an otherwise byte-identical config (s1 vs r0
-        # differ in this field alone), at unchanged MPJPE. Rollout 4 measured
-        # marginally better still and rollout 3 clearly worse, so the optimum is
-        # broad across 4-6 and 6 is the interior choice.
+        # NOTE: `collector.frames_per_batch` is deliberately NOT set here. It
+        # inherits 24 from the base contract, which is also what the PPO and
+        # VQ-VAE configs use, so the rollout length has exactly one definition.
         #
-        # This does NOT change optimizer work per frame: update density is
-        # epochs / mini_batch_size and does not involve the batch size. What it
-        # changes is how often data is recollected -- half the batch means twice
-        # the iterations, so twice the LR-controller adaptations and half the
-        # policy drift between the collecting policy and the last update on a
-        # batch. Raising updates per frame instead lost in five separate arms.
+        # This class did set 6, from 2026-08-02 until 2026-08-03. The screen
+        # measured `s1` (6) at +7.3% return and +6.8% episode length over `r0`
+        # (12) at unchanged MPJPE, on configs differing in that field alone.
+        # That measurement is not disputed -- but it was taken at 23 training
+        # minutes, and scoring on early progress systematically favours a short
+        # rollout, because a short rollout recollects more often and so adapts
+        # faster out of the gate. It says nothing about where the run ends up.
         #
-        # Single seed. The one seed-repeat measured elsewhere in this campaign
-        # put run-to-run spread near 2%, so a 7% effect is outside it, but this
-        # specific comparison has not been replicated.
-        self.collector.frames_per_batch = 6
+        # Against that, gamma 0.97 with gae_lambda 0.95 gives gamma*lambda
+        # 0.9215 and an effective GAE horizon of 1/(1 - 0.9215) = 12.7 steps.
+        # A truncated rollout captures only 1 - 0.9215^n of the advantage
+        # weight mass:
+        #
+        #     rollout  3 -> 21.7%      rollout 12 -> 62.5%
+        #     rollout  6 -> 38.8%      rollout 24 -> 85.9%
+        #
+        # At 6 the advantage estimate is cut off below half its intended window,
+        # which biases credit assignment in a way that costs little early (any
+        # signal helps) and compounds once the value function is carrying the
+        # policy. The campaign's own data agrees at the bottom end: rollout 3
+        # "clearly worse ... where the GAE horizon is too short" is the same
+        # effect, just far enough along to be visible at 23 minutes.
+        #
+        # 24 covers 1.88x the horizon and is the house standard. Choosing it
+        # over the early-speed optimum is a deliberate trade of measured early
+        # rate for an unbiased advantage estimate at convergence, on runs whose
+        # budget is 5B frames rather than 23 minutes.
+        #
+        # None of this changes optimizer work per frame: update density is
+        # epochs / mini_batch_size and does not involve the batch size. It
+        # changes how often data is recollected, and how much of the return the
+        # advantage actually sees.
 
 
 @configclass
