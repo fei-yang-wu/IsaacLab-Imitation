@@ -62,8 +62,9 @@ _build
 /datasets/
 /offline_dataset_cache/
 
-# Tests
-tests/
+# Tests (repo-root scratch dir only -- an unanchored `tests/` also
+# swallowed source/*/tests/, which silently dropped real test files)
+/tests/
 
 # Docker history
 .isaac-lab-docker-history

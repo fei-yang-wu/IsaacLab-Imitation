@@ -71,6 +71,8 @@ ROLLOUT_STEPS="${ROLLOUT_STEPS:-12}"
 #
 # Set MAX_ITERATIONS explicitly to go back to a fixed-frame screen.
 MAX_ITERATIONS="${MAX_ITERATIONS:-2000}"  # non-binding: ~295M frames, no arm reaches it
+# Must be reachable inside the wall, or the arm produces no checkpoint to evaluate.
+SAVE_INTERVAL="${SAVE_INTERVAL:-50000000}"
 FRAMES_PER_BATCH=$((NUM_ENVS * ROLLOUT_STEPS))
 TOTAL_FRAMES=$((MAX_ITERATIONS * FRAMES_PER_BATCH))
 
@@ -293,12 +295,12 @@ submit_arm() {
         physics=newton_mjwarp
         "env.sim.physics.solver_cfg.njmax=${NJMAX}"
         "env.sim.physics.solver_cfg.nconmax=${NCONMAX}"
-        "env.lafan1_manifest_path=${MANIFEST_PATH}"
-        "env.dataset_path=${DATASET_PATH}"
+        "env.data.manifest=${MANIFEST_PATH}"
+        "env.data.cache_dir=${DATASET_PATH}"
         # MUST stay false: the /data cache is shared with every other LAFAN1 arm
         # and a refresh=true job rebuilds it underneath them -- including the
         # running 5B job.
-        env.refresh_zarr_dataset=false
+        env.data.cache_refresh=false
         "env.command_interface.actor.dim=${arm_command_dim}"
         "agent.ipmd.latent_dim=${arm_command_dim}"
         agent.ipmd.command_source=hl_skill
@@ -318,7 +320,13 @@ submit_arm() {
         "agent.collector.frames_per_batch=${arm_rollout}"
         # A screen does not need checkpoints, but one at the end is cheap and
         # lets a winning arm be continued rather than re-run from scratch.
-        "agent.save_interval=${TOTAL_FRAMES}"
+        # NOT TOTAL_FRAMES. Under the wall-clock protocol the iteration cap is
+        # deliberately non-binding, so an arm never reaches TOTAL_FRAMES and would
+        # save nothing at all -- leaving it unevaluable after the fact. A fixed
+        # interval well inside what any arm reaches guarantees a checkpoint, and
+        # the Slurm wall killing the job mid-interval only costs the last partial
+        # one.
+        "agent.save_interval=${SAVE_INTERVAL}"
         agent.logger.backend=wandb
         agent.logger.video=false
         "agent.logger.project_name=${WANDB_PROJECT}"

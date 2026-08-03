@@ -150,9 +150,9 @@ run_arm() {
         --num_envs "${NUM_ENVS}" --max_iterations "${arm_iterations}" --headless
         --seed "${SEED}"
         --kit_args=--/app/extensions/fsWatcherEnabled=false
-        "env.lafan1_manifest_path=${MANIFEST_PATH}"
-        "env.dataset_path=${DATASET_PATH}"
-        env.refresh_zarr_dataset=false
+        "env.data.manifest=${MANIFEST_PATH}"
+        "env.data.cache_dir=${DATASET_PATH}"
+        env.data.cache_refresh=false
         # The encoder consumes a 10-frame window (input dim 670 = 10*58 + 10*3
         # + 10*6), so the interface must publish current + 9 future frames.
         env.command_interface.encoder.future_steps=9

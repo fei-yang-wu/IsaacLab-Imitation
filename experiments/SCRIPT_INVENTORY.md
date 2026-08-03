@@ -192,8 +192,6 @@ test now enforces that every `experiments/` script is classified.
 | `experiments/campaigns/2026-07-27-sonic-env-latent-det/sonic_env_det/submit_latent_v0_reset_sampling_ice.sh` | guarded launcher | Submits the latent-v0 reset-sampling arm to ICE. |
 | `experiments/campaigns/2026-07-27-sonic-env-latent-det/sonic_env_det/submit_sonic_env_latent_det_ice.sh` | guarded launcher | Submits the SONIC-env latent determinism arm to ICE. |
 | `experiments/campaigns/2026-07-29-latent-holdout-horizon/latent_holdout/submit_latent_holdout_horizon_ice.sh` | guarded launcher | Submits the hold-in-{5,1} horizon ablation to ICE. |
-| `experiments/paper/_paper_common.py` | library | Shared provenance/gate plumbing for the paper pipeline stages. |
-| `experiments/paper/_paper_specs.py` | library | Frozen paper protocol specification constants. |
 | `experiments/paper/pipeline/pretrain_latent_encoder.py` | workflow | Hydra stage: pretrain the latent encoder for the paper pipeline. |
 | `experiments/paper/pipeline/train_low_level.py` | workflow | Hydra stage: train a low-level tracker for the paper pipeline. |
 | `experiments/paper/reference_buffer_workflow.py` | workflow | Reference-buffer workflow; the reference implementation of the paper-script standard. |

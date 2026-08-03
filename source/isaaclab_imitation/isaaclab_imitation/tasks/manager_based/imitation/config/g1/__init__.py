@@ -1,35 +1,29 @@
-"""G1 imitation task registrations: recipe x command-config pins.
+"""G1 imitation task registrations.
 
-Recipe (reward/termination/reset design) is the only axis with separate env
-classes; the latent-vs-explicit command choice is pure configuration
-(``env.command_mode`` plus the agent entry point). Three recipes exist:
+A task id is the stable, citable identity of a protocol: it names a config
+class so a recorded command, checkpoint, or paper gate keeps resolving. It is
+not a kind of environment. Everything from ``-G1-v2`` onward is ONE environment
+(``imitation_g1_env_v2.ImitationG1V2EnvCfg``) at different points in its
+configuration space, and the classes behind those ids (``surfaces.py``) select
+presets and set scalars, nothing more. A new ablation is a CLI override::
 
-- **Stable** (``imitation_g1_env_v2.ImitationG1EnvCfg`` -- the flagship
-  class name follows the newest release): SONIC release recipe with this
-  repo's legacy reset distribution -- the current default (``-G1-v2``,
-  2026-08-01 onward; ``-G1-v1`` is frozen at its exact old kwargs).
-- **Strict** (``common.tracking_env._apply_strict_recipe``): strict SONIC
-  termination functions on the legacy scaffolding -- pins
-  ``variants.strict.ImitationG1StrictTrackEnvCfg`` (explicit) and
-  ``variants.strict.ImitationG1LatentStrictEnvCfg`` (latent).
-- **LafanTrack** (``imitation_g1_env_v0.ImitationG1LafanTrackEnvCfg``): the
-  original torso-anchored loose-termination tracking recipe.
+    --task Isaac-Imitation-G1-v2 env.command_interface.actor=explicit
 
-Module layout: shared components and the legacy base machinery in
-``common/`` (``common.tracking_env`` is the DEPRECATED v0/v1-only base); the
-releases as standalone, fully spelled-out assemblies in
-``imitation_g1_env_v0.py`` (LafanTrack), ``imitation_g1_env_v1.py`` (the
-frozen v1) and ``imitation_g1_env_v2.py`` (the FLAT flagship
-``ImitationG1EnvCfg`` + ``ImitationG1FullSurfaceEnvCfg``, inheriting only
-``ImitationLearningEnvCfg``); every non-default surface in ``surfaces/``
-(one standalone flat file per family, on the v2 full surface base).
-``variants/`` keeps only the frozen Strict pins; the historical
-``imitation_g1*_env_cfg`` modules remain as re-export shims for old imports
-and serialized configs.
+not a new class and not a new id. Register an id when a protocol needs to be
+cited later; until then, override.
 
-Registrations below are grouped: current defaults first, then the migrated
-v2 surfaces, then the Strict recipe pins, then deprecated/frozen pins kept
-for reproducibility.
+Module layout: ``imitation_g1_env_v2.py`` (the current environment, inheriting
+only ``ImitationLearningEnvCfg``) plus ``surfaces.py`` (its registered
+configuration points). Frozen behind them: ``imitation_g1_env_v0.py``
+(LafanTrack) and ``imitation_g1_env_v1.py``, both on the DEPRECATED
+``common/tracking_env.py`` base, with ``variants/`` holding the Strict pins and
+the historical ``imitation_g1*_env_cfg`` modules kept as re-export shims. The
+legacy configs keep their own flat dataset fields; v2 configures motion data
+through ``env.data.*`` (see ``motion_data.MotionDataCfg``).
+
+Registrations below are grouped: current defaults first, then the v2 surfaces,
+then the Strict recipe pins, then deprecated/frozen pins kept for
+reproducibility.
 """
 
 import gymnasium as gym
@@ -143,7 +137,7 @@ _LATENT_STABLE_TASK_KWARGS = {
 # Migrated v2 surfaces (2026-08-01): the vqvae / cvae / per-step-VQ / sonic
 # families, re-registered on the flat v2 full surface base and the v2 env.
 _LATENT_VQVAE_V2_TASK_KWARGS = {
-    "env_cfg_entry_point": (f"{__name__}.surfaces.vqvae:ImitationG1VQVAESurfaceEnvCfg"),
+    "env_cfg_entry_point": (f"{__name__}.surfaces:ImitationG1VQVAESurfaceEnvCfg"),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_vqvae_cfg:G1ImitationLatentRLOptIPMDVQVAEConfig"
     ),
@@ -156,9 +150,7 @@ _LATENT_VQVAE_V2_TASK_KWARGS = {
 }
 
 _LATENT_FUTURE_CVAE_V2_TASK_KWARGS = {
-    "env_cfg_entry_point": (
-        f"{__name__}.surfaces.future_cvae:ImitationG1FutureCVAESurfaceEnvCfg"
-    ),
+    "env_cfg_entry_point": (f"{__name__}.surfaces:ImitationG1FutureCVAESurfaceEnvCfg"),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentFutureCVAERLOptIPMDConfig"
     ),
@@ -168,9 +160,7 @@ _LATENT_FUTURE_CVAE_V2_TASK_KWARGS = {
 }
 
 _LATENT_PER_STEP_VQ_V2_TASK_KWARGS = {
-    "env_cfg_entry_point": (
-        f"{__name__}.surfaces.future_cvae:ImitationG1PerStepVQSurfaceEnvCfg"
-    ),
+    "env_cfg_entry_point": (f"{__name__}.surfaces:ImitationG1PerStepVQSurfaceEnvCfg"),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentPerStepVQRLOptIPMDConfig"
     ),
@@ -180,7 +170,7 @@ _LATENT_PER_STEP_VQ_V2_TASK_KWARGS = {
 }
 
 _SONIC_V2_TASK_KWARGS = {
-    "env_cfg_entry_point": (f"{__name__}.surfaces.sonic:ImitationG1SonicSurfaceEnvCfg"),
+    "env_cfg_entry_point": (f"{__name__}.surfaces:ImitationG1SonicSurfaceEnvCfg"),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationLatentSonicRLOptIPMDConfig"
     ),
@@ -195,7 +185,7 @@ _SONIC_V2_TASK_KWARGS = {
 _SONIC_NO_HISTORY_V2_TASK_KWARGS = {
     **_SONIC_V2_TASK_KWARGS,
     "env_cfg_entry_point": (
-        f"{__name__}.surfaces.sonic:ImitationG1SonicNoHistorySurfaceEnvCfg"
+        f"{__name__}.surfaces:ImitationG1SonicNoHistorySurfaceEnvCfg"
     ),
 }
 
@@ -205,7 +195,7 @@ _SONIC_NO_HISTORY_V2_TASK_KWARGS = {
 _SONIC_OFFICIAL_FSQ_V2_TASK_KWARGS = {
     **_SONIC_V2_TASK_KWARGS,
     "env_cfg_entry_point": (
-        f"{__name__}.surfaces.sonic:ImitationG1SonicOfficialFSQSurfaceEnvCfg"
+        f"{__name__}.surfaces:ImitationG1SonicOfficialFSQSurfaceEnvCfg"
     ),
     "rlopt_cfg_entry_point": (
         f"{agents.__name__}.rlopt_ipmd_cfg:"
@@ -228,6 +218,9 @@ _SONIC_OFFICIAL_FSQ_V2_TASK_KWARGS = {
 # `-Latent-v0`'s "moving alias" pattern again; it predates this convention
 # and is kept only for its own back-compat reasons (see its comment below).
 # ---------------------------------------------------------------------------
+_CURRENT_V2_IPMD_TUNED_ENTRY_POINT = (
+    f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationTunedRLOptIPMDConfig"
+)
 
 _CURRENT_V2_IPMD_L2T_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_l2t_cfg:G1ImitationRLOptIPMDL2TConfig"
@@ -256,10 +249,10 @@ gym.register(
     kwargs={
         **_LATENT_STABLE_TASK_KWARGS,
         "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v2:ImitationG1V2EnvCfg"),
-        # PPO / SAC train on the explicit surfaces (vanilla input keys): pair
-        # them with the full surface + `env.command_mode=explicit` +
-        # `agent.ipmd.use_latent_command=false`-style overrides, or use the
-        # vanilla `-G1-v0` / `-G1-Strict-v0` pins. The default stays IPMD.
+        # PPO / SAC train on the explicit surfaces (vanilla input keys):
+        # pair them with `env.command_interface.actor=explicit` plus
+        # `agent.ipmd.use_latent_command=false`, or use the `-Explicit-v2`
+        # pin below. The default stays IPMD on the latent command.
         "rlopt_ppo_cfg_entry_point": (
             f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig"
         ),
@@ -267,6 +260,7 @@ gym.register(
             f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
         ),
         "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
+        "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
     },
 )
 
@@ -282,7 +276,7 @@ gym.register(
     kwargs={
         **_LATENT_STABLE_TASK_KWARGS,
         "env_cfg_entry_point": (
-            f"{__name__}.surfaces.explicit:ImitationG1ExplicitSurfaceEnvCfg"
+            f"{__name__}.surfaces:ImitationG1ExplicitSurfaceEnvCfg"
         ),
         "rlopt_ppo_cfg_entry_point": (
             f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig"
@@ -291,6 +285,7 @@ gym.register(
             f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
         ),
         "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
+        "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
     },
 )
 
@@ -304,10 +299,9 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         **_LATENT_STABLE_TASK_KWARGS,
-        "env_cfg_entry_point": (
-            f"{__name__}.surfaces.explicit:ImitationG1ChunkSurfaceEnvCfg"
-        ),
+        "env_cfg_entry_point": (f"{__name__}.surfaces:ImitationG1ChunkSurfaceEnvCfg"),
         "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
+        "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
     },
 )
 
@@ -378,10 +372,11 @@ gym.register(
 )
 
 # ---------------------------------------------------------------------------
-# Migrated v2 surface pins (2026-08-01): the vqvae / cvae / per-step-VQ /
-# sonic families, re-registered on the flat v2 full surface base
-# (`surfaces/`) and the v2 env. The legacy `-G1-Latent-*` ids for these
-# families were deleted with their legacy variant configs.
+# v2 surface pins: latent-command widths and encoder windows on the single v2
+# environment (`surfaces.py`). Each is equivalent to the corresponding
+# `env.command_interface.*` overrides on `-G1-v2`; the id exists so protocols
+# and checkpoints can cite one. The legacy `-G1-Latent-*` ids for these
+# families were deleted with their legacy variant configs on 2026-08-01.
 # ---------------------------------------------------------------------------
 
 # Flat v2 full surface x causal 9-step-window VQ-VAE command

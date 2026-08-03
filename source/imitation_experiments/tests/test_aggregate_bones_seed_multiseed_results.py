@@ -9,7 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from aggregate_bones_seed_multiseed_results import METRICS, aggregate_runs
+from imitation_experiments.paths import load_paper_entrypoint
+
+_multiseed = load_paper_entrypoint("aggregate_bones_seed_multiseed_results")
+METRICS = _multiseed.METRICS
+aggregate_runs = _multiseed.aggregate_runs
 
 
 GOALS = ["kick", "stoop"]

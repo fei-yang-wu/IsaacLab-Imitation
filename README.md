@@ -21,9 +21,37 @@ RLOpt and RSL-RL.
 
 Registered task IDs currently include:
 
-- `Isaac-Imitation-G1-v0`
-- `Isaac-Imitation-G1-Latent-v0`
-- `Isaac-Imitation-G1-LafanTrack-v0` (legacy alias of `Isaac-Imitation-G1-v0`)
+| Task ID | Actor command | Skill-encoder window |
+| --- | --- | --- |
+| `Isaac-Imitation-G1-v2` | latent, 258-D | single frame |
+| `Isaac-Imitation-G1-Explicit-v2` | explicit, full body | none |
+| `Isaac-Imitation-G1-Chunk-v2` | 10-frame packet held 10 steps | none |
+| `Isaac-Imitation-G1-VQVAE-v0` | latent, 258-D | 8 past + current |
+| `Isaac-Imitation-G1-CVAE-v0` | latent, 256-D | current + 9 future |
+| `Isaac-Imitation-G1-PerStepVQ-v0` | latent, 64-D | current + 9 future |
+| `Isaac-Imitation-G1-Sonic-v0` | latent, 258-D | single frame, SONIC recipe |
+
+Each is one point in the same environment's configuration space, so an id is
+the citable name of a protocol rather than a distinct implementation, and the
+same selections are available directly:
+
+```bash
+--task Isaac-Imitation-G1-v2 \
+    env.command_interface.actor=latent|explicit|chunk \
+    env.command_interface.encoder=single|causal9|future10|future26 \
+    env.command_interface.reference.selection=default|sonic|frame0
+```
+
+Register a new id when a protocol needs to be cited later; until then, override.
+
+`Isaac-Imitation-G1-v0`, `-v1`, `-Latent-v0`, `-Strict-v0`, and `-LafanTrack-v0`
+stay registered for reproducing recorded results and should not be cited for new
+work. They are also the boundary for how motion data is configured: `-G1-v2` and
+later use `env.data.*` (`env.data.manifest`, `env.data.cache_dir`,
+`env.data.clips`), while the frozen ids keep the older flat fields
+(`env.lafan1_manifest_path`, `env.dataset_path`, `env.motions`). Setting a flat
+field on a v2 task fails with the replacement named, rather than silently
+training on data it did not select.
 
 ## Workspace setup
 
@@ -233,11 +261,19 @@ Train a G1 imitation policy with RLOpt IPMD:
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
+    --task Isaac-Imitation-G1-v2 \
     --algo IPMD \
     --headless \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
+
+The task runs at **50 Hz control** (200 Hz physics, `sim.dt=0.005`,
+`decimation=4`). That is a protocol decision every reward, termination
+threshold, and recorded result is defined at, so it is declared by the task and
+never inferred from data: clips are checked against it and a mismatch is
+refused rather than silently retuning the physics rate. The conversion pipeline
+in `scripts/data/` resamples sources to 50 Hz, so a mismatch means the wrong
+manifest.
 
 Train the IPMD learning-to-teach variant on a current-v2 command surface:
 
@@ -246,7 +282,7 @@ python scripts/rlopt/train.py \
     --task Isaac-Imitation-G1-Explicit-v2 \
     --algo IPMD_L2T \
     --headless \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
 `IPMD_L2T` keeps rollout control and the ordinary IPMD/PPO objectives on a
@@ -264,7 +300,7 @@ python scripts/rlopt/play.py \
     --task Isaac-Imitation-G1-Explicit-v2 \
     --algo IPMD_L2T \
     --checkpoint /absolute/path/to/checkpoint.pt \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
 ### LAFAN1 local pretrain + low-level pipeline (reproducible)
@@ -291,98 +327,37 @@ convergence by 2B. The full per-stage commands, expected metrics, joint-order ve
 and troubleshooting are in [wiki/lafan1-local-training.md](wiki/lafan1-local-training.md).
 
 For imitation-based RL, the recommended starting point in this repo is RLOpt IPMD on
-`Isaac-Imitation-G1-Latent-v0`. If you want a smaller single-motion setup for the
+`Isaac-Imitation-G1-v2`. If you want a smaller single-motion setup for the
 retargeted Unitree `dance102` clip, use:
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
+    --task Isaac-Imitation-G1-v2 \
     --algo IPMD \
     --headless \
-    env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json
+    env.data.manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json
 ```
 
-The action-labeled Dance102 variant keeps the original NPZ intact and uses a
-locally generated label NPZ plus a separate manifest. Generate those artifacts
-with `scripts/rlopt/label_npz_with_policy.py` or provide your own matching
-manifest before launching:
+Restrict it to a subset of the manifest's clips with
+`env.data.clips='["dance1_subject1"]'`, and point the built Zarr cache somewhere
+specific with `env.data.cache_dir=...` (omit it and the cache path is derived
+from the manifest's identity, so jobs naming the same manifest share one).
+
+Train with RLOpt PPO on the explicit command surface (PPO and SAC read the
+vanilla input keys, so pair them with an explicit actor):
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --algo IPMD_BILINEAR \
-    --headless \
-    env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_rlopt_ipmd_500m_actions_manifest.json \
-    env.reconstructed_reference_action=false \
-    agent.bilinear.offline_pretrain.policy_bc_updates=2000
-```
-
-The older cluster ablation launcher for scratch, state-only SR pretraining, reconstructed-action BC, and recorded-label BC was pruned on 2026-07-23. The direct command above remains a development example; start a dated campaign if that comparison is revived.
-
-Train with RLOpt PPO:
-
-```bash
-python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-v0 \
+    --task Isaac-Imitation-G1-Explicit-v2 \
     --algo PPO \
     --headless \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
-Train ASE with the full local LAFAN1 G1 manifest:
-
-```bash
-python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --num_envs 4096 \
-    --algo ASE \
-    --headless \
-    --video \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
-```
-
-Train latent-conditioned IPMD with the same manifest:
-
-```bash
-python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --algo IPMD \
-    --headless \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
-```
-
-For the LAFAN1 no-language latent-skill pipeline, use:
-
-```bash
-pixi run -e isaaclab scripts/rlopt/run_lafan1_no_language_pipeline.sh
-```
-
-This runs the default no-language stack for LAFAN1: DiffSR skill encoder,
-flow-matching planner, latent-conditioned IPMD-Bilinear low-level policy,
-evaluation, and optional oracle rollout finetuning. Defaults include
-`num_envs=4096`, `z_dim=256`, `horizon_steps=10`, sinusoidal phase features,
-and `state_history_steps=9`. The default budgets are 5k skill-encoder updates,
-5k base-planner updates, and 10k low-level policy iterations.
-
-To run only the 40-motion oracle rollout-finetuning stage from existing
-checkpoints, use:
-
-```bash
-pixi run -e isaaclab python scripts/rlopt/run_lafan1_no_language_rollout_ft_merged.py \
-    --checkpoint /path/to/low_level_policy.pt \
-    --planner_checkpoint /path/to/base_planner.pt \
-    --skill_checkpoint /path/to/skill_encoder.pt \
-    --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
-    --dataset_path data/lafan1/g1_hl_diffsr \
-    --ranks all \
-    --seeds 0,1,2 \
-    --finetune_updates 20000
-```
-
-This collects oracle skill rollouts with the frozen skill encoder, merges the
-samples, and finetunes one shared no-language planner. With the default LAFAN1
-manifest, `--ranks all --seeds 0,1,2` collects 40 motions times 3 seeds, or 120
-rollout trajectories total.
+The `ASE`, `GAIL`, `AMP`, and `IPMD_BILINEAR` algorithms still exist in RLOpt,
+but their agent-config entry points were pruned from these tasks on 2026-08-01;
+selecting one fails to resolve an agent config. `IPMD` (default), `IPMD_L2T`,
+`PPO`, and `SAC` are the live pairings.
 
 The broad command-space oracle ablation is archived. Current Phase-4/5 qualification retains only two internal helpers in `experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/`: checkpoint evaluation and the low-level oracle submission adapter. They are dependencies of guarded paper workflows, not a collaborator-facing command-style sweep. Historical paths and recovery instructions are in [`experiments/PRUNED_SCRIPTS.md`](experiments/PRUNED_SCRIPTS.md).
 
@@ -720,8 +695,9 @@ python scripts/viz/replay_reference.py \
 Notes:
 
 - use `data/lafan1/manifests/g1_lafan1_manifest.json` to load the full local 40-motion set
-- `Isaac-Imitation-G1-v0` is the canonical vanilla tracking task and expects `env.lafan1_manifest_path=...`
-- `Isaac-Imitation-G1-Latent-v0` is the latent-conditioned variant for ASE or latent-enabled IPMD
+- the playback and replay commands above target the frozen `-G1-v0` / `-Latent-v0`
+  ids, which keep the flat `env.lafan1_manifest_path=...` field; on `-G1-v2` and
+  later the same setting is `env.data.manifest=...` (see the task list at the top)
 - `Isaac-Imitation-G1-LafanTrack-v0` remains available as a legacy alias for the vanilla task
 - `replay_reference.py` disables reward and termination terms by default, so long reference videos do not reset early
 - pass `--keep_terminations` or `--keep_rewards` if you explicitly want the old RL-style behavior during replay

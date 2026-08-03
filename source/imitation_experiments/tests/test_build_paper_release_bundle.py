@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from build_paper_release_bundle import (
-    PHASE4_PROTOCOL,
-    PHASE5_PROTOCOL,
-    build_release,
-)
+from imitation_experiments.paths import load_paper_entrypoint
+
+_bundle = load_paper_entrypoint("build_paper_release_bundle")
+PHASE4_PROTOCOL = _bundle.PHASE4_PROTOCOL
+PHASE5_PROTOCOL = _bundle.PHASE5_PROTOCOL
+build_release = _bundle.build_release
 
 
 def _sha256(path: Path) -> str:
@@ -100,9 +101,7 @@ def _phase5(root: Path) -> Path:
     outputs = {
         "results_json": results,
         "per_goal_csv": _text(aggregate / "multiseed_per_goal.csv"),
-        "paired_differences_csv": _text(
-            aggregate / "multiseed_paired_differences.csv"
-        ),
+        "paired_differences_csv": _text(aggregate / "multiseed_paired_differences.csv"),
         "before_after_csv": _text(aggregate / "multiseed_before_after.csv"),
         "paper_markdown": _text(aggregate / "multiseed_results.md"),
     }

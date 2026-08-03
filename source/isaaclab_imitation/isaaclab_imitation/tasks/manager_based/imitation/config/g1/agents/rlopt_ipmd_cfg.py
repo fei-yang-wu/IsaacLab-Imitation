@@ -692,6 +692,103 @@ class G1ImitationLatentSonicRLOptIPMDConfig(G1ImitationLatentRLOptIPMDConfig):
 
 
 @configclass
+class G1ImitationTunedRLOptIPMDConfig(G1ImitationLatentSonicRLOptIPMDConfig):
+    """The 2026-08-03 tuned low-level recipe (screen `rlopt-hparam-search`).
+
+    A NEW class rather than a change to
+    :meth:`G1ImitationLatentSonicRLOptIPMDConfig._apply_local_optimizer_contract`,
+    for the same reason the G1 task ids are versioned instead of mutated: every
+    existing run, the in-flight 5B job, and the paper-facing v2 campaign all
+    resolve that contract, and silently redefining it would change what those
+    runs mean after the fact. Select this explicitly with
+    ``--agent rlopt_ipmd_tuned_cfg_entry_point``.
+
+    Measured against `b0_baseline` -- the previous cluster recipe verbatim -- at
+    a matched 100M frames, 3 seeds:
+
+    ======================  =============  =====================
+    metric                  b0_baseline    this recipe
+    ======================  =============  =====================
+    return / minute         0.279          1.290 +/- 0.026
+    episode length / min    3.92           11.12 +/- 0.22
+    MPJPE (mm)              69.18          61.74 +/- 0.53
+    wall-clock              46.2 min       27.1 min
+    ======================  =============  =====================
+
+    Seed spread is ~2%, so every gain is well outside noise, and MPJPE improves
+    alongside the rates -- which is what separates this from a reward or
+    termination change that merely inflates them.
+
+    Every value below is a measured screen result. What is deliberately NOT here:
+
+    * **Geometry.** 12288 x 12 is unchanged. Rollout length, environment count
+      and batch size were swept extensively (6/24576, 6/12288, 9/16384, 8/24576,
+      4, 3) and at a wall-clock mark every arm actually reached, all variants
+      land within ~3% return of each other with no consistent MPJPE ordering.
+      Earlier readings that appeared to favour a shorter rollout compared arms
+      that had run for different lengths.
+    * **More optimizer work.** Raising updates-per-frame lost in five separate
+      arms across four bases. `epochs / mini_batch_size` is the update density
+      and does not involve the batch size at all.
+    * **Bigger or deeper networks.** 2048x6 lost on every base; depth at fixed
+      width was neutral, so the width benefit is width, not depth.
+
+    The environment-side half of the recipe (termination curriculum and its
+    window, the action-rate and tracking-point weights) is NOT set here because
+    it lives on the env config. See the campaign README; a launcher must pass
+    those too, and `submit_tuned_5b_ice.sh` is the reference invocation.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        assert self.value_function is not None
+        # Optimizer: the KL rule fires once per ITERATION instead of once per
+        # minibatch. Measured over a 3.5B reference run, the per-minibatch rule
+        # produced a serially uncorrelated log-LR spanning 58x whose iteration
+        # mean never once left the dead band -- it was adapting to sampling
+        # noise, not to policy drift.
+        self.optim.kl_adapt_step = "iteration"
+        self.optim.desired_kl = 0.02  # peaked; 0.01 and 0.04 both measured worse
+        # Entropy bonus off. It was 4.5x the policy-gradient term in the loss and
+        # held sigma near 0.32 rad indefinitely. NOTE: this leaves no floor
+        # (log_std_min is effectively unbounded), so sigma should be watched over
+        # a multi-billion-frame run. Bounding it instead was tried and lost.
+        self.ppo.entropy_coeff = 0.0
+        # Running input normalization, the single largest optimizer-side effect
+        # (+50% episode length on its own). The latent command is already listed
+        # in normalize_input_exclude_keys, so z and its sin/cos phase stay raw --
+        # normalizing them would make the planner -> tracker interface
+        # non-stationary.
+        self.policy.normalize_input = True
+        self.value_function.normalize_input = True
+        self.policy.activation_fn = "silu"
+        self.value_function.activation_fn = "silu"
+        self.policy.num_cells = [1024, 1024, 512]
+        self.value_function.num_cells = [1024, 1024, 512]
+        # Horizon 100 -> 33 control steps at 50 Hz. Mixed on the pre-tuning base
+        # and a win on this one; interactions in this stack are real.
+        self.loss.gamma = 0.97
+        # Rollout 12 -> 6 steps per environment. Scored at a wall-clock mark every
+        # arm in the campaign reached, this is worth +7.3% return and +6.8%
+        # episode length against an otherwise byte-identical config (s1 vs r0
+        # differ in this field alone), at unchanged MPJPE. Rollout 4 measured
+        # marginally better still and rollout 3 clearly worse, so the optimum is
+        # broad across 4-6 and 6 is the interior choice.
+        #
+        # This does NOT change optimizer work per frame: update density is
+        # epochs / mini_batch_size and does not involve the batch size. What it
+        # changes is how often data is recollected -- half the batch means twice
+        # the iterations, so twice the LR-controller adaptations and half the
+        # policy drift between the collecting policy and the last update on a
+        # batch. Raising updates per frame instead lost in five separate arms.
+        #
+        # Single seed. The one seed-repeat measured elsewhere in this campaign
+        # put run-to-run spread near 2%, so a 7% effect is outside it, but this
+        # specific comparison has not been replicated.
+        self.collector.frames_per_batch = 6
+
+
+@configclass
 class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
     G1ImitationLatentSonicRLOptIPMDConfig
 ):

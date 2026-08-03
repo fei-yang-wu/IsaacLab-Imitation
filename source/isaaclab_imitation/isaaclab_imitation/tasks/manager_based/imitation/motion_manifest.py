@@ -1,8 +1,11 @@
-"""Single schema authority for LAFAN1-style motion-dataset manifests.
+"""Single schema authority for motion-clip manifests.
 
-Every motion dataset in this repo (LAFAN1, Unitree Dance102, BONES-SEED, and
-the unified merge) enters training through the same ``loader_type="lafan1_csv"``
-manifest blob::
+A *clip manifest* names an ordered set of motion clips -- each a file (NPZ, or
+a CSV that still needs resampling) plus its source frame rate and an optional
+frame range. It is the only way motion data enters training, and it is dataset
+agnostic: LAFAN1, Unitree Dance102, BONES-SEED, and cross-dataset merges are
+all just different *contents* of the same blob, distinguished by the free-form
+``metadata.family`` label rather than by code paths::
 
     {
       "dataset_name": "...",
@@ -12,11 +15,16 @@ manifest blob::
       "metadata": {..., "family": ..., "role": ...}
     }
 
-This module owns reading, validating, and writing that blob. It is
-deliberately stdlib-only (json/pathlib/hashlib) so scripts and tests can load
-it by file path without importing the ``isaaclab_imitation`` package (which
-registers Isaac tasks on import). ``lafan1_manifest.py`` remains as a thin
-re-export shim for legacy imports.
+``lafan1_csv`` in that payload is NOT a dataset name: it is the key of the
+ILTools clip loader that consumes the blob (see :data:`CLIP_LOADER_KEY`), owned
+by the ImitationLearningTools submodule. It is the one place that spelling is
+allowed to appear, and nothing in this repo should branch on it.
+
+This module owns reading, validating, and writing the blob. It is deliberately
+stdlib-only (json/pathlib/hashlib) so scripts and tests can load a manifest by
+file path without importing the ``isaaclab_imitation`` package (which registers
+Isaac tasks on import). The environment-facing configuration built on top of it
+lives in :mod:`motion_data`.
 """
 
 from __future__ import annotations
@@ -34,21 +42,19 @@ from typing import Any
 PACKAGE_ROOT = Path(__file__).resolve().parents[3]
 MANIFESTS_DIR = PACKAGE_ROOT / "manifests"
 
-# Known dataset families and manifest roles. ``metadata.family`` identifies
-# which motion-data lineage a manifest belongs to; ``metadata.role`` records
-# what the manifest is for in the experiment workflow.
-MOTION_MANIFEST_FAMILIES = ("lafan1", "dance102", "bones_seed", "unified")
-MOTION_MANIFEST_ROLES = ("debug", "daily", "testing", "headline")
+# The ILTools loader that consumes a clip manifest, and the payload key it
+# reads its entries from. This is a submodule contract (see
+# ``iltools/datasets/loaders.py``), which is why the spelling is historical:
+# it is the ONLY place a dataset name appears as a code identifier, and it is
+# passed through to the loader rather than branched on.
+CLIP_LOADER_KEY = "lafan1_csv"
 
-# Conventional role for each family when a writer does not pass one
-# explicitly: dance102 is the quick debug set, lafan1 the daily driver,
-# unified the cross-dataset testing merge, and bones_seed the headline data.
-DEFAULT_ROLE_BY_FAMILY = {
-    "lafan1": "daily",
-    "dance102": "debug",
-    "bones_seed": "headline",
-    "unified": "testing",
-}
+# ``metadata.family`` names the motion-data lineage a manifest describes and
+# ``metadata.role`` what it is for in the experiment workflow. Both are
+# free-form labels about the *data*: they are carried through, used to make
+# cache directories self-describing, and never branched on, so a new dataset
+# needs no code change here. These are the families in use today.
+KNOWN_MANIFEST_FAMILIES = ("lafan1", "dance102", "bones_seed", "unified")
 
 # Entry keys carried through normalization beyond the required
 # name/path/input_fps(/frame_range) set. The ILTools ``Lafan1CsvLoader``
@@ -57,7 +63,7 @@ DEFAULT_ROLE_BY_FAMILY = {
 _PRESERVED_ENTRY_KEYS = ("source_dataset", "source_motion_name")
 
 
-def normalize_lafan1_entries(
+def normalize_clip_entries(
     entries_like: list[dict[str, Any]],
     *,
     base_dir: str | Path | None = None,
@@ -115,32 +121,35 @@ def normalize_lafan1_entries(
     return entries
 
 
-def load_lafan1_manifest(
+def load_clip_manifest(
     manifest_path: str | Path,
 ) -> tuple[Path, list[dict[str, Any]]]:
-    """Load manifest entries and resolve relative motion paths against the manifest file."""
+    """Load manifest entries and resolve relative clip paths against the manifest file."""
     manifest_file = Path(manifest_path).expanduser().resolve()
     if not manifest_file.is_file():
-        raise FileNotFoundError(f"lafan1_manifest_path not found: {manifest_file}")
+        raise FileNotFoundError(f"Clip manifest not found: {manifest_file}")
 
     data = json.loads(manifest_file.read_text(encoding="utf-8"))
     if isinstance(data, dict):
-        entries_like = data.get("dataset", {}).get("trajectories", {}).get("lafan1_csv")
+        entries_like = (
+            data.get("dataset", {}).get("trajectories", {}).get(CLIP_LOADER_KEY)
+        )
         if entries_like is None:
-            entries_like = data.get("lafan1_csv", data.get("motions", data))
+            entries_like = data.get(CLIP_LOADER_KEY, data.get("motions", data))
     else:
         entries_like = data
 
     if not isinstance(entries_like, list) or len(entries_like) == 0:
         raise ValueError(
-            "Manifest must define a non-empty `dataset.trajectories.lafan1_csv` list."
+            f"Manifest must define a non-empty `dataset.trajectories.{CLIP_LOADER_KEY}` "
+            f"list: {manifest_file}"
         )
 
-    entries = normalize_lafan1_entries(entries_like, base_dir=manifest_file.parent)
+    entries = normalize_clip_entries(entries_like, base_dir=manifest_file.parent)
     return manifest_file, entries
 
 
-def load_lafan1_manifest_loader_options(manifest_path: str | Path) -> dict[str, int]:
+def load_clip_loader_options(manifest_path: str | Path) -> dict[str, int]:
     """Load optional ILTools loader options from manifest metadata."""
     manifest_file = Path(manifest_path).expanduser().resolve()
     data = json.loads(manifest_file.read_text(encoding="utf-8"))
@@ -164,7 +173,7 @@ def load_lafan1_manifest_loader_options(manifest_path: str | Path) -> dict[str, 
     return options
 
 
-def infer_npz_manifest_control_freq(entries: list[dict[str, Any]]) -> float | None:
+def infer_manifest_control_freq(entries: list[dict[str, Any]]) -> float | None:
     """Infer a single control frequency from NPZ manifest entries.
 
     CSV manifests often describe source data that still needs resampling, so timing is
@@ -188,7 +197,7 @@ def infer_npz_manifest_control_freq(entries: list[dict[str, Any]]) -> float | No
     return None
 
 
-def build_lafan1_loader_kwargs(
+def build_clip_loader_kwargs(
     *,
     entries: list[dict[str, Any]],
     sim_dt: float,
@@ -198,22 +207,28 @@ def build_lafan1_loader_kwargs(
     dataset_name: str = "lafan1",
     canonical_joint_names: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Build normalized LAFAN1 loader kwargs from resolved source entries.
+    """Build the ILTools clip-loader call arguments from resolved clip entries.
+
+    These are call arguments, not configuration: everything here is derived
+    from the environment config and the manifest, so the result is built at
+    resolution time and never stored as a config field.
 
     ``joint_names`` is the *native* joint-order fallback used only for sources
     whose NPZ carries no ``joint_names``. ``canonical_joint_names`` (when given)
     is the order every trajectory is unified to at zarr-build time (the robot
     articulation order), so training reads a single canonical layout.
+    ``dataset_name`` is a provenance label the loader records; it defaults to
+    the historical value so cache identities stay stable.
     """
-    normalized_entries = normalize_lafan1_entries(copy.deepcopy(entries))
+    normalized_entries = normalize_clip_entries(copy.deepcopy(entries))
     if len(normalized_entries) == 0:
-        raise ValueError("LAFAN1 loader entries must be a non-empty list.")
+        raise ValueError("Clip loader entries must be a non-empty list.")
     if control_freq is None:
         control_freq = 1.0 / (float(sim_dt) * float(decimation))
 
     loader_kwargs: dict[str, Any] = {
         "dataset_name": str(dataset_name),
-        "dataset": {"trajectories": {"lafan1_csv": normalized_entries}},
+        "dataset": {"trajectories": {CLIP_LOADER_KEY: normalized_entries}},
         "control_freq": float(control_freq),
         "sim": {"dt": float(sim_dt)},
         "decimation": int(decimation),
@@ -229,7 +244,7 @@ def _sanitize_cache_name(value: str) -> str:
     return name or "manifest"
 
 
-def dataset_path_from_entries(
+def cache_dir_from_entries(
     entries: list[dict[str, Any]],
     *,
     manifest_path: str | Path | None = None,
@@ -237,16 +252,14 @@ def dataset_path_from_entries(
 ) -> str:
     """Create a stable cache path tied to the manifest identity and entries.
 
-    The cache directory name is prefixed with the manifest's ``family``
-    (fallback ``"lafan1"`` when absent) so caches self-describe, e.g.
-    ``iltools_g1_bones_seed_tracking_*`` instead of a family-agnostic
-    ``iltools_g1_lafan1_tracking_*``. This changes cache directory names for
-    NEW resolutions only: the content digest is computed exactly as before,
-    previously built caches simply become cold, and ``refresh_zarr_dataset``
-    semantics are untouched.
+    The directory name is prefixed with the manifest's ``family`` so caches
+    self-describe (``iltools_g1_bones_seed_tracking_*``). The two ``"lafan1"``
+    fallbacks below are frozen spellings, not defaults worth generalizing:
+    changing either would rename -- and therefore invalidate -- every cache
+    built before this function existed.
     """
     cache_root = Path(
-        os.environ.get("ISAACLAB_IMITATION_LAFAN1_ZARR_CACHE_ROOT", "/tmp")
+        os.environ.get("ISAACLAB_IMITATION_MOTION_CACHE_ROOT", "/tmp")
     ).expanduser()
     resolved_manifest_path = None
     manifest_name = "lafan1"
@@ -307,7 +320,7 @@ def load_manifest_family(manifest_path: str | Path) -> str | None:
 def read_manifest(manifest_path: str | Path) -> dict[str, Any]:
     """Read and validate a motion-dataset manifest, returning the raw payload.
 
-    Motion paths are NOT resolved here; use :func:`load_lafan1_manifest` for
+    Motion paths are NOT resolved here; use :func:`load_clip_manifest` for
     resolved loader entries. Legacy manifests without ``metadata.family`` or
     ``metadata.role`` are accepted (the accessors return None for them).
     """
@@ -318,10 +331,10 @@ def read_manifest(manifest_path: str | Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"Manifest root must be a JSON object: {manifest_file}")
 
-    entries = payload.get("dataset", {}).get("trajectories", {}).get("lafan1_csv")
+    entries = payload.get("dataset", {}).get("trajectories", {}).get(CLIP_LOADER_KEY)
     if not isinstance(entries, list) or len(entries) == 0:
         raise ValueError(
-            "Manifest must define a non-empty `dataset.trajectories.lafan1_csv` "
+            f"Manifest must define a non-empty `dataset.trajectories.{CLIP_LOADER_KEY}` "
             f"list: {manifest_file}"
         )
     for index, entry in enumerate(entries):
@@ -343,19 +356,6 @@ def read_manifest(manifest_path: str | Path) -> dict[str, Any]:
     if metadata is not None and not isinstance(metadata, dict):
         raise ValueError(f"Manifest `metadata` must be a mapping: {manifest_file}")
 
-    family = manifest_family(payload)
-    if family is not None and family not in MOTION_MANIFEST_FAMILIES:
-        raise ValueError(
-            f"Manifest metadata.family={family!r} is not one of "
-            f"{MOTION_MANIFEST_FAMILIES}: {manifest_file}"
-        )
-    role = manifest_role(payload)
-    if role is not None and role not in MOTION_MANIFEST_ROLES:
-        raise ValueError(
-            f"Manifest metadata.role={role!r} is not one of "
-            f"{MOTION_MANIFEST_ROLES}: {manifest_file}"
-        )
-
     return payload
 
 
@@ -368,19 +368,18 @@ def write_manifest(
     family: str,
     role: str | None = None,
 ) -> dict[str, Any]:
-    """Write the canonical motion-dataset manifest blob and return the payload.
+    """Write the canonical clip-manifest blob and return the payload.
 
     ``metadata`` is carried through verbatim with ``family`` and ``role``
-    merged in. When ``role`` is None it defaults from
-    :data:`DEFAULT_ROLE_BY_FAMILY`. The file is written with sorted keys,
-    2-space indentation, and a trailing newline.
+    merged in. Both are free-form labels describing the data (see
+    :data:`KNOWN_MANIFEST_FAMILIES`); a new dataset needs no change here. The
+    file is written with sorted keys, 2-space indentation, and a trailing
+    newline.
     """
-    if family not in MOTION_MANIFEST_FAMILIES:
-        raise ValueError(f"family={family!r} is not one of {MOTION_MANIFEST_FAMILIES}.")
-    if role is None:
-        role = DEFAULT_ROLE_BY_FAMILY[family]
-    if role not in MOTION_MANIFEST_ROLES:
-        raise ValueError(f"role={role!r} is not one of {MOTION_MANIFEST_ROLES}.")
+    if not str(family).strip():
+        raise ValueError("family must be a non-empty label naming the data lineage.")
+    if role is not None and not str(role).strip():
+        raise ValueError("role must be a non-empty label when given.")
     if not isinstance(entries, list) or len(entries) == 0:
         raise ValueError("Manifest entries must be a non-empty list.")
     for index, entry in enumerate(entries):
@@ -396,11 +395,14 @@ def write_manifest(
         raise ValueError("Manifest metadata must be a mapping.")
 
     merged_metadata = dict(metadata)
-    merged_metadata["family"] = family
-    merged_metadata["role"] = role
+    merged_metadata["family"] = str(family)
+    if role is not None:
+        merged_metadata["role"] = str(role)
     payload: dict[str, Any] = {
         "dataset_name": str(dataset_name),
-        "dataset": {"trajectories": {"lafan1_csv": [dict(entry) for entry in entries]}},
+        "dataset": {
+            "trajectories": {CLIP_LOADER_KEY: [dict(entry) for entry in entries]}
+        },
         "metadata": merged_metadata,
     }
 

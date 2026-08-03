@@ -225,8 +225,8 @@ def _pretrain_cmd(args: argparse.Namespace, output_dir: Path) -> list[str]:
         cmd.extend(["--wandb_run_name", f"{output_dir.name}_pretrain"])
     cmd.extend(
         [
-            f"env.lafan1_manifest_path={_repo_path(args.manifest_path)}",
-            f"env.dataset_path={_repo_path(args.dataset_path)}",
+            f"env.data.manifest={_repo_path(args.manifest_path)}",
+            f"env.data.cache_dir={_repo_path(args.dataset_path)}",
         ]
     )
     cmd.extend(args.pretrain_override)
@@ -320,8 +320,8 @@ def _train_cmd(
         f"agent.ipmd.hl_skill_anchor_coeff={args.hl_skill_anchor_coeff}",
         f"agent.ipmd.hl_skill_offline_diffsr_coeff={args.hl_skill_offline_coeff}",
         f"agent.ipmd.hl_skill_lr={args.hl_skill_lr}",
-        f"env.lafan1_manifest_path={_repo_path(args.manifest_path)}",
-        f"env.dataset_path={_repo_path(args.dataset_path)}",
+        f"env.data.manifest={_repo_path(args.manifest_path)}",
+        f"env.data.cache_dir={_repo_path(args.dataset_path)}",
     ]
     if args.wandb_entity:
         hydra_overrides.append(f"agent.logger.entity={args.wandb_entity}")

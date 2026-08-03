@@ -117,13 +117,20 @@ TUNED_OVERRIDES=(
 
 ssh_ice() { ssh -o BatchMode=yes -o ConnectTimeout=10 ice "$@"; }
 
+# The container sees the data under /data; the login node sees the same tree under
+# REMOTE_DATA_ROOT. Deriving the remote paths from the container ones keeps the
+# gate honest for any dataset instead of only the LAFAN1 tree it was written for.
+remote_of() { printf '%s' "${REMOTE_DATA_ROOT}${1#/data}"; }
+
 check_gates() {
-    local sha n bytes
-    sha="$(ssh_ice "sha256sum '${REMOTE_DATA_ROOT}/lafan1_corrected_8e95d557/manifests/g1_lafan1_manifest.json'" | awk '{print $1}')"
-    n="$(ssh_ice "find '${REMOTE_DATA_ROOT}/lafan1_corrected_8e95d557' -type f -name '*.npz' | wc -l")"
+    local sha n bytes manifest_remote data_remote
+    manifest_remote="$(remote_of "${MANIFEST_PATH}")"
+    data_remote="$(dirname "$(dirname "${manifest_remote}")")"
+    sha="$(ssh_ice "sha256sum '${manifest_remote}'" | awk '{print $1}')"
+    n="$(ssh_ice "find '${data_remote}' -type f -name '*.npz' | wc -l")"
     [[ "${sha}" == "${EXPECTED_MANIFEST_SHA256}" && "${n}" == "${EXPECTED_NPZ_COUNT}" ]] \
-        || fail "corrected-LAFAN1 gate failed: sha=${sha} npz=${n}"
-    echo "[PASS] corrected-LAFAN1 manifest sha + NPZ count"
+        || fail "dataset gate failed for ${manifest_remote}: sha=${sha} npz=${n}"
+    echo "[PASS] manifest sha + NPZ count (${n}) for $(basename "${MANIFEST_PATH}")"
     bytes="$(ssh_ice "if [ -s '${ENCODER_CKPT_REMOTE}' ]; then stat -c %s '${ENCODER_CKPT_REMOTE}'; else echo 0; fi")"
     (( bytes > 1000000 )) || fail "encoder missing/truncated (${bytes} B): ${ENCODER_CKPT_REMOTE}"
     echo "[PASS] skill encoder present (${bytes} bytes)"
@@ -171,9 +178,9 @@ cmd=(./docker/cluster/cluster_interface.sh -c ice_runtime job
     physics=newton_mjwarp
     "env.sim.physics.solver_cfg.njmax=${NJMAX}"
     "env.sim.physics.solver_cfg.nconmax=${NCONMAX}"
-    "env.lafan1_manifest_path=${MANIFEST_PATH}"
-    "env.dataset_path=${DATASET_PATH}"
-    env.refresh_zarr_dataset=false
+    "env.data.manifest=${MANIFEST_PATH}"
+    "env.data.cache_dir=${DATASET_PATH}"
+    env.data.cache_refresh=false
     "env.command_interface.actor.dim=${LATENT_COMMAND_DIM}"
     "agent.ipmd.latent_dim=${LATENT_COMMAND_DIM}"
     agent.ipmd.command_source=hl_skill

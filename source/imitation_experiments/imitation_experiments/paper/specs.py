@@ -453,7 +453,7 @@ LATENT_MODES: dict[str, LatentModeSpec] = {
         name="future_cvae",
         lineage="online",
         online_method="future_cvae",
-        task="Isaac-Imitation-G1-Latent-FutureCVAE-v0",
+        task="Isaac-Imitation-G1-CVAE-v0",
         notes=(
             "Conditional VAE over the current-and-future window, trained jointly "
             "with the policy. There is no offline DiffSR pretrain for this arm: "
@@ -465,14 +465,14 @@ LATENT_MODES: dict[str, LatentModeSpec] = {
         name="patch_vqvae",
         lineage="online",
         online_method="patch_vqvae",
-        task="Isaac-Imitation-G1-Latent-VQVAE-v0",
+        task="Isaac-Imitation-G1-VQVAE-v0",
         notes="Online VQ-VAE over a causal past window.",
     ),
     "per_step_vq_sequence": LatentModeSpec(
         name="per_step_vq_sequence",
         lineage="online",
         online_method="per_step_vq_sequence",
-        task="Isaac-Imitation-G1-Latent-PerStepVQ-v0",
+        task="Isaac-Imitation-G1-PerStepVQ-v0",
         notes="Per-step VQ token sequence consumed as a token plan.",
     ),
 }

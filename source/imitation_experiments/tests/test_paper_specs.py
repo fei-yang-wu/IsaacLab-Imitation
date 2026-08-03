@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from _paper_specs import build_explicit_interface, get_interface
+from imitation_experiments.paper.specs import (
+    build_explicit_interface,
+    get_interface,
+)
 
 
 def test_root_points5_pose_width_and_term_order() -> None:

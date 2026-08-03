@@ -399,9 +399,13 @@ from tensordict.nn import InteractionType
 from torchrl.envs import Compose, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 
-from imitation_experiments.lowlevel.low_level_tracker import load_frozen_low_level_tracker  # noqa: E402
+from imitation_experiments.lowlevel.low_level_tracker import (
+    load_frozen_low_level_tracker,
+)  # noqa: E402
 from imitation_experiments.data.balanced_motion_rows import BalancedMotionRowSelector  # noqa: E402
-from imitation_experiments.provenance.paper_protocol_metadata import interval_event_metadata  # noqa: E402
+from imitation_experiments.provenance.paper_protocol_metadata import (
+    interval_event_metadata,
+)  # noqa: E402
 from imitation_experiments.planner.planner_latency import PlannerForwardTimer  # noqa: E402
 
 
@@ -459,9 +463,7 @@ def _configure_base_only_termination(
         func=_imitation_mdp.root_height_below_minimum,
         params={
             "minimum_height": float(minimum_height),
-            "asset_cfg": SceneEntityCfg(
-                "robot", body_names=FALL_TERMINATION_BODY_NAME
-            ),
+            "asset_cfg": SceneEntityCfg("robot", body_names=FALL_TERMINATION_BODY_NAME),
         },
     )
     names = set(getattr(terminations, "__dict__", {}).keys())
@@ -491,6 +493,9 @@ from isaaclab_imitation.contracts.command_publisher import (  # noqa: E402
     renewal_env_ids as publisher_renewal_env_ids,
 )
 from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids  # noqa: E402
+from isaaclab_imitation.tasks.manager_based.imitation.motion_data import (
+    apply_motion_data,
+)
 
 from imitation_experiments.evaluation.closed_loop_metrics import FallTracker  # noqa: E402
 from imitation_experiments.planner.interface_planner_common import (  # noqa: E402
@@ -1181,9 +1186,7 @@ def _current_reference_command_terms(
         ref_kwargs["anchor_body_name"] = str(anchor_body_name)
     term_names = _interface_command_term_names(interface)
     resolved_past_steps = (
-        int(args_cli.command_past_steps)
-        if past_steps is None
-        else int(past_steps)
+        int(args_cli.command_past_steps) if past_steps is None else int(past_steps)
     )
     resolved_future_steps = (
         int(args_cli.command_future_steps)
@@ -1424,11 +1427,7 @@ def _require_streamed_tracker_checkpoint_contract(
         raise ValueError(
             "Planner checkpoint is incompatible with the runtime streamed-vanilla "
             f"contract: {mismatches}."
-            + (
-                ""
-                if not waived
-                else f" (recorded diagnostic waivers: {waived})"
-            )
+            + ("" if not waived else f" (recorded diagnostic waivers: {waived})")
         )
     if waived:
         print(
@@ -1555,9 +1554,6 @@ def main(
             "Temporal ensembling requires a prediction horizon longer than the "
             "execution window."
         )
-    execution_layout = PacketLayout(
-        packet_layout.term_widths, packet_frames=execution_frames
-    )
     execution_target_spec = InterfaceTargetSpec(
         interface=target_spec.interface,
         term_names=target_spec.term_names,
@@ -1680,27 +1676,28 @@ def main(
         if args_cli.motion_manifest is not None
         else None
     )
-    if args_cli.dataset_path is not None:
-        env_cfg.dataset_path = str(args_cli.dataset_path.expanduser().resolve())
-    if motion_manifest is not None:
-        env_cfg.lafan1_manifest_path = str(motion_manifest)
-        resolve_manifest_config = getattr(env_cfg, "_resolve_manifest_config", None)
-        if callable(resolve_manifest_config):
-            resolve_manifest_config(
-                dataset_path_explicit=args_cli.dataset_path is not None
-            )
-    if str(args_cli.motion_name).strip():
-        env_cfg.motions = [str(args_cli.motion_name).strip()]
-    if hasattr(env_cfg, "refresh_zarr_dataset"):
-        env_cfg.refresh_zarr_dataset = bool(args_cli.refresh_zarr_dataset)
+    apply_motion_data(
+        env_cfg,
+        manifest=motion_manifest,
+        cache_dir=(
+            args_cli.dataset_path.expanduser().resolve()
+            if args_cli.dataset_path is not None
+            else None
+        ),
+        clips=(
+            [str(args_cli.motion_name).strip()]
+            if str(args_cli.motion_name).strip()
+            else None
+        ),
+        cache_refresh=bool(args_cli.refresh_zarr_dataset),
+        wrap_steps=False,
+    )
     if hasattr(env_cfg, "reference_start_frame"):
         env_cfg.reference_start_frame = int(args_cli.reference_start_frame)
     if hasattr(env_cfg, "random_reset_full_trajectory"):
         env_cfg.random_reset_full_trajectory = False
     if hasattr(env_cfg, "reset_schedule"):
         env_cfg.reset_schedule = str(args_cli.reset_schedule)
-    if hasattr(env_cfg, "wrap_steps"):
-        env_cfg.wrap_steps = False
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
@@ -1975,8 +1972,7 @@ def main(
             ),
             "early_terminations_enabled": True,
             "tracking_terminations_enabled": not bool(
-                args_cli.disable_tracking_terminations
-                or args_cli.base_only_termination
+                args_cli.disable_tracking_terminations or args_cli.base_only_termination
             ),
             "base_only_termination": bool(args_cli.base_only_termination),
             "fall_height_m": float(args_cli.fall_height_m),
@@ -2878,8 +2874,7 @@ def main(
             ),
             "early_terminations_enabled": True,
             "tracking_terminations_enabled": not bool(
-                args_cli.disable_tracking_terminations
-                or args_cli.base_only_termination
+                args_cli.disable_tracking_terminations or args_cli.base_only_termination
             ),
             "base_only_termination": bool(args_cli.base_only_termination),
             "fall_height_m": float(args_cli.fall_height_m),

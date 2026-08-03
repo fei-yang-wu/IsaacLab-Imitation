@@ -53,11 +53,11 @@ from isaaclab.utils.configclass import configclass
 
 from ....imitation_env_cfg import ImitationLearningEnvCfg
 from ....motion_manifest import (
-    build_lafan1_loader_kwargs,
-    dataset_path_from_entries,
-    infer_npz_manifest_control_freq,
-    load_lafan1_manifest,
-    load_lafan1_manifest_loader_options,
+    build_clip_loader_kwargs,
+    cache_dir_from_entries,
+    infer_manifest_control_freq,
+    load_clip_manifest,
+    load_clip_loader_options,
     load_manifest_family,
 )
 from .actions import G1ActionsCfg
@@ -103,9 +103,143 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     terminations = G1TerminationsCfg()  # type: ignore
     events = G1EventCfg()
 
-    device: str = "cuda"
+    # ------------------------------------------------------------------
+    # Dataset surface of the LEGACY (v0/v1) environments.
+    #
+    # Relocated here from `ImitationLearningEnvCfg` on 2026-08-03: only
+    # `ImitationRLEnvLegacy` reads these. The v2 environment configures its
+    # motion data through `MotionDataCfg` (`env.data.*`), and inheriting a
+    # second, silently-ignored dataset surface is exactly the ambiguity that
+    # redesign removed -- so the shared base no longer declares one.
+    # ------------------------------------------------------------------
+    # Dataset settings
+    dataset_type: str = "zarr"
+    # Dataset and cache settings for ImitationRLEnv
+    dataset_path: str = "/tmp/iltools_zarr"
+    window_size: int = 64  # Window size for per-env cache
+    batch_size: int = 1  # Batch size for Zarr prefetching
+    device: str = "cuda"  # Torch device
+    # Device holding the reference replay buffer. "cuda:0" keeps every
+    # transition in VRAM (fastest: a 4096-row gather is ~15 us). Use "cpu" when
+    # the reference set is larger than the GPU -- TorchRL then builds a
+    # LazyMemmapStorage and the trajectory manager copies each sampled batch to
+    # the compute device. Measured cost of the CPU path is ~1.3 ms per 4096-row
+    # gather, a few percent of a control step at 4096 environments.
+    dataset_storage_device: str = "cuda:0"
+    # Reusable on-disk home for the CPU memmap buffer. CPU storage only. When
+    # this directory already holds a matching build, the buffer is memory-mapped
+    # in milliseconds instead of refilled from Zarr -- filling costs about 66 ms
+    # per trajectory plus 53 us per frame, i.e. hours for a 129,785-clip set,
+    # and every job start would otherwise pay it. None keeps the old behaviour
+    # of a throwaway temp directory.
+    dataset_storage_persist_dir: str | None = None
+    # Content identity for that buffer, which makes it relocatable: set it to
+    # something naming the source content (the manifest sha256, a dataset
+    # release tag) and the buffer can be built once on one machine, copied to a
+    # compute node, and reopened there without the Zarr being present at all.
+    # Leave None only when the buffer is built and consumed in place, where the
+    # absolute Zarr path is used as the identity instead.
+    dataset_storage_persist_id: str | None = None
+    # Force a refill of dataset_storage_persist_dir. A persisted buffer is NOT
+    # invalidated by a Zarr rebuilt in place, nor by a persist_id reused for
+    # changed content; set this whenever the source content changes.
+    dataset_storage_persist_rebuild: bool = False
+    # Restrict which Zarr arrays are loaded into the reference buffer. None
+    # loads every key. This is the main lever on buffer size: for a 30-body G1
+    # tree the full key set is 2,696 B/frame, of which the eight transition-
+    # aligned `next_*` duplicates are 568 B (21%).
+    # NOTE: this cannot be named `keys` -- that shadows dict-like access on the
+    # config object and silently resolves to a bound method rather than a field.
+    dataset_keys: list[str] | None = None
+    loader_type: str = "lafan1_csv"  # Loader type (required if Zarr does not exist)
+    loader_kwargs: dict = {
+        "dataset": {"trajectories": {"lafan1_csv": []}},
+    }  # Loader kwargs (required if Zarr does not exist)
+    dataset: dict = {
+        "trajectories": {
+            "default": ["walk"],
+            "amass": [],
+            "lafan1": [],
+        }
+    }
     replay_reference: bool = False
     replay_only: bool = False
+    # Reference joint names for the robot from the historical G1 reference qpos order.
+    reference_joint_names: list[str] = [
+        "root_x",
+        "root_y",
+        "root_z",
+        "root_qw",
+        "root_qx",
+        "root_qy",
+        "root_qz",
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_hip_yaw_joint",
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint",
+        "right_hip_yaw_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
+        "torso_joint",
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_pitch_joint",
+        "left_elbow_roll_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_pitch_joint",
+        "right_elbow_roll_joint",
+    ]
+
+    # Target joint names for the robot from the reference qpos order (this is the order of G1 in IsaacLab)
+    target_joint_names: list[str] = [
+        "root_x",
+        "root_y",
+        "root_z",
+        "root_qw",
+        "root_qx",
+        "root_qy",
+        "root_qz",
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_hip_yaw_joint",
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint",
+        "right_hip_yaw_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
+        "torso_joint",
+        "left_shoulder_pitch_joint",
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_pitch_joint",
+        "left_elbow_roll_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_pitch_joint",
+        "right_elbow_roll_joint",
+    ]
+
+    # Bodies used for the root-relative MPJPE training metric; empty disables
+    # it. This cannot be expressed as a ``RewTerm`` with ``weight=0.0`` because
+    # the reward manager skips zero-weight terms without calling them, so the
+    # env logs it on a dedicated ``Metrics/`` channel instead. Set this to the
+    # same body set the closed-loop evaluators use so the training curve and
+    # the evaluation number mean the same thing.
+    mpjpe_metric_body_names: list[str] = []
+
     reference_start_frame: int = 0
     latent_command_dim: int = 64
     latent_patch_past_steps: int = 0
@@ -625,7 +759,7 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     ) -> None:
         if timing_explicit or not bool(self.sync_control_rate_to_manifest):
             return
-        control_freq = infer_npz_manifest_control_freq(source_entries)
+        control_freq = infer_manifest_control_freq(source_entries)
         if control_freq is None:
             return
         self._set_control_frequency(control_freq)
@@ -640,10 +774,8 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         if self.lafan1_manifest_path is None:
             return
 
-        _, manifest_entries = load_lafan1_manifest(self.lafan1_manifest_path)
-        manifest_loader_options = load_lafan1_manifest_loader_options(
-            self.lafan1_manifest_path
-        )
+        _, manifest_entries = load_clip_manifest(self.lafan1_manifest_path)
+        manifest_loader_options = load_clip_loader_options(self.lafan1_manifest_path)
         loader_chunk_size = self.lafan1_loader_chunk_size
         if loader_chunk_size is None:
             loader_chunk_size = manifest_loader_options.get("chunk_size")
@@ -655,7 +787,7 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
             timing_explicit=timing_explicit,
         )
         self.loader_type = "lafan1_csv"
-        self.loader_kwargs = build_lafan1_loader_kwargs(
+        self.loader_kwargs = build_clip_loader_kwargs(
             entries=manifest_entries,
             sim_dt=float(self.sim.dt),
             decimation=int(self.decimation),
@@ -666,7 +798,7 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         if dataset_path_explicit and self.dataset_path is not None:
             self.dataset_path = str(Path(self.dataset_path).expanduser().resolve())
         else:
-            self.dataset_path = dataset_path_from_entries(
+            self.dataset_path = cache_dir_from_entries(
                 manifest_entries,
                 manifest_path=self.lafan1_manifest_path,
                 family=load_manifest_family(self.lafan1_manifest_path),

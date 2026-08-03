@@ -140,15 +140,25 @@ ssh_ice() {
     ssh -o BatchMode=yes -o ConnectTimeout=10 ice "$@"
 }
 
+# The gate checks the manifest this run will actually load, derived from
+# MANIFEST_PATH, rather than a hard-coded LAFAN1 path. With the path fixed in
+# the gate but MANIFEST_PATH overridable, a run pointed at another dataset
+# passed a gate on data it never opened -- the gate has to move with the data or
+# it is decoration.
 check_data_gate() {
-    local actual_sha remote_npz_count
-    actual_sha="$(ssh_ice "sha256sum '${REMOTE_DATA_ROOT}/lafan1_corrected_8e95d557/manifests/g1_lafan1_manifest.json'" | awk '{print $1}')"
-    remote_npz_count="$(ssh_ice "find '${REMOTE_DATA_ROOT}/lafan1_corrected_8e95d557' -type f -name '*.npz' | wc -l")"
+    local remote_manifest data_root actual_sha remote_npz_count
+    remote_manifest="${REMOTE_DATA_ROOT}/${MANIFEST_PATH#/data/}"
+    data_root="${REMOTE_DATA_ROOT}/${MANIFEST_PATH#/data/}"
+    data_root="${data_root%/manifests/*}"
+    actual_sha="$(ssh_ice "sha256sum '${remote_manifest}'" | awk '{print $1}')"
+    remote_npz_count="$(ssh_ice "find '${data_root}' -type f -name '*.npz' | wc -l")"
     if [[ "${actual_sha}" != "${EXPECTED_MANIFEST_SHA256}" || "${remote_npz_count}" != "${EXPECTED_NPZ_COUNT}" ]]; then
-        echo "[ERROR] ICE corrected-LAFAN1 data gate failed: sha=${actual_sha}, npz=${remote_npz_count}." >&2
+        echo "[ERROR] ICE data gate failed for ${remote_manifest}:" >&2
+        echo "[ERROR]   sha=${actual_sha} (expected ${EXPECTED_MANIFEST_SHA256})" >&2
+        echo "[ERROR]   npz=${remote_npz_count} (expected ${EXPECTED_NPZ_COUNT})" >&2
         exit 2
     fi
-    echo "[PASS] corrected-LAFAN1 manifest sha and NPZ count match the frozen protocol."
+    echo "[PASS] manifest sha and NPZ count match for ${remote_manifest}"
 }
 
 check_encoder_gate() {
@@ -213,7 +223,7 @@ submit_pretrain() {
         --pretrain-override physics=newton_mjwarp
         # MUST stay false: the /data cache is shared with every other LAFAN1
         # arm and a refresh=true job rebuilds it underneath them.
-        --pretrain-override env.refresh_zarr_dataset=false
+        --pretrain-override env.data.cache_refresh=false
     )
 
     echo
@@ -267,9 +277,9 @@ submit_lowlevel() {
         physics=newton_mjwarp
         "env.sim.physics.solver_cfg.njmax=${NJMAX}"
         "env.sim.physics.solver_cfg.nconmax=${NCONMAX}"
-        "env.lafan1_manifest_path=${MANIFEST_PATH}"
-        "env.dataset_path=${DATASET_PATH}"
-        env.refresh_zarr_dataset=false
+        "env.data.manifest=${MANIFEST_PATH}"
+        "env.data.cache_dir=${DATASET_PATH}"
+        env.data.cache_refresh=false
         # The published latent width is declared on the actor channel of the
         # command interface; the agent side must match it. The training entry
         # point binds the agent to this interface, so the actor kind

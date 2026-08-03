@@ -36,9 +36,26 @@ TASK_IDS = sorted(
 
 
 def _load_env_cfg(task_id: str):
+    """The task's config as the environment sees it: constructed, then resolved.
+
+    Resolution is what turns a v2 config's declarations into its actual
+    surface (preset selections collapsed, command terms narrowed, anchors
+    stamped), so a layout recorded before it would not be the layout any run
+    uses. Configs with no motion data resolve fine -- the dataset is only
+    required when something actually loads it.
+    """
     entry = gym.spec(task_id).kwargs["env_cfg_entry_point"]
     module_name, class_name = entry.split(":")
-    return getattr(importlib.import_module(module_name), class_name)()
+    cfg = getattr(importlib.import_module(module_name), class_name)()
+    resolve = getattr(cfg, "resolve", None)
+    if callable(resolve):
+        resolve()
+    else:
+        # Legacy v0/v1 configs derive their command surface in their own step.
+        refresh = getattr(cfg, "_refresh_command_observation_terms", None)
+        if callable(refresh):
+            refresh()
+    return cfg
 
 
 def _group_terms(group) -> list[str]:
@@ -52,17 +69,6 @@ def _group_terms(group) -> list[str]:
 
 def _layout(task_id: str) -> dict:
     cfg = _load_env_cfg(task_id)
-    # Record the env-construction layout: the flat v2 configs finalize their
-    # command-mode / whitelist / toggle derivation in resolve_late_overrides()
-    # (legacy v0/v1 surfaces in _refresh_command_observation_terms), which is
-    # what the env actually builds. The fixture is the fixed point either way.
-    resolve = getattr(cfg, "resolve_late_overrides", None)
-    if not callable(resolve):
-        refresh = getattr(cfg, "_refresh_command_observation_terms", None)
-        if callable(refresh):
-            refresh()
-    else:
-        resolve()
     groups = {}
     for field in dataclasses.fields(cfg.observations):
         group = getattr(cfg.observations, field.name)
@@ -77,10 +83,22 @@ def _layout(task_id: str) -> dict:
         "events_class": type(cfg.events).__name__,
         "actions_class": type(cfg.actions).__name__,
         "curriculum": type(cfg.curriculum).__name__ if cfg.curriculum else None,
-        "anchor_body": getattr(cfg, "expert_anchor_body_name", None),
+        "anchor_body": _anchor_body(cfg),
         "command": _command_surface(cfg),
         "groups": groups,
     }
+
+
+def _anchor_body(cfg) -> str | None:
+    """The body anchor-relative terms are expressed in.
+
+    v2 keeps it on the command interface's reference channel, its single home;
+    the frozen v0/v1 configs keep the flat environment field.
+    """
+    interface = getattr(cfg, "command_interface", None)
+    if interface is not None:
+        return interface.reference.anchor_body_name
+    return getattr(cfg, "expert_anchor_body_name", None)
 
 
 def _command_surface(cfg) -> dict:
@@ -245,13 +263,11 @@ def test_refresh_is_identity_for_default_tasks() -> None:
     """The env-construction resolution must not move any registered default."""
     for task_id in TASK_IDS:
         cfg = _load_env_cfg(task_id)
-        resolve = getattr(cfg, "resolve_late_overrides", None)
+        resolve = getattr(cfg, "resolve", None) or getattr(
+            cfg, "_refresh_command_observation_terms", None
+        )
         if not callable(resolve):
-            # Legacy v0/v1 surfaces keep the refresh path.
-            refresh = getattr(cfg, "_refresh_command_observation_terms", None)
-            if not callable(refresh):
-                continue
-            resolve = refresh
+            continue
         before = _layout(task_id)["groups"]
         resolve()
         after = {
@@ -322,7 +338,6 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     """
     v2_cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
     assert v2_cfg.enable_reward_input_observations is False
-    v2_cfg.resolve_late_overrides()
     assert getattr(v2_cfg.observations, "reward_input", None) is None
 
     v1_cfg = _load_env_cfg("Isaac-Imitation-G1-v1")
@@ -331,18 +346,21 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     v0_cfg = _load_env_cfg("Isaac-Imitation-G1-v0")
     assert _group_terms(v0_cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
-    # The single v2 env keeps the v1 opt-in semantics: the env-construction
-    # resolution drops the group at the default (parked) toggle and keeps the
-    # exact v0/v1 term list when the knob is enabled before construction.
-    cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
+    # The single v2 env keeps the v1 opt-in semantics: resolution drops the
+    # group at the default (parked) toggle and keeps the exact v0/v1 term list
+    # when the knob is enabled beforehand -- which is the only order that can
+    # work, because resolution only ever removes from the declared surface.
+    entry = gym.spec("Isaac-Imitation-G1-v2").kwargs["env_cfg_entry_point"]
+    module_name, class_name = entry.split(":")
+    cfg = getattr(importlib.import_module(module_name), class_name)()
     cfg.enable_reward_input_observations = True
-    cfg.resolve_late_overrides()
+    cfg.resolve()
     assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
     for name in ("expert_anchor_pos_b", "expert_anchor_ori_b"):
         term = getattr(cfg.observations.reward_input, name)
-        assert term.params["anchor_body_name"] == cfg.expert_anchor_body_name
+        assert term.params["anchor_body_name"] == _anchor_body(cfg)
     # Resolution stays a fixed point.
-    cfg.resolve_late_overrides()
+    cfg.resolve()
     assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
 

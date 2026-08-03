@@ -16,11 +16,10 @@ Two rules this module exists to enforce:
   to boot; discovering a typo'd checkpoint path after that wastes a scheduler
   slot, and on ICE a wasted slot can mean a wasted 16-hour window.
 
-Scripts import this by inserting their parent directory on ``sys.path``:
+Import it as a package module -- it is installed, so no path manipulation is
+involved from a script, a test, or anywhere else::
 
-    _PAPER_DIR = Path(__file__).resolve().parent.parent
-    sys.path.insert(0, str(_PAPER_DIR))
-    from _paper_common import PipelineError, run_command
+    from imitation_experiments.paper.common import PipelineError, run_command
 """
 
 from __future__ import annotations
@@ -73,7 +72,9 @@ INTERFACE_BASELINES = (
     REPO_ROOT
     / "experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines"
 )
-IMITATION_EXPERIMENTS_PKG = REPO_ROOT / "source/imitation_experiments/imitation_experiments"
+IMITATION_EXPERIMENTS_PKG = (
+    REPO_ROOT / "source/imitation_experiments/imitation_experiments"
+)
 
 SCRIPTS_RLOPT = REPO_ROOT / "scripts/rlopt"
 
@@ -203,7 +204,9 @@ def require_file(value: Any, what: str) -> Path:
     return path
 
 
-def refuse_existing_output(path: str | Path, *, allow_existing: bool, what: str) -> Path:
+def refuse_existing_output(
+    path: str | Path, *, allow_existing: bool, what: str
+) -> Path:
     """Refuse a populated output directory so a partial rerun cannot pass as complete.
 
     Mirrors the gate used by the aggregators and the release-bundle builder.

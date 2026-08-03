@@ -35,7 +35,7 @@ def main() -> None:
         num_envs=int(args_cli.num_envs),
         use_fabric=True,
     )
-    env_cfg.lafan1_manifest_path = str(args_cli.motion_manifest.expanduser().resolve())
+    env_cfg.data.manifest = str(args_cli.motion_manifest.expanduser().resolve())
     resolve_manifest = getattr(env_cfg, "_resolve_manifest_config", None)
     if callable(resolve_manifest):
         resolve_manifest()

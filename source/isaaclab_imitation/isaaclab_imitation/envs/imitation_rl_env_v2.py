@@ -71,79 +71,18 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     behaviorally identical under the same cfg.
     """
 
-    @staticmethod
-    def _lafan_source_entries_from_loader_kwargs(
-        loader_kwargs: Any,
-    ) -> list[dict[str, Any]]:
-        try:
-            entries = loader_kwargs["dataset"]["trajectories"]["lafan1_csv"]
-        except Exception:
-            return []
-        if not isinstance(entries, list):
-            return []
-        return [entry for entry in entries if isinstance(entry, dict)]
-
     def __init__(self, cfg: Any, render_mode: str | None = None, **kwargs: Any) -> None:
         """Initialize the v2 env: planes first, then the base managers."""
         # Get device
         device = torch.device(cfg.sim.device)
         num_envs = int(cfg.scene.num_envs)
 
-        # Isaac Lab 3.0's hydra integration applies `env.*` CLI overrides with
-        # a plain setattr on the config (no `from_dict` round-trip), so a
-        # `env.lafan1_manifest_path=...` override may arrive here without the
-        # manifest-derived loader config having been resolved yet. The flat
-        # v2 configs own exactly one construction-time resolution step
-        # (`resolve_late_overrides`); legacy (v0/v1) configs keep the
-        # `_resolve_manifest_config` + `_refresh_command_observation_terms`
-        # machinery, which the else branch below preserves unchanged.
-        resolve = getattr(cfg, "resolve_late_overrides", None)
-        if callable(resolve):
-            # Preserve values applied after config construction. Isaac Lab's
-            # Hydra integration uses plain setattr for late CLI overrides, so
-            # default resolution would silently replace an explicit cache and
-            # motion subset.
-            configured_dataset_path = getattr(cfg, "dataset_path", None)
-            default_dataset_path = getattr(type(cfg), "dataset_path", "data/lafan1/g1/")
-            resolve(
-                dataset_path_explicit=(
-                    configured_dataset_path is not None
-                    and configured_dataset_path != default_dataset_path
-                ),
-                motions_explicit=getattr(cfg, "motions", None) is not None,
-            )
-        else:
-            if getattr(cfg, "lafan1_manifest_path", None) is not None and not (
-                self._lafan_source_entries_from_loader_kwargs(
-                    getattr(cfg, "loader_kwargs", {})
-                )
-            ):
-                manifest_resolver = getattr(cfg, "_resolve_manifest_config", None)
-                if callable(manifest_resolver):
-                    configured_dataset_path = getattr(cfg, "dataset_path", None)
-                    default_dataset_path = getattr(
-                        type(cfg), "dataset_path", "data/lafan1/g1/"
-                    )
-                    manifest_resolver(
-                        dataset_path_explicit=(
-                            configured_dataset_path is not None
-                            and configured_dataset_path != default_dataset_path
-                        ),
-                        motions_explicit=getattr(cfg, "motions", None) is not None,
-                    )
-
-            # Same plain-setattr gotcha for the command configuration:
-            # `env.command_mode=...` / `env.command_observation_terms=[...]`
-            # can arrive as direct field writes after `__post_init__` already
-            # pruned the observation groups with the class defaults. Re-derive
-            # the pruned command-term set from the final field values before
-            # any manager reads the observation config. Idempotent for
-            # defaults.
-            refresh_command_terms = getattr(
-                cfg, "_refresh_command_observation_terms", None
-            )
-            if callable(refresh_command_terms):
-                refresh_command_terms()
+        # Isaac Lab 3.0 applies `env.*` CLI overrides and preset selections
+        # after the config is constructed, so this is the first moment the
+        # config's field values are final. The v2 configs own exactly one
+        # resolution step, and it needs nothing from here: every derived value
+        # is a function of the fields it can already see.
+        cfg.resolve()
 
         # The declared command interface is the whole command surface. The
         # environment derives only what its data plane and reset path need;

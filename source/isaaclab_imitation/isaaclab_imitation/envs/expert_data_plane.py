@@ -38,7 +38,6 @@ import isaaclab.utils.math as math_utils
 import torch
 import zarr
 from iltools.datasets.lafan1.loader import Lafan1CsvLoader
-from iltools.datasets.loaders import load_dataset_loader
 from iltools.datasets.manager import ParallelTrajectoryManager, ResetSchedule
 from iltools.datasets.utils import make_rb_from
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
@@ -95,43 +94,30 @@ def _convert_reference_quats_to_xyzw(reference: TensorDict) -> TensorDict:
     return reference
 
 
-def _normalize_dataset_keys(raw: Any) -> list[str] | None:
-    """Normalize `env.dataset_keys` into an explicit list of Zarr array names.
-
-    A Hydra override such as ``env.dataset_keys=[qpos,qvel]`` can arrive as
-    the literal string ``"[qpos,qvel]"`` rather than a parsed list. Iterating
-    that string yields single characters, which surfaces much later as a
-    confusing ``KeyError: "Key '[' not found"``, so normalize it here instead.
-    """
-    if raw is None:
-        return None
-    if isinstance(raw, str):
-        text = raw.strip()
-        if text.startswith("[") and text.endswith("]"):
-            text = text[1:-1]
-        names = [part.strip().strip("'\"") for part in text.split(",")]
-    else:
-        names = [str(part).strip().strip("'\"") for part in raw]
-    names = [name for name in names if name]
-    if not names:
-        raise ValueError(
-            "env.dataset_keys was provided but resolved to an empty selection."
-        )
-    return names
+def _zarr_path_of(cache_dir: str) -> Path:
+    """The Zarr store inside a cache directory, or the directory itself."""
+    path = Path(cache_dir)
+    if path.is_dir():
+        store = path / "trajectories.zarr"
+        return store if store.exists() else path
+    return path
 
 
-def _load_loco_mujoco_loader() -> type[Any]:
-    """Import the optional Loco-MuJoCo loader only when requested."""
-    try:
-        loader_cls = load_dataset_loader("loco_mujoco")
-    except ImportError as exc:
-        raise ImportError(
-            "loader_type='loco_mujoco' requires the optional loco-mujoco "
-            "dependencies. Install ImitationLearningTools with its "
-            "`loco-mujoco` extra or select a different loader such as "
-            "'lafan1_csv'."
-        ) from exc
-    return loader_cls
+def _build_zarr_cache(loader_kwargs: dict[str, Any], zarr_path: Path) -> None:
+    """Build the Zarr cache from the resolved clip-loader call arguments."""
+    from omegaconf import DictConfig
+
+    build_kwargs = {
+        key: int(loader_kwargs[key])
+        for key in ("chunk_size", "shard_size")
+        if loader_kwargs.get(key) is not None
+    }
+    _ = Lafan1CsvLoader(
+        cfg=DictConfig(loader_kwargs),
+        build_zarr_dataset=True,
+        zarr_path=str(zarr_path),
+        **build_kwargs,
+    )
 
 
 class ExpertDataPlane:
@@ -151,136 +137,69 @@ class ExpertDataPlane:
         device = torch.device(cfg.sim.device)
         num_envs = int(cfg.scene.num_envs)
 
-        # Get dataset path and determine if we need to create it
-        dataset_path = getattr(cfg, "dataset_path", None)
-        loader_type = getattr(cfg, "loader_type", None)
-        loader_kwargs = getattr(cfg, "loader_kwargs", {})
-        refresh_zarr_dataset = bool(getattr(cfg, "refresh_zarr_dataset", False))
-        if loader_type in ("lafan1_csv", "lafan1"):
-            lafan_source_entries = self._lafan_source_entries_from_loader_kwargs(
-                loader_kwargs
-            )
-            manifest_path = getattr(cfg, "lafan1_manifest_path", None)
-            has_manifest_loader = (
-                manifest_path is not None and len(lafan_source_entries) > 0
-            )
-            has_explicit_loader_setup = (
-                dataset_path is not None and len(lafan_source_entries) > 0
-            )
-            if not has_manifest_loader and not has_explicit_loader_setup:
-                raise ValueError(
-                    "G1 LAFAN tracking tasks now require "
-                    "`env.lafan1_manifest_path=/path/to/manifest.json` for "
-                    "normal use. If you are configuring the env "
-                    "programmatically, provide explicit "
-                    "`loader_kwargs.dataset.trajectories.lafan1_csv` entries "
-                    "and `dataset_path` before env creation."
-                )
-
-        # Build or load the replay buffer and trajectory info
-        if dataset_path is not None:
-            dataset_path = Path(dataset_path)
-            # Check if it's a directory containing trajectories.zarr or the zarr itself
-            if dataset_path.is_dir():
-                zarr_path = dataset_path / "trajectories.zarr"
-                if not zarr_path.exists():
-                    zarr_path = dataset_path  # Assume the directory itself is the zarr
-            else:
-                zarr_path = dataset_path
-
-            # For debugging, optionally force dataset refresh on every run.
-            if refresh_zarr_dataset:
-                if loader_type is None:
-                    raise ValueError(
-                        "refresh_zarr_dataset=True requires loader_type + "
-                        "loader_kwargs so the zarr dataset can be rebuilt."
-                    )
-                if zarr_path.exists():
-                    if zarr_path.is_dir():
-                        shutil.rmtree(zarr_path)
-                    else:
-                        zarr_path.unlink()
-
-            # If zarr doesn't exist and loader is provided, create it
-            if not zarr_path.exists() and loader_type is not None:
-                if loader_type == "loco_mujoco":
-                    from omegaconf import DictConfig
-
-                    loader_cfg = DictConfig(loader_kwargs)
-                    loader_cls = _load_loco_mujoco_loader()
-                    _ = loader_cls(
-                        env_name=loader_kwargs["env_name"],
-                        cfg=loader_cfg,
-                        build_zarr_dataset=True,
-                        zarr_path=str(zarr_path),
-                    )
-                elif loader_type in ("lafan1_csv", "lafan1"):
-                    from omegaconf import DictConfig
-
-                    loader_cfg = DictConfig(loader_kwargs)
-                    loader_build_kwargs = {
-                        key: int(loader_kwargs[key])
-                        for key in ("chunk_size", "shard_size")
-                        if key in loader_kwargs and loader_kwargs[key] is not None
-                    }
-                    _ = Lafan1CsvLoader(
-                        cfg=loader_cfg,
-                        build_zarr_dataset=True,
-                        zarr_path=str(zarr_path),
-                        **loader_build_kwargs,
-                    )
-                else:
-                    raise ValueError(
-                        f"Unsupported loader_type: {loader_type}. "
-                        "Supported loader types: loco_mujoco, lafan1_csv, lafan1."
-                    )
-
-            # Load replay buffer from Zarr
-            datasets = getattr(cfg, "datasets", None)
-            motions = getattr(cfg, "motions", None)
-            traj_names = getattr(cfg, "trajectories", None)
-            # `dataset_keys`, not `keys`: on a dict-like config object `cfg.keys`
-            # resolves to the bound `keys()` method, so the old lookup could
-            # never select a subset and silently loaded every array.
-            keys = _normalize_dataset_keys(getattr(cfg, "dataset_keys", None))
-
-            # The reference replay buffer normally lives in VRAM. A reference
-            # set larger than the GPU (e.g. the 129,785-clip BONES-SEED tree,
-            # about 135 GB of transitions) needs CPU storage instead;
-            # `make_rb_from` then builds a LazyMemmapStorage, and
-            # ParallelTrajectoryManager already indexes on the storage device
-            # and copies each sampled batch to the compute device.
-            storage_device = torch.device(
-                str(getattr(cfg, "dataset_storage_device", "cuda:0"))
-            )
-            storage_persist_dir = getattr(cfg, "dataset_storage_persist_dir", None)
-            rb, traj_info = make_rb_from(
-                zarr_path=str(zarr_path),
-                datasets=datasets,
-                motions=motions,
-                trajectories=traj_names,
-                keys=keys,
-                device=storage_device,
-                persist_dir=storage_persist_dir,
-                persist_id=getattr(cfg, "dataset_storage_persist_id", None)
-                if storage_persist_dir is not None
-                else None,
-                persist_rebuild=bool(
-                    getattr(cfg, "dataset_storage_persist_rebuild", False)
-                ),
-                verbose_tree=False,
-                # Prefetch threads only help the CPU-storage path; on a
-                # GPU-resident buffer the gather is already ~15 us.
-                prefetch=3,
-                # Pinning a >100 GB CPU buffer would exhaust pinned memory and
-                # is unnecessary: samples are copied one small batch at a time.
-                pin_memory=storage_device.type == "cuda",
-            )
-        else:
+        # The dataset layout is derived by `MotionDataCfg.resolve`, which the
+        # environment config runs before the env reaches here. Nothing about
+        # what data to load is decided in this file: it consumes the resolved
+        # answer, so the configuration and the load cannot disagree.
+        data_cfg = cfg.data
+        resolved = cfg.resolved_data
+        if resolved is None:
             raise ValueError(
-                "Either dataset_path must be provided, or loader_type + "
-                "loader_kwargs must be provided to create a new dataset."
+                "No motion data is configured. Set "
+                "`env.data.manifest=/path/to/manifest.json` (a clip manifest to "
+                "build the reference set from) or `env.data.cache_dir=...` (an "
+                "already-built cache to load). If the config was built by hand, "
+                "note that `cfg.resolve()` must run before the env loads."
             )
+
+        zarr_path = _zarr_path_of(resolved.cache_dir)
+        if data_cfg.cache_refresh and zarr_path.exists():
+            if not resolved.can_build:
+                raise ValueError(
+                    "cache_refresh=True would delete the cache with no way to "
+                    "rebuild it: set `env.data.manifest` to the clip manifest "
+                    "the cache was built from."
+                )
+            if zarr_path.is_dir():
+                shutil.rmtree(zarr_path)
+            else:
+                zarr_path.unlink()
+
+        if not zarr_path.exists():
+            if not resolved.can_build:
+                raise FileNotFoundError(
+                    f"No motion cache at {zarr_path} and no manifest to build "
+                    "one from. Set `env.data.manifest=/path/to/manifest.json`."
+                )
+            _build_zarr_cache(resolved.loader_kwargs, zarr_path)
+
+        # The reference replay buffer normally lives in VRAM. A reference set
+        # larger than the GPU (e.g. the 129,785-clip BONES-SEED tree, about
+        # 135 GB of transitions) needs CPU storage instead; `make_rb_from`
+        # then builds a LazyMemmapStorage, and ParallelTrajectoryManager
+        # already indexes on the storage device and copies each sampled batch
+        # to the compute device.
+        storage_device = torch.device(str(data_cfg.storage_device))
+        rb, traj_info = make_rb_from(
+            zarr_path=str(zarr_path),
+            datasets=None,
+            motions=resolved.motions(),
+            trajectories=None,
+            keys=list(data_cfg.keys) if data_cfg.keys else None,
+            device=storage_device,
+            persist_dir=data_cfg.persist_dir,
+            persist_id=(
+                data_cfg.persist_id if data_cfg.persist_dir is not None else None
+            ),
+            persist_rebuild=bool(data_cfg.persist_rebuild),
+            verbose_tree=False,
+            # Prefetch threads only help the CPU-storage path; on a
+            # GPU-resident buffer the gather is already ~15 us.
+            prefetch=3,
+            # Pinning a >100 GB CPU buffer would exhaust pinned memory and
+            # is unnecessary: samples are copied one small batch at a time.
+            pin_memory=storage_device.type == "cuda",
+        )
 
         # Trajectory selection is declared on the reference command channel:
         # the schedule (including the `custom` selector an evaluation driver or
@@ -295,7 +214,7 @@ class ExpertDataPlane:
                 "The reference channel declares schedule='custom' without a "
                 "custom_fn(env_ids, num_trajectories) selector."
             )
-        wrap_steps = getattr(cfg, "wrap_steps", False)
+        wrap_steps = bool(data_cfg.wrap_steps)
         # The env parses the reset-start frame once (`_reference_start_frame`);
         # the trajectory manager's initial cursor uses the same value.
         reference_start_frame = env._reference_start_frame
@@ -305,8 +224,8 @@ class ExpertDataPlane:
                 "The reference command channel's anchor_body_name must be non-empty."
             )
 
-        reference_joint_names = list(getattr(cfg, "reference_joint_names", []))
-        target_joint_names = list(getattr(cfg, "target_joint_names", []))
+        reference_joint_names = list(cfg.reference_joint_names)
+        target_joint_names = list(cfg.target_joint_names)
         dataset_joint_names = self._read_reference_joint_names_from_zarr(zarr_path)
         if len(dataset_joint_names) > 0:
             # The dataset (zarr) is authoritative for the reference joint order.
@@ -401,18 +320,6 @@ class ExpertDataPlane:
     # ------------------------------------------------------------------
     # Reference metadata / joint alignment.
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _lafan_source_entries_from_loader_kwargs(
-        loader_kwargs: Any,
-    ) -> list[dict[str, Any]]:
-        try:
-            entries = loader_kwargs["dataset"]["trajectories"]["lafan1_csv"]
-        except Exception:
-            return []
-        if not isinstance(entries, list):
-            return []
-        return [entry for entry in entries if isinstance(entry, dict)]
 
     def _align_reference_target_joints_to_articulation(self) -> None:
         """Retarget the trajectory manager to the live articulation joint order.

@@ -115,6 +115,9 @@ from isaaclab.envs import (
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
 from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from isaaclab_imitation.tasks.manager_based.imitation.motion_data import (
+    apply_motion_data,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import IPMD, PPO, SAC
 from tensordict import TensorDictBase
@@ -587,14 +590,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         args_cli.device if args_cli.device is not None else env_cfg.sim.device
     )
     env_cfg.log_dir = str(output_npz.parent)
-    if motion_manifest is not None:
-        if not hasattr(env_cfg, "lafan1_manifest_path"):
-            raise TypeError(f"Task {args_cli.task} does not support --motion_manifest.")
-        env_cfg.lafan1_manifest_path = str(motion_manifest)
-        if hasattr(env_cfg, "_resolve_manifest_config"):
-            env_cfg._resolve_manifest_config()
-    if hasattr(env_cfg, "refresh_zarr_dataset"):
-        env_cfg.refresh_zarr_dataset = bool(args_cli.refresh_zarr_dataset)
+    apply_motion_data(
+        env_cfg,
+        manifest=motion_manifest,
+        cache_refresh=bool(args_cli.refresh_zarr_dataset),
+        wrap_steps=False,
+    )
     if hasattr(env_cfg, "reference_start_frame"):
         env_cfg.reference_start_frame = 0
     if hasattr(env_cfg, "random_reset_full_trajectory"):
@@ -605,8 +606,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.random_reset_step_max = 0
     if hasattr(env_cfg, "reset_schedule"):
         env_cfg.reset_schedule = "sequential"
-    if hasattr(env_cfg, "wrap_steps"):
-        env_cfg.wrap_steps = False
     _disable_observation_corruption(env_cfg)
     step_dt = _configured_step_dt(env_cfg)
     if (
