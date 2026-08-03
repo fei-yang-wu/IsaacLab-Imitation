@@ -33,14 +33,45 @@ class G1ImitationPhysicsCfg(PresetCfg):
 
     default = PhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
     physx = PhysxCfg(gpu_max_rigid_patch_count=10 * 2**15)
+    # Aligned to stock CPU MuJoCo, 2026-08-03. Newton MJWarp *is* MuJoCo Warp,
+    # so it can be made to agree with stock MuJoCo -- and in free flight it
+    # already does, to <= 1.7e-6 rad over 13 control steps. Add ground contact
+    # and it leaves both MuJoCo and PhysX, so the remaining differences are all
+    # contact-side.
+    #
+    # A field-by-field diff of `mjw_model.opt` against a CPU MuJoCo model
+    # (`scripts/audit/dump_mjwarp_model_contract.py` prints the whole option
+    # table) found the solver core already identical -- cone, integrator, solver,
+    # iterations, ls_iterations, impratio, gravity, timestep -- and exactly three
+    # differences, closed here:
+    #
+    # 1. `use_mujoco_contacts`: False routed Newton's own collision pipeline into
+    #    MJWarp instead of letting MuJoCo generate the contacts. Verified to
+    #    reach the solver -- it flips `mjw_model.opt.run_collision_detection`.
+    # 2. `nconmax=10` (which MJWarp raises to 18) drops contacts on a 30-body
+    #    self-colliding humanoid; it overflowed in measured rollouts.
+    # 3. `tolerance` defaulted to 1e-6 against stock MuJoCo's 1e-8.
+    #
+    # One residual is NOT reachable from config: MJWarp sets `disableflags` bit
+    # 19, `mjDSBL_MULTICCD`, which stock MuJoCo leaves clear, and
+    # `MJWarpSolverCfg` exposes no `disableflags` field. Fewer contact points per
+    # convex pair is invisible in flight and decisive on the floor, so this is
+    # "as close as the config allows", not parity.
+    #
+    # Do not add a *new* physics preset name for variants of this. Preset
+    # alternatives are matched by name across groups, and
+    # `G1ImitationContactSensorCfg` has no alternative for an unknown name, so it
+    # silently falls back to `default` -- a PhysX contact sensor on a Newton
+    # backend, which dies in `create_rigid_body_view` on a None handle.
     newton_mjwarp = NewtonCfg(
         solver_cfg=MJWarpSolverCfg(
-            njmax=95,
-            nconmax=10,
+            njmax=288,
+            nconmax=200,
             cone="pyramidal",
             impratio=1,
             integrator="implicitfast",
-            use_mujoco_contacts=False,
+            use_mujoco_contacts=True,
+            tolerance=1.0e-8,
         ),
         num_substeps=1,
         debug_mode=False,

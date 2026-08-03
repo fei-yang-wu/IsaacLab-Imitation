@@ -16,12 +16,12 @@ Examples (run from the repository root):
     pixi run -e isaaclab python scripts/bench/diagnose_g1_dynamics.py \
         --task Isaac-Imitation-G1-Latent-v0 --num_envs 128 --steps 500 \
         --assert-kitless physics=newton_mjwarp \
-        env.lafan1_manifest_path=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
+        env.data.manifest=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
 
     pixi run -e isaaclab python scripts/bench/diagnose_g1_dynamics.py \
         --task Isaac-Imitation-G1-Latent-v0 --num_envs 128 --steps 500 \
         physics=physx \
-        env.lafan1_manifest_path=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
+        env.data.manifest=data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
 """
 
 from __future__ import annotations
@@ -36,7 +36,10 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-RUNTIME_HELPER_DIR = SCRIPT_DIR / "rlopt"
+# scripts/bench/ -> scripts/rlopt/. This file used to live in scripts/, and the
+# relative hop was never updated when it moved, so the import failed outright --
+# the same defect already fixed in scripts/audit/dump_backend_index_contract.py.
+RUNTIME_HELPER_DIR = SCRIPT_DIR.parent / "rlopt"
 if str(RUNTIME_HELPER_DIR) not in sys.path:
     sys.path.insert(0, str(RUNTIME_HELPER_DIR))
 
@@ -47,6 +50,12 @@ from runtime_bootstrap import (  # noqa: E402
     install_kit_import_guard,
     requested_backend,
     validate_gpu_policy,
+)
+from imitation_experiments.audit.backend_determinism import (  # noqa: E402
+    RANDOMIZATION_PROFILES,
+    apply_randomization_profile,
+    describe_reference_selection,
+    pin_reference_start,
 )
 from imitation_experiments.lowlevel.oracle_action import live_oracle_action  # noqa: E402
 
@@ -83,7 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--randomization-profile",
-        choices=("none", "startup", "reset", "all"),
+        choices=RANDOMIZATION_PROFILES,
         default="none",
         help=(
             "Select SONIC randomization for attribution: startup keeps asset/domain "
@@ -123,70 +132,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     args_cli, hydra_args = setup_preset_cli(parser, argv)
     sys.argv = [sys.argv[0], *hydra_args]
     return args_cli
-
-
-def _disable_training_randomization(env_cfg: object) -> None:
-    """Keep reference reset wiring but remove its stochastic perturbations."""
-    events = getattr(env_cfg, "events", None)
-    if events is None:
-        return
-    for name in (
-        "physics_material",
-        "add_joint_default_pos",
-        "base_com",
-        "push_robot",
-        "randomize_rigid_body_mass",
-    ):
-        if hasattr(events, name):
-            setattr(events, name, None)
-
-    reset_term = getattr(events, "reset_reference_state", None)
-    if reset_term is None:
-        return
-    reset_term.params["pose_range"] = {
-        key: (0.0, 0.0) for key in ("x", "y", "z", "roll", "pitch", "yaw")
-    }
-    reset_term.params["velocity_range"] = {
-        key: (0.0, 0.0) for key in ("x", "y", "z", "roll", "pitch", "yaw")
-    }
-    reset_term.params["joint_position_range"] = (0.0, 0.0)
-
-
-def _configure_randomization_profile(env_cfg: object, profile: str) -> None:
-    """Select startup and reset randomization independently for attribution."""
-    if profile == "all":
-        return
-    if profile == "none":
-        _disable_training_randomization(env_cfg)
-        return
-
-    events = getattr(env_cfg, "events", None)
-    if events is None:
-        return
-    if hasattr(events, "push_robot"):
-        events.push_robot = None
-
-    if profile == "reset":
-        for name in (
-            "physics_material",
-            "add_joint_default_pos",
-            "base_com",
-            "randomize_rigid_body_mass",
-        ):
-            if hasattr(events, name):
-                setattr(events, name, None)
-        return
-
-    reset_term = getattr(events, "reset_reference_state", None)
-    if reset_term is None:
-        return
-    reset_term.params["pose_range"] = {
-        key: (0.0, 0.0) for key in ("x", "y", "z", "roll", "pitch", "yaw")
-    }
-    reset_term.params["velocity_range"] = {
-        key: (0.0, 0.0) for key in ("x", "y", "z", "roll", "pitch", "yaw")
-    }
-    reset_term.params["joint_position_range"] = (0.0, 0.0)
 
 
 def _apply_sonic_release_overrides(env_cfg: object, *, task_name: str) -> None:
@@ -231,10 +176,9 @@ def _run_probe(env_cfg: object, args_cli: argparse.Namespace, backend: str) -> d
         _apply_sonic_release_overrides(env_cfg, task_name=args_cli.task)
     if args_cli.device is not None:
         env_cfg.sim.device = args_cli.device
+    reference_selection_surface = None
     if not args_cli.full_trajectory_random_starts:
-        env_cfg.random_reset_step_min = 0
-        env_cfg.random_reset_step_max = 0
-        env_cfg.random_reset_full_trajectory = False
+        reference_selection_surface = pin_reference_start(env_cfg, start_frame=0)
     env_cfg.observations.policy.enable_corruption = False
     randomization_profile = args_cli.randomization_profile
     if args_cli.training_randomization:
@@ -243,7 +187,8 @@ def _run_probe(env_cfg: object, args_cli: argparse.Namespace, backend: str) -> d
                 "Use either --training-randomization or --randomization-profile, not both."
             )
         randomization_profile = "all"
-    _configure_randomization_profile(env_cfg, randomization_profile)
+    randomization_kept = apply_randomization_profile(env_cfg, randomization_profile)
+    reference_selection = describe_reference_selection(env_cfg)
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     unwrapped = env.unwrapped
@@ -386,7 +331,14 @@ def _run_probe(env_cfg: object, args_cli: argparse.Namespace, backend: str) -> d
         "action_mode": args_cli.action_mode,
         "training_randomization": randomization_profile == "all",
         "randomization_profile": randomization_profile,
+        "randomization_kept": randomization_kept,
         "full_trajectory_random_starts": bool(args_cli.full_trajectory_random_starts),
+        # Which reset-sampling surface was actually written, and what it now
+        # says. Recorded because pinning silently missed the v2 surface before
+        # `pin_reference_start` existed, and an uncontrolled run is
+        # indistinguishable from a controlled one after the fact otherwise.
+        "reference_selection_surface": reference_selection_surface,
+        "reference_selection": reference_selection,
         "initial_reference_step_min": int(initial_local_steps.min().item()),
         "initial_reference_step_max": int(initial_local_steps.max().item()),
         "initial_reference_step_unique": int(initial_local_steps.unique().numel()),
