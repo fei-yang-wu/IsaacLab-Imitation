@@ -721,12 +721,28 @@ class G1ImitationTunedRLOptIPMDConfig(G1ImitationLatentSonicRLOptIPMDConfig):
 
     Every value below is a measured screen result. What is deliberately NOT here:
 
-    * **Geometry.** 12288 x 12 is unchanged. Rollout length, environment count
-      and batch size were swept extensively (6/24576, 6/12288, 9/16384, 8/24576,
-      4, 3) and at a wall-clock mark every arm actually reached, all variants
-      land within ~3% return of each other with no consistent MPJPE ordering.
-      Earlier readings that appeared to favour a shorter rollout compared arms
-      that had run for different lengths.
+    * **Environment count and batch size.** 12288 environments is unchanged, and
+      raising the count does not help: `s3` (20480 x 6) and `q2` (24576 x 6) do
+      not beat `s1` (12288 x 6).
+
+    What IS changed, and is easy to miss because an earlier revision of this
+    docstring said the opposite:
+
+    * **Rollout length: 12 -> 6** (``collector.frames_per_batch`` below). Scored
+      at 23 training-minutes -- a mark every arm in the campaign reached, so
+      nothing is clamped to its endpoint -- `s1` (6) beats `r0` (12) by **+7.3%
+      return and +6.8% episode length at unchanged MPJPE**, and the two differ in
+      that field and nothing else, verified field by field. The optimum is broad
+      across 4-6 and collapses at 3, where the GAE horizon (gamma 0.97, lambda
+      0.95) is too short. Single seed; the one seed-repeat in this campaign put
+      run-to-run spread near 2%, so 7% is outside it, but this specific
+      comparison has not been replicated.
+
+      This bullet previously claimed geometry was unchanged at 12, on a reading
+      that scored arms at a mark some had not reached -- which clamps the short
+      runs to their final value and flatters them. The code below has set 6
+      since the campaign concluded; the text had not caught up, and a launcher
+      trusting the text over the code shipped two 5B runs at 12 on 2026-08-03.
     * **More optimizer work.** Raising updates-per-frame lost in five separate
       arms across four bases. `epochs / mini_batch_size` is the update density
       and does not involve the batch size at all.
