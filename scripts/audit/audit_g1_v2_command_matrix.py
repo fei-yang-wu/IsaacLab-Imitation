@@ -422,7 +422,7 @@ def _construct_row(row_name: str, row: dict) -> int:
     env = None
     try:
         env_cfg = _env_cfg_for(row)
-        env_cfg.lafan1_manifest_path = str(_MANIFEST.resolve())
+        env_cfg.data.manifest = str(_MANIFEST.resolve())
         env = gym.make(_TASK, cfg=env_cfg)
         agent_cfg = _agent_cfg_for(row, env_cfg)
         keys = list(agent_cfg.policy.input_keys or [])

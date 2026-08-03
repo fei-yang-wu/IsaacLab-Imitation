@@ -184,9 +184,16 @@ from torchrl.envs import Compose, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 
 
-from imitation_experiments.lowlevel.low_level_tracker import load_frozen_low_level_tracker
-from imitation_experiments.provenance.paper_protocol_metadata import interval_event_metadata
+from imitation_experiments.lowlevel.low_level_tracker import (
+    load_frozen_low_level_tracker,
+)
+from imitation_experiments.provenance.paper_protocol_metadata import (
+    interval_event_metadata,
+)
 from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids
+from isaaclab_imitation.tasks.manager_based.imitation.motion_data import (
+    apply_motion_data,
+)
 
 
 ALGORITHM_CLASS_MAP = {
@@ -1183,11 +1190,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.command_observation_source = "planner"
     _sync_env_window_params(env_cfg)
 
-    if args_cli.dataset_path is not None:
-        if not hasattr(env_cfg, "dataset_path"):
-            raise TypeError(f"Task {args_cli.task} does not support --dataset_path.")
-        env_cfg.dataset_path = str(args_cli.dataset_path.expanduser().resolve())
-
     env_cfg.scene.num_envs = int(args_cli.num_envs)
     env_cfg.seed = (
         args_cli.seed if args_cli.seed is not None else getattr(agent_cfg, "seed", None)
@@ -1195,21 +1197,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_cfg.sim.device = (
         args_cli.device if args_cli.device is not None else env_cfg.sim.device
     )
-    if motion_manifest is not None:
-        if not hasattr(env_cfg, "lafan1_manifest_path"):
-            raise TypeError(f"Task {args_cli.task} does not support --motion_manifest.")
-        env_cfg.lafan1_manifest_path = str(motion_manifest)
-        resolve_manifest_config = getattr(env_cfg, "_resolve_manifest_config", None)
-        if callable(resolve_manifest_config):
-            resolve_manifest_config(
-                dataset_path_explicit=args_cli.dataset_path is not None
-            )
-    if args_cli.motion_name is not None:
-        if not hasattr(env_cfg, "motions"):
-            raise TypeError(f"Task {args_cli.task} does not support --motion_name.")
-        env_cfg.motions = [str(args_cli.motion_name)]
-    if hasattr(env_cfg, "refresh_zarr_dataset"):
-        env_cfg.refresh_zarr_dataset = bool(args_cli.refresh_zarr_dataset)
+    apply_motion_data(
+        env_cfg,
+        manifest=motion_manifest,
+        cache_dir=(
+            args_cli.dataset_path.expanduser().resolve()
+            if args_cli.dataset_path is not None
+            else None
+        ),
+        clips=(
+            [str(args_cli.motion_name)] if args_cli.motion_name is not None else None
+        ),
+        cache_refresh=bool(args_cli.refresh_zarr_dataset),
+        wrap_steps=False,
+    )
     if hasattr(env_cfg, "reference_start_frame"):
         env_cfg.reference_start_frame = int(args_cli.reference_start_frame)
     if hasattr(env_cfg, "random_reset_full_trajectory"):
@@ -1220,8 +1221,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.random_reset_step_max = int(args_cli.reference_start_frame)
     if hasattr(env_cfg, "reset_schedule"):
         env_cfg.reset_schedule = str(args_cli.reset_schedule)
-    if hasattr(env_cfg, "wrap_steps"):
-        env_cfg.wrap_steps = False
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
     if args_cli.certify_streamed_vanilla_equivalence:
@@ -1680,7 +1679,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         "max_steps": int(args_cli.steps),
         "steps_run": int(steps_executed),
         "stop_reason": (
-            "max_steps" if int(steps_executed) == int(args_cli.steps) else "all_envs_done"
+            "max_steps"
+            if int(steps_executed) == int(args_cli.steps)
+            else "all_envs_done"
         ),
         "per_environment": [
             {

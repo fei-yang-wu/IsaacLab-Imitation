@@ -49,7 +49,7 @@ def test_real_manifest_read_path_structural_invariants(manifest_path: Path) -> N
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     raw_entries = raw["dataset"]["trajectories"]["lafan1_csv"]
 
-    resolved_path, entries = _MODULE.load_lafan1_manifest(manifest_path)
+    resolved_path, entries = _MODULE.load_clip_manifest(manifest_path)
 
     assert resolved_path == manifest_path.resolve()
     assert len(entries) == len(raw_entries)
@@ -113,64 +113,49 @@ def test_write_manifest_read_manifest_round_trip(tmp_path: Path) -> None:
     assert "family" not in metadata and "role" not in metadata
 
 
-def test_write_manifest_defaults_role_from_family(tmp_path: Path) -> None:
-    for family, expected_role in _MODULE.DEFAULT_ROLE_BY_FAMILY.items():
-        manifest_path = tmp_path / f"{family}.json"
-        payload = _MODULE.write_manifest(
-            manifest_path,
-            dataset_name=family,
-            entries=[{"name": "m", "path": "m.npz", "input_fps": 50.0}],
-            metadata={},
-            family=family,
-        )
-        assert _MODULE.manifest_role(payload) == expected_role
+def test_manifest_family_and_role_are_free_form_labels(tmp_path: Path) -> None:
+    """A new dataset needs no code change to describe itself.
 
-
-def test_write_manifest_rejects_unknown_family_and_role(tmp_path: Path) -> None:
+    family/role name the *data* -- which lineage a manifest describes and what
+    it is for -- and nothing branches on them, so they are carried through
+    verbatim rather than checked against a closed set that a new dataset would
+    have to be added to first.
+    """
     entries = [{"name": "m", "path": "m.npz", "input_fps": 50.0}]
-    with pytest.raises(ValueError, match="family"):
-        _MODULE.write_manifest(
-            tmp_path / "bad.json",
-            dataset_name="x",
-            entries=entries,
-            metadata={},
-            family="mystery",
-        )
-    with pytest.raises(ValueError, match="role"):
-        _MODULE.write_manifest(
-            tmp_path / "bad.json",
-            dataset_name="x",
-            entries=entries,
-            metadata={},
-            family="lafan1",
-            role="paper",
-        )
-
-
-def test_read_manifest_rejects_unknown_family(tmp_path: Path) -> None:
-    manifest_path = tmp_path / "bad_family.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "dataset_name": "x",
-                "dataset": {
-                    "trajectories": {
-                        "lafan1_csv": [
-                            {"name": "m", "path": "m.npz", "input_fps": 50.0}
-                        ]
-                    }
-                },
-                "metadata": {"family": "mystery"},
-            }
-        ),
-        encoding="utf-8",
+    payload = _MODULE.write_manifest(
+        tmp_path / "novel.json",
+        dataset_name="novel_capture",
+        entries=entries,
+        metadata={},
+        family="novel_capture",
+        role="pilot",
     )
+    assert _MODULE.manifest_family(payload) == "novel_capture"
+    assert _MODULE.manifest_role(payload) == "pilot"
+    assert _MODULE.read_manifest(tmp_path / "novel.json") == payload
+
+    # Role is optional; omitting it records no role rather than inventing one.
+    payload = _MODULE.write_manifest(
+        tmp_path / "no_role.json",
+        dataset_name="novel_capture",
+        entries=entries,
+        metadata={},
+        family="novel_capture",
+    )
+    assert _MODULE.manifest_role(payload) is None
+
     with pytest.raises(ValueError, match="family"):
-        _MODULE.read_manifest(manifest_path)
+        _MODULE.write_manifest(
+            tmp_path / "blank.json",
+            dataset_name="x",
+            entries=entries,
+            metadata={},
+            family="   ",
+        )
 
 
 def test_normalize_preserves_provenance_keys_and_drops_other_extras() -> None:
-    entries = _MODULE.normalize_lafan1_entries(
+    entries = _MODULE.normalize_clip_entries(
         [
             {
                 "name": "walk1",
@@ -192,7 +177,7 @@ def test_normalize_preserves_provenance_keys_and_drops_other_extras() -> None:
 
 
 def test_provenance_keys_survive_loader_kwargs_build() -> None:
-    loader_kwargs = _MODULE.build_lafan1_loader_kwargs(
+    loader_kwargs = _MODULE.build_clip_loader_kwargs(
         entries=[
             {
                 "name": "walk1",
@@ -212,18 +197,18 @@ def test_provenance_keys_survive_loader_kwargs_build() -> None:
     assert entry["source_motion_name"] == "orig_walk"
 
 
-def test_dataset_path_from_entries_family_prefix(
+def test_cache_dir_from_entries_family_prefix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("ISAACLAB_IMITATION_LAFAN1_ZARR_CACHE_ROOT", str(tmp_path))
+    monkeypatch.setenv("ISAACLAB_IMITATION_MOTION_CACHE_ROOT", str(tmp_path))
     entries = [{"name": "m", "path": "/tmp/x/m.npz", "input_fps": 50.0}]
     manifest_path = tmp_path / "g1_bones_manifest.json"
 
     default_path = Path(
-        _MODULE.dataset_path_from_entries(entries, manifest_path=manifest_path)
+        _MODULE.cache_dir_from_entries(entries, manifest_path=manifest_path)
     )
     bones_path = Path(
-        _MODULE.dataset_path_from_entries(
+        _MODULE.cache_dir_from_entries(
             entries, manifest_path=manifest_path, family="bones_seed"
         )
     )

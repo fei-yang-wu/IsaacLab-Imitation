@@ -3,7 +3,7 @@ from __future__ import annotations
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
     G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig,
 )
-from isaaclab_imitation.tasks.manager_based.imitation.config.g1.surfaces.sonic import (
+from isaaclab_imitation.tasks.manager_based.imitation.config.g1.surfaces import (
     ImitationG1SonicOfficialFSQSurfaceEnvCfg,
 )
 

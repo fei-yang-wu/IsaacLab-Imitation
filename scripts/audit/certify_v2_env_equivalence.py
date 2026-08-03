@@ -20,7 +20,6 @@ env. This tool therefore certifies:
 
 Capturing the same class twice and comparing is the regression gate; a
 legacy-vs-v2 comparison is expected to diverge after the first noise draw.
-"""
 
 Examples (run from the repository root):
 
@@ -153,7 +152,7 @@ def _capture(args: argparse.Namespace) -> None:
         num_envs=args.num_envs,
         use_fabric=True,
     )
-    setattr(env_cfg, "lafan1_manifest_path", str(args.manifest.resolve()))
+    env_cfg.data.manifest = str(args.manifest.resolve())
     for override in _split_override_tokens(args.env_overrides):
         key, value = override.split("=", 1)
         env_cfg = _apply_env_override(env_cfg, key, value)

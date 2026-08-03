@@ -905,12 +905,7 @@ _LATENT_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
     "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
 }
 
-# Anchor-relative observation terms per group on the single v2 surface
-# (`G1V2ObservationCfg`). Command terms are absent by design: they read the
-# command channels, whose anchor body is declared once on the reference channel
-# (`ReferenceChannelCfg.anchor_body_name`). Only the robot-side body terms and
-# the parked reward_input group still carry an `anchor_body_name` param.
-_V2_ANCHOR_TERM_NAMES_BY_GROUP: dict[str, tuple[str, ...]] = {
-    "critic": ("body_pos", "body_ori"),
-    "reward_input": ("expert_anchor_pos_b", "expert_anchor_ori_b"),
-}
+# NOTE: the v2 surface has no anchor-term table. `_resolve.stamp_anchor_body`
+# finds them by asking the terms -- a term takes an anchor body exactly when it
+# declares the parameter -- so adding a term to a group cannot leave it pointing
+# at a stale anchor because someone forgot a list.

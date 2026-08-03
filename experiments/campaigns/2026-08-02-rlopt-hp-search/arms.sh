@@ -424,7 +424,117 @@ HP_SCREEN_ARM_SPECS=(
 # would be the safer default if it costs nothing.
 "r0_champion_wallclock|Champion under the wall-clock protocol: the reference r1 is read against.|agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 env.rewards.action_rate_l2.weight=0.0"
 "r1_actrate_sonic|Champion with SONIC's action_rate_l2 = -0.1 restored. Judge on MPJPE and episode length; return is not comparable to r0.|agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 env.rewards.action_rate_l2.weight=-0.1"
+# --- Round 17: was q2 the environments, or the shorter rollout? -----------------
+# q2 (24576 x 6) is the best arm of the campaign -- MPJPE 55.97 against the
+# champion's 60.84, episode length 368.9 against 315.3, and 100M frames in 24.1
+# minutes against 90.9M in 26.8. But it changed TWO things at once: 2x the
+# environments and half the rollout length. s1 separates them by taking the
+# short rollout at the ORIGINAL env count.
+#
+# Update density stays 271 per M frames throughout -- it is epochs divided by
+# mini_batch_size and does not involve the batch at all -- so shrinking the batch
+# in s1 costs no optimizer steps per frame.
+#
+# VRAM measured across the sweep: 42.1 GiB at 12288 envs, 47.8 at 16384, 63.2 at
+# 24576 -- about 1.7 GiB per 1000 envs on a 21 GiB base. 32768 envs projects to
+# ~77 GiB against 76 usable, so 24576 is the practical ceiling here and s2 pushes
+# the batch rather than the env count. q1 already OOMed at 24576 x 12, so s2 at
+# x8 may too; it fails in minutes if so.
+"s1_envs12k_r6|12288 envs x 6: q2's short rollout at the champion's env count. Isolates rollout length from parallelism.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000"
+"s2_envs24k_r8|24576 envs x 8: q2's env count with a 1.33x batch. Between q2 (worked) and q1 (OOM).|ENVS=24576 ROLLOUT_STEPS=8 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000"
+"s3_envs20k_r6|20480 envs x 6: a middle env count at q2's rollout, to see whether the gain is monotone in environments.|ENVS=20480 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000"
+# --- Round 18: why does the small batch win? ------------------------------------
+# s1 (12288 x 6) is the best arm measured: MPJPE 54.56 against r0's 56.72 at the
+# SAME env count, with 14% more frames done. And s3 (20480 x 6) is worse than s1,
+# so q2's earlier win was the shorter rollout, not the extra environments --
+# adding environments at a fixed rollout actively hurts.
+#
+# But three things still move together when the rollout shortens at fixed envs:
+#   batch size      147456 -> 73728
+#   iteration count doubles at fixed frames
+#   GAE horizon     truncates from 12 steps to 6
+# The iteration count is the suspicious one: the KL rule fires once per
+# ITERATION now, so s1 gets ~2.3x the LR adaptations r0 does over the same
+# frames. Updates per frame is 271 in both -- that is epochs/mini_batch_size and
+# does not involve the batch.
+#
+# t3 is the discriminator: it keeps s1's batch and iteration count and only
+# doubles updates-per-frame. If the gain is the LR-adaptation count, t3 adds
+# nothing over s1; if it is optimizer work, t3 improves on it.
+# t1/t2 push the rollout shorter still, where the GAE truncation should
+# eventually bite and bound how far this direction goes.
+"t1_r4|12288 x 4 (batch 49152, 3x r0's iterations). Pushes the winning direction.|ENVS=12288 ROLLOUT_STEPS=4 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000"
+"t2_r3|12288 x 3 (batch 36864, 4x r0's iterations). Where GAE truncation to 3 steps should start to hurt.|ENVS=12288 ROLLOUT_STEPS=3 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000"
+"t3_r6_mb9216|s1's geometry with mini_batch 9216: same batch, same iterations, same LR steps, 2x updates per frame. Separates optimizer work from LR-adaptation count.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=9216 agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000"
+# --- Round 19: why does the smaller batch win, and does s1 replicate? -----------
+# s1 (12288 x 6) is the best arm measured -- MPJPE 54.56 against r0's 56.72 at
+# the same env count. t3 ruled out optimizer work as the cause: doubling updates
+# per iteration on s1's exact geometry made it WORSE (58.74, ep_len 287.7), the
+# fifth arm to lose that way. And the rollout curve is peaked at 6 -- t1 (r4) and
+# t2 (r3) are both worse -- so this is an optimum, not a direction.
+#
+# Two candidate mechanisms remain, and they are inseparable by geometry alone
+# because iterations and batch are inverses at fixed frames:
+#   (a) 2x the LR-controller adaptations, since the KL rule fires per iteration
+#   (b) half the within-iteration policy drift -- the last update sits 20
+#       gradient steps from the collecting policy instead of 40
+#
+# (a) is testable indirectly: if adaptation FREQUENCY is what helps, the
+# controller is now running twice as often and should prefer a gentler step
+# (u1) or a retuned target (u2/u3). If none of the three moves anything, the
+# mechanism is drift, and the lesson is simply "recollect sooner".
+#
+# u0 exists because s1 is about to change the recipe and every arm since m4 has
+# been a single seed. A 2% seed spread was measured earlier on m4; anything
+# inside that is not a result.
+"u1_lrfactor12|s1 + lr_adaptation_factor 1.5 -> 1.2: a gentler LR step, now that the controller fires twice as often.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.optim.lr_adaptation_factor=1.2"
+"u2_kl01|s1 + desired_kl back to 0.01. 0.02 was tuned at the OLD adaptation rate.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.optim.desired_kl=0.01"
+"u3_kl04|s1 + desired_kl 0.04, the other side of the same retune.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.optim.desired_kl=0.04"
+"u0_s1_repeat|s1 verbatim, for a second seed. Guards the recipe change against single-seed noise.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.optim.desired_kl=0.02"
+# --- Round 20: two untested environment axes -----------------------------------
+# Measured seed spread on an IDENTICAL config (s1 at seeds 0 and 1) is 13% on
+# return, 14% on episode length, 5% on MPJPE -- far above the ~2% carried over
+# from the m4 100M-frame validation. Every wall-clock single-seed difference
+# below ~15% in rounds 17-19 is therefore uninterpretable, and these two arms
+# are run at two seeds each for that reason.
+#
+# Both axes are environment-side and untouched by the whole campaign, which has
+# swept the optimizer nearly dry:
+#   v1  reset start range 0-200 -> 0-500 frames. The reset distribution was
+#       measured in 2026-07-27 to be worth ~5.6x episode length at 4096 envs,
+#       making it one of the largest single effects ever found here, and its
+#       WIDTH has never been varied. More diverse starts should generalise; too
+#       wide risks starting mid-motion in poses the policy cannot recover from.
+#   v2  the motion tracking rewards themselves (body pos and ori, weight 1.0),
+#       which dominate the positive reward mass. Doubling them shifts the
+#       balance against the anchor terms. NOTE this rescales return, so v2 is
+#       judged on MPJPE and episode length only -- the same rule that exposed
+#       the termination-curriculum artifact.
+"v1_reset_wide|Reset start range widened 0-200 -> 0-500 frames. Untouched axis, and the reset distribution is historically one of the largest effects here.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 env.command_interface.reference.selection.random_step_max=500"
+"v2_motion_weights_2x|motion_body_pos and motion_body_ori 1.0 -> 2.0. Judge on MPJPE and episode length; return is rescaled and not comparable.|ENVS=12288 ROLLOUT_STEPS=6 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_body_ori.weight=2.0"
+# --- Round 21: the informative direction from each round-20 result --------------
+# v1 widened the reset range 0-200 -> 0-500 and lost on both seeds (-17% episode
+# length, -19% return, +12% MPJPE), which is outside the 13% seed band. That is
+# a real result and it points the other way, so w1 NARROWS instead. Reset
+# sampling remains the highest-leverage environment knob on record here (~5.6x
+# episode length in the 2026-07-27 screen) and its width is now known to matter.
+#
+# w2 is the direction the campaign never tested. Five arms raised updates per
+# frame and all five lost (a1, a9, i5, m3, t3); nothing ever LOWERED it. At
+# rollout 6 the batch is 73728, so mini_batch 36864 gives 2 minibatches x 5
+# epochs = 10 updates per iteration, 136 per M frames against the standard 271.
+# If the batch really is over-worked, halving the work should help rather than
+# merely cost less.
+#
+# Both at two seeds: a single seed cannot resolve anything under ~15% here.
+"w1_reset_narrow|Reset start range narrowed 0-200 -> 0-100, the opposite of v1 which lost on both seeds.|ENVS=12288 ROLLOUT_STEPS=6 agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} env.command_interface.reference.selection.random_step_max=100"
+"w2_updates_half|mini_batch 18432 -> 36864: 136 updates per M frames against the standard 271. The only untested direction on an axis where five arms have lost by going the other way.|ENVS=12288 ROLLOUT_STEPS=6 agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=36864"
 )
+
+
+
+
+
 
 
 

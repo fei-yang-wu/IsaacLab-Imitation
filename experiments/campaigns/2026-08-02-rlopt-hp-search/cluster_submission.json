@@ -496,6 +496,69 @@
       "rollout_steps": 12,
       "seed": 0,
       "total_frames": 294912000
+    },
+    "s1_envs12k_r6": {
+      "job": "5559748",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "s2_envs24k_r8": {
+      "job": "5559749",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "s3_envs20k_r6": {
+      "job": "5559750",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "t1_r4": {
+      "job": "5559789",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "t2_r3": {
+      "job": "5559796",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "t3_r6_mb9216": {
+      "job": "5559797",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "u1_lrfactor12": {
+      "job": "5559874",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "u2_kl01": {
+      "job": "5559894",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "u3_kl04": {
+      "job": "5559895",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
     }
   },
   "encoder_checkpoint": "/data/pretrain_store/lafan1_v2_det_sr_h10_z256_seed0/checkpoints/latest.pt",
@@ -506,12 +569,12 @@
     "seed": 0,
     "total_frames": 294912000
   },
-  "last_submitted_at": "2026-08-03T08:43:20.974312-04:00",
+  "last_submitted_at": "2026-08-03T11:06:58.408665-04:00",
   "log_root": "/data/rlopt_hp_screen_100m_20260802",
   "manifest_sha256": "d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8",
   "note": "Budget changed mid-campaign: rounds 1-7 ran 50,135,040 frames, rounds 8-12 and the final b0 denominator ran 99,975,168. Geometry is recorded per arm; there is no single campaign geometry.",
-  "rlopt_dirty": true,
-  "rlopt_git_sha": "df052d64f4b4f7157883e2f26ed1ddb66c0d25ca",
+  "rlopt_dirty": false,
+  "rlopt_git_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
   "screen_tag": "rlopt_hp_screen_100m_20260802",
   "submitted_at": "2026-08-02T19:42:05-04:00",
   "task": "Isaac-Imitation-G1-v2",
@@ -520,5 +583,5 @@
     "project": "g1-lafan1"
   },
   "workspace_dirty": true,
-  "workspace_git_sha": "999e2f4c053ef85868a942b89675a9242285d6a7"
+  "workspace_git_sha": "aaa1fb07466d6f98bafc3337572ebbebe79651f9"
 }

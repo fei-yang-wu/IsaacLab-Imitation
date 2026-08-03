@@ -86,9 +86,9 @@ run_probe() {
         --num_envs "${num_envs}" --max_iterations "${ITERATIONS}" --headless
         --seed 0
         --kit_args=--/app/extensions/fsWatcherEnabled=false
-        "env.lafan1_manifest_path=${MANIFEST_PATH}"
-        "env.dataset_path=${DATASET_PATH}"
-        env.refresh_zarr_dataset=false
+        "env.data.manifest=${MANIFEST_PATH}"
+        "env.data.cache_dir=${DATASET_PATH}"
+        env.data.cache_refresh=false
         env.command_interface.encoder.future_steps=9
         agent.ipmd.command_source=hl_skill
         "agent.ipmd.hl_skill_checkpoint_path=${ENCODER_CKPT}"

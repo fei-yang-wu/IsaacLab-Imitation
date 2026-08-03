@@ -17,10 +17,16 @@ from imitation_experiments.audit.audit_focused_causal_interface_comparison impor
     PAPER_ROLLOUT_METRICS,
     _audit_closed_loop_outcome,
 )
-from aggregate_phase4_no_language_results import aggregate, write_aggregate_outputs
-from imitation_experiments.provenance.phase4_no_language_matrix import motion_slug, resolve_task
 from imitation_experiments.audit.validate_phase4_no_language_submission import validate
-from imitation_experiments.paths import REPO_ROOT
+from imitation_experiments.paths import REPO_ROOT, load_paper_entrypoint
+from imitation_experiments.provenance.phase4_no_language_matrix import (
+    motion_slug,
+    resolve_task,
+)
+
+_phase4 = load_paper_entrypoint("aggregate_phase4_no_language_results")
+aggregate = _phase4.aggregate
+write_aggregate_outputs = _phase4.write_aggregate_outputs
 
 
 def _write_json(path: Path, payload: object) -> None:

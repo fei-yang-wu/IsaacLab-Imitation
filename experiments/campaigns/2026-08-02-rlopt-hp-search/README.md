@@ -412,6 +412,78 @@ here and neither should be read against the 100M table.
 | reference EE in the critic | neutral to slightly negative |
 | fixed LRs, 2x updates, fewer/more epochs, `gae_lambda` 0.98 | all lose |
 
+
+## The recipe, as a default
+
+Registered as `rlopt_ipmd_tuned_cfg_entry_point`
+(`G1ImitationTunedRLOptIPMDConfig`), so the agent half needs no overrides:
+
+```bash
+--agent rlopt_ipmd_tuned_cfg_entry_point
+```
+
+It is a NEW config class, not a change to the existing local optimizer
+contract. Every prior run, the in-flight 5B job and the paper-facing v2
+campaign all resolve that contract, and redefining it would silently change
+what those runs mean -- the same reason G1 task ids are versioned rather than
+mutated.
+
+The environment half lives on the env config and must still be passed:
+
+```bash
+env.rewards.action_rate_l2.weight=0.0
+env.rewards.tracking_reward_points.weight=4.0
+env.enable_termination_curriculum=true
+env.termination_curriculum_start_frames=5000000
+env.termination_curriculum_end_frames=30000000
+```
+
+`submit_tuned_5b_ice.sh` is the reference invocation.
+
+### What is deliberately not in it
+
+**Geometry: rollout 12 -> 6, and this took three attempts to read correctly.**
+Scored at 23 training-minutes -- a mark EVERY arm in the campaign reached, so
+nothing is clamped to its endpoint:
+
+| arm | rollout | ep_len | return | MPJPE |
+|---|---|---|---|---|
+| t1_r4 | 4 | 319.9 | 47.79 | 56.04 |
+| s1_envs12k_r6 | 6 | 313.5 | 46.97 | 60.55 |
+| r0_champion | 12 | 293.6 | 43.77 | 60.27 |
+| t2_r3 | 3 | 295.3 | 42.85 | 62.53 |
+
+`s1` and `r0` differ in `collector.frames_per_batch` and nothing else --
+verified field by field -- so this is a clean single factor worth **+7.3%
+return and +6.8% episode length** at unchanged MPJPE. The optimum is broad
+across 4-6 and collapses at 3, where the GAE horizon (gamma 0.97, lambda 0.95)
+is too short.
+
+It does NOT change optimizer work per frame: update density is
+`epochs / mini_batch_size` and does not involve the batch size. What halving the
+batch changes is how often data is recollected -- twice the iterations, so twice
+the LR-controller adaptations and half the drift between the collecting policy
+and the last update on a batch.
+
+Environment COUNT is a separate axis and does not help: `s3` (20480 x 6) and
+`q2` (24576 x 6) do not beat `s1` (12288 x 6). An earlier reading credited the
+environments; it was the rollout.
+
+Two wrong intermediate conclusions are recorded here because the failure mode
+is easy to repeat. Scoring arms at a mark some of them had not reached clamps
+the short runs to their final value and flatters them, which first made a
+shorter rollout look far better than it is, and then -- when the top six were
+compared only against each other -- made the whole axis look like noise. Only a
+mark every arm reached is safe.
+
+**More optimizer work.** Five arms across four bases lost by raising
+updates-per-frame (`a1`, `a9`, `i5`, `m3`, `t3`). Update density is
+`epochs / mini_batch_size` and does not involve the batch size.
+
+**Bigger or deeper networks.** 2048x6 lost on every base; depth at fixed width
+was neutral, so width is what helps and there is nothing for residual
+connections to fix.
+
 ## Scope and limits
 
 **This is a screen, not a result.** 50M frames at this geometry is 340

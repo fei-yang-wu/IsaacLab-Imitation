@@ -314,7 +314,7 @@ from isaaclab.utils.math import quat_apply, quat_apply_inverse, quat_error_magni
 from isaaclab.utils.dict import print_dict
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from isaaclab_imitation.tasks.manager_based.imitation.motion_manifest import (
-    build_lafan1_loader_kwargs,
+    build_clip_loader_kwargs,
 )
 from tensordict import TensorDict, TensorDictBase
 
@@ -1060,7 +1060,7 @@ def _apply_motion_source_override(env_cfg) -> None:
 
         env_cfg.loader_type = "lafan1_csv"
         target_joint_names = list(getattr(env_cfg, "target_joint_names", []) or [])
-        env_cfg.loader_kwargs = build_lafan1_loader_kwargs(
+        env_cfg.loader_kwargs = build_clip_loader_kwargs(
             entries=entries,
             sim_dt=float(env_cfg.sim.dt),
             decimation=int(env_cfg.decimation),

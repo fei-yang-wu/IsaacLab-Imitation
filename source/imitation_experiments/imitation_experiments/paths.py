@@ -26,6 +26,34 @@ REPO_ROOT = find_repo_root()
 PAPER_DIR = REPO_ROOT / "experiments/paper"
 
 
+def load_paper_entrypoint(script_name: str):
+    """Import a release-facing entrypoint from ``experiments/paper`` by path.
+
+    Those scripts are entrypoints, not library modules: they stay at the paths
+    protocols and gates cite, and they are deliberately not importable by name.
+    Tests still need to exercise their internals, and loading the file at its
+    documented location says exactly that -- unlike putting
+    ``experiments/paper`` on ``sys.path``, which makes every module in it
+    silently importable from everywhere and is what this repo's layout rules
+    forbid.
+
+    Args:
+        script_name: File stem under ``experiments/paper``, e.g.
+            ``"build_paper_release_bundle"``.
+    """
+    import importlib.util
+
+    script_path = PAPER_DIR / f"{script_name}.py"
+    if not script_path.is_file():
+        raise FileNotFoundError(f"No paper entrypoint at {script_path}")
+    spec = importlib.util.spec_from_file_location(script_name, script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load paper entrypoint {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def module_source_rel(module_name: str) -> str:
     """Repo-relative source path of a package module, for provenance hashing."""
     import importlib.util

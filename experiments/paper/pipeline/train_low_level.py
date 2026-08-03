@@ -42,16 +42,12 @@ Every parameter lives in ``experiments/paper/conf/low_level.yaml``.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig
 
-_PAPER_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_PAPER_DIR))
-
-from _paper_common import (  # noqa: E402
+from imitation_experiments.paper.common import (
     PipelineError,
     REPO_ROOT,
     SCRIPTS_RLOPT,
@@ -69,7 +65,7 @@ from _paper_common import (  # noqa: E402
     to_container,
     write_stage_record,
 )
-from _paper_specs import get_interface, get_latent_mode  # noqa: E402
+from imitation_experiments.paper.specs import get_interface, get_latent_mode
 
 logger = logging.getLogger("train_low_level")
 

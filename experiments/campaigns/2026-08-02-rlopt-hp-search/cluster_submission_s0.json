@@ -1,11 +1,31 @@
 {
   "arms": {
-    "m4_gamma097": "5559632",
-    "u0_s1_repeat": {
-      "job": "5559896",
+    "v1_reset_wide": {
+      "job": "5560027",
       "num_envs": 12288,
       "rollout_steps": 12,
-      "seed": 1,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "v2_motion_weights_2x": {
+      "job": "5560029",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "w1_reset_narrow": {
+      "job": "5560123",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "w2_updates_half": {
+      "job": "5560124",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
       "total_frames": 294912000
     }
   },
@@ -14,15 +34,15 @@
     "max_iterations": 2000,
     "num_envs": 12288,
     "rollout_steps": 12,
-    "seed": 1,
+    "seed": 0,
     "total_frames": 294912000
   },
-  "last_submitted_at": "2026-08-03T11:07:43.562247-04:00",
-  "log_root": "/data/rlopt_hp_screen_100m_seed1",
+  "last_submitted_at": "2026-08-03T14:50:26.459917-04:00",
+  "log_root": "/data/rlopt_hp_screen_100m_s0",
   "manifest_sha256": "d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8",
   "rlopt_dirty": false,
   "rlopt_git_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
-  "screen_tag": "rlopt_hp_screen_100m_seed1",
+  "screen_tag": "rlopt_hp_screen_100m_s0",
   "task": "Isaac-Imitation-G1-v2",
   "wandb": {
     "group": "rlopt-hparam-search",

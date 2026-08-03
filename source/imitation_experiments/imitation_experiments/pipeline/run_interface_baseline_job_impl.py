@@ -76,7 +76,7 @@ def _apply_container_python_defaults(env: dict[str, str]) -> None:
         cache_root = Path(cluster_data_dir).expanduser() / "lafan1" / "zarr_cache"
         cache_root.mkdir(parents=True, exist_ok=True)
         env.setdefault(
-            "ISAACLAB_IMITATION_LAFAN1_ZARR_CACHE_ROOT",
+            "ISAACLAB_IMITATION_MOTION_CACHE_ROOT",
             str(cache_root),
         )
         cache_run_id = env.get("SLURM_JOB_ID") or env.get("SLURM_JOBID")

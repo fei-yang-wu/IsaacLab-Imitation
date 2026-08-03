@@ -97,7 +97,7 @@ def main() -> None:
     env_cfg = parse_env_cfg(
         args.task, device="cuda:0", num_envs=args.num_envs, use_fabric=True
     )
-    setattr(env_cfg, "lafan1_manifest_path", str(args.manifest.resolve()))
+    env_cfg.data.manifest = str(args.manifest.resolve())
     for override in _split_overrides(args.env_overrides):
         key, value = override.split("=", 1)
         if key.startswith("env."):

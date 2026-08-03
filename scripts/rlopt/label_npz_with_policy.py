@@ -34,17 +34,30 @@ parser.add_argument(
     choices=["PPO", "SAC", "IPMD"],
     help="RLOpt algorithm used by the checkpoint.",
 )
-parser.add_argument("--checkpoint", type=Path, required=True, help="RLOpt checkpoint to load.")
-parser.add_argument("--source_npz", type=Path, required=True, help="Source trajectory NPZ to copy and label.")
-parser.add_argument("--output_npz", type=Path, required=True, help="Output NPZ with action labels.")
+parser.add_argument(
+    "--checkpoint", type=Path, required=True, help="RLOpt checkpoint to load."
+)
+parser.add_argument(
+    "--source_npz",
+    type=Path,
+    required=True,
+    help="Source trajectory NPZ to copy and label.",
+)
+parser.add_argument(
+    "--output_npz", type=Path, required=True, help="Output NPZ with action labels."
+)
 parser.add_argument(
     "--motion_manifest",
     type=Path,
     default=Path("data/unitree/manifests/g1_unitree_dance102_manifest.json"),
     help="Manifest used to build the policy observation/reference stream.",
 )
-parser.add_argument("--num_envs", type=int, default=1, help="Number of envs. Currently must be 1.")
-parser.add_argument("--seed", type=int, default=None, help="Seed used for env and policy construction.")
+parser.add_argument(
+    "--num_envs", type=int, default=1, help="Number of envs. Currently must be 1."
+)
+parser.add_argument(
+    "--seed", type=int, default=None, help="Seed used for env and policy construction."
+)
 parser.add_argument(
     "--max_transitions",
     type=int,
@@ -72,9 +85,17 @@ import isaaclab_imitation.tasks  # noqa: F401
 import isaaclab_tasks  # noqa: F401
 import numpy as np
 import torch
-from isaaclab.envs import DirectMARLEnv, DirectMARLEnvCfg, DirectRLEnvCfg, ManagerBasedRLEnvCfg
+from isaaclab.envs import (
+    DirectMARLEnv,
+    DirectMARLEnvCfg,
+    DirectRLEnvCfg,
+    ManagerBasedRLEnvCfg,
+)
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from isaaclab_imitation.tasks.manager_based.imitation.motion_data import (
+    apply_motion_data,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import IPMD, PPO, SAC
 from tensordict.nn import InteractionType
@@ -127,7 +148,13 @@ def _disable_observation_corruption(env_cfg: object) -> None:
     observations = getattr(env_cfg, "observations", None)
     if observations is None:
         return
-    for group_name in ("policy", "critic", "expert_state", "expert_window", "reward_input"):
+    for group_name in (
+        "policy",
+        "critic",
+        "expert_state",
+        "expert_window",
+        "reward_input",
+    ):
         group = getattr(observations, group_name, None)
         if group is not None and hasattr(group, "enable_corruption"):
             group.enable_corruption = False
@@ -147,7 +174,9 @@ agent_entry_point = resolve_agent_cfg_entry_point(args_cli.task, args_cli.algori
 @hydra_task_config(args_cli.task, agent_entry_point)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg):
     if args_cli.num_envs != 1:
-        raise ValueError("label_npz_with_policy.py currently supports --num_envs 1 only.")
+        raise ValueError(
+            "label_npz_with_policy.py currently supports --num_envs 1 only."
+        )
 
     sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
     if callable(sync_input_keys):
@@ -175,17 +204,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     if args_cli.max_transitions > 0:
         transition_count = min(transition_count, int(args_cli.max_transitions))
     if transition_count <= 0:
-        raise ValueError(f"Need at least two frames to export actions, got {frame_count}.")
+        raise ValueError(
+            f"Need at least two frames to export actions, got {frame_count}."
+        )
 
     env_cfg.scene.num_envs = 1
-    env_cfg.seed = args_cli.seed if args_cli.seed is not None else getattr(agent_cfg, "seed", None)
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    env_cfg.seed = (
+        args_cli.seed if args_cli.seed is not None else getattr(agent_cfg, "seed", None)
+    )
+    env_cfg.sim.device = (
+        args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    )
     env_cfg.log_dir = str(checkpoint_path.parent)
-    env_cfg.lafan1_manifest_path = str(motion_manifest)
-    if hasattr(env_cfg, "_resolve_manifest_config"):
-        env_cfg._resolve_manifest_config()
-    if hasattr(env_cfg, "refresh_zarr_dataset"):
-        env_cfg.refresh_zarr_dataset = bool(args_cli.refresh_zarr_dataset)
+    apply_motion_data(
+        env_cfg,
+        manifest=motion_manifest,
+        cache_refresh=bool(args_cli.refresh_zarr_dataset),
+        wrap_steps=False,
+    )
     if hasattr(env_cfg, "replay_only"):
         env_cfg.replay_only = True
     if hasattr(env_cfg, "replay_reference"):
@@ -198,8 +234,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.random_reset_step_min = 0
     if hasattr(env_cfg, "random_reset_step_max"):
         env_cfg.random_reset_step_max = 0
-    if hasattr(env_cfg, "wrap_steps"):
-        env_cfg.wrap_steps = False
     if hasattr(env_cfg, "reset_schedule"):
         env_cfg.reset_schedule = "sequential"
     _disable_observation_corruption(env_cfg)
@@ -220,11 +254,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     env = IsaacLabWrapper(raw_env)
     env = env.set_info_dict_reader(
-        IsaacLabTerminalObsReader(observation_spec=env.observation_spec, backend="gymnasium")
+        IsaacLabTerminalObsReader(
+            observation_spec=env.observation_spec, backend="gymnasium"
+        )
     )
     env = TransformedEnv(
         base_env=env,
-        transform=Compose(RewardSum(), StepCounter(transition_count + 2), RewardClipping(-10.0, 5.0)),
+        transform=Compose(
+            RewardSum(), StepCounter(transition_count + 2), RewardClipping(-10.0, 5.0)
+        ),
     )
 
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
@@ -249,7 +287,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     env_ids = torch.zeros((1,), device=agent.device, dtype=torch.long)
     print(f"[INFO] Exporting {transition_count} transition actions...")
     for step_idx in range(transition_count):
-        with torch.inference_mode(), set_exploration_type(InteractionType.DETERMINISTIC):
+        with (
+            torch.inference_mode(),
+            set_exploration_type(InteractionType.DETERMINISTIC),
+        ):
             td = collector_policy(td)
         action = td.get("action")
         if action is None:
@@ -262,7 +303,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         with torch.inference_mode():
             td = env.step(td)
-            td = step_mdp(td, exclude_reward=True, exclude_done=False, exclude_action=True)
+            td = step_mdp(
+                td, exclude_reward=True, exclude_done=False, exclude_action=True
+            )
 
     full_actions = np.zeros((frame_count, action_dim), dtype=np.float32)
     full_targets = np.zeros((frame_count, action_dim), dtype=np.float32)
@@ -292,7 +335,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     output_arrays["action_joint_pos_target"] = full_targets
     output_arrays["transition_action_joint_pos_target"] = transition_targets
     output_arrays["action_joint_names"] = action_joint_names
-    output_arrays["action_label_metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
+    output_arrays["action_label_metadata_json"] = np.asarray(
+        json.dumps(metadata, sort_keys=True)
+    )
 
     output_npz.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output_npz, **output_arrays)

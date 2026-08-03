@@ -45,7 +45,9 @@ from collections.abc import Sequence
 from dataclasses import MISSING
 
 from isaaclab.utils.configclass import configclass
+from isaaclab_tasks.utils import PresetCfg
 
+from ._resolve import coerce_declared_types
 from .command_components import (
     COMMAND_COMPONENT_ORDER,
     COMMAND_COMPONENT_TERM_NAMES,
@@ -70,6 +72,9 @@ from .mdp.commands.reference import (
 )
 
 _CHANNELS = frozenset({"reference", "actor"})
+
+ActorCommand = LatentCommandCfg | ExplicitCommandCfg | ChunkCommandCfg
+"""The three actor command kinds; exactly one is built per environment."""
 
 # Every command term an observation group may declare, in canonical order.
 _ALL_COMMAND_TERM_NAMES: tuple[str, ...] = (
@@ -107,6 +112,99 @@ class EncoderViewCfg:
         return component_term_names(self.components)
 
 
+def _resolved_preset(value):
+    """Collapse a still-unresolved :class:`PresetCfg` to its default alternative.
+
+    Isaac Lab resolves presets inside ``register_task``, so the CLI path always
+    hands the environment a concrete config. A config built directly -- in a
+    test, an audit script, an evaluation driver -- never passes through that
+    step, and would otherwise reach the managers holding a preset object. One
+    line here means every construction path converges on the same tree instead
+    of each consumer learning to accept both shapes.
+    """
+    while isinstance(value, PresetCfg):
+        value = value.default
+    return value
+
+
+@configclass
+class ActorCommandPreset(PresetCfg):
+    """The actor channel's command kind, selectable at launch.
+
+    A comparison row is one token::
+
+        env.command_interface.actor=explicit
+        env.command_interface.actor=chunk
+
+    and the selected config's own fields stay overridable underneath it
+    (``env.command_interface.actor.components=...``,
+    ``env.command_interface.actor.dim=64``), because Isaac Lab resolves presets
+    before it applies path scalars. This is what makes swapping the actor a
+    configuration change rather than a new config class: the alternatives are
+    different *types*, which no scalar override could ever select between.
+    """
+
+    default: LatentCommandCfg = LatentCommandCfg()
+    latent: LatentCommandCfg = LatentCommandCfg()
+    explicit: ExplicitCommandCfg = ExplicitCommandCfg()
+    chunk: ChunkCommandCfg = ChunkCommandCfg(
+        source="reference", horizon=10, hold_steps=10
+    )
+
+
+@configclass
+class EncoderViewPreset(PresetCfg):
+    """The window a latent recipe's skill encoder reads, selectable at launch.
+
+    Named for the window itself rather than for the encoder that happens to use
+    it, because the environment only publishes a view: what consumes it (VQ-VAE,
+    CVAE, per-step VQ, FSQ) is the agent's business::
+
+        env.command_interface.encoder=causal9   # 8 past frames plus current
+        env.command_interface.encoder=future10  # current plus 9 future frames
+    """
+
+    default: EncoderViewCfg = EncoderViewCfg(past_steps=0, future_steps=0)
+    single: EncoderViewCfg = EncoderViewCfg(past_steps=0, future_steps=0)
+    causal9: EncoderViewCfg = EncoderViewCfg(past_steps=8, future_steps=0)
+    future10: EncoderViewCfg = EncoderViewCfg(past_steps=0, future_steps=9)
+    future26: EncoderViewCfg = EncoderViewCfg(past_steps=0, future_steps=25)
+
+
+@configclass
+class ReferenceSelectionPreset(PresetCfg):
+    """Reset-start sampling profiles, selectable at launch.
+
+    ``default`` is this repo's reset distribution; the 2026-07-27 screen
+    attributed ~5.6x episode length at 4096 environments to it rather than to
+    SONIC's rewards or actuators. ``sonic`` is the release sampler it was
+    measured against, and ``frame0`` is the fixed-start protocol the low-level
+    qualification gate runs.
+    """
+
+    default: ReferenceSelectionCfg = ReferenceSelectionCfg(
+        schedule="random",
+        start_mode="auto",
+        random_step_min=0,
+        random_step_max=200,
+        full_trajectory=False,
+        adaptive_failure_rate_max_over_mean=50.0,
+    )
+    sonic: ReferenceSelectionCfg = ReferenceSelectionCfg(
+        schedule="random",
+        start_mode="auto",
+        random_step_min=0,
+        random_step_max=0,
+        full_trajectory=True,
+        adaptive_failure_rate_max_over_mean=200.0,
+    )
+    frame0: ReferenceSelectionCfg = ReferenceSelectionCfg(
+        schedule="random",
+        start_mode="fixed",
+        start_frame=0,
+    )
+
+
 @configclass
 class CommandInterfaceCfg:
     """Two channels, one declared interface.
@@ -114,25 +212,43 @@ class CommandInterfaceCfg:
     Every environment config carries exactly one of these; the command terms,
     the observation-group command surface, and the actor / critic / encoder
     input keys are all derived from it.
+
+    ``actor`` and ``encoder`` default to presets, so a comparison row is a
+    launch-time selection (``env.command_interface.actor=explicit``) rather
+    than a config class. :meth:`resolve` collapses any preset left standing to
+    its ``default`` alternative, which is what makes a directly constructed
+    config -- a test, a script that never went through Hydra -- behave exactly
+    like the unselected CLI path.
     """
 
     # pyrefly: ignore[bad-assignment]  # Isaac Lab required-field idiom
     reference: ReferenceChannelCfg = MISSING
 
-    actor: LatentCommandCfg | ExplicitCommandCfg | ChunkCommandCfg = LatentCommandCfg()
+    actor: ActorCommand | ActorCommandPreset = ActorCommandPreset()
+    """The one command the actor consumes. A preset until :meth:`resolve`."""
 
-    encoder: EncoderViewCfg | None = None
+    encoder: EncoderViewCfg | EncoderViewPreset | None = EncoderViewPreset()
+    """The skill encoder's windowed reference view, or ``None`` for no encoder."""
 
     critic_channels: tuple[str, ...] = ("actor", "reference")
     """Channels the critic reads. The critic may read several; the actor may not."""
 
     def resolve(self) -> None:
         """Normalize and validate the whole interface. Idempotent."""
+        self.actor = _resolved_preset(self.actor)
+        self.encoder = _resolved_preset(self.encoder)
+        # The agent binding resolves the interface in the training entry point,
+        # well before the environment resolves its own config, so the interface
+        # parses its own CLI strings rather than depending on that ordering.
+        coerce_declared_types(self)
         if is_missing(self.reference):
             raise ValueError(
                 "CommandInterfaceCfg.reference is required: the reference channel "
                 "is always present (rewards, terminations, metrics, reset pose)."
             )
+        # Collapsed here rather than inside the reference channel so the mdp
+        # layer keeps no dependency on Isaac Lab's preset machinery.
+        self.reference.selection = _resolved_preset(self.reference.selection)
         self.reference.resolve()
         self.actor.resolve()
         if self.encoder is not None:
@@ -400,13 +516,17 @@ __all__ = [
     "COMMAND_SPACE_COMPONENTS",
     "FULL_BODY_COMPONENTS",
     "LATENT_COMMAND_TERM_NAME",
+    "ActorCommand",
+    "ActorCommandPreset",
     "ChunkCommandCfg",
     "CommandInterfaceCfg",
     "EncoderViewCfg",
+    "EncoderViewPreset",
     "ExplicitCommandCfg",
     "LatentCommandCfg",
     "ReferenceChannelCfg",
     "ReferenceSelectionCfg",
+    "ReferenceSelectionPreset",
     "actor_command_keys",
     "actor_input_keys",
     "bind_command_interface",

@@ -74,7 +74,7 @@ def humanize_motion_name(name: str) -> str:
 
 
 def _extract_manifest_entries(data: Any) -> list[dict[str, Any]]:
-    """Mirror ``load_lafan1_manifest`` key lookups to find the trajectory list."""
+    """Mirror ``load_clip_manifest`` key lookups to find the trajectory list."""
     if isinstance(data, dict):
         entries = data.get("dataset", {}).get("trajectories", {}).get("lafan1_csv")
         if entries is None:
@@ -284,22 +284,29 @@ def main() -> None:
         language_phrases = load_language_phrases(language_sidecar_path)
 
     missing_language = [
-        name for name in names if args.language_sidecar is not None and name not in language_phrases
+        name
+        for name in names
+        if args.language_sidecar is not None and name not in language_phrases
     ]
     if missing_language and args.require_language_sidecar_matches:
         preview = ", ".join(missing_language[:10])
         suffix = " ..." if len(missing_language) > 10 else ""
         raise SystemExit(
-            "Language sidecar is missing manifest motion names: "
-            f"{preview}{suffix}"
+            f"Language sidecar is missing manifest motion names: {preview}{suffix}"
         )
 
     phrases = [
-        language_phrases.get(name, name if args.raw_names else humanize_motion_name(name))
+        language_phrases.get(
+            name, name if args.raw_names else humanize_motion_name(name)
+        )
         for name in names
     ]
     phrase_sources = [
-        "language_sidecar" if name in language_phrases else "raw_name" if args.raw_names else "motion_name"
+        "language_sidecar"
+        if name in language_phrases
+        else "raw_name"
+        if args.raw_names
+        else "motion_name"
         for name in names
     ]
 
