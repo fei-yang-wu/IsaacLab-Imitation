@@ -81,10 +81,15 @@ TRAIN_CHECKPOINT="${TRAIN_CHECKPOINT:-}"
 
 # ICE TIMEOUT is a hard SIGKILL: the final save never runs and everything since
 # the last save_interval boundary is lost. Size the segment to exit cleanly
-# under the wall. 76k fps is the measured latent-arm rate at this geometry
-# (job 5546958); the local 4096-env number does NOT transfer, and the explicit
-# arms' 80k+ overran the wall when it was used here.
-SEGMENT_FPS="${SEGMENT_FPS:-76000}"
+# under the wall.
+#
+# 70k, not the 76k an earlier campaign reported: this run was measured at
+# 72,217 fps at 12288 x 12 (job 5558142, steady state after the ~23k startup
+# sample), which at 28,883 iterations projected 16.38 h against a 15.44 h
+# usable wall -- i.e. sizing on another campaign's number would have lost the
+# segment. Keep a margin below the measured rate; finishing a segment early
+# costs one extra submission, overrunning costs up to a full save interval.
+SEGMENT_FPS="${SEGMENT_FPS:-70000}"
 SEGMENT_WALL_S="${SEGMENT_WALL_S:-57540}"      # 15:59:00
 SEGMENT_STARTUP_S="${SEGMENT_STARTUP_S:-900}"  # Isaac boot + data load
 SEGMENT_TAIL_S="${SEGMENT_TAIL_S:-600}"        # final save + log sync
@@ -99,10 +104,17 @@ EXPECTED_MANIFEST_SHA256="${EXPECTED_MANIFEST_SHA256:-d972c37c41dadbb68c30fc456a
 EXPECTED_NPZ_COUNT="${EXPECTED_NPZ_COUNT:-40}"
 REMOTE_DATA_ROOT="${REMOTE_DATA_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLab/data}"
 
+# Two identities, deliberately separate. The encoder is determined by the latent
+# recipe alone (horizon, z, mode, seed) -- it is pretrained at 16 envs and knows
+# nothing about the low-level rollout geometry -- while the low-level run tag
+# carries the geometry so its checkpoints and W&B runs stay distinguishable.
+# Folding the geometry into the encoder path made a rollout-steps change point
+# at a non-existent encoder.
+ENCODER_TAG="${ENCODER_TAG:-lafan1_v2_det_sr_h${HORIZON_STEPS}_z${Z_DIM}_seed${SEED}}"
 RUN_TAG="${RUN_TAG:-lafan1_v2_det_sr_h${HORIZON_STEPS}_z${Z_DIM}_5b_seed${SEED}_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}}"
-ENCODER_DIR_CONTAINER="/data/pretrain_store/${RUN_TAG}"
+ENCODER_DIR_CONTAINER="/data/pretrain_store/${ENCODER_TAG}"
 ENCODER_CKPT_CONTAINER="${ENCODER_CKPT_CONTAINER:-${ENCODER_DIR_CONTAINER}/checkpoints/latest.pt}"
-ENCODER_CKPT_REMOTE="${REMOTE_DATA_ROOT}/pretrain_store/${RUN_TAG}/checkpoints/latest.pt"
+ENCODER_CKPT_REMOTE="${REMOTE_DATA_ROOT}/pretrain_store/${ENCODER_TAG}/checkpoints/latest.pt"
 TRAIN_LOG_DIR="/data/v2_command_interface/${RUN_TAG}/rlopt_train"
 
 # --- Pretrain sizing ---------------------------------------------------------
@@ -117,7 +129,12 @@ WANDB_GROUP="${WANDB_GROUP:-v2}"
 # WANDB_TAGS itself); see docker/cluster/run_singularity.sh.
 WANDB_TAGS="${WANDB_TAGS:-sr,det,v2,lafan1,${STAGE}}"
 
-EXCLUDE_NODES="${EXCLUDE_NODES:-atl1-1-03-010-15-0}"
+# Nodes Slurm advertises as healthy but whose GPU is unusable -- they keep
+# accepting jobs and killing them seconds in:
+#   atl1-1-03-010-15-0  "No devices were found" (2026-07-26)
+#   atl1-1-03-013-13-0  cudaErrorDevicesUnavailable, job 5558162 (2026-08-02);
+#                       still advertised `mix` with 1.9 TB free afterwards
+EXCLUDE_NODES="${EXCLUDE_NODES:-atl1-1-03-010-15-0,atl1-1-03-013-13-0}"
 
 ssh_ice() {
     ssh -o BatchMode=yes -o ConnectTimeout=10 ice "$@"

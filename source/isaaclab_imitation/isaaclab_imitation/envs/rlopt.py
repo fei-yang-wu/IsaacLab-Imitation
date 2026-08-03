@@ -12,6 +12,8 @@ import gymnasium as gym
 import torch
 from rlopt.agent import (  # noqa: F401
     FastSACRLOptConfig,
+    IPMDL2TConfig,
+    IPMDL2TRLOptConfig,
     FastTD3RLOptConfig,
     IPMDBilinearRLOptConfig,
     IPMDRLOptConfig,

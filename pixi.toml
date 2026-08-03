@@ -11,7 +11,7 @@ lint = "ruff check ."
 format-check = "ruff format --check ."
 typecheck = "ty check"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
-test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py tests/test_hl_skill_encoder.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
+test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_ipmd_l2t.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py tests/test_hl_skill_encoder.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
 test-runtime-bootstrap = "pytest -q source/isaaclab_imitation/tests/test_rlopt_runtime_bootstrap.py"
 test-experiments = "pytest -q source/imitation_experiments/tests"
 test-scripts = "pytest -q scripts/audit/test_audit_bones_seed_phase5.py scripts/audit/test_compare_bones_seed_exports.py scripts/data/test_prepare_bones_seed_phase5.py"

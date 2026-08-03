@@ -37,7 +37,7 @@ parser.add_argument(
     dest="algorithm",
     type=str.upper,
     default="IPMD",
-    choices=["PPO", "SAC", "IPMD"],
+    choices=["PPO", "SAC", "IPMD", "IPMD_L2T"],
     help="RLOpt algorithm (must match the checkpoint).",
 )
 parser.add_argument(
@@ -90,7 +90,7 @@ from isaaclab.envs import (
 from isaaclab.utils.dict import print_dict
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from rlopt.agent import IPMD, PPO, SAC
+from rlopt.agent import IPMD, IPMDL2T, PPO, SAC
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 from tensordict.nn import InteractionType
@@ -102,12 +102,14 @@ ALGORITHM_CLASS_MAP = {
     "PPO": PPO,
     "SAC": SAC,
     "IPMD": IPMD,
+    "IPMD_L2T": IPMDL2T,
 }
 
 ENTRY_POINT_ALGORITHM_MAP = {
     "rlopt_ppo_cfg_entry_point": "PPO",
     "rlopt_sac_cfg_entry_point": "SAC",
     "rlopt_ipmd_cfg_entry_point": "IPMD",
+    "rlopt_ipmd_l2t_cfg_entry_point": "IPMD_L2T",
 }
 
 
@@ -236,7 +238,10 @@ def main(
     agent.load_model(checkpoint_path)
 
     # switch to eval / inference mode
-    collector_policy = agent.collector_policy
+    collector_policy = getattr(agent, "deployment_policy", None)
+    if collector_policy is None:
+        collector_policy = agent.collector_policy
+
     collector_policy.eval()
 
     dt = getattr(env, "step_dt", None)

@@ -376,6 +376,17 @@ def bind_command_interface(agent_cfg, env_cfg) -> CommandInterfaceCfg | None:
         return None
     if not hasattr(agent_cfg, "sync_input_keys"):
         return None
+    # Normalize before deriving. Binding runs in the training entry point, which
+    # is well before the env constructor calls `resolve_late_overrides`, so an
+    # `env.command_interface.*` CLI override is still in whatever form Isaac
+    # Lab's config updater delivered it -- for a component list with a `None`
+    # default, the raw string "[a,b,c]". Deriving keys from that iterates it
+    # character by character and dies with `KeyError: '['` deep inside term
+    # resolution, several frames from the override that caused it.
+    #
+    # `resolve()` is idempotent by contract, so doing it here costs nothing and
+    # the environment still resolves the same interface later.
+    interface.resolve()
     agent_cfg._command_interface = interface
     sync = getattr(agent_cfg, "sync_input_keys", None)
     if callable(sync):
