@@ -54,18 +54,39 @@ LATENT_HOLD_STEPS="${LATENT_HOLD_STEPS:-10}"
 NJMAX="${NJMAX:-320}"
 NCONMAX="${NCONMAX:-40}"
 
-# --- Geometry: unchanged from the v2 campaign and from the screen -------------
+# --- Geometry -----------------------------------------------------------------
+# ROLLOUT_STEPS is 6, NOT the 12 this campaign started from. It has to equal
+# `G1ImitationTunedRLOptIPMDConfig.collector.frames_per_batch`, because this
+# launcher reconstructs the tuned recipe from the copied TUNED_OVERRIDES list
+# below rather than selecting it by entry point -- `Isaac-Imitation-G1-v2`
+# registers the *base* SonicRLOptIPMD config, so nothing here inherits the tuned
+# value and a stale number is applied silently.
+#
+# 6 was measured at +7.3% return and +6.8% episode length at unchanged MPJPE
+# against a byte-identical config (screen arms s1 vs r0): halving the batch
+# doubles the iterations, so twice the LR-controller adaptations and half the
+# policy drift between the collecting policy and the last update on a batch.
+#
+# This default said 12 until 2026-08-03 and two 5B runs were launched with it
+# before the drift was spotted. If you change the tuned class, change this too.
 TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-12288}"
-ROLLOUT_STEPS="${ROLLOUT_STEPS:-12}"
+ROLLOUT_STEPS="${ROLLOUT_STEPS:-6}"
 MINIBATCH_SIZE="${MINIBATCH_SIZE:-18432}"
 FRAMES_PER_BATCH=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
 FRAME_CAP="${FRAME_CAP:-5000000000}"
 COMPLETED_FRAMES="${COMPLETED_FRAMES:-0}"
 TRAIN_CHECKPOINT="${TRAIN_CHECKPOINT:-}"
 
-# 62,406 fps measured on this exact configuration at 100M (screen arm p4). Kept
-# a margin below it: finishing a segment early costs one extra submission,
-# overrunning costs everything since the last save.
+# 62,406 fps measured at 100M (screen arm p4). Kept a margin below it: finishing
+# a segment early costs one extra submission, overrunning costs everything since
+# the last save.
+#
+# That measurement was taken at rollout 12. At rollout 6 the optimizer work per
+# frame is unchanged -- update density is `epochs / mini_batch_size` and does not
+# involve the batch size -- but there are twice as many iterations, so the fixed
+# per-iteration cost (logging, LR adaptation, sync) doubles. The 7% margin here
+# is expected to absorb that; read the real rate off segment 1 and raise this for
+# later segments rather than trusting it twice.
 SEGMENT_FPS="${SEGMENT_FPS:-58000}"
 SEGMENT_WALL_S="${SEGMENT_WALL_S:-57540}"      # 15:59:00
 SEGMENT_STARTUP_S="${SEGMENT_STARTUP_S:-900}"
