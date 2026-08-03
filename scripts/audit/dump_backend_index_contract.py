@@ -42,7 +42,9 @@ from pathlib import Path
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-RUNTIME_HELPER_DIR = SCRIPT_DIR / "rlopt"
+# scripts/audit/ -> scripts/rlopt/. This file used to live in scripts/, and the
+# relative hop was never updated when it moved, so the import failed outright.
+RUNTIME_HELPER_DIR = SCRIPT_DIR.parent / "rlopt"
 if str(RUNTIME_HELPER_DIR) not in sys.path:
     sys.path.insert(0, str(RUNTIME_HELPER_DIR))
 
@@ -53,6 +55,11 @@ from runtime_bootstrap import (  # noqa: E402
     install_kit_import_guard,
     requested_backend,
     validate_gpu_policy,
+)
+from imitation_experiments.audit.backend_determinism import (  # noqa: E402
+    apply_randomization_profile,
+    describe_reference_selection,
+    pin_reference_start,
 )
 
 
@@ -136,31 +143,13 @@ def _build_report(env_cfg: object, args_cli: argparse.Namespace) -> dict:
     # Otherwise two backends start from different reference frames and different
     # randomized joint defaults, and the sampled planner frame below would differ
     # for reasons that have nothing to do with joint order.
-    env_cfg.random_reset_step_min = 0
-    env_cfg.random_reset_step_max = 0
-    env_cfg.random_reset_full_trajectory = False
-    events_cfg = getattr(env_cfg, "events", None)
-    for event_name in dir(events_cfg or ()):
-        if event_name.startswith("_"):
-            continue
-        params = getattr(getattr(events_cfg, event_name), "params", None)
-        if not isinstance(params, dict):
-            continue
-        # The joint-default randomization perturbs the action offset, which is
-        # one of the order-dependent quantities being audited. It documents
-        # None as "no randomization".
-        if "pos_distribution_params" in params:
-            params["pos_distribution_params"] = None
-        # The reference reset draws pose, velocity, and joint noise. Two
-        # backends consume the RNG differently, so leaving these on makes the
-        # two runs start from genuinely different states and any sampled state
-        # below would differ for reasons unrelated to indexing. Empty ranges
-        # mean "no offset"; None is not accepted here.
-        for range_key in ("pose_range", "velocity_range"):
-            if range_key in params:
-                params[range_key] = {}
-        if "joint_position_range" in params:
-            params["joint_position_range"] = (0.0, 0.0)
+    #
+    # Both steps go through the shared helper because doing it inline here wrote
+    # `random_reset_step_min` -- a field the v2 surface does not have -- and a
+    # configclass takes the attribute without complaint. The audit then reported
+    # a "byte-identical planner frame" check it was no longer performing.
+    reference_selection_surface = pin_reference_start(env_cfg, start_frame=0)
+    apply_randomization_profile(env_cfg, "none")
 
     env = gym.make(args_cli.task, cfg=env_cfg)
     try:
@@ -176,6 +165,8 @@ def _build_report(env_cfg: object, args_cli: argparse.Namespace) -> dict:
             ),
             "robot_joint_names": list(robot.joint_names),
             "robot_body_names": list(robot.body_names),
+            "reference_selection_surface": reference_selection_surface,
+            "reference_selection": describe_reference_selection(env_cfg),
         }
 
         # The canonical name lists the env believes it is pinned to.
@@ -359,6 +350,29 @@ def compare(left_path: Path, right_path: Path) -> int:
     same_enumeration = left_joints == right_joints
     print(f"left  : {left_path}  ({left['physics_cfg']})")
     print(f"right : {right_path}  ({right['physics_cfg']})")
+
+    # A contract written before the reset-pinning fix carries no selection
+    # record, and one written against an unpinned config started the two
+    # backends on different reference frames. Either way the planner-frame
+    # comparison below is not a controlled measurement, so say so rather than
+    # letting a state difference be read as a solver finding.
+    left_selection = left.get("reference_selection") or {}
+    right_selection = right.get("reference_selection") or {}
+    for side, selection in (("left", left_selection), ("right", right_selection)):
+        if not selection:
+            print(
+                f"[WARN] {side} contract predates reset-start pinning; its "
+                "planner-frame comparison is not controlled."
+            )
+        elif selection.get("start_mode") not in (None, "fixed"):
+            print(
+                f"[WARN] {side} ran with start_mode="
+                f"{selection.get('start_mode')!r}: reference starts were not pinned."
+            )
+    if left_selection and right_selection and left_selection != right_selection:
+        print(
+            f"[WARN] reset-start settings differ: {left_selection} vs {right_selection}"
+        )
     print(f"articulation joint order identical: {same_enumeration}")
     if not same_enumeration:
         moved = [
