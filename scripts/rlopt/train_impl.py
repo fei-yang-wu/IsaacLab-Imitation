@@ -52,6 +52,7 @@ from isaaclab.envs import (
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from rlopt.agent import IPMDL2T
 from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
 from rlopt.config_base import RLOptConfig, TrainerConfig
 from torchrl.envs import (
@@ -87,6 +88,7 @@ ALGORITHM_CLASS_MAP = {
     "SAC": SAC,
     "FASTSAC": FastSAC,
     "IPMD": IPMD,
+    "IPMD_L2T": IPMDL2T,
     "IPMD_SR": IPMDSR,
     "IPMD_BILINEAR": IPMDBilinear,
     "GAIL": GAIL,
@@ -294,7 +296,13 @@ def train(
     # and keep the configured minibatch SIZE (so per-gradient-step memory is
     # constant; the number of minibatches grows with the batch). The default
     # 4096-env / horizon-24 configuration is unchanged by this.
-    _ONPOLICY_SINGLE_ROLLOUT_ALGOS = {"PPO", "IPMD", "IPMD_SR", "IPMD_BILINEAR"}
+    _ONPOLICY_SINGLE_ROLLOUT_ALGOS = {
+        "PPO",
+        "IPMD",
+        "IPMD_L2T",
+        "IPMD_SR",
+        "IPMD_BILINEAR",
+    }
     if args_cli.algorithm in _ONPOLICY_SINGLE_ROLLOUT_ALGOS:
         scaled_frames_per_batch = int(agent_cfg.collector.frames_per_batch)
         replay_buffer_cfg = getattr(agent_cfg, "replay_buffer", None)
@@ -435,8 +443,8 @@ def train(
         base_env=env,
         transform=Compose(
             RewardSum(),  # type: ignore
-            StepCounter(1000),  # type: ignore
-            RewardClipping(-10.0, 5.0),  # type: ignore
+            StepCounter(500),  # type: ignore
+            # RewardClipping(-10.0, 5.0),  # type: ignore
         ),
     )
 

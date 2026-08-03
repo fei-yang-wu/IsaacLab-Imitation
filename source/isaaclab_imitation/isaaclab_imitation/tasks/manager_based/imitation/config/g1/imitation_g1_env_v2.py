@@ -74,7 +74,10 @@ from .common.presets import (
     _set_contact_sensor_update_period,
 )
 from .common.rewards import G1SonicRewardsCfg
-from .common.terminations import G1SonicTerminationsCfg
+from .common.terminations import (
+    G1SonicTerminationCurriculumCfg,
+    G1SonicTerminationsCfg,
+)
 
 
 @configclass
@@ -155,6 +158,29 @@ class ImitationG1V2EnvCfg(ImitationLearningEnvCfg):
     # Master switch for the reward_input observation group (parked IPMD
     # reward-estimation stack).
     enable_reward_input_observations: bool = False
+
+    # Master switch for the SONIC termination-threshold anneal, off by default
+    # so `curriculum = None` stays the surface's declared behaviour.
+    #
+    # Off means the strict release thresholds apply from frame 0, which is the
+    # 2026-07-21 decision: a moving threshold makes early curves incomparable
+    # across runs. That reasoning is about measurement, and it is why this stays
+    # opt-in rather than becoming the default. It is worth having a switch
+    # because the anneal's own start values were measured as the fastest local
+    # learner (episode length 25.9 against 14.6 for strict-from-scratch over
+    # 50M, migration wiki 2026-07-19), and because the anneal completes at 500M
+    # -- 10% of a 5B budget -- so a long run ends on bit-identical strict SONIC
+    # thresholds either way.
+    enable_termination_curriculum: bool = False
+
+    # Anneal window for that curriculum, in environment frames. Exposed as env
+    # fields rather than left to `env.curriculum.<term>.params.*` overrides,
+    # which cannot work: `curriculum` is still None when Hydra applies overrides
+    # and is only installed during `resolve_late_overrides`, so a CLI override
+    # would target a non-existent node. None keeps each term's own default
+    # (50M -> 500M).
+    termination_curriculum_start_frames: int | None = None
+    termination_curriculum_end_frames: int | None = None
 
     # Anchor used when constructing expert batches and high-level macro states,
     # and by the anchor-relative reward terms. Synced into the reference
@@ -432,6 +458,26 @@ class ImitationG1V2EnvCfg(ImitationLearningEnvCfg):
         if not self.enable_reward_input_observations:
             if getattr(self.observations, "reward_input", None) is not None:
                 self.observations.reward_input = None
+        # Installed here, not in __post_init__: the toggle is an `env.*` CLI
+        # override and so only has its final value by this point. Guarded on
+        # `is None` so an explicitly assigned curriculum is never replaced.
+        if self.enable_termination_curriculum and self.curriculum is None:
+            self.curriculum = G1SonicTerminationCurriculumCfg()
+            for window_field, value in (
+                ("start_frames", self.termination_curriculum_start_frames),
+                ("end_frames", self.termination_curriculum_end_frames),
+            ):
+                if value is None:
+                    continue
+                for term_name in (
+                    "anchor_pos_threshold",
+                    "anchor_ori_threshold",
+                    "ee_body_pos_threshold",
+                    "foot_pos_xyz_threshold",
+                ):
+                    getattr(self.curriculum, term_name).params[window_field] = int(
+                        value
+                    )
         self._set_anchor_body(self.expert_anchor_body_name)
         self._sync_command_interface()
 

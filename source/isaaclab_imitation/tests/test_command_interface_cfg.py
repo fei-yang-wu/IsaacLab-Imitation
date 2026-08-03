@@ -22,6 +22,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
     ReferenceChannelCfg,
     ReferenceSelectionCfg,
     actor_command_keys,
+    bind_command_interface,
     actor_input_keys,
     command_space_components,
     critic_command_keys,
@@ -356,3 +357,73 @@ def test_resolve_is_idempotent():
         critic_command_keys(cfg),
         encoder_command_keys(cfg),
     ) == before
+
+
+class _StubAgentCfg:
+    """Minimal agent stand-in: records the interface and derives critic keys.
+
+    Mirrors what the real IPMD config does at bind time -- the point of the test
+    is *when* normalization happens, not which agent does the deriving.
+    """
+
+    def __init__(self):
+        self._command_interface = None
+        self.critic_keys = None
+
+    def sync_input_keys(self):
+        self.critic_keys = critic_input_keys(
+            self._command_interface, privileged_keys=PRIVILEGED_KEYS
+        )
+
+
+class _StubEnvCfg:
+    def __init__(self, interface):
+        self.command_interface = interface
+
+
+def test_bind_normalizes_a_cli_string_component_list_before_deriving_keys():
+    """A Hydra override reaches bind as a raw string, and must still work.
+
+    Binding happens in the training entry point, long before the env
+    constructor runs `resolve_late_overrides`, so `critic_components` is still
+    whatever Isaac Lab's config updater assigned -- for a `None`-default field
+    that is the literal string "[a,b,c]". Without normalization at bind time it
+    is iterated character by character and dies with `KeyError: '['` several
+    frames away from the override that caused it.
+    """
+    interface = CommandInterfaceCfg(
+        reference=_reference(),
+        actor=LatentCommandCfg(dim=258),
+        critic_channels=("reference",),
+    )
+    # Exactly what `env.command_interface.reference.critic_components=[...]`
+    # leaves behind: a string, not a sequence.
+    interface.reference.critic_components = "[joint_qpos_qvel,root_pos,ee_pos]"
+
+    agent = _StubAgentCfg()
+    bound = bind_command_interface(agent, _StubEnvCfg(interface))
+
+    assert bound is interface
+    # Canonically ordered, not as written -- ee_pos precedes root_pos.
+    assert interface.reference.critic_components == (
+        "joint_qpos_qvel",
+        "ee_pos",
+        "root_pos",
+    )
+    assert ("critic", "expert_ee_pos_b") in agent.critic_keys
+
+
+def test_bind_is_idempotent_with_the_environments_own_resolution():
+    """Binding resolves, and the env resolving again afterwards is a no-op."""
+    interface = CommandInterfaceCfg(
+        reference=_reference(critic_components="[root_pos,joint_qpos_qvel]"),
+        actor=LatentCommandCfg(dim=258),
+        critic_channels=("reference",),
+    )
+    agent = _StubAgentCfg()
+    bind_command_interface(agent, _StubEnvCfg(interface))
+    first = agent.critic_keys
+
+    interface.resolve()
+    agent.sync_input_keys()
+    assert agent.critic_keys == first

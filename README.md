@@ -239,6 +239,34 @@ python scripts/rlopt/train.py \
     env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
+Train the IPMD learning-to-teach variant on a current-v2 command surface:
+
+```bash
+python scripts/rlopt/train.py \
+    --task Isaac-Imitation-G1-Explicit-v2 \
+    --algo IPMD_L2T \
+    --headless \
+    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+```
+
+`IPMD_L2T` keeps rollout control and the ordinary IPMD/PPO objectives on a
+privileged teacher that reads the critic observations. A second actor reads
+the normal policy observations and learns from the teacher's executed actions;
+it never controls training rollouts. The same algorithm entry point is
+registered on `Isaac-Imitation-G1-v2`, `Isaac-Imitation-G1-Explicit-v2`, and
+`Isaac-Imitation-G1-Chunk-v2`. Latent v2 runs retain the usual IPMD skill-command
+checkpoint requirements.
+
+Play an IPMD-L2T checkpoint with the deployable student policy:
+
+```bash
+python scripts/rlopt/play.py \
+    --task Isaac-Imitation-G1-Explicit-v2 \
+    --algo IPMD_L2T \
+    --checkpoint /absolute/path/to/checkpoint.pt \
+    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+```
+
 ### LAFAN1 local pretrain + low-level pipeline (reproducible)
 
 The recommended reproducible recipe trains a G1 LAFAN1 policy in two stages — pretrain a

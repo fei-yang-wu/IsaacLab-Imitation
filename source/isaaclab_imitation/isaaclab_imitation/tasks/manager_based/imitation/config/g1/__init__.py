@@ -229,6 +229,10 @@ _SONIC_OFFICIAL_FSQ_V2_TASK_KWARGS = {
 # and is kept only for its own back-compat reasons (see its comment below).
 # ---------------------------------------------------------------------------
 
+_CURRENT_V2_IPMD_L2T_ENTRY_POINT = (
+    f"{agents.__name__}.rlopt_ipmd_l2t_cfg:G1ImitationRLOptIPMDL2TConfig"
+)
+
 # Stable recipe, command space configured -- THE DEFAULT latent task
 # (2026-08-01 onward; supersedes `-G1-v1`, which stays frozen at its exact
 # old kwargs below). No `Latent` tag: under the recipe x command-config
@@ -262,6 +266,7 @@ gym.register(
         "rlopt_sac_cfg_entry_point": (
             f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
         ),
+        "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
     },
 )
 
@@ -285,6 +290,7 @@ gym.register(
         "rlopt_sac_cfg_entry_point": (
             f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
         ),
+        "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
     },
 )
 
@@ -301,6 +307,7 @@ gym.register(
         "env_cfg_entry_point": (
             f"{__name__}.surfaces.explicit:ImitationG1ChunkSurfaceEnvCfg"
         ),
+        "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
     },
 )
 

@@ -21,11 +21,13 @@ ALGORITHMS = (
     "PPO",
     "SAC",
     "IPMD",
+    "IPMD_L2T",
 )
 ENTRY_POINT_ALGORITHM_MAP = {
     "rlopt_ppo_cfg_entry_point": "PPO",
     "rlopt_sac_cfg_entry_point": "SAC",
     "rlopt_ipmd_cfg_entry_point": "IPMD",
+    "rlopt_ipmd_l2t_cfg_entry_point": "IPMD_L2T",
 }
 
 
