@@ -1,0 +1,53 @@
+{
+  "arms": {
+    "x1_updates_half_aligned": {
+      "job": "5560648",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "x2_reset_narrow_aligned": {
+      "job": "5560649",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "y0_aligned_control": {
+      "job": "5560679",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "y1_updates_quarter": {
+      "job": "5560680",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    }
+  },
+  "encoder_checkpoint": "/data/pretrain_store/lafan1_v2_det_sr_h10_z256_seed0/checkpoints/latest.pt",
+  "geometry": {
+    "max_iterations": 2000,
+    "num_envs": 12288,
+    "rollout_steps": 12,
+    "seed": 0,
+    "total_frames": 294912000
+  },
+  "last_submitted_at": "2026-08-03T18:01:26.111454-04:00",
+  "log_root": "/data/rlopt_hp_screen_aligned_s0",
+  "manifest_sha256": "d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8",
+  "rlopt_dirty": false,
+  "rlopt_git_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
+  "screen_tag": "rlopt_hp_screen_aligned_s0",
+  "task": "Isaac-Imitation-G1-v2",
+  "wandb": {
+    "group": "rlopt-hparam-search",
+    "project": "g1-lafan1"
+  },
+  "workspace_dirty": true,
+  "workspace_git_sha": "33f313f30e643641546cfb37aa507d5cf4aeca15"
+}

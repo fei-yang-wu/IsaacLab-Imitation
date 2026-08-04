@@ -115,7 +115,18 @@ ENCODER_CKPT_CONTAINER="/data/pretrain_store/${ENCODER_TAG}/checkpoints/latest.p
 ENCODER_CKPT_REMOTE="${REMOTE_DATA_ROOT}/pretrain_store/${ENCODER_TAG}/checkpoints/latest.pt"
 
 RUN_TAG="${RUN_TAG:-lafan1_v2_tuned_5b_seed${SEED}_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}}"
-TRAIN_LOG_DIR="/data/tuned_5b/${RUN_TAG}/rlopt_train"
+LOG_ROOT="${LOG_ROOT:-/data/tuned_5b}"
+TRAIN_LOG_DIR="${LOG_ROOT}/${RUN_TAG}/rlopt_train"
+
+# --- Termination protocol -----------------------------------------------------
+# Unset is the instantaneous protocol the registered task id defines, which every
+# recorded oracle-qualification and M3 number is stated against. A window changes
+# only where the episode ends: the strict thresholds are inherited unchanged, so
+# a run that sets this is comparable on MPJPE but NOT on episode length, return,
+# or any per-minute rate -- a window inflates those exactly the way loosening a
+# threshold does.
+TERMINATION_WINDOW="${TERMINATION_WINDOW:-}"
+TERMINATION_WINDOW_PROBE="${TERMINATION_WINDOW_PROBE:-0}"
 
 WANDB_PROJECT="${WANDB_PROJECT:-g1-lafan1}"
 WANDB_GROUP="${WANDB_GROUP:-tuned-5b}"
@@ -184,9 +195,27 @@ check_gates() {
         "${REPO_ROOT}/source/isaaclab_imitation/isaaclab_imitation/tasks/manager_based/imitation/config/g1/imitation_g1_env_v2.py" \
         || fail "v2 env config lacks enable_termination_curriculum."
     echo "[PASS] tuned-recipe code changes present in the working tree"
+    if [[ -n "${TERMINATION_WINDOW}" || "${TERMINATION_WINDOW_PROBE}" == "1" ]]; then
+        grep -q "termination_window" "${REPO_ROOT}/scripts/rlopt/train.py" \
+            || fail "scripts/rlopt/train.py lacks --termination_window; the flag would be an unknown argument."
+        echo "[PASS] termination-window flag present in the working tree"
+    fi
+}
+
+check_termination_window() {
+    # A window and the probe are mutually exclusive: the probe measures how long
+    # violations last, which requires terminating on none of them.
+    if [[ "${TERMINATION_WINDOW_PROBE}" == "1" && -n "${TERMINATION_WINDOW}" ]]; then
+        fail "TERMINATION_WINDOW_PROBE=1 cannot be combined with TERMINATION_WINDOW=${TERMINATION_WINDOW}."
+    fi
+    if [[ -n "${TERMINATION_WINDOW}" ]]; then
+        [[ "${TERMINATION_WINDOW}" =~ ^[0-9]+$ ]] && (( TERMINATION_WINDOW >= 1 )) \
+            || fail "TERMINATION_WINDOW must be a positive integer; got '${TERMINATION_WINDOW}'."
+    fi
 }
 
 check_rollout_matches_recipe
+check_termination_window
 
 remaining=$((FRAME_CAP - COMPLETED_FRAMES))
 (( remaining > 0 )) || { echo "[INFO] ${RUN_TAG} already at FRAME_CAP."; exit 0; }
@@ -199,6 +228,10 @@ fi
 
 checkpoint_args=()
 [[ -n "${TRAIN_CHECKPOINT}" ]] && checkpoint_args=(--checkpoint "${TRAIN_CHECKPOINT}")
+
+window_args=()
+[[ -n "${TERMINATION_WINDOW}" ]] && window_args=(--termination_window "${TERMINATION_WINDOW}")
+[[ "${TERMINATION_WINDOW_PROBE}" == "1" ]] && window_args=(--termination_window_probe)
 
 export CLUSTER_LOGIN="${CLUSTER_LOGIN:-login-ice.pace.gatech.edu}"
 export CLUSTER_SLURM_SUBMIT_SCRIPT=pace
@@ -221,6 +254,7 @@ cmd=(./docker/cluster/cluster_interface.sh -c ice_runtime job
     --seed "${SEED}" --max_iterations "${max_iterations}"
     --kit_args=--/app/extensions/fsWatcherEnabled=false
     "${checkpoint_args[@]}"
+    "${window_args[@]}"
     physics=newton_mjwarp
     "env.sim.physics.solver_cfg.njmax=${NJMAX}"
     "env.sim.physics.solver_cfg.nconmax=${NCONMAX}"
@@ -258,6 +292,13 @@ echo "[INFO] geometry    : ${TRAIN_NUM_ENVS} x ${ROLLOUT_STEPS} = ${FRAMES_PER_B
 echo "[INFO] budget      : ${FRAME_CAP} cap; ${COMPLETED_FRAMES} done; this segment ${max_iterations} iters (~$((max_iterations * FRAMES_PER_BATCH)) frames)"
 echo "[INFO] segment cap : ${SEGMENT_MAX_ITERATIONS} iters at ${SEGMENT_FPS} fps under a ${CLUSTER_SLURM_TIME_LIMIT} wall"
 echo "[INFO] save every  : ${SAVE_INTERVAL} frames (bounds TIMEOUT loss)"
+if [[ "${TERMINATION_WINDOW_PROBE}" == "1" ]]; then
+    echo "[INFO] terminations: PROBE -- tracking terminations off, run lengths logged (diagnostic only)"
+elif [[ -n "${TERMINATION_WINDOW}" ]]; then
+    echo "[INFO] terminations: window ${TERMINATION_WINDOW} consecutive steps (thresholds unchanged)"
+else
+    echo "[INFO] terminations: instantaneous (the registered protocol)"
+fi
 echo "[INFO] encoder     : ${ENCODER_CKPT_CONTAINER}"
 echo "[INFO] checkpoints : ${TRAIN_LOG_DIR}"
 echo "[INFO] wandb       : ${WANDB_PROJECT} / ${WANDB_GROUP}"

@@ -529,7 +529,49 @@ HP_SCREEN_ARM_SPECS=(
 # Both at two seeds: a single seed cannot resolve anything under ~15% here.
 "w1_reset_narrow|Reset start range narrowed 0-200 -> 0-100, the opposite of v1 which lost on both seeds.|ENVS=12288 ROLLOUT_STEPS=6 agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} env.command_interface.reference.selection.random_step_max=100"
 "w2_updates_half|mini_batch 18432 -> 36864: 136 updates per M frames against the standard 271. The only untested direction on an axis where five arms have lost by going the other way.|ENVS=12288 ROLLOUT_STEPS=6 agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=36864"
+# --- Round 22: rebased on the mjwarp-aligned config, testing what 5B does not ---
+# The 5B runs now cover rollout 6 / 12 / 24 on both datasets, which settles that
+# question at full budget -- far better than a 23-minute screen, since scoring on
+# early progress systematically favours a short rollout regardless of where the
+# run ends up. These two arms therefore avoid rollout entirely and test the axes
+# those runs hold fixed.
+#
+# Solver settings must match the aligned runs (njmax 288, nconmax 200) rather
+# than the 320/40 the earlier screen used. They are passed via the launcher's
+# NJMAX/NCONMAX variables, NOT as arm overrides: the base command already sets
+# those keys, so an arm override would put the same Hydra key on the line twice.
+#
+# x1: the one direction 21 rounds never tried. Five arms RAISED updates per frame
+#     (a1, a9, i5, m3, t3) and all five lost; none ever lowered it. At the r12
+#     batch of 147456, mini_batch 36864 gives 4 minibatches x 5 epochs = 20
+#     updates, 136 per M frames against the standard 271.
+# x2: reset width. Widening 0-200 -> 0-500 (v1) lost on BOTH seeds by more than
+#     the 13% noise band, which is one of the few trustworthy wall-clock results.
+#     Narrowing is the untested direction on a knob already shown to matter.
+#
+# Two seeds each -- a single seed cannot resolve anything under ~15%.
+"x1_updates_half_aligned|mini_batch 18432 -> 36864 on the aligned base: 136 updates per M frames vs 271.|agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=36864"
+"x2_reset_narrow_aligned|Reset range 0-200 -> 0-100 on the aligned base, the opposite of the v1 arm that lost on both seeds.|agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH} env.command_interface.reference.selection.random_step_max=100"
+# --- Round 23: the control I forgot, and the direction that moved ---------------
+# Round 22 shipped two treatments and NO control, so x1 could be ranked above x2
+# but neither against the aligned config itself. y0 is that control.
+#
+# It also corrected the noise estimate. Two genuine seeds (0 and 1) of x1 landed
+# within 0.2% of each other, against the 13% I had measured from two runs of
+# s1 and attributed to the seed. Seed is NOT the dominant noise source here --
+# node and co-tenancy variation in throughput is, because these metrics are
+# scored at a fixed training-MINUTE and a slower node reaches that mark at fewer
+# frames. Same-round arms are therefore far more comparable than cross-round ones.
+#
+# x1 (136 updates per M frames) beat x2 on all three metrics, and five earlier
+# arms lost by RAISING update density. y1 halves it again to 68 to find where
+# that direction turns, since a monotone trend over five points is worth chasing
+# to its end rather than stopping at the first improvement.
+"y0_aligned_control|The aligned config with nothing changed. The control round 22 lacked.|agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=${HP_SCREEN_BASE_MINIBATCH}"
+"y1_updates_quarter|mini_batch 73728: 68 updates per M frames, half of x1 and a quarter of standard. Finds where the less-work trend turns.|agent.optim.kl_adapt_step=iteration agent.ppo.entropy_coeff=0.0 agent.policy.normalize_input=true agent.value_function.normalize_input=true agent.policy.activation_fn=silu agent.value_function.activation_fn=silu agent.policy.num_cells=[1024,1024,512] agent.value_function.num_cells=[1024,1024,512] agent.optim.desired_kl=0.02 agent.loss.gamma=0.97 env.rewards.action_rate_l2.weight=0.0 env.rewards.tracking_reward_points.weight=4.0 env.enable_termination_curriculum=true env.termination_curriculum_start_frames=5000000 env.termination_curriculum_end_frames=30000000 agent.loss.mini_batch_size=73728"
 )
+
+
 
 
 

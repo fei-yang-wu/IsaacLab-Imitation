@@ -1,0 +1,40 @@
+{
+  "agent_entry_point": "rlopt_ipmd_tuned_cfg_entry_point",
+  "arms": {
+    "window10": {
+      "job": "5560945",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "termination_window": 10,
+      "total_frames": 1000000000
+    },
+    "window3": {
+      "job": "5560944",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "termination_window": 3,
+      "total_frames": 1000000000
+    }
+  },
+  "campaign": "2026-08-03-termination-window",
+  "cluster": "ICE (login-ice.pace.gatech.edu)",
+  "control_run": "lafan1_v2_mjwarp_aligned_5b_seed0_e12288_r24 @ 1B (instantaneous, W&B group mjwarp-aligned-5b)",
+  "encoder_checkpoint": "/data/pretrain_store/lafan1_v2_det_sr_h10_z256_seed0/checkpoints/latest.pt",
+  "launcher": "experiments/campaigns/2026-08-03-termination-window/submit_termination_window_1b_ice.sh",
+  "log_root": "/data/term_window",
+  "manifest_sha256": "d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8",
+  "physics": "newton_mjwarp (njmax 288, nconmax 200)",
+  "rlopt_dirty": false,
+  "rlopt_git_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
+  "scoring_note": "MPJPE only. A window inflates episode length, return and every per-minute rate mechanically, the same way a threshold relaxation does. Evaluate the resulting checkpoints under the strict instantaneous protocol.",
+  "submitted_at": "2026-08-03T19:53:22.482077-04:00",
+  "task": "Isaac-Imitation-G1-v2",
+  "wandb": {
+    "group": "termination-window-1b",
+    "project": "g1-lafan1"
+  },
+  "workspace_dirty": true,
+  "workspace_git_sha": "33f313f30e643641546cfb37aa507d5cf4aeca15"
+}
