@@ -351,6 +351,34 @@ sit on it depends on whether the downstream consumer cares more about tracking
 precision or about episodes surviving. For a planner-training checkpoint,
 survival is arguably worth more than the last 1 mm of MPJPE.
 
+## Final screen table — no single config dominates
+
+| arm | MPJPE | EE | survival | clips | full-horizon |
+|---|---|---|---|---|---|
+| control | 22.03 | 0.0785 | 444.6 | 25/40 | 43.51 |
+| **s11** (body 0.05, w2) | **17.90** | 0.0777 | 443.9 | 24/40 | 37.28 |
+| **s12** (body 0.05 + anchor-pos w2) | 21.19 | **0.0540** | 440.2 | 23/40 | 46.73 |
+| **s13** (body 0.05 + wrist reward) | 18.93 | 0.0988 | **450.2** | 24/40 | **33.33** |
+| s2 (body 0.05) | 17.89 | 0.0722 | 439.1 | 23/40 | 43.10 |
+| s6 (anchor-pos w2) | 24.98 | 0.0599 | 443.8 | 24/40 | 43.35 |
+
+Pick by what the downstream consumer needs:
+
+- **strict MPJPE** → s11 (−18.8%), survival preserved
+- **EE** → s12 (−31.2%), beating s6
+- **full-horizon MPJPE and survival** → s13 (−23.4%, 450.2)
+
+**s13 corrects an earlier call of mine.** I described the wrist reward as
+"refuted" because s7 alone moved EE by 0.5%. Combined with the sharpened body
+kernel it produces the best full-horizon *and* best survival in the screen,
+while making world-frame EE worse. The wrist term does something real — it just
+is not visible in the metric I judged it by, and world-frame EE was the wrong
+lens because it is dominated by root drift.
+
+For a **planner-training checkpoint**, s13 is the strongest candidate: survival
+and full-horizon are what a planner consumes, and strict MPJPE at 18.93 is
+within noise of the best.
+
 ## How to improve EE further
 
 EE is **world-frame**, and decomposing it settles what to work on:

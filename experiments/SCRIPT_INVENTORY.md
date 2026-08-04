@@ -25,6 +25,7 @@ Classes:
 
 | Path | Class | Responsibility |
 | --- | --- | --- |
+| `experiments/campaigns/2026-08-04-bones129k-v2-scale/run.sh` | guarded launcher | Runs the staged full-129,785-motion v2 DiffSR pretrain and local 24,576-environment low-level scale probe. |
 | `experiments/campaigns/2026-07-22-bones-h10-scale/submit.sh` | front door | Dated wrapper for the retained BONES h10 scale screen. |
 | `experiments/campaigns/2026-07-29-sonic-official-fsq/run.sh` | front door | Dated wrapper for the official-window SONIC FSQ32 low-level campaign. |
 | `experiments/campaigns/2026-07-29-sonic-official-fsq/sonic_official_fsq/submit_sonic_official_fsq_ice.sh` | guarded launcher | Validates corrected LAFAN1 inputs and submits one resumable ICE H200 segment under the 5B cap. |

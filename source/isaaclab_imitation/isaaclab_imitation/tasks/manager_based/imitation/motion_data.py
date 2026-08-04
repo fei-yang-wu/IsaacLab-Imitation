@@ -140,6 +140,19 @@ class MotionDataCfg:
     are 568 B (21%).
     """
 
+    macro_cache_device: str | None = None
+    """Optional device for a compact offline macro-state cache.
+
+    This fast path currently supports the ``root_qpos`` macro-state terms. It
+    materializes only joint positions and the selected anchor pose, avoiding a
+    scattered gather over every field in a large CPU replay buffer for each
+    encoder batch. Leave ``None`` to sample macro transitions directly from the
+    reference replay buffer.
+    """
+
+    macro_cache_chunk_size: int = 262_144
+    """Rows copied per chunk while materializing ``macro_cache_device``."""
+
     wrap_steps: bool = False
     """Wrap the reference cursor at the end of a clip instead of terminating."""
 

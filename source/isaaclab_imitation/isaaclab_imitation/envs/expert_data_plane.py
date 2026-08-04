@@ -294,6 +294,10 @@ class ExpertDataPlane:
         self.reference_site_names: list[str] = []
         self._expert_sampler_warned_unknown_terms: set[str] = set()
         self._expert_macro_feature_slices: dict[str, tuple[int, int]] | None = None
+        self._expert_macro_split_rank_cache: dict[
+            tuple[str, float, int], torch.Tensor
+        ] = {}
+        self._root_qpos_macro_cache: dict[str, torch.Tensor] | None = None
 
         self._load_reference_metadata(zarr_path)
 
@@ -1444,6 +1448,15 @@ class ExpertDataPlane:
                 f"expert macro splits, got {eval_fraction!r}."
             )
 
+        cache_key = (normalized, eval_fraction, int(split_seed))
+        cache = getattr(self, "_expert_macro_split_rank_cache", None)
+        if cache is None:
+            cache = {}
+            self._expert_macro_split_rank_cache = cache
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         num_ranks = int(nonempty_ranks.numel())
         if num_ranks < 2:
             logger.warning(
@@ -1464,9 +1477,11 @@ class ExpertDataPlane:
         eval_count = min(eval_count, num_ranks - 1)
         selected = perm[:eval_count] if normalized == "eval" else perm[eval_count:]
         selected = selected.sort().values
-        return selected.to(
+        selected = selected.to(
             device=self.trajectory_manager.state_device, dtype=torch.long
         )
+        cache[cache_key] = selected
+        return selected
 
     def _sample_expert_window_slice_for_trajectory_ranks(
         self,
@@ -1506,6 +1521,184 @@ class ExpertDataPlane:
             expert_window = expert_window.to(tm.device)
         expert_window = tm.attach_reference_fields(expert_window, use_buffers=False)
         return _convert_reference_quats_to_xyzw(expert_window.to(self._env.device))
+
+    def _root_qpos_macro_cache_device(self) -> torch.device | None:
+        configured = getattr(self._env.cfg.data, "macro_cache_device", None)
+        if configured is None or not str(configured).strip():
+            return None
+        terms = self._expert_macro_feature_term_order()
+        expected = (
+            "expert_motion_qpos",
+            "expert_anchor_pos_b",
+            "expert_anchor_ori_b",
+        )
+        if terms != expected:
+            raise ValueError(
+                "env.data.macro_cache_device currently requires the root_qpos "
+                f"macro-state terms {expected}, got {terms}."
+            )
+        return torch.device(str(configured))
+
+    def _ensure_root_qpos_macro_cache(self) -> dict[str, torch.Tensor] | None:
+        """Materialize the compact root+qpos source fields on the cache device."""
+        cache_device = self._root_qpos_macro_cache_device()
+        if cache_device is None:
+            return None
+        if self._root_qpos_macro_cache is not None:
+            return self._root_qpos_macro_cache
+
+        tm = self.trajectory_manager
+        storage = getattr(tm.rb, "_storage", None)
+        source = getattr(storage, "_storage", None)
+        if source is None:
+            raise RuntimeError(
+                "The root_qpos macro cache requires tensor-backed replay storage."
+            )
+        required = ("joint_pos", "body_pos_w", "body_quat_w")
+        missing = [key for key in required if source.get(key, None) is None]
+        if missing:
+            raise KeyError(
+                "The root_qpos macro cache is missing replay fields "
+                f"{missing}; available keys are {list(source.keys())}."
+            )
+        if self._expert_anchor_body_name not in self.reference_body_names:
+            raise ValueError(
+                "The root_qpos macro cache cannot resolve anchor body "
+                f"{self._expert_anchor_body_name!r} in dataset body names."
+            )
+
+        anchor_id = self.reference_body_names.index(self._expert_anchor_body_name)
+        total = int(tm.end.max().item())
+        joint_source = source["joint_pos"]
+        body_pos_source = source["body_pos_w"]
+        body_quat_source = source["body_quat_w"]
+        if int(joint_source.shape[0]) < total:
+            raise RuntimeError(
+                "Replay storage is shorter than the trajectory index table: "
+                f"storage={joint_source.shape[0]}, indexed={total}."
+            )
+
+        joint_shape = (total, int(joint_source.shape[-1]))
+        cache_bytes = total * (
+            int(joint_source.shape[-1]) * joint_source.element_size()
+            + 3 * body_pos_source.element_size()
+            + 4 * body_quat_source.element_size()
+        )
+        if cache_device.type == "cuda":
+            free_bytes, _ = torch.cuda.mem_get_info(cache_device)
+            reserve_bytes = 4 * 1024**3
+            if cache_bytes + reserve_bytes > free_bytes:
+                raise RuntimeError(
+                    "Insufficient CUDA memory for the compact root_qpos macro "
+                    f"cache: need {cache_bytes / 1024**3:.1f} GiB plus a "
+                    f"4 GiB reserve, have {free_bytes / 1024**3:.1f} GiB free."
+                )
+
+        logger.warning(
+            "Materializing %.1f GiB root_qpos macro cache (%s rows) on %s; "
+            "this is a one-time sequential read for this process.",
+            cache_bytes / 1024**3,
+            total,
+            cache_device,
+        )
+        cache = {
+            "joint_pos": torch.empty(
+                joint_shape, dtype=joint_source.dtype, device=cache_device
+            ),
+            "anchor_pos_w": torch.empty(
+                (total, 3), dtype=body_pos_source.dtype, device=cache_device
+            ),
+            "anchor_quat_w": torch.empty(
+                (total, 4), dtype=body_quat_source.dtype, device=cache_device
+            ),
+        }
+        chunk_size = int(getattr(self._env.cfg.data, "macro_cache_chunk_size", 262_144))
+        if chunk_size <= 0:
+            raise ValueError("env.data.macro_cache_chunk_size must be positive.")
+
+        sources = (
+            ("joint_pos", joint_source),
+            ("anchor_pos_w", body_pos_source),
+            ("anchor_quat_w", body_quat_source),
+        )
+        for target_name, source_tensor in sources:
+            target = cache[target_name]
+            for start in range(0, total, chunk_size):
+                end = min(start + chunk_size, total)
+                if target_name == "joint_pos":
+                    chunk = source_tensor[start:end]
+                else:
+                    chunk = source_tensor[start:end, anchor_id]
+                    if target_name == "anchor_quat_w":
+                        chunk = chunk[..., _WXYZ_TO_XYZW]
+                target[start:end].copy_(chunk.to(device=cache_device))
+            logger.info(
+                "Materialized root_qpos macro cache field %s (%s rows).",
+                target_name,
+                total,
+            )
+        self._root_qpos_macro_cache = cache
+        logger.warning("Root_qpos macro cache is ready on %s.", cache_device)
+        return cache
+
+    def _sample_root_qpos_macro_window_for_trajectory_ranks(
+        self,
+        traj_ranks: torch.Tensor,
+        local_steps: torch.Tensor,
+        *,
+        past_steps: int,
+        future_steps: int,
+    ) -> TensorDict | None:
+        cache = self._ensure_root_qpos_macro_cache()
+        if cache is None:
+            return None
+        tm = self.trajectory_manager
+        cache_device = cache["joint_pos"].device
+        traj_ranks_t = traj_ranks.to(device=tm.state_device, dtype=torch.long)
+        local_steps_t = local_steps.to(device=tm.state_device, dtype=torch.long)
+        offsets = torch.arange(
+            -past_steps,
+            future_steps + 1,
+            device=tm.state_device,
+            dtype=torch.long,
+        )
+        lengths = tm.length.index_select(0, traj_ranks_t).clamp(min=1)
+        steps = local_steps_t.unsqueeze(1) + offsets.unsqueeze(0)
+        steps = torch.minimum(steps.clamp(min=0), (lengths - 1).unsqueeze(1))
+        indices = tm.start.index_select(0, traj_ranks_t).unsqueeze(1) + steps
+        indices = indices.to(device=cache_device)
+        return TensorDict(
+            {
+                "joint_pos": cache["joint_pos"][indices],
+                "_macro_anchor_pos_w": cache["anchor_pos_w"][indices],
+                "_macro_anchor_quat_w": cache["anchor_quat_w"][indices],
+            },
+            batch_size=list(indices.shape),
+            device=cache_device,
+        ).to(self._env.device)
+
+    def _sample_expert_macro_window_for_trajectory_ranks(
+        self,
+        traj_ranks: torch.Tensor,
+        local_steps: torch.Tensor,
+        *,
+        past_steps: int,
+        future_steps: int,
+    ) -> TensorDict:
+        compact = self._sample_root_qpos_macro_window_for_trajectory_ranks(
+            traj_ranks,
+            local_steps,
+            past_steps=past_steps,
+            future_steps=future_steps,
+        )
+        if compact is not None:
+            return compact
+        return self._sample_expert_window_slice_for_trajectory_ranks(
+            traj_ranks,
+            local_steps,
+            past_steps=past_steps,
+            future_steps=future_steps,
+        )
 
     def _build_reward_input_cache(self, *, device: torch.device) -> None:
         """Pre-materialize expert-side values for the `reward_input` obs group.
@@ -1818,23 +2011,37 @@ class ExpertDataPlane:
         batch_size = int(env_ids.shape[0])
         joint_ids_t = self._get_joint_ids_tensor_fast(joint_ids)
         joint_pos = self._select_last_dim(expert_window["joint_pos"], joint_ids_t)
-        joint_vel = self._select_last_dim(expert_window["joint_vel"], joint_ids_t)
-        expert_motion = torch.cat([joint_pos, joint_vel], dim=-1).reshape(
-            batch_size, -1
+        joint_vel_source = expert_window.get("joint_vel", None)
+        joint_vel = (
+            self._select_last_dim(joint_vel_source, joint_ids_t)
+            if joint_vel_source is not None
+            else None
         )
 
-        body_pos_source, body_quat_source, body_dim = self._expert_body_pose_fields(
-            expert_window
-        )
-        anchor_ids = self._get_reference_body_ids_fast((anchor_body_name,))
-        anchor_pos = body_pos_source.index_select(body_dim, anchor_ids).squeeze(
-            body_dim
-        )
-        anchor_quat = body_quat_source.index_select(body_dim, anchor_ids).squeeze(
-            body_dim
-        )
+        compact_anchor_pos = expert_window.get("_macro_anchor_pos_w", None)
+        compact_anchor_quat = expert_window.get("_macro_anchor_quat_w", None)
+        if compact_anchor_pos is not None or compact_anchor_quat is not None:
+            if compact_anchor_pos is None or compact_anchor_quat is None:
+                raise KeyError("Compact macro windows require both anchor pose fields.")
+            anchor_pos = compact_anchor_pos
+            anchor_quat = compact_anchor_quat
+        else:
+            body_pos_source, body_quat_source, body_dim = self._expert_body_pose_fields(
+                expert_window
+            )
+            anchor_ids = self._get_reference_body_ids_fast((anchor_body_name,))
+            anchor_pos = body_pos_source.index_select(body_dim, anchor_ids).squeeze(
+                body_dim
+            )
+            anchor_quat = body_quat_source.index_select(body_dim, anchor_ids).squeeze(
+                body_dim
+            )
         body_terms_enabled = len(reference_body_names) > 0
         if body_terms_enabled:
+            if compact_anchor_pos is not None:
+                raise ValueError(
+                    "Compact root_qpos macro windows do not carry EE/keypoint bodies."
+                )
             body_ids = self._get_reference_body_ids_fast(tuple(reference_body_names))
             body_pos = body_pos_source.index_select(body_dim, body_ids)
             body_quat = body_quat_source.index_select(body_dim, body_ids)
@@ -1916,13 +2123,16 @@ class ExpertDataPlane:
             raise ValueError(f"Unsupported expert-window context: {context!r}.")
 
         terms = {
-            "expert_motion": expert_motion,
             "expert_motion_qpos": joint_pos.reshape(batch_size, -1),
             "expert_anchor_pos_b": anchor_pos_b.reshape(batch_size, -1),
             "expert_anchor_ori_b": compiled.quat_to_rot6d_flat(anchor_ori_b).reshape(
                 batch_size, -1
             ),
         }
+        if joint_vel is not None:
+            terms["expert_motion"] = torch.cat([joint_pos, joint_vel], dim=-1).reshape(
+                batch_size, -1
+            )
         if body_terms_enabled:
             body_pos_flat = body_pos_b.reshape(batch_size, -1)
             terms["expert_ee_pos_b"] = body_pos_flat
@@ -2621,7 +2831,7 @@ class ExpertDataPlane:
             )
             local_steps = local_steps_tm.to(device=self._env.device, dtype=torch.long)
             traj_rank = traj_ranks_tm.to(device=self._env.device, dtype=torch.long)
-            expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
+            expert_window = self._sample_expert_macro_window_for_trajectory_ranks(
                 traj_ranks_tm,
                 local_steps_tm,
                 past_steps=state_history_steps,
@@ -2641,9 +2851,12 @@ class ExpertDataPlane:
                 traj_rank = tm.env_traj_rank.index_select(
                     0, env_ids.to(device=tm.state_device, dtype=torch.long)
                 ).to(device=self._env.device, dtype=torch.long)
-                expert_window = self._sample_expert_window_slice(
-                    env_ids,
-                    local_steps,
+                traj_ranks_tm = tm.env_traj_rank.index_select(
+                    0, env_ids.to(device=tm.state_device, dtype=torch.long)
+                )
+                expert_window = self._sample_expert_macro_window_for_trajectory_ranks(
+                    traj_ranks_tm,
+                    local_steps.to(device=tm.state_device, dtype=torch.long),
                     past_steps=state_history_steps,
                     future_steps=horizon_steps,
                 )
@@ -2673,7 +2886,7 @@ class ExpertDataPlane:
                     device=self._env.device, dtype=torch.long
                 )
                 traj_rank = traj_ranks_tm.to(device=self._env.device, dtype=torch.long)
-                expert_window = self._sample_expert_window_slice_for_trajectory_ranks(
+                expert_window = self._sample_expert_macro_window_for_trajectory_ranks(
                     traj_ranks_tm,
                     local_steps_tm,
                     past_steps=state_history_steps,
@@ -2780,9 +2993,9 @@ class ExpertDataPlane:
         traj_rank = tm.env_traj_rank.index_select(
             0, env_ids_t.to(device=tm.state_device, dtype=torch.long)
         ).to(device=self._env.device, dtype=torch.long)
-        expert_window = self._sample_expert_window_slice(
-            env_ids_t,
-            local_steps,
+        expert_window = self._sample_expert_macro_window_for_trajectory_ranks(
+            traj_rank.to(device=tm.state_device, dtype=torch.long),
+            local_steps.to(device=tm.state_device, dtype=torch.long),
             past_steps=state_history_steps,
             future_steps=horizon_steps,
         )
