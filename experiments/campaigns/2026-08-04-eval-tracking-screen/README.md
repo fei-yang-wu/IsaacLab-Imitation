@@ -220,10 +220,16 @@ the **control at matched 500M** (job 5561149), not against the 1.9B baseline.
 | **control** (std 0.30) | 22.03 | 0.0785 | 444.6 | 25/40 | 43.51 | 0.2272 |
 | s1 (std 0.10) | 19.61 | 0.0791 | 442.1 | 24/40 | 43.42 | 0.1902 |
 | **s2 (std 0.05)** | **17.89** | **0.0722** | 439.1 | 23/40 | 43.10 | 0.2034 |
+| s3 (velocity kernels) | 23.03 | 0.0842 | 442.4 | 24/40 | 46.34 | 0.2145 |
 
 **Sharpening `motion_body_pos` works, and is monotone**: 22.03 → 19.61 → 17.89
 strict MPJPE, i.e. **−18.8%** at std 0.05, with EE **−8.0%**. Both are well
 outside the ~2% seed spread the 2026-08-02 campaign measured.
+
+**s3 is a clean negative**: sharpening the velocity kernels degrades every
+axis — MPJPE +4.5%, EE +7%, full-horizon +6.5%. That refutes the "velocity is
+the derivative channel of position tracking" hypothesis it was built on. Only
+the *position* kernel helps.
 
 Three things to read carefully:
 
