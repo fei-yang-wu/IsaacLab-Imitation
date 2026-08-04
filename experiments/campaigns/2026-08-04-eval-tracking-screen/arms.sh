@@ -166,6 +166,24 @@ EVAL_SCREEN_ARM_SPECS=(
 # lowest-weighted term. s14 applies the recipe that worked there.
 "s14_anchor_ori_w2|motion_global_anchor_ori std 0.40 -> 0.15 and weight 0.5 -> 2.0, the same treatment that made s6 the best EE arm, applied to the orientation term no arm has moved. Targets the ~35 mm orientation lever in the EE budget.|env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0"
 "s15_ee_stack|s11 best-MPJPE kernel plus BOTH anchor terms sharpened and upweighted -- position (s6) and orientation (s14). The full stack against the EE budget, if the two anchor components are independent.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0"
+# --- Round 8: give the BODIES a world-frame target, not just the root -------
+#
+#   arm                          MPJPE-G   EE-G    root   root_ori
+#   control                       0.0758  0.0785  0.0707   0.0554
+#   s6  (anchor-pos w2)           0.0535  0.0599  0.0404   0.0625
+#   s12 (body + anchor-pos)       0.0494  0.0540  0.0411   0.0663
+#   s15 (+ anchor-ori)            0.0439  0.0475  0.0385   0.0273   -42.1% / -39.5%
+#
+# s15 is the best arm and the first to move root_ori at all -- 0.055-0.066 rad
+# in every other run, 0.0273 here. That confirms the lever-arm reading: the
+# orientation term was worth ~33 mm of EE error and nothing had touched it.
+#
+# But s15 still anchors the world through the ROOT ALONE. Every body-level
+# position reward remains rerooted and therefore drift-blind: roughly 8.0 of
+# position-reward weight cannot see the world against 1.0 that can. s16 gives
+# the bodies themselves a world-frame target using the new
+# `reference_global_body_position_error_exp`.
+"s16_global_bodies|s15 plus world-frame targets on the bodies, feet and wrists. Every body-level position reward today is rerooted and drift-blind; this is the untested continuation of the logic behind every gain so far.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0 env.rewards.motion_body_pos_global.weight=2.0 env.rewards.motion_foot_pos_global.weight=1.0 env.rewards.motion_ee_pos_global.weight=1.0"
 "s5_anchor_sharp|motion_global_anchor_pos kernel 0.30 -> 0.10. Targets root drift, which is ~100% of world-frame EE error and the larger half of global MPJPE. 96.7% saturated today.|env.rewards.motion_global_anchor_pos.params.std=0.1"
 "s6_anchor_sharp_w2|s5 plus weight 0.5 -> 2.0, so the term controlling the dominant error source stops being the lowest-weighted tracking term. Gradient 0.59 -> 16.2, i.e. into the band where tracking_reward_points already operates.|env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
 # --- Round 3: the failures are ONE MOTION CLASS, and one missing allowance ---
