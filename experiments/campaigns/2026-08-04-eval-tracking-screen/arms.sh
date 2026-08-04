@@ -108,6 +108,20 @@ EVAL_SCREEN_ARM_SPECS=(
 # most directly motivated arm in the screen: it targets the measured cause of
 # the dominant failure, and it changes nothing while the reference is upright.
 "s8_foot_allowance|Give foot_pos_xyz the crouching allowance the other two position terms already have: relax to 0.6 m when the reference root is below 0.5 m. Targets the fall-and-get-up failures that account for every non-surviving clip. No effect while the reference is upright.|env.terminations.foot_pos_xyz.params.down_threshold=0.6"
+# s9 covers the regime s8 cannot. The failing clips are the DYNAMIC ones --
+# jumps, runs, sprints, fights, falls -- while all 8 dance clips and 11 of 12
+# walks survive. s8's allowance keys on a LOW reference root, so it fires for
+# the falls and never for the airborne cases, whose root is high. During a
+# flight phase the foot's horizontal position is not correctable at that
+# instant and self-corrects on landing.
+#
+# Applied per body on the reference foot's own height: one foot is typically
+# airborne while the other is planted, so a per-environment test would relax
+# the stance foot too.
+#
+# HOLD until round 1 reports. This is a targeted follow-up, not a speculative
+# addition to an already-contended queue.
+"s9_foot_swing_allowance|foot_pos_xyz relaxes to 0.5 m for a foot whose REFERENCE is above 0.15 m, i.e. in flight, plus s8's low-root allowance. Targets the jump/run/sprint failures that s8 cannot reach.|env.terminations.foot_pos_xyz.params.down_threshold=0.6 env.terminations.foot_pos_xyz.params.swing_threshold=0.5"
 "s7_ee_reward|Enable the inert wrist term motion_ee_pos at 2.0 -- same geometry as motion_foot_pos, on the hands. The wrists have no horizontal termination and only their 2-of-5 share of tracking_reward_points. Expected to be second-order if drift dominates.|env.rewards.motion_ee_pos.weight=2.0"
 )
 
