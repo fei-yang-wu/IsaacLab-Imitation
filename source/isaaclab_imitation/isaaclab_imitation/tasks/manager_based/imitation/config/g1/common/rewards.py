@@ -423,3 +423,67 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             "asset_cfg": SceneEntityCfg("robot", joint_names=[r".*ankle.*"]),
         },
     )
+
+
+@configclass
+class G1V2TunedRewardsCfg(G1SonicRewardsCfg):
+    """The v2 default tracking weights, as measured by the 2026-08-04 screen.
+
+    A SUBCLASS rather than an edit to :class:`G1SonicRewardsCfg`, because that
+    class is also `-G1-v1`'s, and v1 is frozen: changing it in place would move
+    a superseded surface's numbers without anything saying so.
+
+    Three deltas, all on terms that already existed. Measured against the prior
+    defaults over three seeds against two control seeds, evaluated with
+    randomization off under the strict protocol -- every arm seed beat every
+    control seed on every tracking metric, ranges disjoint:
+
+        MPJPE-G   0.0751 -> 0.0471   -37.3%
+        EE-G      0.0782 -> 0.0510   -34.7%
+        root pos  0.0702 -> 0.0411   -41.4%
+        root ori  0.0589 -> 0.0290   -50.8%
+        survival   444.4 ->  440.2    -0.9%
+
+    The gain is concentrated in the ROOT, which is the point: world-frame EE
+    error is almost entirely root drift (54.7 mm root against 53.5 mm EE, with
+    root-relative MPJPE-L only 20.2 mm at the pre-screen operating point), and
+    the two anchor terms carried the lowest weight of any tracking term. It
+    costs 0.9% of survival.
+
+    KNOWN LIMIT, so nobody re-derives it: this does not move the full-horizon
+    pass, whose training-seed spread (~28-30%) exceeds every reward effect
+    measured. That pass is governed by which clips fall, and sharpening these
+    kernels buys precision, not falls. `motion_global_anchor_pos_wide` is the
+    open follow-up there and stays inert here until it reports.
+    """
+
+    motion_body_pos = RewTerm(
+        func=mdp.reference_relative_body_position_error_exp,
+        weight=2.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_TRACKED_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_TRACKED_BODY_NAMES,
+            "anchor_body_name": "pelvis",
+            "std": 0.05,
+        },
+    )
+    motion_global_anchor_pos = RewTerm(
+        func=mdp.reference_global_anchor_position_error_exp,
+        weight=2.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "anchor_body_name": "pelvis",
+            "std": 0.1,
+        },
+    )
+    motion_global_anchor_ori = RewTerm(
+        func=mdp.reference_global_anchor_orientation_error_exp,
+        weight=2.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "anchor_body_name": "pelvis",
+            "std": 0.15,
+        },
+    )

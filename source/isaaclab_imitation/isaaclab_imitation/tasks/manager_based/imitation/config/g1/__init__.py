@@ -210,6 +210,27 @@ _SONIC_OFFICIAL_FSQ_V2_TASK_KWARGS = {
 # ---------------------------------------------------------------------------
 # Current defaults.
 #
+# WHAT `-G1-v2` MEANS AS OF 2026-08-04 -- both changed IN PLACE, by explicit
+# decision, rather than by registering a `-v3`:
+#   * rewards: `G1V2TunedRewardsCfg` (motion_body_pos std 0.05 w2.0,
+#     motion_global_anchor_pos std 0.1 w2.0, motion_global_anchor_ori std 0.15
+#     w2.0). Measured -37.3% MPJPE-G / -34.7% EE-G over three seeds against two
+#     control seeds, ranges disjoint.
+#   * macro state: the `root_qpos` frame (qpos + root pose, 38/frame -> a
+#     380-wide encoder input), replacing full-body (67/frame -> 670).
+#
+# THE COST OF DOING IT IN PLACE: a v2 checkpoint trained before this date no
+# longer reproduces from the id alone. It needs
+# `env.expert_macro_state_terms=[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]`
+# and its original reward overrides. Pairing an old full-body encoder with the
+# new default fails loudly at the first forward (`hl/state shape mismatch`),
+# never silently. See the `g1-encoder-interface` skill.
+#
+# `ImitationG1SonicSurfaceEnvCfg` is pinned to the pre-2026-08-04 rewards and
+# macro state because it is the published SONIC recipe; the other v2 subclasses
+# (Explicit-v2, Chunk-v2, VQVAE/CVAE/PerStepVQ-v0) deliberately track the
+# default, so the comparison rows stay matched.
+#
 # Versioning convention (2026-07-31 onward): "the default" is always the
 # highest-numbered `-G1-vN` latent id below. Bumping the config is bumping
 # the number, never mutating an existing vN's kwargs -- once a vN is

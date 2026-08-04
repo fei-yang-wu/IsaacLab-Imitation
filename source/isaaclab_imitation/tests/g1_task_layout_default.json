@@ -65,7 +65,7 @@
       ]
     },
     "observations_class": "G1V2ObservationCfg",
-    "rewards_class": "G1SonicRewardsCfg",
+    "rewards_class": "G1V2TunedRewardsCfg",
     "terminations_class": "G1SonicTerminationsCfg"
   },
   "Isaac-Imitation-G1-Chunk-v2": {
@@ -128,7 +128,7 @@
       ]
     },
     "observations_class": "G1V2ObservationCfg",
-    "rewards_class": "G1SonicRewardsCfg",
+    "rewards_class": "G1V2TunedRewardsCfg",
     "terminations_class": "G1SonicTerminationsCfg"
   },
   "Isaac-Imitation-G1-Explicit-v2": {
@@ -191,7 +191,7 @@
       ]
     },
     "observations_class": "G1V2ObservationCfg",
-    "rewards_class": "G1SonicRewardsCfg",
+    "rewards_class": "G1V2TunedRewardsCfg",
     "terminations_class": "G1SonicTerminationsCfg"
   },
   "Isaac-Imitation-G1-LafanTrack-v0": {
@@ -583,7 +583,7 @@
       ]
     },
     "observations_class": "G1V2ObservationCfg",
-    "rewards_class": "G1SonicRewardsCfg",
+    "rewards_class": "G1V2TunedRewardsCfg",
     "terminations_class": "G1SonicTerminationsCfg"
   },
   "Isaac-Imitation-G1-Sonic-NoHist-v0": {
@@ -939,7 +939,7 @@
       ]
     },
     "observations_class": "G1V2ObservationCfg",
-    "rewards_class": "G1SonicRewardsCfg",
+    "rewards_class": "G1V2TunedRewardsCfg",
     "terminations_class": "G1SonicTerminationsCfg"
   },
   "Isaac-Imitation-G1-v0": {
@@ -1171,7 +1171,7 @@
       ]
     },
     "observations_class": "G1V2ObservationCfg",
-    "rewards_class": "G1SonicRewardsCfg",
+    "rewards_class": "G1V2TunedRewardsCfg",
     "terminations_class": "G1SonicTerminationsCfg"
   }
 }
