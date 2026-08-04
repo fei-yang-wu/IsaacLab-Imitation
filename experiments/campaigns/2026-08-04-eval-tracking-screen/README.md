@@ -221,6 +221,23 @@ the **control at matched 500M** (job 5561149), not against the 1.9B baseline.
 | s1 (std 0.10) | 19.61 | 0.0791 | 442.1 | 24/40 | 43.42 | 0.1902 |
 | **s2 (std 0.05)** | **17.89** | **0.0722** | 439.1 | 23/40 | 43.10 | 0.2034 |
 | s3 (velocity kernels) | 23.03 | 0.0842 | 442.4 | 24/40 | 46.34 | 0.2145 |
+| **s4** (body 0.10, w2) | 18.17 | 0.0820 | 442.6 | 23/40 | **39.81** | — |
+| s5 (anchor 0.10) | 23.47 | 0.0821 | 444.2 | 24/40 | 44.18 | — |
+| **s6** (anchor 0.10, w2) | 24.98 | **0.0599** | 443.8 | 24/40 | 43.35 | — |
+| **s7** (wrist reward) | 19.11 | 0.0781 | **445.5** | 24/40 | 40.60 | — |
+| s8 (foot allowance) | 22.37 | 0.0762 | 443.4 | 24/40 | 44.44 | — |
+
+**The two goal metrics are won by different arms, with opposing trade-offs.**
+s2 sharpens the root-relative body term and takes MPJPE (−18.8%) while EE moves
+little; s6 upweights the global root term and takes EE (**−23.7%**) while MPJPE
+gets worse. That is precisely the error decomposition: MPJPE-L is
+*root-relative*, so the body kernel owns it, and world-frame EE is mostly root
+drift, so the anchor term owns that. s12 combines one from each.
+
+**s8 landed neutral (+1.5%)**, confirming the eval-time prediction made before
+the run that `foot_pos_xyz` is a tripwire rather than the cause. **s3 and s5 are
+negatives** — sharpening velocity kernels, or the anchor kernel without also
+raising its weight, both degrade MPJPE.
 
 **Sharpening `motion_body_pos` works, and is monotone**: 22.03 → 19.61 → 17.89
 strict MPJPE, i.e. **−18.8%** at std 0.05, with EE **−8.0%**. Both are well
