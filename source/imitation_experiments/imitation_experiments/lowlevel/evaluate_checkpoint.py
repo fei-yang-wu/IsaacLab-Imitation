@@ -103,6 +103,16 @@ parser.add_argument(
     help="Optional single motion name to evaluate from the manifest.",
 )
 parser.add_argument(
+    "--trajectory_rank",
+    type=int,
+    default=None,
+    help=(
+        "Optional exact trajectory rank in the loaded dataset. Unlike "
+        "--motion_name, this preserves the full-store data path and is useful "
+        "for reproducing one row from a large parallel evaluation."
+    ),
+)
+parser.add_argument(
     "--dataset_path",
     type=Path,
     default=None,
@@ -1318,8 +1328,50 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     reference_selection_surface = pin_reference_start(
         env_cfg, start_frame=int(args_cli.reference_start_frame)
     )
-    if hasattr(env_cfg, "reset_schedule"):
+    reference_channel = getattr(
+        getattr(env_cfg, "command_interface", None), "reference", None
+    )
+    reference_selection = getattr(reference_channel, "selection", None)
+    if reference_selection is not None:
+        # v2 owns trajectory assignment on the reference command channel. The
+        # old flat field is absent (or ignored) there, which previously made
+        # --reset_schedule metadata disagree with the actual ranks.
+        reference_selection.schedule = str(args_cli.reset_schedule)
+    elif hasattr(env_cfg, "reset_schedule"):
+        # Frozen v0/v1 surfaces retain the legacy flat field.
         env_cfg.reset_schedule = str(args_cli.reset_schedule)
+    if args_cli.trajectory_rank is not None:
+        if args_cli.motion_name is not None:
+            raise ValueError(
+                "--trajectory_rank and --motion_name are mutually exclusive."
+            )
+        trajectory_rank = int(args_cli.trajectory_rank)
+        if trajectory_rank < 0:
+            raise ValueError("--trajectory_rank must be non-negative.")
+
+        def _fixed_trajectory_rank(
+            env_ids: torch.Tensor, num_trajectories: int
+        ) -> torch.Tensor:
+            if trajectory_rank >= int(num_trajectories):
+                raise ValueError(
+                    f"--trajectory_rank={trajectory_rank} is outside the loaded "
+                    f"dataset with {num_trajectories} trajectories."
+                )
+            return torch.full(
+                (int(env_ids.numel()),),
+                trajectory_rank,
+                dtype=torch.long,
+                device=env_ids.device,
+            )
+
+        if reference_selection is not None:
+            reference_selection.schedule = "custom"
+            reference_selection.custom_fn = _fixed_trajectory_rank
+        elif hasattr(env_cfg, "reset_schedule"):
+            env_cfg.reset_schedule = "custom"
+            env_cfg.custom_reset_fn = _fixed_trajectory_rank
+        else:
+            raise RuntimeError("The environment has no trajectory selection surface.")
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
     # Domain randomization was previously left entirely live here while
@@ -1746,6 +1798,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if motion_manifest is not None
             else None,
             "motion_name": args_cli.motion_name,
+            "trajectory_rank": args_cli.trajectory_rank,
             "dataset_path": str(getattr(env_cfg, "dataset_path", "")),
             "command_space": command_space,
             "low_level_command_mode": low_level_command_mode,
