@@ -450,3 +450,42 @@ and passes 500M on its way to 5B. It is the matched control and costs nothing �
 - One seed per arm. The 2026-08-02 campaign measured ~2% seed spread on
   per-minute rates and larger node-to-node variation; treat differences below
   a few percent as unresolved.
+
+## Round 9: the seed repeat, and what it invalidates
+
+s15 was retrained at seed 1 with the evaluation seed held at 0, so the only
+difference is the training seed.
+
+| arm | strict MPJPE-G | vs control | full-horizon MPJPE-G | vs control | surv |
+|---|---|---|---|---|---|
+| control | 0.0758 | — | 0.2230 | — | 444.6 |
+| s15 seed 0 | 0.0439 | −42.1% | 0.1740 | −22.0% | 438.7 |
+| s15 seed 1 | 0.0533 | −29.6% | 0.2303 | **+3.3%** | 441.2 |
+| s16 | 0.0334 | −55.9% | 0.1879 | −15.8% | 430.7 |
+
+**The training-seed spread on full-horizon MPJPE-G is ~28% — larger than every
+between-arm difference this campaign has reported on that pass.** s15's −22.0%
+does not reproduce; its seed-1 repeat is marginally *worse* than control. So no
+arm has a demonstrated full-horizon improvement, and the full-horizon column of
+rounds 1–8 cannot rank arms. Those rankings were read off single seeds.
+
+What survives:
+
+- **The strict-pass gain is real.** Both s15 seeds sit far below control
+  (−42.1%, −29.6%) against a 19.5% spread. The reward change does something.
+- **Survival is the low-variance metric** — 438.7 against 441.2 across the same
+  two seeds, well under 1%. Prefer it for ranking until MPJPE has repeats.
+- **s16's strict win is confounded by survival.** It has the lowest survival in
+  the screen (430.7, below control's 444.6), and strict MPJPE is scored only
+  over frames a surviving episode reached, on a per-step curve that is flat to
+  ~300 steps and then diverges. Dying earlier deletes the worst frames.
+
+Why full-horizon is the noisy one: with every termination off, a fallen robot
+keeps accumulating error for the rest of the horizon, so the mean is set by how
+many environments fall and how far they drift — a heavy-tailed quantity. The
+pass is still the right frame-matched comparison; it just needs repeats before
+a difference under ~30% means anything. `per_environment` records survival and
+termination terms but **not** per-environment metrics, so the tail cannot be
+decomposed from a saved run.
+
+Next: two more seeds of s15 and of the control before promoting anything.
