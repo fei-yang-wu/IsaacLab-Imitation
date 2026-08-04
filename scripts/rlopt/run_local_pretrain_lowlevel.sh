@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# SUPERSEDED. This is the PRE-v2 recipe, kept to reproduce runs that predate the
+# v2 command interface: it targets the frozen `Isaac-Imitation-G1-Latent-v0`
+# with a 25-step horizon and the legacy flat `env.lafan1_manifest_path` /
+# `env.dataset_path` fields, none of which the current environment uses.
+#
+# For a new local experiment run `scripts/rlopt/run_local_v2_pipeline.sh`
+# instead (task -G1-v2, det-SR horizon 10 / z 256, tuned agent entry point).
+# See wiki/local-experiments.md.
+#
 # Reproducible local LAFAN1 pipeline: pretrain a DiffSR skill encoder, then train
 # the low-level oracle IPMD policy conditioned on that encoder (command_source=hl_skill).
 #

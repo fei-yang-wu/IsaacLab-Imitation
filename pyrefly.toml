@@ -1,0 +1,7 @@
+project-includes = ["**/*.py*"]
+python-interpreter-path = ".pixi/envs/isaaclab/bin/python"
+search-path = [
+    ".pixi/envs/isaaclab/lib/python3.12/site-packages/isaaclab/source/isaaclab",
+    "source/isaaclab_imitation",
+    "source/imitation_experiments",
+]

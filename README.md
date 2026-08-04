@@ -1,8 +1,9 @@
 # IsaacLab-Imitation
 
 IsaacLab-Imitation is a multi-repo workspace for humanoid imitation learning on top of Isaac Lab. This repository
-contains the Isaac Lab extension code for the imitation environments and pins the active `IsaacLab`, `RLOpt`, and
-`ImitationLearningTools` dependency checkouts as git submodules.
+contains the Isaac Lab extension code for the imitation environments and pins the active `RLOpt` and
+`ImitationLearningTools` dependency checkouts as git submodules. Isaac Lab itself is pinned as a regular Pixi/PyPI
+dependency (`isaaclab==3.0.0b2.post1` from NVIDIA's index), not a submodule.
 
 The current focus is manager-based imitation environments for the Unitree G1 robot, with training flows built around
 RLOpt and RSL-RL.
@@ -13,15 +14,44 @@ RLOpt and RSL-RL.
 - `scripts/rlopt`: training and playback entrypoints for RLOpt
 - `scripts/rsl_rl`: training entrypoints for RSL-RL
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test environment runners
-- `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/`: required submodule checkouts
+- `experiments/`: current-campaign navigation, reusable experiment tooling, and the staged paper-facing entrypoint
+- `RLOpt/`, `ImitationLearningTools/`: required submodule checkouts
 - `source/isaaclab_imitation/isaaclab_imitation/assets/unitree`: vendored Unitree G1 URDF, meshes, and robot config
 - `docker/cluster`: cluster submission utilities
 
 Registered task IDs currently include:
 
-- `Isaac-Imitation-G1-v0`
-- `Isaac-Imitation-G1-Latent-v0`
-- `Isaac-Imitation-G1-LafanTrack-v0` (legacy alias of `Isaac-Imitation-G1-v0`)
+| Task ID | Actor command | Skill-encoder window |
+| --- | --- | --- |
+| `Isaac-Imitation-G1-v2` | latent, 258-D | single frame |
+| `Isaac-Imitation-G1-Explicit-v2` | explicit, full body | none |
+| `Isaac-Imitation-G1-Chunk-v2` | 10-frame packet held 10 steps | none |
+| `Isaac-Imitation-G1-VQVAE-v0` | latent, 258-D | 8 past + current |
+| `Isaac-Imitation-G1-CVAE-v0` | latent, 256-D | current + 9 future |
+| `Isaac-Imitation-G1-PerStepVQ-v0` | latent, 64-D | current + 9 future |
+| `Isaac-Imitation-G1-Sonic-v0` | latent, 258-D | single frame, SONIC recipe |
+
+Each is one point in the same environment's configuration space, so an id is
+the citable name of a protocol rather than a distinct implementation, and the
+same selections are available directly:
+
+```bash
+--task Isaac-Imitation-G1-v2 \
+    env.command_interface.actor=latent|explicit|chunk \
+    env.command_interface.encoder=single|causal9|future10|future26 \
+    env.command_interface.reference.selection=default|sonic|frame0
+```
+
+Register a new id when a protocol needs to be cited later; until then, override.
+
+`Isaac-Imitation-G1-v0`, `-v1`, `-Latent-v0`, `-Strict-v0`, and `-LafanTrack-v0`
+stay registered for reproducing recorded results and should not be cited for new
+work. They are also the boundary for how motion data is configured: `-G1-v2` and
+later use `env.data.*` (`env.data.manifest`, `env.data.cache_dir`,
+`env.data.clips`), while the frozen ids keep the older flat fields
+(`env.lafan1_manifest_path`, `env.dataset_path`, `env.motions`). Setting a flat
+field on a v2 task fails with the replacement named, rather than silently
+training on data it did not select.
 
 ## Workspace setup
 
@@ -39,7 +69,7 @@ git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-This workspace expects `IsaacLab`, `RLOpt`, and `ImitationLearningTools` to live under this repo as submodules. G1 robot
+This workspace expects `RLOpt` and `ImitationLearningTools` to live under this repo as submodules. G1 robot
 configuration and the required URDF/mesh assets are vendored in this repo under `source/isaaclab_imitation`, so
 `unitree_rl_lab` is no longer required for training. `loco-mujoco` is optional and only needed when explicitly selecting
 the `loco_mujoco` loader.
@@ -112,7 +142,7 @@ desired label sequence:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py \
+pixi run -e isaaclab-lerobot python scripts/viz/replay_unitree_lerobot_reference.py \
     --headless \
     --device cuda:0 \
     --repo_id unitreerobotics/G1_WBT_Brainco_Pickup_Pillow \
@@ -126,7 +156,7 @@ pixi run -e isaaclab-lerobot python scripts/replay_unitree_lerobot_reference.py 
     --overwrite_npz
 ```
 
-For multiple episodes, use `scripts/batch_csv_to_npz.py` with LeRobot jobs:
+For multiple episodes, use `scripts/data/batch_csv_to_npz.py` with LeRobot jobs:
 
 ```json
 [
@@ -146,13 +176,13 @@ For multiple episodes, use `scripts/batch_csv_to_npz.py` with LeRobot jobs:
 
 ```bash
 TERM=xterm PYTHONUNBUFFERED=1 \
-pixi run -e isaaclab-lerobot python scripts/batch_csv_to_npz.py \
+pixi run -e isaaclab-lerobot python scripts/data/batch_csv_to_npz.py \
     --headless \
     --device cuda:0 \
     --jobs_json data/unitree/lerobot_jobs.json \
     --output_fps 30
 
-pixi run python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/data/write_lafan1_npz_manifest.py \
     --npz_dir data/unitree/npz \
     --manifest_path data/unitree/manifests/g1_wbt_pillow_30hz.json \
     --dataset_name unitree_lerobot
@@ -170,7 +200,7 @@ list when `agent.offline_dataset.enabled=true`.
 Probe the multi-repo streaming cache without launching Isaac:
 
 ```bash
-pixi run -e lerobot python scripts/validate_lerobot_streaming_cache.py \
+pixi run -e lerobot python scripts/audit/validate_lerobot_streaming_cache.py \
     --repo_ids_file data/unitree/g1_wbt_lerobot_repos.json \
     --max_episodes_per_repo 1 \
     --min_ready_transitions 32 \
@@ -227,19 +257,91 @@ Use the Isaac Lab Pixi environment for Isaac-backed training:
 pixi shell -e isaaclab
 ```
 
+### Start here: the current default pipeline
+
+One script runs the current default end to end — pretrain a **deterministic
+continuous (det-SR)** skill encoder, then train the low-level tracker on the
+**tuned recipe** conditioned on that frozen encoder:
+
+```bash
+bash scripts/rlopt/run_local_v2_pipeline.sh
+
+# quick check first; DRY_RUN=1 prints both commands and runs nothing
+DRY_RUN=1 bash scripts/rlopt/run_local_v2_pipeline.sh
+TOTAL_FRAMES=10000000 bash scripts/rlopt/run_local_v2_pipeline.sh
+```
+
+Defaults: task `Isaac-Imitation-G1-v2`, agent
+`rlopt_ipmd_tuned_cfg_entry_point`, encoder horizon 10 / `z_dim` 256 (published
+command width **258**, including the `sin_cos` phase), `newton_mjwarp` with
+njmax 288 / nconmax 200, 4096 envs, 50M frames, and **instantaneous
+terminations** — the persistence window is opt-in via `TERMINATION_WINDOW=N`.
+
+Budget guidance: ~10M frames for routine debugging, at most ~50M for a serious
+local check, and do not run 100M locally. Local runs qualify code; the cluster
+produces convergence and paper numbers.
+
+Read [wiki/local-experiments.md](wiki/local-experiments.md) before a first run.
+It covers what "the default" currently resolves to, how to evaluate a
+checkpoint (strict **and** the full-horizon diagnostic), how to read MPJPE-L
+against MPJPE-G, and the measurement traps that have cost real time — Newton is
+not run-to-run deterministic at a fixed seed, and every per-minute rate is
+gameable by anything that lengthens an episode.
+
 Train a G1 imitation policy with RLOpt IPMD:
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
+    --task Isaac-Imitation-G1-v2 \
     --algo IPMD \
     --headless \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
+```
+
+The task runs at **50 Hz control** (200 Hz physics, `sim.dt=0.005`,
+`decimation=4`). That is a protocol decision every reward, termination
+threshold, and recorded result is defined at, so it is declared by the task and
+never inferred from data: clips are checked against it and a mismatch is
+refused rather than silently retuning the physics rate. The conversion pipeline
+in `scripts/data/` resamples sources to 50 Hz, so a mismatch means the wrong
+manifest.
+
+Train the IPMD learning-to-teach variant on a current-v2 command surface:
+
+```bash
+python scripts/rlopt/train.py \
+    --task Isaac-Imitation-G1-Explicit-v2 \
+    --algo IPMD_L2T \
+    --headless \
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
+```
+
+`IPMD_L2T` keeps rollout control and the ordinary IPMD/PPO objectives on a
+privileged teacher that reads the critic observations. A second actor reads
+the normal policy observations and learns from the teacher's executed actions;
+it never controls training rollouts. The same algorithm entry point is
+registered on `Isaac-Imitation-G1-v2`, `Isaac-Imitation-G1-Explicit-v2`, and
+`Isaac-Imitation-G1-Chunk-v2`. Latent v2 runs retain the usual IPMD skill-command
+checkpoint requirements.
+
+Play an IPMD-L2T checkpoint with the deployable student policy:
+
+```bash
+python scripts/rlopt/play.py \
+    --task Isaac-Imitation-G1-Explicit-v2 \
+    --algo IPMD_L2T \
+    --checkpoint /absolute/path/to/checkpoint.pt \
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
 ### LAFAN1 local pretrain + low-level pipeline (reproducible)
 
-The recommended reproducible recipe trains a G1 LAFAN1 policy in two stages — pretrain a
+> **Superseded.** This section documents the PRE-v2 recipe, kept to reproduce
+> runs that predate the v2 command interface. For a new experiment use
+> `scripts/rlopt/run_local_v2_pipeline.sh` (see "Start here" above and
+> [wiki/local-experiments.md](wiki/local-experiments.md)).
+
+The pre-v2 recipe trains a G1 LAFAN1 policy in two stages — pretrain a
 DiffSR skill encoder from expert motion, then train the low-level "oracle" IPMD policy
 conditioned on that encoder. One script chains both stages with the validated defaults
 (builds the zarr cache, wires the fresh skill checkpoint into the low-level run):
@@ -261,142 +363,51 @@ convergence by 2B. The full per-stage commands, expected metrics, joint-order ve
 and troubleshooting are in [wiki/lafan1-local-training.md](wiki/lafan1-local-training.md).
 
 For imitation-based RL, the recommended starting point in this repo is RLOpt IPMD on
-`Isaac-Imitation-G1-Latent-v0`. If you want a smaller single-motion setup for the
+`Isaac-Imitation-G1-v2`. If you want a smaller single-motion setup for the
 retargeted Unitree `dance102` clip, use:
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
+    --task Isaac-Imitation-G1-v2 \
     --algo IPMD \
     --headless \
-    env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json
+    env.data.manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json
 ```
 
-The action-labeled Dance102 variant keeps the original NPZ intact and uses a
-locally generated label NPZ plus a separate manifest. Generate those artifacts
-with `scripts/rlopt/label_npz_with_policy.py` or provide your own matching
-manifest before launching:
+Restrict it to a subset of the manifest's clips with
+`env.data.clips='["dance1_subject1"]'`, and point the built Zarr cache somewhere
+specific with `env.data.cache_dir=...` (omit it and the cache path is derived
+from the manifest's identity, so jobs naming the same manifest share one).
+
+Train with RLOpt PPO on the explicit command surface (PPO and SAC read the
+vanilla input keys, so pair them with an explicit actor):
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --algo IPMD_BILINEAR \
-    --headless \
-    env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_rlopt_ipmd_500m_actions_manifest.json \
-    env.reconstructed_reference_action=false \
-    agent.bilinear.offline_pretrain.policy_bc_updates=2000
-```
-
-For the cluster ablation set comparing scratch, state-only SR pretraining,
-reconstructed-action BC, and recorded-label BC:
-
-```bash
-DRY_RUN=1 experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
-experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
-```
-
-Train with RLOpt PPO:
-
-```bash
-python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-v0 \
+    --task Isaac-Imitation-G1-Explicit-v2 \
     --algo PPO \
     --headless \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
 
-Train ASE with the full local LAFAN1 G1 manifest:
+The `ASE`, `GAIL`, `AMP`, and `IPMD_BILINEAR` algorithms still exist in RLOpt,
+but their agent-config entry points were pruned from these tasks on 2026-08-01;
+selecting one fails to resolve an agent config. `IPMD` (default), `IPMD_L2T`,
+`PPO`, and `SAC` are the live pairings.
 
-```bash
-python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --num_envs 4096 \
-    --algo ASE \
-    --headless \
-    --video \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
-```
+The broad command-space oracle ablation is archived. Current Phase-4/5 qualification retains only two internal helpers in `experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/`: checkpoint evaluation and the low-level oracle submission adapter. They are dependencies of guarded paper workflows, not a collaborator-facing command-style sweep. Historical paths and recovery instructions are in [`experiments/PRUNED_SCRIPTS.md`](experiments/PRUNED_SCRIPTS.md).
 
-Train latent-conditioned IPMD with the same manifest:
+For experiment navigation, begin with
+[`experiments/README.md`](experiments/README.md). It points to the current
+dated campaign, exhaustive live inventory, and paper-facing staging surface.
 
-```bash
-python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --algo IPMD \
-    --headless \
-    env.lafan1_manifest_path=./data/lafan1/manifests/g1_lafan1_manifest.json
-```
-
-For the LAFAN1 no-language latent-skill pipeline, use:
-
-```bash
-pixi run -e isaaclab scripts/rlopt/run_lafan1_no_language_pipeline.sh
-```
-
-This runs the default no-language stack for LAFAN1: DiffSR skill encoder,
-flow-matching planner, latent-conditioned IPMD-Bilinear low-level policy,
-evaluation, and optional oracle rollout finetuning. Defaults include
-`num_envs=4096`, `z_dim=256`, `horizon_steps=10`, sinusoidal phase features,
-and `state_history_steps=9`. The default budgets are 5k skill-encoder updates,
-5k base-planner updates, and 10k low-level policy iterations.
-
-To run only the 40-motion oracle rollout-finetuning stage from existing
-checkpoints, use:
-
-```bash
-pixi run -e isaaclab python scripts/rlopt/run_lafan1_no_language_rollout_ft_merged.py \
-    --checkpoint /path/to/low_level_policy.pt \
-    --planner_checkpoint /path/to/base_planner.pt \
-    --skill_checkpoint /path/to/skill_encoder.pt \
-    --manifest data/lafan1/manifests/g1_lafan1_manifest.json \
-    --dataset_path data/lafan1/g1_hl_diffsr \
-    --ranks all \
-    --seeds 0,1,2 \
-    --finetune_updates 20000
-```
-
-This collects oracle skill rollouts with the frozen skill encoder, merges the
-samples, and finetunes one shared no-language planner. With the default LAFAN1
-manifest, `--ranks all --seeds 0,1,2` collects 40 motions times 3 seeds, or 120
-rollout trajectories total.
-
-For the command-space oracle ablation comparing the existing single-frame
-full-body command, a full-body trajectory command, and an end-effector
-trajectory command, use:
-
-```bash
-DRY_RUN=1 experiments/command_space_ablation/run_local_oracle_smoke.sh
-experiments/command_space_ablation/run_local_oracle_smoke.sh
-
-DRY_RUN=1 experiments/command_space_ablation/submit_cluster_oracle_ablation.sh
-```
-
-Set `COMMAND_OBSERVATION_SOURCE=planner_oracle` to route the same oracle
-commands through the planner command buffers for a bridge smoke test.
-The cluster launcher defaults to three Dance102 seeds (`2024 2025 2026`) and
-uses `docker/cluster/.env.cluster` for the cluster-side manifest path.
-
-After checkpoints are available, evaluate them with the shared deterministic
-table path:
-
-```bash
-SEEDS="2024 2025 2026" \
-CHECKPOINTS="/path/single_seed2024.pt /path/single_seed2025.pt /path/single_seed2026.pt \
-/path/full_body_seed2024.pt /path/full_body_seed2025.pt /path/full_body_seed2026.pt \
-/path/ee_seed2024.pt /path/ee_seed2025.pt /path/ee_seed2026.pt" \
-experiments/command_space_ablation/evaluate_oracle_checkpoints.sh
-```
-
-The detailed two-level plan, metric list, and later closed-loop planner
-comparison live in
-[wiki/command-space-ablation.md](wiki/command-space-ablation.md).
-For trajectory checkpoints, set `PLANNER_MODE=reference`, `hold_current`,
-`noisy_reference`, or `zero` in the evaluator wrapper to compare the planner
-buffer path and simple planner-burden baselines.
-For the paper-facing learned-planner comparison between the learned latent
-interface, full-body trajectory commands, and end-effector trajectory commands,
-use the controlled strong internal baseline workflow in
-[wiki/fair-interface-baselines.md](wiki/fair-interface-baselines.md).
+The paper-facing learned-planner comparison has exactly two rows: the learned
+DiffSR latent interface and the ten-frame explicit vanilla command packet.
+The stable public entrypoint is staged under
+[`experiments/paper/`](experiments/paper/README.md); it remains blocked until
+the documented Phase 4 and Phase 5 release gates pass. The authoritative
+protocol is
+[`wiki/causal-interface-paper-plan.md`](wiki/causal-interface-paper-plan.md).
 
 For the two-stage high-level skill workflow, use the pipeline entrypoint. It
 first runs offline DiffSR skill-encoder pretraining, checks
@@ -515,7 +526,7 @@ The simplest way to get the full local G1 dataset from the public Hugging Face d
 `lvhaidong/LAFAN1_Retargeting_Dataset` is the shell wrapper:
 
 ```bash
-./scripts/download_g1_lafan1_data.sh
+./scripts/data/download_g1_lafan1_data.sh
 ```
 
 This downloads the G1 subset into `data/` and then runs the local NPZ + manifest preparation step.
@@ -525,7 +536,7 @@ To bake the G1 arms-up alignment trim into the generated NPZ files, pass
 The underlying Python entrypoint is:
 
 ```bash
-pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
+pixi run -e isaaclab python scripts/data/setup_lafan1_dataset.py \
     --prepare-npz --headless
 ```
 
@@ -533,7 +544,7 @@ For the G1 retargeted set, the public CSV motions often begin with an arms-up
 alignment pose. To bake a per-motion trim into the generated NPZ files, add:
 
 ```bash
-pixi run -e isaaclab python scripts/setup_lafan1_dataset.py \
+pixi run -e isaaclab python scripts/data/setup_lafan1_dataset.py \
     --prepare-npz --headless \
     --auto_trim_mode g1_shoulder_roll
 ```
@@ -556,7 +567,7 @@ If `data/lafan1/manifests/g1_lafan1_manifest.json` already exists, you do not ne
 If you already have local NPZ files but no manifest yet, generate one directly:
 
 ```bash
-pixi run python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/data/write_lafan1_npz_manifest.py \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_lafan1_manifest.json
 ```
@@ -572,7 +583,7 @@ cp source/isaaclab_imitation/isaaclab_imitation/manifests/g1_lafan1_manifest.tem
 For a smaller local subset:
 
 ```bash
-pixi run python scripts/write_lafan1_npz_manifest.py \
+pixi run python scripts/data/write_lafan1_npz_manifest.py \
     --npz_dir data/lafan1/npz/g1 \
     --manifest_path data/lafan1/manifests/g1_debug_manifest.json \
     --select dance1_subject1 dance1_subject2 walk1_subject1
@@ -583,7 +594,7 @@ pixi run python scripts/write_lafan1_npz_manifest.py \
 Prepare local CSV motions into NPZ plus a manifest with:
 
 ```bash
-pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
+pixi run -e isaaclab python scripts/data/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -595,7 +606,7 @@ If you want one replay MP4 per converted motion, add `--record_videos` and `--vi
 To auto-trim the G1 arms-up alignment segment while rebuilding NPZ files, add:
 
 ```bash
-pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
+pixi run -e isaaclab python scripts/data/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -612,7 +623,7 @@ If you already have NPZ files and only want a trimmed manifest without
 rewriting those NPZ files, use:
 
 ```bash
-pixi run -e isaaclab python scripts/prepare_lafan1_from_csv.py \
+pixi run -e isaaclab python scripts/data/prepare_lafan1_from_csv.py \
     --csv_dir /absolute/path/to/csv_motions \
     --npz_dir /absolute/path/to/data/lafan1/npz/g1 \
     --manifest_path /absolute/path/to/data/lafan1/manifests/g1_lafan1_manifest.json \
@@ -629,7 +640,7 @@ In that mode the per-motion trim is written into each manifest entry as
 If you only want the prepared NPZ subtree, use:
 
 ```bash
-pixi run python scripts/setup_g1_lafan1_npz_dataset.py
+pixi run python scripts/data/setup_g1_lafan1_npz_dataset.py
 ```
 
 That syncs `npz/g1` from the dataset repo `GeorgiaTech/g1_lafan1_50hz` into:
@@ -641,7 +652,7 @@ data/lafan1/npz/g1/
 Upload mode pushes the same local NPZ tree back to Hugging Face:
 
 ```bash
-pixi run python scripts/setup_g1_lafan1_npz_dataset.py \
+pixi run python scripts/data/setup_g1_lafan1_npz_dataset.py \
     --mode upload --token "$HF_TOKEN"
 ```
 
@@ -695,7 +706,7 @@ python scripts/rlopt/play.py \
 Compare an RLOpt policy checkpoint against the synchronized reference motion:
 
 ```bash
-python scripts/compare_policy_reference.py \
+python scripts/viz/compare_policy_reference.py \
     --task Isaac-Imitation-G1-Latent-v0 \
     --algo IPMD \
     --checkpoint /absolute/path/to/checkpoint.pt \
@@ -706,7 +717,7 @@ python scripts/compare_policy_reference.py \
 Replay all 40 local G1 LAFAN1 motions from the full manifest:
 
 ```bash
-python scripts/replay_reference.py \
+python scripts/viz/replay_reference.py \
     --task Isaac-Imitation-G1-v0 \
     --motion_manifest data/lafan1/manifests/g1_lafan1_manifest.json \
     --motion_refresh_dataset \
@@ -720,8 +731,9 @@ python scripts/replay_reference.py \
 Notes:
 
 - use `data/lafan1/manifests/g1_lafan1_manifest.json` to load the full local 40-motion set
-- `Isaac-Imitation-G1-v0` is the canonical vanilla tracking task and expects `env.lafan1_manifest_path=...`
-- `Isaac-Imitation-G1-Latent-v0` is the latent-conditioned variant for ASE or latent-enabled IPMD
+- the playback and replay commands above target the frozen `-G1-v0` / `-Latent-v0`
+  ids, which keep the flat `env.lafan1_manifest_path=...` field; on `-G1-v2` and
+  later the same setting is `env.data.manifest=...` (see the task list at the top)
 - `Isaac-Imitation-G1-LafanTrack-v0` remains available as a legacy alias for the vanilla task
 - `replay_reference.py` disables reward and termination terms by default, so long reference videos do not reset early
 - pass `--keep_terminations` or `--keep_rewards` if you explicitly want the old RL-style behavior during replay
@@ -735,7 +747,7 @@ This repo is easier to work on with terminal-first tooling than with heavy IDE i
 Recommended tools:
 
 - `ruff` for linting and formatting
-- `pyrefly` for type and import checking
+- `ty` for type and import checking
 - `pytest` for focused unit tests
 
 Pixi owns the development tools in `pixi.toml`. Prefer `pixi run` for
@@ -783,11 +795,13 @@ For a minimal IPMD training smoke on the Unitree Dance102 manifest:
 pixi run -e isaaclab smoke-ipmd
 ```
 
-`pyrefly` is configured by [source/isaaclab_imitation/pyproject.toml](source/isaaclab_imitation/pyproject.toml) and
-already includes the import roots for this repo plus dependency checkouts such as `IsaacLab`, `RLOpt`, and
+`ty` is configured by [ty.toml](ty.toml) at the repo root, which
+mirrors the module-resolution layout previously used by `pyrefly.toml`: it
+points ty at the `isaaclab` Pixi environment and includes the import roots for
+this repo plus dependency checkouts such as `IsaacLab`, `RLOpt`, and
 `ImitationLearningTools`.
 
-For VS Code, prefer the Ruff extension and terminal-based `pyrefly` checks. Pylance is not the recommended workflow for
+For VS Code, prefer the Ruff and ty extensions and terminal-based `ty` checks. Pylance is not the recommended workflow for
 this workspace because the Isaac / Omniverse dependency tree is large, generated settings tend to drift, and static
 analysis is more reliable here when driven from the checked-in repo configuration.
 
@@ -800,7 +814,7 @@ pixi run pre-commit run --all-files
 ```
 
 Note that the current hook set is inherited from upstream Isaac Lab conventions. For day-to-day work in this repo,
-`ruff` and `pyrefly` are the recommended feedback loop.
+`ruff` and `ty` are the recommended feedback loop.
 
 ## Cluster note
 
@@ -811,8 +825,8 @@ layout and environment variables.
 Cluster jobs submitted through `docker/cluster/cluster_interface.sh job ...` now auto-check the G1 dataset tree before
 running the user workload. The container-side preflight in `docker/cluster/run_singularity.sh` verifies that the G1 NPZ
 tree under `${CLUSTER_G1_DATA_ROOT:-${CLUSTER_DATA_DIR}/lafan1}` contains at least 40 motions. If the dataset is
-incomplete, it downloads the G1 NPZ dataset from Hugging Face with `scripts/setup_g1_lafan1_npz_dataset.py` and
-regenerates `g1_lafan1_manifest.json` with `scripts/write_lafan1_npz_manifest.py` only when the manifest is missing or
+incomplete, it downloads the G1 NPZ dataset from Hugging Face with `scripts/data/setup_g1_lafan1_npz_dataset.py` and
+regenerates `g1_lafan1_manifest.json` with `scripts/data/write_lafan1_npz_manifest.py` only when the manifest is missing or
 older than the NPZ files. You can override that behavior with `CLUSTER_G1_MANIFEST_REFRESH_POLICY`:
 `auto` regenerates only when needed, `never` leaves the manifest untouched, and `always` regenerates on every job.
 

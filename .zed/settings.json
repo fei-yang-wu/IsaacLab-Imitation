@@ -1,0 +1,21 @@
+{
+  "languages": {
+    "Python": {
+      "language_servers": ["ty", "ruff"]
+    }
+  },
+  "lsp": {
+    "ty": {
+      "binary": {
+        "path": ".pixi/envs/default/bin/ty",
+        "arguments": ["server"]
+      }
+    },
+    "ruff": {
+      "binary": {
+        "path": ".pixi/envs/default/bin/ruff",
+        "arguments": ["server"]
+      }
+    }
+  }
+}

@@ -1,5 +1,7 @@
 # LAFAN1 From-Scratch Interface Comparison
 
+This is a chronology page. The earlier three-interface runner, manual capacity tools, and checkpoint-listing helpers recorded below were pruned on 2026-07-23. Use the guarded Phase-4/5 entrypoints classified in `experiments/SCRIPT_INVENTORY.md` for current work. Their paths and recovery commands are in [`experiments/PRUNED_SCRIPTS.md`](../experiments/PRUNED_SCRIPTS.md).
+
 Redo of the PR#19 LAFAN1 motion-tracking comparison with every low-level
 policy trained from scratch, so the comparison measures interface quality
 instead of low-level checkpoint provenance. A fourth, deliberately basic
@@ -49,11 +51,11 @@ reused; local qualification uses the fresh content-specific cache
 The code provides two guards:
 
 ```bash
-pixi run python scripts/audit_g1_lafan1_body_frames.py \
+pixi run python scripts/audit/audit_g1_lafan1_body_frames.py \
   --manifest /path/to/manifest.json \
   --report /path/to/body_frame_audit.json
 
-pixi run python scripts/repair_g1_lafan1_body_offsets.py \
+pixi run python scripts/data/repair_g1_lafan1_body_offsets.py \
   --input_dir data/lafan1/npz/g1 \
   --output_dir /path/to/separate_corrected_npz
 ```
@@ -412,7 +414,7 @@ capacity-efficiency claim.
 
 All four sizes, both stages, oracle-normalized metrics, exact starts, hashes,
 and training-contract checks are generated from artifacts by
-`experiments/interface_baselines/aggregate_one_motion_capacity_scaling.py`.
+`source/imitation_experiments/imitation_experiments/capacity/aggregate_one_motion_capacity_scaling.py`.
 The current outputs are under
 `logs/interface_baselines/lafan1_one_motion_capacity_scaling_20260716/capacity_summary/`.
 The medium compatibility entries are symbolic links to the original matched
@@ -482,7 +484,7 @@ environments, 50,865 iterations (`5,000,232,960` frames), the exact corrected
 256, fixed reset range 0-200, unchanged rewards and terminations, no reward
 estimator, and no BC. It submits no EE/full-body controller and runs no
 paper-facing planner evaluation. The dedicated launcher is
-`experiments/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh`.
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh`.
 
 Qualification jobs `3503401` and `3503425` were canceled while
 dependency-pending and produced no output. The first predated the exact parsed
@@ -663,7 +665,7 @@ streamed-vanilla equivalence certificate from the exact vanilla checkpoint.
 The DiffSR audit uses the explicit strict tracking-failure rate rather than
 `done_rate`, because a successful motion may end through `reference_finished`.
 The fixed launcher is
-`experiments/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`;
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`;
 it is implemented and tested.
 
 The original qualification job `3502183` was canceled before it ran. Its
@@ -1061,7 +1063,7 @@ PROJECT_NAME=G1-Imitation-LAFAN1-FromScratch \
 GROUP_NAME=lafan1_fromscratch_h10_ipmd_5b_seed0 \
 RUN_PREFIX=lafan1_fromscratch_h10_ipmd_5b_seed0 \
 EXTRA_OVERRIDES="env.random_reset_step_min=0 env.random_reset_step_max=200 env.random_reset_full_trajectory=false env.command_hold_steps=0 agent.ipmd.reward_loss_coeff=0.0 agent.ipmd.reward_l2_coeff=0.0 agent.ipmd.reward_grad_penalty_coeff=0.0 agent.ipmd.reward_logit_reg_coeff=0.0 agent.ipmd.reward_param_weight_decay_coeff=0.0 agent.value_function.num_cells=[768,512,256] agent.logger.backend=wandb" \
-experiments/command_space_ablation/submit_cluster_oracle_ablation.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/command_space_ablation/submit_cluster_oracle_ablation.sh
 ```
 
 Remove `DRY_RUN=1` only after checking that the rendered batch script retains
@@ -1232,3 +1234,49 @@ should be labeled as such, not presented as the matched comparison).
 - The chunk planners are chunked Transformers (~20M params); the latent
   planner is the existing flow-matching SkillCommander (~2M params). Report
   parameter counts alongside tracking metrics.
+
+## 2026-07-29 mechanism study (shared-tracker BB1/BB3, one motion walk1, seed 0 unless noted)
+
+Artifacts under `logs/interface_baselines/{bb1_shared_tracker,bb3_noise_curves,covariate_shift,c3_freshness,bb1_repeatability}`.
+Scripts: `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_bb1_shared_tracker_sweep.sh`,
+`run_bb3_noise_curves.sh`, `imitation_experiments.capacity.analyze_planner_residual_structure`.
+
+**BB1 (headline).** FB planner -> frozen 670 encoder -> latent tracker, vs latent
+planner -> same tracker. Gate: expert packet through the identical path reproduces
+the latent oracle (30.37 vs 30.42 mm). Over sizes small/medium/large x seeds 0-2,
+latent is **3.19x better** oracle-normalized with no seed overlap between arms and
+no oracle-normalization needed (single shared tracker/encoder/ceiling).
+
+**Mechanism ledger** (each tested, most refuted):
+- Encoder absorbs command error: **NO**, three ways -- white-noise contraction 1.9x,
+  real-residual contraction 1.65 (train) / 1.23 (deploy), all amplifying; and the
+  planner's real error through the shared tracker costs 2.3x more than white noise
+  of matched alpha (122-137 vs 54 mm).
+- Interfaces differ in error tolerance: **only in a narrow band, and it crosses.**
+  Full noise curve (packet-side vs z-side, same latent tracker, 3 reps/point,
+  alphas 0.1-4.0): parity to 0.5; **z 17% cheaper at alpha=1.0 (0.83x)** -- the
+  band real planners occupy; parity again in means by 1.25; z worse by 2.0
+  (1.24x). Both cliffs onset near alpha~1.3 (packet: 54->64->120->173->220 over
+  1.0->2.0). Past onset, z fails BIMODALLY (a=1.5 reps 58/100/177 mm, sd 60 vs
+  packet 23): a corrupted code either stays decodable or leaves the manifold,
+  while the 670-d packet degrades gradually. Zero falls even at alpha=4
+  (+-32 deg/frame). Working story: z's usable region extends ~25% further and
+  covers the planner operating point (FB deploys at alpha~1.12, ~0.2 below the
+  cliff); beyond it the code loses meaning per-rollout rather than by degrees.
+  Ties to BB1 via residual geometry: latent planner errors are low-rank
+  (top-PC 55%), plausibly on-manifold and cheap; FB planner errors act like
+  white noise at alpha~1.5 (120 mm ~ its real 122-137 mm).
+- Covariate shift: FB planner alpha 0.074 on oracle states -> **1.120 on its own
+  visited states (15x)**, temporal coherence 0.356 -> 0.972. Latent planner's
+  visited-state alpha is **higher** (1.301, own units), so shift magnitude does not
+  order the interfaces; latent residual is far more low-rank (top-PC 55% vs 18%).
+- Freshness (C3, recorded contract waiver `streamed_contract_waivers`):
+  republish interval 2/5/10 -> **361/213/104 mm**. Faster replanning is strictly
+  worse; staleness is NOT the failure mode. Supports boundary-discontinuity
+  mechanism -> C1 delta parameterization is the indicated intervention.
+
+**Evaluation noise:** identical runs differ; sd scales with error level
+(~2% relative near oracle, ~12% at 135 mm; 5 identical large/seed0 runs:
+136/118/138/162/125). Single-run cells cannot resolve sub-15% differences in the
+high-error regime. The offline encoder-contraction metric does not transfer to
+closed loop and should not be quoted.

@@ -117,7 +117,7 @@ sim.render()
 scene.update(sim.get_physics_dt())
 ```
 
-`scripts/replay_reference.py` also forces `env.replay_only=True`, disables
+`scripts/viz/replay_reference.py` also forces `env.replay_only=True`, disables
 terminations/rewards by default, and uses the env replay-only path that writes
 reference state directly instead of calling Isaac physics stepping.
 

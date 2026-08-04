@@ -1,0 +1,31 @@
+# Frozen pin for the deterministic-latent end-to-end chain (2026-07-30,
+# recipe refreshed 2026-07-31 to the qualified enc380 route-study defaults).
+#
+# The base pipeline config now carries the full enc380 recipe (deterministic
+# z256 encoder over the 10-frame root_qpos macro window, h10 latent tracker on
+# the Strict task, balanced 100-trajectory collection, medium flow planner at
+# 30k updates / batch 1024, packet-route closed-loop eval), so this pin only
+# records what this campaign fixes on top of it.
+
+defaults:
+  - latent_e2e
+  - _self_
+
+name: det_latent_e2e_lafan1
+seed: 0
+route: root_qpos
+motion: walk1_subject1
+
+pretrain:
+  overrides:
+    - latent.mode=deterministic
+
+low_level:
+  overrides:
+    - latent_arm=deterministic
+    - task=${task}
+    - hold.steps=10
+
+# Frozen at dry-run until the rendered plan is reviewed; flip on the command
+# line only: ./run.sh dry_run=false
+dry_run: true

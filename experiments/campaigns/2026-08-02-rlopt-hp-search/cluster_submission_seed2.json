@@ -1,0 +1,26 @@
+{
+  "arms": {
+    "m4_gamma097": "5559634"
+  },
+  "encoder_checkpoint": "/data/pretrain_store/lafan1_v2_det_sr_h10_z256_seed0/checkpoints/latest.pt",
+  "geometry": {
+    "max_iterations": 678,
+    "num_envs": 12288,
+    "rollout_steps": 12,
+    "seed": 2,
+    "total_frames": 99975168
+  },
+  "last_submitted_at": "2026-08-03T03:46:12.625756-04:00",
+  "log_root": "/data/rlopt_hp_screen_100m_seed2",
+  "manifest_sha256": "d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8",
+  "rlopt_dirty": true,
+  "rlopt_git_sha": "df052d64f4b4f7157883e2f26ed1ddb66c0d25ca",
+  "screen_tag": "rlopt_hp_screen_100m_seed2",
+  "task": "Isaac-Imitation-G1-v2",
+  "wandb": {
+    "group": "rlopt-hparam-search",
+    "project": "g1-lafan1"
+  },
+  "workspace_dirty": true,
+  "workspace_git_sha": "999e2f4c053ef85868a942b89675a9242285d6a7"
+}

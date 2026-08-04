@@ -24,13 +24,7 @@ parser.add_argument(
     choices=[
         "PPO",
         "SAC",
-        "FASTSAC",
         "IPMD",
-        "IPMD_SR",
-        "IPMD_BILINEAR",
-        "GAIL",
-        "AMP",
-        "ASE",
     ],
 )
 parser.add_argument("--checkpoint", type=Path, required=True)
@@ -119,10 +113,13 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
 )
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
-from isaaclab_imitation.envs.imitation_rl_env import ImitationRLEnv
+from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from isaaclab_imitation.tasks.manager_based.imitation.motion_data import (
+    apply_motion_data,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
+from rlopt.agent import IPMD, PPO, SAC
 from tensordict import TensorDictBase
 from tensordict.nn import InteractionType
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
@@ -132,13 +129,7 @@ from torchrl.envs.utils import set_exploration_type, step_mdp
 ALGORITHM_CLASS_MAP = {
     "PPO": PPO,
     "SAC": SAC,
-    "FASTSAC": FastSAC,
     "IPMD": IPMD,
-    "IPMD_SR": IPMDSR,
-    "IPMD_BILINEAR": IPMDBilinear,
-    "GAIL": GAIL,
-    "AMP": AMP,
-    "ASE": ASE,
 }
 
 BODY_STATE_KEYS = {
@@ -151,13 +142,7 @@ BODY_STATE_KEYS = {
 ENTRY_POINT_ALGORITHM_MAP = {
     "rlopt_ppo_cfg_entry_point": "PPO",
     "rlopt_sac_cfg_entry_point": "SAC",
-    "rlopt_fastsac_cfg_entry_point": "FASTSAC",
     "rlopt_ipmd_cfg_entry_point": "IPMD",
-    "rlopt_ipmd_sr_cfg_entry_point": "IPMD_SR",
-    "rlopt_ipmd_bilinear_cfg_entry_point": "IPMD_BILINEAR",
-    "rlopt_gail_cfg_entry_point": "GAIL",
-    "rlopt_amp_cfg_entry_point": "AMP",
-    "rlopt_ase_cfg_entry_point": "ASE",
 }
 
 
@@ -183,22 +168,22 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     raise ValueError(msg)
 
 
-def _unwrap_imitation_env(env) -> ImitationRLEnv:
+def _unwrap_imitation_env(env) -> ImitationRLEnvLegacy:
     current = env
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if isinstance(current, ImitationRLEnv):
+        if isinstance(current, ImitationRLEnvLegacy):
             return current
         unwrapped = getattr(current, "unwrapped", None)
-        if isinstance(unwrapped, ImitationRLEnv):
+        if isinstance(unwrapped, ImitationRLEnvLegacy):
             return unwrapped
         current = (
             getattr(current, "base_env", None)
             or getattr(current, "env", None)
             or getattr(current, "_env", None)
         )
-    raise TypeError("Could not unwrap ImitationRLEnv.")
+    raise TypeError("Could not unwrap ImitationRLEnvLegacy.")
 
 
 def _to_numpy(tensor: torch.Tensor) -> np.ndarray:
@@ -233,7 +218,7 @@ def _disable_observation_corruption(env_cfg: object) -> None:
             group.enable_corruption = False
 
 
-def _infer_output_fps(base_env: ImitationRLEnv, env_cfg: object) -> float:
+def _infer_output_fps(base_env: ImitationRLEnvLegacy, env_cfg: object) -> float:
     if args_cli.fps > 0.0:
         return float(args_cli.fps)
 
@@ -262,7 +247,7 @@ def _configured_step_dt(env_cfg: object) -> float | None:
 
 
 def _snapshot_robot_state(
-    base_env: ImitationRLEnv, env_id: int = 0
+    base_env: ImitationRLEnvLegacy, env_id: int = 0
 ) -> dict[str, np.ndarray]:
     robot_data = base_env.robot.data
     return {
@@ -605,14 +590,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         args_cli.device if args_cli.device is not None else env_cfg.sim.device
     )
     env_cfg.log_dir = str(output_npz.parent)
-    if motion_manifest is not None:
-        if not hasattr(env_cfg, "lafan1_manifest_path"):
-            raise TypeError(f"Task {args_cli.task} does not support --motion_manifest.")
-        env_cfg.lafan1_manifest_path = str(motion_manifest)
-        if hasattr(env_cfg, "_resolve_manifest_config"):
-            env_cfg._resolve_manifest_config()
-    if hasattr(env_cfg, "refresh_zarr_dataset"):
-        env_cfg.refresh_zarr_dataset = bool(args_cli.refresh_zarr_dataset)
+    apply_motion_data(
+        env_cfg,
+        manifest=motion_manifest,
+        cache_refresh=bool(args_cli.refresh_zarr_dataset),
+        wrap_steps=False,
+    )
     if hasattr(env_cfg, "reference_start_frame"):
         env_cfg.reference_start_frame = 0
     if hasattr(env_cfg, "random_reset_full_trajectory"):
@@ -623,8 +606,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.random_reset_step_max = 0
     if hasattr(env_cfg, "reset_schedule"):
         env_cfg.reset_schedule = "sequential"
-    if hasattr(env_cfg, "wrap_steps"):
-        env_cfg.wrap_steps = False
     _disable_observation_corruption(env_cfg)
     step_dt = _configured_step_dt(env_cfg)
     if (

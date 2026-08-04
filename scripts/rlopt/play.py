@@ -12,12 +12,24 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play a checkpoint of an RLOpt agent.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during play.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
 parser.add_argument(
-    "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
+    "--video", action="store_true", default=False, help="Record videos during play."
 )
-parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
+parser.add_argument(
+    "--video_length",
+    type=int,
+    default=200,
+    help="Length of the recorded video (in steps).",
+)
+parser.add_argument(
+    "--disable_fabric",
+    action="store_true",
+    default=False,
+    help="Disable fabric and use USD I/O operations.",
+)
+parser.add_argument(
+    "--num_envs", type=int, default=None, help="Number of environments to simulate."
+)
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
     "--algo",
@@ -25,13 +37,27 @@ parser.add_argument(
     dest="algorithm",
     type=str.upper,
     default="IPMD",
-    choices=["PPO", "SAC", "FASTSAC", "IPMD", "IPMD_SR", "IPMD_BILINEAR", "GAIL", "AMP", "ASE"],
+    choices=["PPO", "SAC", "IPMD", "IPMD_L2T"],
     help="RLOpt algorithm (must match the checkpoint).",
 )
-parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint (.pt).")
-parser.add_argument("--output_dir", type=str, default=None, help="Optional log/video output directory for this play run.")
-parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment.")
-parser.add_argument("--real-time", action="store_true", default=False, help="Run in real-time, if possible.")
+parser.add_argument(
+    "--checkpoint", type=str, default=None, help="Path to model checkpoint (.pt)."
+)
+parser.add_argument(
+    "--output_dir",
+    type=str,
+    default=None,
+    help="Optional log/video output directory for this play run.",
+)
+parser.add_argument(
+    "--seed", type=int, default=None, help="Seed used for the environment."
+)
+parser.add_argument(
+    "--real-time",
+    action="store_true",
+    default=False,
+    help="Run in real-time, if possible.",
+)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -64,7 +90,7 @@ from isaaclab.envs import (
 from isaaclab.utils.dict import print_dict
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
+from rlopt.agent import IPMD, IPMDL2T, PPO, SAC
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 from tensordict.nn import InteractionType
@@ -75,25 +101,15 @@ import isaaclab_imitation.tasks  # noqa: F401
 ALGORITHM_CLASS_MAP = {
     "PPO": PPO,
     "SAC": SAC,
-    "FASTSAC": FastSAC,
     "IPMD": IPMD,
-    "IPMD_SR": IPMDSR,
-    "IPMD_BILINEAR": IPMDBilinear,
-    "GAIL": GAIL,
-    "AMP": AMP,
-    "ASE": ASE,
+    "IPMD_L2T": IPMDL2T,
 }
 
 ENTRY_POINT_ALGORITHM_MAP = {
     "rlopt_ppo_cfg_entry_point": "PPO",
     "rlopt_sac_cfg_entry_point": "SAC",
-    "rlopt_fastsac_cfg_entry_point": "FASTSAC",
     "rlopt_ipmd_cfg_entry_point": "IPMD",
-    "rlopt_ipmd_sr_cfg_entry_point": "IPMD_SR",
-    "rlopt_ipmd_bilinear_cfg_entry_point": "IPMD_BILINEAR",
-    "rlopt_gail_cfg_entry_point": "GAIL",
-    "rlopt_amp_cfg_entry_point": "AMP",
-    "rlopt_ase_cfg_entry_point": "ASE",
+    "rlopt_ipmd_l2t_cfg_entry_point": "IPMD_L2T",
 }
 
 
@@ -135,23 +151,35 @@ def main(
     agent_cfg,
 ):
     """Play with an RLOpt agent."""
-    sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
-    if callable(sync_input_keys):
-        sync_input_keys()
+    # Same binding as training: the environment's command interface decides the
+    # agent's input keys, so a checkpoint is replayed against the contract it
+    # was trained on.
+    from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+        bind_command_interface,
+    )
+
+    if bind_command_interface(agent_cfg, env_cfg) is None:
+        sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
+        if callable(sync_input_keys):
+            sync_input_keys()
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
         args_cli.seed = random.randint(0, 10000)
 
     # override configurations with non-hydra CLI arguments
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.scene.num_envs = (
+        args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    )
     agent_cfg.env.num_envs = env_cfg.scene.num_envs
     agent_cfg.env.env_name = args_cli.task
     agent_cfg.seed = args_cli.seed if args_cli.seed is not None else agent_cfg.seed
     agent_cfg.collector.frames_per_batch *= env_cfg.scene.num_envs
     # set the environment seed
     env_cfg.seed = agent_cfg.seed
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    env_cfg.sim.device = (
+        args_cli.device if args_cli.device is not None else env_cfg.sim.device
+    )
 
     # validate checkpoint
     if args_cli.checkpoint is None:
@@ -168,7 +196,9 @@ def main(
     env_cfg.log_dir = log_dir
 
     # create isaac environment
-    env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    env = gym.make(
+        args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None
+    )
 
     if isinstance(env.unwrapped, DirectMARLEnv):
         raise NotImplementedError("DirectMARLEnv is not supported for RLOpt play.")
@@ -208,7 +238,10 @@ def main(
     agent.load_model(checkpoint_path)
 
     # switch to eval / inference mode
-    collector_policy = agent.collector_policy
+    collector_policy = getattr(agent, "deployment_policy", None)
+    if collector_policy is None:
+        collector_policy = agent.collector_policy
+
     collector_policy.eval()
 
     dt = getattr(env, "step_dt", None)
@@ -231,10 +264,15 @@ def main(
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
-        with torch.inference_mode(), set_exploration_type(InteractionType.DETERMINISTIC):
+        with (
+            torch.inference_mode(),
+            set_exploration_type(InteractionType.DETERMINISTIC),
+        ):
             td = collector_policy(td)
             td = env.step(td)
-            td = step_mdp(td, exclude_reward=True, exclude_done=False, exclude_action=True)
+            td = step_mdp(
+                td, exclude_reward=True, exclude_done=False, exclude_action=True
+            )
 
         timestep += 1
         if args_cli.video and timestep >= args_cli.video_length:

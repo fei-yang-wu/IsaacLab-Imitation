@@ -77,6 +77,7 @@ parser.add_argument(
         "gumbel_multicat",
         "gumbel",
         "fsq",
+        "sonic_fsq",
         "vq",
     ),
     help=(
@@ -123,6 +124,19 @@ parser.add_argument(
     help="Per-dim levels for --latent_mode fsq (codebook size = product).",
 )
 parser.add_argument(
+    "--sonic_fsq_levels",
+    type=int,
+    nargs="+",
+    default=[32] * 64,
+    help=(
+        "Per-dim levels for --latent_mode sonic_fsq. Default is the SONIC-matched "
+        "token space (64 dims x 32 levels ~= 320 bits per command, i.e. gear_sonic "
+        "tokens of shape (2, 32) at num_fsq_levels=32). This mode publishes the "
+        "quantizer output directly as the command, so --z_dim must equal the "
+        "number of levels given here."
+    ),
+)
+parser.add_argument(
     "--encoder_hidden_dims",
     type=int,
     nargs="+",
@@ -148,6 +162,16 @@ parser.add_argument(
     type=int,
     default=512,
     help="DiffSR bilinear embedding dimension.",
+)
+parser.add_argument(
+    "--diffsr_phi_parameterization",
+    type=str,
+    default="concat",
+    choices=("concat", "bilinear"),
+    help=(
+        "DiffSR phi(s,z) parameterization. 'concat' is the newer simple-concat "
+        "path; 'bilinear' restores the legacy matrix F(s) with g(z)^T F(s)."
+    ),
 )
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
 parser.add_argument("--num_updates", type=int, default=2000, help="Training updates.")
@@ -330,7 +354,7 @@ from isaaclab_tasks.utils import compute_kit_requirements, launch_simulation
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import HighLevelSkillDiffSRConfig, HighLevelSkillDiffSRTrainer
 
-AGENT_ENTRY_POINT = "rlopt_ipmd_bilinear_cfg_entry_point"
+AGENT_ENTRY_POINT = "rlopt_ipmd_cfg_entry_point"
 
 
 def _write_jsonl(path: Path, row: dict[str, Any]) -> None:
@@ -394,6 +418,7 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         gumbel_tau_anneal_iters=args_cli.gumbel_tau_anneal_iters,
         gumbel_hard=args_cli.gumbel_hard,
         fsq_levels=tuple(args_cli.fsq_levels),
+        sonic_fsq_levels=tuple(args_cli.sonic_fsq_levels),
         **(
             {"encoder_hidden_dims": tuple(args_cli.encoder_hidden_dims)}
             if args_cli.encoder_hidden_dims
@@ -404,6 +429,7 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
         vq_dead_code_reset_iters=args_cli.vq_dead_code_reset_iters,
         diffsr_feature_dim=args_cli.diffsr_feature_dim,
         diffsr_embed_dim=args_cli.diffsr_embed_dim,
+        diffsr_phi_parameterization=args_cli.diffsr_phi_parameterization,
         batch_size=args_cli.batch_size,
         num_updates=args_cli.num_updates,
         log_interval=args_cli.log_interval,

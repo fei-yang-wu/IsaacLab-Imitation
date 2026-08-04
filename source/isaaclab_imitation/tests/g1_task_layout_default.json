@@ -1,0 +1,1177 @@
+{
+  "Isaac-Imitation-G1-CVAE-v0": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [],
+      "actor_hold_steps": 1,
+      "actor_horizon": null,
+      "actor_kind": "latent",
+      "actor_latent_dim": 256,
+      "actor_source": "agent",
+      "critic_channels": [
+        "actor",
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_window": [
+        0,
+        9
+      ],
+      "generation": "interface",
+      "selection_full_trajectory": false,
+      "selection_random_step_max": 200,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1FutureCVAESurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Chunk-v2": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "actor_hold_steps": 10,
+      "actor_horizon": 10,
+      "actor_kind": "chunk",
+      "actor_latent_dim": null,
+      "actor_source": "reference",
+      "critic_channels": [
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": null,
+      "encoder_window": null,
+      "generation": "interface",
+      "selection_full_trajectory": false,
+      "selection_random_step_max": 200,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1ChunkSurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Explicit-v2": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "actor_hold_steps": null,
+      "actor_horizon": null,
+      "actor_kind": "explicit",
+      "actor_latent_dim": null,
+      "actor_source": "reference",
+      "critic_channels": [
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": null,
+      "encoder_window": null,
+      "generation": "interface",
+      "selection_full_trajectory": false,
+      "selection_random_step_max": 200,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1ExplicitSurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-LafanTrack-v0": {
+    "actions_class": "G1ActionsCfg",
+    "anchor_body": "torso_link",
+    "command": {
+      "command_hold_steps": 0,
+      "generation": "legacy",
+      "latent_command_dim": 64,
+      "latent_patch_future_steps": 0,
+      "latent_patch_past_steps": 0,
+      "random_reset_full_trajectory": true,
+      "random_reset_step_max": 0,
+      "random_reset_step_min": 0
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1LafanTrackEnvCfg",
+    "events_class": "G1EventCfg",
+    "groups": {
+      "critic": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_motion_qpos",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "expert_state": [
+        "joint_pos",
+        "joint_vel",
+        "root_pos",
+        "root_quat",
+        "root_lin_vel",
+        "root_ang_vel",
+        "expert_motion",
+        "expert_anchor_ori_b",
+        "expert_anchor_pos_b"
+      ],
+      "expert_window": [
+        "expert_motion",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b"
+      ],
+      "policy": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_motion_qpos",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "reward_input": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ]
+    },
+    "observations_class": "G1ObservationCfg",
+    "rewards_class": "G1RewardsCfg",
+    "terminations_class": "G1TerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Latent-History-v0": {
+    "actions_class": "G1ActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "command_hold_steps": 0,
+      "generation": "legacy",
+      "latent_command_dim": 258,
+      "latent_patch_future_steps": 0,
+      "latent_patch_past_steps": 0,
+      "random_reset_full_trajectory": false,
+      "random_reset_step_max": 200,
+      "random_reset_step_min": 0
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1LatentStrictHistoryEnvCfg",
+    "events_class": "G1EventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "expert_goal": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ],
+      "expert_state": [
+        "joint_pos",
+        "joint_vel",
+        "root_pos",
+        "root_quat",
+        "root_lin_vel",
+        "root_ang_vel",
+        "expert_motion",
+        "expert_anchor_ori_b",
+        "expert_anchor_pos_b"
+      ],
+      "expert_window": [
+        "expert_motion",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "reward_input": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ]
+    },
+    "observations_class": "G1SonicLatentObservationCfg",
+    "rewards_class": "G1RewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Latent-Strict-v0": {
+    "actions_class": "G1ActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "command_hold_steps": 0,
+      "generation": "legacy",
+      "latent_command_dim": 258,
+      "latent_patch_future_steps": 0,
+      "latent_patch_past_steps": 0,
+      "random_reset_full_trajectory": false,
+      "random_reset_step_max": 200,
+      "random_reset_step_min": 0
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1LatentStrictEnvCfg",
+    "events_class": "G1EventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "projected_gravity",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "joint_pos",
+        "joint_vel",
+        "last_action"
+      ],
+      "expert_goal": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ],
+      "expert_state": [
+        "joint_pos",
+        "joint_vel",
+        "root_pos",
+        "root_quat",
+        "root_lin_vel",
+        "root_ang_vel",
+        "expert_motion",
+        "expert_anchor_ori_b",
+        "expert_anchor_pos_b"
+      ],
+      "expert_window": [
+        "expert_motion",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "reward_input": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ]
+    },
+    "observations_class": "G1LatentObservationCfg",
+    "rewards_class": "G1RewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Latent-v0": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "command_hold_steps": 0,
+      "generation": "legacy",
+      "latent_command_dim": 258,
+      "latent_patch_future_steps": 0,
+      "latent_patch_past_steps": 0,
+      "random_reset_full_trajectory": false,
+      "random_reset_step_max": 200,
+      "random_reset_step_min": 0
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1EnvV1Cfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "projected_gravity",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "joint_pos",
+        "joint_vel",
+        "last_action"
+      ],
+      "expert_goal": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ],
+      "expert_state": [
+        "joint_pos",
+        "joint_vel",
+        "root_pos",
+        "root_quat",
+        "root_lin_vel",
+        "root_ang_vel",
+        "expert_motion",
+        "expert_anchor_ori_b",
+        "expert_anchor_pos_b"
+      ],
+      "expert_window": [
+        "expert_motion",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "reward_input": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ]
+    },
+    "observations_class": "G1LatentObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-PerStepVQ-v0": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [],
+      "actor_hold_steps": 1,
+      "actor_horizon": null,
+      "actor_kind": "latent",
+      "actor_latent_dim": 64,
+      "actor_source": "agent",
+      "critic_channels": [
+        "actor",
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_window": [
+        0,
+        9
+      ],
+      "generation": "interface",
+      "selection_full_trajectory": false,
+      "selection_random_step_max": 200,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1PerStepVQSurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Sonic-NoHist-v0": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [],
+      "actor_hold_steps": 1,
+      "actor_horizon": null,
+      "actor_kind": "latent",
+      "actor_latent_dim": 258,
+      "actor_source": "agent",
+      "critic_channels": [
+        "actor",
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_window": [
+        0,
+        0
+      ],
+      "generation": "interface",
+      "selection_full_trajectory": true,
+      "selection_random_step_max": 0,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": "G1SonicTerminationCurriculumCfg",
+    "env_cfg_class": "ImitationG1SonicNoHistorySurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Sonic-v0": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [],
+      "actor_hold_steps": 1,
+      "actor_horizon": null,
+      "actor_kind": "latent",
+      "actor_latent_dim": 258,
+      "actor_source": "agent",
+      "critic_channels": [
+        "actor",
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_window": [
+        0,
+        0
+      ],
+      "generation": "interface",
+      "selection_full_trajectory": true,
+      "selection_random_step_max": 0,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": "G1SonicTerminationCurriculumCfg",
+    "env_cfg_class": "ImitationG1SonicSurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-SonicOfficialFSQ-v0": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [],
+      "actor_hold_steps": 1,
+      "actor_horizon": null,
+      "actor_kind": "latent",
+      "actor_latent_dim": 64,
+      "actor_source": "agent",
+      "critic_channels": [
+        "actor",
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_window": [
+        0,
+        9
+      ],
+      "generation": "interface",
+      "selection_full_trajectory": false,
+      "selection_random_step_max": 200,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": "G1SonicTerminationCurriculumCfg",
+    "env_cfg_class": "ImitationG1SonicOfficialFSQSurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-Strict-v0": {
+    "actions_class": "G1ActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "command_hold_steps": 0,
+      "generation": "legacy",
+      "latent_command_dim": 64,
+      "latent_patch_future_steps": 0,
+      "latent_patch_past_steps": 0,
+      "random_reset_full_trajectory": false,
+      "random_reset_step_max": 200,
+      "random_reset_step_min": 0
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1StrictTrackEnvCfg",
+    "events_class": "G1EventCfg",
+    "groups": {
+      "critic": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_motion_qpos",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "expert_state": [
+        "joint_pos",
+        "joint_vel",
+        "root_pos",
+        "root_quat",
+        "root_lin_vel",
+        "root_ang_vel",
+        "expert_motion",
+        "expert_anchor_ori_b",
+        "expert_anchor_pos_b"
+      ],
+      "expert_window": [
+        "expert_motion",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b"
+      ],
+      "policy": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_motion_qpos",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "reward_input": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ]
+    },
+    "observations_class": "G1ObservationCfg",
+    "rewards_class": "G1RewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-VQVAE-v0": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [],
+      "actor_hold_steps": 1,
+      "actor_horizon": null,
+      "actor_kind": "latent",
+      "actor_latent_dim": 258,
+      "actor_source": "agent",
+      "critic_channels": [
+        "actor",
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_window": [
+        8,
+        0
+      ],
+      "generation": "interface",
+      "selection_full_trajectory": false,
+      "selection_random_step_max": 200,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1VQVAESurfaceEnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-v0": {
+    "actions_class": "G1ActionsCfg",
+    "anchor_body": "torso_link",
+    "command": {
+      "command_hold_steps": 0,
+      "generation": "legacy",
+      "latent_command_dim": 64,
+      "latent_patch_future_steps": 0,
+      "latent_patch_past_steps": 0,
+      "random_reset_full_trajectory": true,
+      "random_reset_step_max": 0,
+      "random_reset_step_min": 0
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1LafanTrackEnvCfg",
+    "events_class": "G1EventCfg",
+    "groups": {
+      "critic": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_motion_qpos",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "expert_state": [
+        "joint_pos",
+        "joint_vel",
+        "root_pos",
+        "root_quat",
+        "root_lin_vel",
+        "root_ang_vel",
+        "expert_motion",
+        "expert_anchor_ori_b",
+        "expert_anchor_pos_b"
+      ],
+      "expert_window": [
+        "expert_motion",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b"
+      ],
+      "policy": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_motion_qpos",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "reward_input": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ]
+    },
+    "observations_class": "G1ObservationCfg",
+    "rewards_class": "G1RewardsCfg",
+    "terminations_class": "G1TerminationsCfg"
+  },
+  "Isaac-Imitation-G1-v1": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "command_hold_steps": 0,
+      "generation": "legacy",
+      "latent_command_dim": 258,
+      "latent_patch_future_steps": 0,
+      "latent_patch_past_steps": 0,
+      "random_reset_full_trajectory": false,
+      "random_reset_step_max": 200,
+      "random_reset_step_min": 0
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1EnvV1Cfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "projected_gravity",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "joint_pos",
+        "joint_vel",
+        "last_action"
+      ],
+      "expert_goal": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ],
+      "expert_state": [
+        "joint_pos",
+        "joint_vel",
+        "root_pos",
+        "root_quat",
+        "root_lin_vel",
+        "root_ang_vel",
+        "expert_motion",
+        "expert_anchor_ori_b",
+        "expert_anchor_pos_b"
+      ],
+      "expert_window": [
+        "expert_motion",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "expert_ee_pos_b",
+        "expert_ee_ori_b",
+        "expert_keypoint_pos_b",
+        "expert_keypoint_ori_b"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "reward_input": [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b"
+      ]
+    },
+    "observations_class": "G1LatentObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  },
+  "Isaac-Imitation-G1-v2": {
+    "actions_class": "G1SonicActionsCfg",
+    "anchor_body": "pelvis",
+    "command": {
+      "actor_components": [],
+      "actor_hold_steps": 1,
+      "actor_horizon": null,
+      "actor_kind": "latent",
+      "actor_latent_dim": 258,
+      "actor_source": "agent",
+      "critic_channels": [
+        "actor",
+        "reference"
+      ],
+      "critic_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_components": [
+        "joint_qpos_qvel",
+        "root_pos",
+        "root_ori"
+      ],
+      "encoder_window": [
+        0,
+        0
+      ],
+      "generation": "interface",
+      "selection_full_trajectory": false,
+      "selection_random_step_max": 200,
+      "selection_random_step_min": 0,
+      "selection_schedule": "random",
+      "selection_start_frame": 0,
+      "selection_start_mode": "auto"
+    },
+    "curriculum": null,
+    "env_cfg_class": "ImitationG1V2EnvCfg",
+    "events_class": "G1SonicEventCfg",
+    "groups": {
+      "critic": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "body_pos",
+        "body_ori",
+        "base_lin_vel",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ],
+      "policy": [
+        "latent_command",
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action"
+      ]
+    },
+    "observations_class": "G1V2ObservationCfg",
+    "rewards_class": "G1SonicRewardsCfg",
+    "terminations_class": "G1SonicTerminationsCfg"
+  }
+}

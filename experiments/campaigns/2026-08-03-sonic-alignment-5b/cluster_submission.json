@@ -1,0 +1,38 @@
+{
+  "agent_entry_point": "rlopt_ipmd_tuned_cfg_entry_point",
+  "arms": {
+    "bones91": {
+      "job": "5561002",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "total_frames": 5000000000
+    },
+    "lafan1": {
+      "job": "5561001",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "total_frames": 5000000000
+    }
+  },
+  "campaign": "2026-08-03-sonic-alignment-5b",
+  "definition": "SONIC-aligned v2: heading_quat twist-about-Z, feet_acc -2.5e-7, 5-point tracking_reward_points",
+  "known_stale_knob": "tracking_reward_points.weight=4.0 was tuned against the 3-point term; carried forward unvalidated",
+  "launcher": "experiments/campaigns/2026-08-03-sonic-alignment-5b/submit_sonic_aligned_5b_ice.sh",
+  "old_definition_predecessors": {
+    "bones91": "bones91_v2_mjwarp_aligned_5b_seed0_e12288_r24 (W&B woykoqp7)",
+    "lafan1": "lafan1_v2_mjwarp_aligned_5b_seed0_e12288_r24 (W&B p4nlrpl6)"
+  },
+  "physics": "newton_mjwarp (njmax 288, nconmax 200)",
+  "rlopt_git_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
+  "sonic_reference": "NVlabs/GR00T-WholeBodyControl main aa263a8 (2026-07-31)",
+  "submitted_at": "2026-08-03T21:32:40.993797-04:00",
+  "task": "Isaac-Imitation-G1-v2",
+  "wandb": {
+    "group": "sonic-aligned-5b",
+    "project": "g1-lafan1"
+  },
+  "workspace_dirty": true,
+  "workspace_git_sha": "33f313f30e643641546cfb37aa507d5cf4aeca15"
+}

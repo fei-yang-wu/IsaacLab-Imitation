@@ -1,0 +1,587 @@
+{
+  "arms": {
+    "a10_obs_norm": {
+      "job": "5558609",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a11_kl_iter_entropy0": {
+      "job": "5558610",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a12_kl_iter_entropy0_obsnorm": {
+      "job": "5558611",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a13_kl_iter_nophase": {
+      "job": "5558616",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a14_kl_iter_critic_ee": {
+      "job": "5558626",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a15_entropy0_obsnorm_bigcritic": {
+      "job": "5558635",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a16_entropy0_obsnorm": {
+      "job": "5558633",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a17_a12_bigcritic": {
+      "job": "5558779",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a1_updates_2x": {
+      "job": "5558469",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a2_kl_per_iteration": {
+      "job": "5558483",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a3_lr_fixed_1e4": {
+      "job": "5558484",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a4_lr_fixed_3e5": {
+      "job": "5558485",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a5_entropy_1e3": {
+      "job": "5558487",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a6_entropy_0": {
+      "job": "5558490",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a7_epochs_3": {
+      "job": "5558491",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a8_r24_matched": {
+      "job": "5558492",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "a9_epochs_10": {
+      "job": "5558493",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "b0_baseline": {
+      "job": "5559617",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "b2_adv_global": {
+      "job": "5558908",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "b3_gradclip": {
+      "job": "5558913",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "b4_silu": {
+      "job": "5558909",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "b5_term_curriculum": {
+      "job": "5558907",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "b6_actor_lr_split": {
+      "job": "5558916",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "c1_sonic_explore": {
+      "job": "5558813",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "c2_clip_ent005": {
+      "job": "5558812",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "c3_clip_ent0": {
+      "job": "5558811",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "c4_lowinit_ent005": {
+      "job": "5558814",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "c5_lowinit_ent0": {
+      "job": "5558807",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "d1_bounded_ent0": {
+      "job": "5558855",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "d2_bounded_ent005": {
+      "job": "5558857",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "e1_gamma097": {
+      "job": "5558918",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "e2_widenet": {
+      "job": "5558919",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "e3_sonicnet": {
+      "job": "5558920",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 50135040
+    },
+    "g0_base100m": {
+      "job": "5558945",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "g1_silu": {
+      "job": "5558946",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "g2_widenet": {
+      "job": "5558947",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "g3_sonicnet": {
+      "job": "5558948",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "g4_advglobal_gradclip": {
+      "job": "5558949",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "h1_silu100m": {
+      "job": "5558963",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "h2_silu_widenet": {
+      "job": "5558964",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "h3_silu_sonicnet": {
+      "job": "5558967",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "i1_deeper": {
+      "job": "5559035",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "i2_desired_kl02": {
+      "job": "5559036",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "i3_gae_lambda098": {
+      "job": "5559038",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "i4_action_rate_half": {
+      "job": "5559039",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "i5_epochs8": {
+      "job": "5559040",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "j0_kl02_actrate": {
+      "job": "5559180",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "j1_curr_compressed": {
+      "job": "5559181",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "j2_actrate_quarter": {
+      "job": "5559182",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "j3_desired_kl04": {
+      "job": "5559183",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "j4_kl02_actrate_sonicnet": {
+      "job": "5559185",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "k0_combined": {
+      "job": "5559358",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "k1_kl04": {
+      "job": "5559359",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "k2_actrate_zero": {
+      "job": "5559361",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "k3_curr_early": {
+      "job": "5559362",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "k4_curr_late": {
+      "job": "5559363",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "m0_best": {
+      "job": "5559389",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "m1_curr_earliest": {
+      "job": "5559390",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "m2_entropy_1e3": {
+      "job": "5559391",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "m3_updates_2x": {
+      "job": "5559392",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "m4_gamma097": {
+      "job": "5559393",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "p1_clip_eps03": {
+      "job": "5559729",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "p2_lr_factor12": {
+      "job": "5559730",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "p3_r24_matched": {
+      "job": "5559731",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "p4_tracking_points_2x": {
+      "job": "5559732",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "p5_critic_coeff05": {
+      "job": "5559733",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "q1_envs24k_r12": {
+      "job": "5559737",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "q2_envs24k_r6": {
+      "job": "5559738",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "q3_envs16k_r9": {
+      "job": "5559739",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 99975168
+    },
+    "r0_champion_wallclock": {
+      "job": "5559744",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "r1_actrate_sonic": {
+      "job": "5559745",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "s1_envs12k_r6": {
+      "job": "5559748",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "s2_envs24k_r8": {
+      "job": "5559749",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "s3_envs20k_r6": {
+      "job": "5559750",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "t1_r4": {
+      "job": "5559789",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "t2_r3": {
+      "job": "5559796",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "t3_r6_mb9216": {
+      "job": "5559797",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "u1_lrfactor12": {
+      "job": "5559874",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "u2_kl01": {
+      "job": "5559894",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    },
+    "u3_kl04": {
+      "job": "5559895",
+      "num_envs": 12288,
+      "rollout_steps": 12,
+      "seed": 0,
+      "total_frames": 294912000
+    }
+  },
+  "encoder_checkpoint": "/data/pretrain_store/lafan1_v2_det_sr_h10_z256_seed0/checkpoints/latest.pt",
+  "geometry": {
+    "max_iterations": 2000,
+    "num_envs": 12288,
+    "rollout_steps": 12,
+    "seed": 0,
+    "total_frames": 294912000
+  },
+  "last_submitted_at": "2026-08-03T11:06:58.408665-04:00",
+  "log_root": "/data/rlopt_hp_screen_100m_20260802",
+  "manifest_sha256": "d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8",
+  "note": "Budget changed mid-campaign: rounds 1-7 ran 50,135,040 frames, rounds 8-12 and the final b0 denominator ran 99,975,168. Geometry is recorded per arm; there is no single campaign geometry.",
+  "rlopt_dirty": false,
+  "rlopt_git_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
+  "screen_tag": "rlopt_hp_screen_100m_20260802",
+  "submitted_at": "2026-08-02T19:42:05-04:00",
+  "task": "Isaac-Imitation-G1-v2",
+  "wandb": {
+    "group": "rlopt-hparam-search",
+    "project": "g1-lafan1"
+  },
+  "workspace_dirty": true,
+  "workspace_git_sha": "aaa1fb07466d6f98bafc3337572ebbebe79651f9"
+}

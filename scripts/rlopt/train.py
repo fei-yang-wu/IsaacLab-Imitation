@@ -20,24 +20,14 @@ logger = logging.getLogger(__name__)
 ALGORITHMS = (
     "PPO",
     "SAC",
-    "FASTSAC",
     "IPMD",
-    "IPMD_SR",
-    "IPMD_BILINEAR",
-    "GAIL",
-    "AMP",
-    "ASE",
+    "IPMD_L2T",
 )
 ENTRY_POINT_ALGORITHM_MAP = {
     "rlopt_ppo_cfg_entry_point": "PPO",
     "rlopt_sac_cfg_entry_point": "SAC",
-    "rlopt_fastsac_cfg_entry_point": "FASTSAC",
     "rlopt_ipmd_cfg_entry_point": "IPMD",
-    "rlopt_ipmd_sr_cfg_entry_point": "IPMD_SR",
-    "rlopt_ipmd_bilinear_cfg_entry_point": "IPMD_BILINEAR",
-    "rlopt_gail_cfg_entry_point": "GAIL",
-    "rlopt_amp_cfg_entry_point": "AMP",
-    "rlopt_ase_cfg_entry_point": "ASE",
+    "rlopt_ipmd_l2t_cfg_entry_point": "IPMD_L2T",
 }
 
 
@@ -100,6 +90,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max_iterations", type=int, default=None, help="Training rollout iterations."
     )
+    parser.add_argument(
+        "--profile_iterations",
+        action="store_true",
+        default=False,
+        help=(
+            "Synchronize CUDA at phase boundaries and report timings for every "
+            "training iteration."
+        ),
+    )
     parser.add_argument("--export_io_descriptors", action="store_true", default=False)
     parser.add_argument(
         "--algo",
@@ -109,6 +108,39 @@ def _build_parser() -> argparse.ArgumentParser:
         default="PPO",
         choices=ALGORITHMS,
         help="RLOpt algorithm; it must match a task config entry point.",
+    )
+    parser.add_argument(
+        "--termination_window",
+        type=int,
+        default=None,
+        help=(
+            "Require this many consecutive violations before a strict tracking "
+            "termination fires. Thresholds are unchanged; only the episode "
+            "boundary moves. Default (unset) is the instantaneous protocol."
+        ),
+    )
+    parser.add_argument(
+        "--termination_window_terms",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated termination terms the window applies to, e.g. "
+            "'foot_pos_xyz'. Default is every strict tracking term. Scoping "
+            "matters: foot_pos_xyz is the only term constraining horizontal "
+            "position and causes ~2/3 of non-timeout terminations, so a window "
+            "on it alone targets the dominant failure while leaving the height "
+            "and orientation terms strict."
+        ),
+    )
+    parser.add_argument(
+        "--termination_window_probe",
+        action="store_true",
+        default=False,
+        help=(
+            "Diagnostic: disable tracking terminations and log how long "
+            "violations actually last, so the payoff of --termination_window "
+            "is measured rather than assumed. Not a qualification protocol."
+        ),
     )
     parser.add_argument("--ray-proc-id", "-rid", type=int, default=None)
     parser.add_argument(

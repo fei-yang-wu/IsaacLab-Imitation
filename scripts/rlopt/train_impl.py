@@ -52,6 +52,7 @@ from isaaclab.envs import (
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from rlopt.agent import IPMDL2T
 from rlopt.agent import AMP, ASE, GAIL, IPMD, IPMDBilinear, IPMDSR, PPO, SAC, FastSAC
 from rlopt.config_base import RLOptConfig, TrainerConfig
 from torchrl.envs import (
@@ -87,6 +88,7 @@ ALGORITHM_CLASS_MAP = {
     "SAC": SAC,
     "FASTSAC": FastSAC,
     "IPMD": IPMD,
+    "IPMD_L2T": IPMDL2T,
     "IPMD_SR": IPMDSR,
     "IPMD_BILINEAR": IPMDBilinear,
     "GAIL": GAIL,
@@ -249,15 +251,92 @@ def _enable_wandb_video_sync(agent: object, *, video_folder: str, base_dir: str)
     return _log_pending_videos
 
 
+def _apply_termination_window_args(
+    args_cli: argparse.Namespace,
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+) -> None:
+    """Opt the strict tracking terminations into a persistence window.
+
+    Registered task ids stay on the instantaneous protocol, so a window is
+    requested per run. ``--termination_window_probe`` is the shadow
+    measurement: it never terminates on tracking error, which is the only way
+    to observe how long a violation would have lasted, and therefore how many
+    of today's one-step terminations a window would convert into recoveries.
+    """
+    requested = getattr(args_cli, "termination_window", None)
+    probe = bool(getattr(args_cli, "termination_window_probe", False))
+    if requested is None and not probe:
+        return
+    window = None if requested is None else int(requested)
+
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.terminations import (  # noqa: E501
+        apply_termination_window,
+    )
+
+    terminations = getattr(env_cfg, "terminations", None)
+    if terminations is None:
+        raise ValueError(
+            "--termination_window/--termination_window_probe require a"
+            " manager-based task with a terminations config."
+        )
+    if probe:
+        if window is not None:
+            raise ValueError(
+                "--termination_window_probe measures run lengths with no"
+                " tracking termination active; it cannot be combined with"
+                " --termination_window."
+            )
+        apply_termination_window(terminations, min_steps=1, diagnostic_only=True)
+        print(
+            "[INFO] Termination-window probe: tracking terminations disabled,"
+            " logging Termination_Window/<term>/recovered_below_<k>_frac."
+            " Diagnostic protocol only -- not a qualification run."
+        )
+        return
+    if window is None or window < 1:
+        raise ValueError(f"--termination_window must be >= 1, got {requested}.")
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.terminations import (  # noqa: E501
+        SONIC_WINDOW_TERM_NAMES,
+    )
+
+    requested_terms = getattr(args_cli, "termination_window_terms", None)
+    if requested_terms:
+        term_names = tuple(
+            name.strip() for name in str(requested_terms).split(",") if name.strip()
+        )
+        unknown = sorted(set(term_names) - set(SONIC_WINDOW_TERM_NAMES))
+        if unknown:
+            raise ValueError(
+                f"--termination_window_terms contains unknown term(s) {unknown}; "
+                f"windowing is defined for {list(SONIC_WINDOW_TERM_NAMES)}."
+            )
+    else:
+        term_names = SONIC_WINDOW_TERM_NAMES
+    apply_termination_window(terminations, min_steps=window, term_names=term_names)
+    print(
+        f"[INFO] Tracking terminations require {window} consecutive violations "
+        f"({', '.join(term_names)})."
+    )
+
+
 def train(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     agent_cfg: RLOptConfig,
     args_cli: argparse.Namespace,
 ) -> None:
     """Train an RLOpt agent inside an already-selected simulation lifecycle."""
-    sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
-    if callable(sync_input_keys):
-        sync_input_keys()
+    # The environment's declared command interface is the authority on every
+    # command input key and on whether the actor consumes a latent. Binding the
+    # agent to it makes the historical env/agent mismatch impossible rather than
+    # validated after the fact; `sync_input_keys` runs as part of the binding.
+    from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+        bind_command_interface,
+    )
+
+    if bind_command_interface(agent_cfg, env_cfg) is None:
+        sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
+        if callable(sync_input_keys):
+            sync_input_keys()
 
     # randomly sample a seed if seed = -1
     if args_cli.seed == -1:
@@ -274,6 +353,8 @@ def train(
         agent_cfg.trainer = TrainerConfig()
     if args_cli.log_interval is not None:
         agent_cfg.trainer.log_interval = max(1, int(args_cli.log_interval))
+    if args_cli.profile_iterations:
+        agent_cfg.trainer.profile_iterations = True
     agent_cfg.collector.frames_per_batch *= env_cfg.scene.num_envs
     # Keep the on-policy rollout buffer and minibatching consistent when num_envs
     # or the per-env horizon (collector.frames_per_batch) differ from the config
@@ -283,7 +364,13 @@ def train(
     # and keep the configured minibatch SIZE (so per-gradient-step memory is
     # constant; the number of minibatches grows with the batch). The default
     # 4096-env / horizon-24 configuration is unchanged by this.
-    _ONPOLICY_SINGLE_ROLLOUT_ALGOS = {"PPO", "IPMD", "IPMD_SR", "IPMD_BILINEAR"}
+    _ONPOLICY_SINGLE_ROLLOUT_ALGOS = {
+        "PPO",
+        "IPMD",
+        "IPMD_L2T",
+        "IPMD_SR",
+        "IPMD_BILINEAR",
+    }
     if args_cli.algorithm in _ONPOLICY_SINGLE_ROLLOUT_ALGOS:
         scaled_frames_per_batch = int(agent_cfg.collector.frames_per_batch)
         replay_buffer_cfg = getattr(agent_cfg, "replay_buffer", None)
@@ -331,6 +418,9 @@ def train(
     env_cfg.sim.device = (
         args_cli.device if args_cli.device is not None else env_cfg.sim.device
     )
+    # Applied before `dump_yaml` below so `params/env.yaml` records the
+    # protocol the run actually used, not the task id's default.
+    _apply_termination_window_args(args_cli, env_cfg)
 
     # directory for logging into
     run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -424,8 +514,8 @@ def train(
         base_env=env,
         transform=Compose(
             RewardSum(),  # type: ignore
-            StepCounter(1000),  # type: ignore
-            RewardClipping(-10.0, 5.0),  # type: ignore
+            StepCounter(500),  # type: ignore
+            # RewardClipping(-10.0, 5.0),  # type: ignore
         ),
     )
 

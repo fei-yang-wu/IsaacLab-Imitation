@@ -1,0 +1,210 @@
+# Configuration for experiments/paper/run_interface_capacity_study.py.
+#
+# Every parameter the study needs lives here. Override any of them on the
+# command line, e.g.
+#   pixi run python experiments/paper/run_interface_capacity_study.py \
+#       stages=[grid] grid.interfaces=[latent_skill,root_points5] grid.seeds=[0]
+#
+# THE STUDY
+# ---------
+# Does a compressed command interface reduce planner-training complexity? Two
+# claims, both measured on one frozen low-level protocol:
+#   iso-parameter    better MPJPE at matched planner parameter count
+#   iso-performance  fewer planner parameters to reach a fixed MPJPE
+#
+# The interfaces form a packet-size ladder at a fixed 5 Hz publication rate. Each
+# has its OWN low-level controller trained natively on that command space -- this
+# is not one tracker fed adapted commands. Consequently there is no channel
+# reconstruction anywhere: a root_qpos controller simply never receives joint
+# velocities.
+#
+# WHY ee_trajectory IS DISABLED BY DEFAULT
+# ----------------------------------------
+# It is not a failed run, it is the rootless control. Its adapter was verified
+# correct (chunked streaming reproduced its own floor to -5.3 mm), but the
+# interface is under-determined: 4 body poses expressed in the TORSO frame never
+# say where the torso should go, and 4 poses do not determine 29 joints. Its
+# oracle floor is 405.2 mm against full-body's 23.8 mm. Note it carries MORE
+# values than root_points5 (360 vs 240) and is 13x worse -- packet size is not
+# what determines trackability; closing the kinematic chain is. Enable it only
+# to reproduce that control measurement.
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    # Deliberately NOT under paths.study_root: Hydra creates its run dir before
+    # main() executes, which would populate the study root and make the
+    # refuse-existing-study-root gate impossible to satisfy on a fresh run.
+    dir: ${oc.env:PWD}/logs/hydra/interface_capacity/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+
+# Which stages to run, in order.
+#   qualify   per-interface gate: replay floor vs 5 Hz oracle stream. An
+#             interface whose own controller cannot track it makes any planner
+#             result on it meaningless, so this gates everything downstream.
+#   oracle    frame-0 oracle metrics + the demonstration rows the planner trains
+#             on. Writes oracle_baselines/<interface>/.
+#   grid      the capacity grid: one planner per (interface, size, seed).
+#   aggregate per-seed and across-seed summaries + the paper tables.
+stages: [qualify, oracle, grid, aggregate]
+
+paths:
+  study_root: ${oc.env:PWD}/logs/interface_baselines/lafan1_interface_capacity
+  checkpoint_root: ${oc.env:PWD}/logs/downloaded_checkpoints
+  manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_walk1_subject1_manifest.json
+  # Latent reference cache. Name-bound and joint-order-safe; do NOT substitute a
+  # cache built from a different NPZ tree.
+  latent_dataset: ${oc.env:PWD}/data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557
+
+motion:
+  name: walk1_subject1
+  # A second motion is the generalisation check. dance1_subject1 is the one the
+  # study used; full-body capacity scaling is MOTION-DEPENDENT (it scales on
+  # walk1, inverts on dance1), so a single-motion claim is not safe.
+  generalisation_name: dance1_subject1
+
+# The frozen low-level protocol. Identical for every interface -- an asymmetry
+# here silently decides the result. A 2026-07-24 audit found `foot_pos_xyz` left
+# active on the latent row only, which truncated its rollouts to ~225 steps
+# against full-body's 700 and inflated latent's win; hence ONE shared override
+# set rather than per-interface ones.
+protocol:
+  reference_start_frame: 0
+  control_steps: 700
+  num_envs: 4
+  episode_length_s: 20.0
+  # Publication schedule: planner emits a 10-frame packet every 10 control
+  # steps (5 Hz into a 50 Hz tracker), consumed one slot per step.
+  publish_interval_steps: 10
+  command_future_steps: 9
+  command_past_steps: 0
+  state_history_steps: 9
+  physics: newton_mjwarp
+  njmax: 320
+  nconmax: 40
+  # Disabled terminations. Tracking-error terms only -- with these on, episodes
+  # end early and MPJPE is averaged over a short low-drift window, which hides
+  # exactly the drift the study measures.
+  disable_terminations:
+    [anchor_pos, anchor_ori, ee_body_pos, foot_pos_xyz]
+  disable_events:
+    [physics_material, add_joint_default_pos, base_com, push_robot,
+     randomize_rigid_body_mass]
+
+# Qualification gate thresholds (stage: qualify).
+qualify:
+  # Streamed-minus-replay-floor tolerance. Generous: this is a smoke gate on the
+  # chunk adapter, not a precision test.
+  tolerance_mm: 25.0
+  # The floor itself must be sane. Faithfully reproducing an already-catastrophic
+  # floor proves the adapter is consistent, not that the interface is usable --
+  # ee_trajectory PASSED the faithfulness check at a 405 mm floor before this
+  # ceiling existed.
+  floor_max_mm: 120.0
+
+# Planner training. Identical across interfaces and sizes; only the target width
+# and the parameter count change.
+planner:
+  family: flow
+  state_key: planner_state
+  num_updates: 2000
+  batch_size: 256
+  micro_batch_size: 32
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  max_samples: 1000
+  flow_num_inference_steps: 16
+  endpoint_num_inference_steps: 4
+  # Zero at evaluation so the reported number is the planner's mean prediction.
+  flow_inference_noise_std: 0.0
+
+grid:
+  interfaces: [latent_skill, full_body_trajectory, root_qpos, root_points5]
+  sizes: [tiny, small, medium, large]
+  seeds: [0, 1, 2]
+  # Demonstration-only is the headline row. Rollout fine-tuning is reported
+  # SEPARATELY and must not be pooled: DAgger's effect is capacity-dependent --
+  # transformative where the pretrained planner is worst (full-body tiny
+  # 358.7 -> 87.9 mm) and harmful where it is already decent (large 118 -> 236).
+  demo_only: true
+  # Rollout collection needs slack: 10 envs x 1000 steps / 10-step publication is
+  # EXACTLY the 1000-row budget, and once the robot actually tracks it reaches
+  # the end of the reference and the budget becomes unreachable.
+  collect_steps: 3000
+
+# One entry per interface. `oracle_mpjpe_mm` is the measured frame-0/700-step
+# floor used to normalize that interface's planner rows: absolute MPJPE alone
+# would conflate planner quality with tracker quality, and the trackers differ.
+interfaces:
+  latent_skill:
+    packet_values: 258        # z256 + 2 phase
+    task: Isaac-Imitation-G1-Latent-Strict-v0
+    checkpoint: lafan1_latent_deterministic_5b_seed0/model_step_4525129728.pt
+    sha256: 785f5327f2356f4a301ac39fc435b78379e9c5a73293c450deb483dd7c188f7c
+    skill_checkpoint: lafan1_latent_deterministic_5b_seed0/skill_encoder/latest.pt
+    frames: 4525129728
+    oracle_mpjpe_mm: 30.5
+    enabled: true
+
+  full_body_trajectory:
+    packet_values: 670        # 10 x (29 qpos + 29 qvel + 3 pos + 6 rot6d)
+    task: Isaac-Imitation-G1-Strict-v0
+    checkpoint: lafan1_fbchunk_5b_seed0/model_step_5000085504.pt
+    sha256: 681a712ea8635aaaf89f788d3d73d3142dab0b26fbb2bb6ab805d27c805a0bf6
+    frames: 5000085504
+    oracle_mpjpe_mm: 23.8
+    enabled: true
+
+  root_qpos:
+    packet_values: 380        # 10 x (29 qpos + 3 pos + 6 rot6d), NO velocities
+    task: Isaac-Imitation-G1-Strict-v0
+    checkpoint: lafan1_rootqpos_5b_seed0/model_step_4600037376.pt
+    sha256: cab14dd65d8521b03db7ed373b2f94c8964f119cc0b6bb9405bab89b5bbe6346
+    frames: 4600037376
+    oracle_mpjpe_mm: 23.6
+    enabled: true
+
+  root_points5:
+    packet_values: 240        # 10 x (5 keypoints x 3 + 3 pos + 6 rot6d)
+    task: Isaac-Imitation-G1-Strict-v0
+    checkpoint: lafan1_rootpoints5_5b_seed0/model_step_4800135168.pt
+    sha256: cb28e87eeb66ba701e03be4050acad44b2b61edc9ccda7dd802e4d3117c4406f
+    frames: 4800135168
+    oracle_mpjpe_mm: 30.6
+    enabled: true
+
+  ee_trajectory:
+    packet_values: 360        # 10 x 4 bodies x (3 pos + 6 rot6d), NO root
+    task: Isaac-Imitation-G1-Strict-v0
+    checkpoint: lafan1_eechunk_5b_seed0/model_step_5000085504.pt
+    sha256: 8c0ac70d99935c8f38561433e8a4e7d0734f0bbc718fe2fa1287485c483e4b11
+    frames: 5000085504
+    oracle_mpjpe_mm: 405.2
+    # The rootless control. Fails the qualify stage by design; enable only to
+    # reproduce that measurement, and expect UNUSABLE INTERFACE.
+    enabled: false
+
+aggregate:
+  # Iso-performance targets: the smallest planner reaching BOTH is the reported
+  # capacity threshold. survival_target 1.0 because with tracking terminations
+  # disabled nothing falls by the base_too_low definition, so MPJPE is the
+  # discriminator and survival is a sanity check rather than a filter.
+  survival_target: 1.0
+  normalized_mpjpe_target: 1.5
+  # The across-seed aggregator refuses a non-empty output dir so a crashed run
+  # cannot be silently overwritten. Set true only to re-aggregate deliberately.
+  overwrite: false
+
+gates:
+  # Verify each enabled interface's checkpoint against its recorded sha256.
+  # Checkpoints have been silently substituted and truncated before in this
+  # campaign; a hash is the only thing that catches it.
+  require_checkpoint_hash: true
+  # Refuse to run the grid on an interface with no passing qualification record.
+  require_qualification: true
+  # Refuse an existing study root, so a partial rerun cannot be mistaken for a
+  # complete one. Set false only for an intentional, audited resume.
+  refuse_existing_study_root: true

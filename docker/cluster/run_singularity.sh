@@ -179,14 +179,14 @@ echo "[INFO] Checking G1 dataset under '\${cluster_g1_data_root}' (npz_count=\${
 
 if [ "\${cluster_g1_force_download}" = "1" ]; then
     echo "[INFO] Force-refreshing G1 dataset from Hugging Face repo '\${cluster_g1_repo_id}' at revision '\${cluster_g1_repo_revision}'."
-    /isaac-sim/python.sh scripts/setup_g1_lafan1_npz_dataset.py \\
+    /isaac-sim/python.sh scripts/data/setup_g1_lafan1_npz_dataset.py \\
         --data_root "\${cluster_g1_data_root}" \\
         --repo_id "\${cluster_g1_repo_id}" \\
         --revision "\${cluster_g1_repo_revision}" \\
         --force-download
 elif [ "\${cluster_g1_npz_count}" -lt "\${cluster_g1_expected_motion_count}" ]; then
     echo "[INFO] G1 dataset incomplete. Downloading from Hugging Face repo '\${cluster_g1_repo_id}' at revision '\${cluster_g1_repo_revision}'."
-    /isaac-sim/python.sh scripts/setup_g1_lafan1_npz_dataset.py \\
+    /isaac-sim/python.sh scripts/data/setup_g1_lafan1_npz_dataset.py \\
         --data_root "\${cluster_g1_data_root}" \\
         --repo_id "\${cluster_g1_repo_id}" \\
         --revision "\${cluster_g1_repo_revision}"
@@ -230,7 +230,7 @@ if [ "\${cluster_g1_manifest_refresh_policy}" = "never" ] && [ ! -f "\${cluster_
 fi
 
 if [ "\${cluster_g1_refresh_manifest}" = "1" ]; then
-    /isaac-sim/python.sh scripts/write_lafan1_npz_manifest.py \\
+    /isaac-sim/python.sh scripts/data/write_lafan1_npz_manifest.py \\
         --npz_dir "\${cluster_g1_npz_dir}" \\
         --manifest_path "\${cluster_g1_manifest_path}" \\
         --recursive
@@ -497,6 +497,17 @@ else
     echo "[INFO] No W&B API key configured for container runtime."
 fi
 
+# W&B run tags. `--containall` isolates the workload environment, so the tags a
+# submitter declares have to cross the container boundary deliberately. wandb
+# reads WANDB_TAGS (comma-separated) itself, so this needs no config field:
+# the repo convention of tagging each run with its environment, primary change,
+# and main features works through here.
+if [ -n "${CLUSTER_WANDB_TAGS:-}" ]; then
+    export SINGULARITYENV_WANDB_TAGS="${CLUSTER_WANDB_TAGS}"
+    export APPTAINERENV_WANDB_TAGS="${CLUSTER_WANDB_TAGS}"
+    echo "[INFO] W&B run tags for container runtime: ${CLUSTER_WANDB_TAGS}"
+fi
+
 # `--containall` isolates the workload environment, so Slurm's array index is
 # not inherited automatically. Staged array workflows use it to select an
 # explicit goal; forward it deliberately across the container boundary.
@@ -653,14 +664,25 @@ g1_usd_env_exports="export ISAACLAB_IMITATION_UNITREE_USD_CACHE_ROOT=$(dirname "
 if [ "${g1_usd_path}" = "repo" ] || [ "${g1_usd_path}" = "none" ]; then
     g1_usd_env_exports=""
 fi
+# Which interpreter the workload gets. RLOpt training entrypoints need the CU130
+# runtime Python (it has torch); everything else -- data prep, agents, viz --
+# runs under Kit's Python. This used to be an exact-name allow-list of
+# `train.py` and `train_hl_skill_pipeline.py`, so any other rlopt entrypoint
+# fell through to /isaac-sim/python.sh and died on `No module named 'torch'`
+# several seconds in, with a traceback that pointed at Isaac Lab rather than at
+# the interpreter (ICE job 5558033). Match the whole class instead.
+#
+# `rlopt_pipeline=1` means "this entrypoint runs its own stages, never rewrite
+# it"; only `train.py` is rewritten to `train_physx.py` under the PhysX backend.
 rlopt_backend=""
 rlopt_pipeline=0
-if [ "${CLUSTER_PYTHON_EXECUTABLE}" = "scripts/rlopt/train_hl_skill_pipeline.py" ]; then
-    rlopt_pipeline=1
-fi
-if [ "${CLUSTER_PYTHON_EXECUTABLE}" = "scripts/rlopt/train.py" ] || [ "$rlopt_pipeline" = "1" ]; then
-    rlopt_backend="$(resolve_rlopt_backend "${@:3}")"
-fi
+case "${CLUSTER_PYTHON_EXECUTABLE}" in
+    scripts/rlopt/train.py) ;;
+    scripts/rlopt/train*.py) rlopt_pipeline=1 ;;
+esac
+case "${CLUSTER_PYTHON_EXECUTABLE}" in
+    scripts/rlopt/train*.py) rlopt_backend="$(resolve_rlopt_backend "${@:3}")" ;;
+esac
 
 if [ "$rlopt_backend" = "newton" ]; then
     printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}" --assert-kitless
