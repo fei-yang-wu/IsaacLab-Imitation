@@ -27,6 +27,40 @@ run), 10 envs from frame 0, seed 0:
 Read the full-horizon row as tracking quality: the strict pass scores MPJPE only
 over frames a live episode reached, so it is biased toward whatever survived.
 
+## The horizon curve: precision is fine, failures are not
+
+Per-step root-relative MPJPE over a 500-step rollout, DR off, tracking
+terminations off (`scripts/audit/sim2sim_backend_eval.py`, 10 envs, frame 0):
+
+| steps | mean MPJPE |
+|---|---|
+| 0–50 | 11.24 mm |
+| 50–150 | 11.05 mm |
+| 150–300 | 11.66 mm |
+| **300–499** | **35.19 mm** |
+
+**Tracking is flat at ~11 mm for the first 6 seconds, then diverges.** That is
+not gradual drift accumulation; it is late-episode failure. The strict pass
+agrees: `done_rate` 0.50 and `survival_steps_mean` 425/500, so roughly half the
+environments fail, concentrated after step ~300, and with terminations disabled
+those failures run away and dominate the horizon mean.
+
+So the 59.7 mm full-horizon figure is not a precision number. It is
+`~11 mm of real tracking` blended with `a diverged tail`. Two consequences:
+
+1. **Precision is already good.** Sharpening a reward kernel to chase 20 → 15 mm
+   is chasing a term that contributes little to the headline number. The
+   round-1 arms (s1/s2/s4) are therefore less likely to move the eval metric
+   than their gradient analysis suggests.
+2. **The lever is survival.** Anything that reduces late failures moves the
+   full-horizon number far more. `foot_pos_xyz` is 66% of non-timeout
+   terminations, which is why the foot reward is in the default and why the
+   remaining failure modes are worth attacking directly.
+
+Precision and survival are coupled — better tracking means fewer threshold
+crossings — so the reward arms are not worthless. But read them against
+survival and the full-horizon number, not against strict MPJPE alone.
+
 ## Where the error actually is
 
 **Root drift accumulates, and it is the dominant eval-time failure.** It grows
