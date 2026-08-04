@@ -351,6 +351,39 @@ sit on it depends on whether the downstream consumer cares more about tracking
 precision or about episodes surviving. For a planner-training checkpoint,
 survival is arguably worth more than the last 1 mm of MPJPE.
 
+## How to improve EE further
+
+EE is **world-frame**, and decomposing it settles what to work on:
+
+| component | control (500M) |
+|---|---|
+| EE, world-frame | 0.0783 m |
+| root position drift | 0.0704 m |
+| **EE, root-relative** (`ee_pos_error_local_m`) | **0.0331 m** |
+| root orientation error | 0.055 rad |
+
+Root-relative EE (33.1 mm) is almost exactly the orientation lever
+(0.6 m mean lever arm × 0.055 rad = 33 mm). Since EE-L subtracts root *position*
+but not root *orientation* — the same caveat as MPJPE-L — the root-relative EE
+error is essentially **all root orientation**, and genuine wrist articulation
+error is near zero.
+
+So the EE budget is:
+
+1. **Root position drift** — the largest component. `s6` cut it 43% and took EE
+   down 23.7%. `s12` and `s15` carry that forward.
+2. **Root orientation lever** — ~33 mm, and **no arm has moved it**: `root_ori`
+   sits at 0.055–0.063 rad in every single run. `motion_global_anchor_ori` is
+   kernel 0.933 / weight 0.5, exactly the state `motion_global_anchor_pos` was
+   in before s6. `s14` applies the same recipe.
+3. **Wrist articulation** — **refuted as a lever**. `s7` rewards wrist position
+   directly and moved EE by 0.5% (0.0785 → 0.0781). Do not add wrist-specific
+   rewards.
+
+The order matters: as position drift falls, the orientation lever becomes the
+dominant term. At s6's 40 mm drift the 33 mm lever is already nearly half the
+budget, which is why s14 and s15 are the arms that matter for EE now.
+
 ## Scoring
 
 `score_eval_tracking_screen.sh` pulls each 500M checkpoint and runs

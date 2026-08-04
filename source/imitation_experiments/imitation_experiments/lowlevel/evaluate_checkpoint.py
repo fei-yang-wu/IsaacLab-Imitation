@@ -528,6 +528,24 @@ def _tracking_metrics(
     if ee_errors is not None:
         metrics["ee_pos_error_m"] = ee_errors[0]
         metrics["ee_ori_error_rad"] = ee_errors[1]
+        # Root-relative EE, the counterpart of MPJPE-L. `ee_pos_error_m` is
+        # WORLD frame, and measurement shows it tracks root position almost
+        # 1:1 -- so it answers "how far is the hand from where it should be in
+        # the world", which is mostly a drift question. This answers the
+        # different question "is the hand in the right place relative to the
+        # body", which is what a wrist-specific reward could actually move.
+        # Without the split, a drift fix and an articulation fix are
+        # indistinguishable in the reported number.
+        ee_ids = _body_ids_for_names(base_env, ee_body_names)
+        actual_ee = _as_torch(base_env._get_robot_body_pose_w_fast(ee_ids)[0])
+        ref_ee = _as_torch(
+            base_env._get_reference_body_pose_w_fast(tuple(ee_body_names))[0]
+        )
+        metrics["ee_pos_error_local_m"] = torch.linalg.vector_norm(
+            (actual_ee - _as_torch(robot_data.root_pos_w)[:, None, :])
+            - (ref_ee - root_pos_ref[:, None, :]),
+            dim=-1,
+        ).mean(dim=-1)
 
     return metrics, tracked_body_lin_vel
 

@@ -143,6 +143,29 @@ EVAL_SCREEN_ARM_SPECS=(
 # foot_pos_xyz is a tripwire rather than the cause.
 "s12_body005_anchor_w2|s2's body kernel (0.05) with s6's anchor term (std 0.10, weight 2.0). MPJPE-L is root-relative and owned by the body kernel; world-frame EE is mostly root drift and owned by the anchor term. Tests whether the two best arms are orthogonal.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
 "s13_body005_wrist|s2's body kernel with s7's wrist reward, the arm with the best survival and second-best full-horizon. Tests whether precision and survival gains stack.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_ee_pos.weight=2.0"
+# --- Round 7: root ORIENTATION is the untouched half of the EE budget -------
+#
+#   run                EE(w)   root_pos  root_ori  MPJPE-L
+#   control           0.0785    0.0707    0.0554    22.03
+#   s6 anchor-pos w2  0.0599    0.0404    0.0625    24.98   EE -23.7%
+#   s7 wrist reward   0.0781    0.0732    0.0588    19.11   EE  -0.5%
+#   s11 best MPJPE    0.0777    0.0715    0.0603    17.90
+#
+# EE is world-frame and tracks root POSITION almost 1:1 -- s6's whole EE gain
+# came from cutting drift 43%, and `EE - root_pos` is a near-constant 8-20 mm
+# everywhere. s7 rewards the wrists directly and moved EE 0.5%, so the wrists
+# are not mistracking; a wrist-specific reward is refuted.
+#
+# What NO arm has touched is root ORIENTATION: 0.055-0.063 rad in every single
+# run. With a ~0.6 m mean lever arm to the EE bodies that is ~35 mm of EE error
+# sitting untouched, and once s6 drives position drift to 40 mm it is nearly
+# half the remaining budget.
+#
+# `motion_global_anchor_ori` is in exactly the state `motion_global_anchor_pos`
+# was in before s6 -- kernel 0.933, weight 0.5, the second-most saturated and
+# lowest-weighted term. s14 applies the recipe that worked there.
+"s14_anchor_ori_w2|motion_global_anchor_ori std 0.40 -> 0.15 and weight 0.5 -> 2.0, the same treatment that made s6 the best EE arm, applied to the orientation term no arm has moved. Targets the ~35 mm orientation lever in the EE budget.|env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0"
+"s15_ee_stack|s11 best-MPJPE kernel plus BOTH anchor terms sharpened and upweighted -- position (s6) and orientation (s14). The full stack against the EE budget, if the two anchor components are independent.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0"
 "s5_anchor_sharp|motion_global_anchor_pos kernel 0.30 -> 0.10. Targets root drift, which is ~100% of world-frame EE error and the larger half of global MPJPE. 96.7% saturated today.|env.rewards.motion_global_anchor_pos.params.std=0.1"
 "s6_anchor_sharp_w2|s5 plus weight 0.5 -> 2.0, so the term controlling the dominant error source stops being the lowest-weighted tracking term. Gradient 0.59 -> 16.2, i.e. into the band where tracking_reward_points already operates.|env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
 # --- Round 3: the failures are ONE MOTION CLASS, and one missing allowance ---
