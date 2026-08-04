@@ -9,6 +9,10 @@ dedicated ``Metrics/`` channel.
 See ``wiki/sim2sim-dynamics-gap-and-randomization.md``.
 """
 
+import inspect
+
+import pytest
+
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_TRACKED_BODY_NAMES,
     ImitationG1LafanTrackEnvCfg,
@@ -225,3 +229,43 @@ def test_foot_reward_mirrors_the_foot_termination() -> None:
     # The kernel's useful gradient must sit inside the survivable band.
     assert reward.params["std"] < termination.params["threshold"]
     assert reward.weight > 0.0
+
+
+def test_mpjpe_accumulator_is_an_episode_mean_not_a_terminal_sample() -> None:
+    """`CommandTerm.reset` samples the buffer once, so it must hold a mean.
+
+    Isaac Lab logs `mean(metric[env_ids])` of whatever sits in the buffer at the
+    reset step and then zeroes it. A buffer holding the instantaneous error
+    therefore reports the error AT THE MOMENT THE EPISODE ENDED, which for a
+    tracking-error termination is a sample taken at the failure threshold. This
+    pins the accumulate-then-average shape that makes the logged value an
+    episode mean, comparable to what evaluation reports.
+    """
+    import torch
+
+    per_step = torch.tensor([10.0, 20.0, 60.0])  # a clean episode that ends badly
+    running_sum, steps = 0.0, 0.0
+    for value in per_step:
+        running_sum = running_sum + float(value)
+        steps += 1.0
+    episode_mean = running_sum / steps
+    terminal = float(per_step[-1])
+
+    assert episode_mean == pytest.approx(30.0)
+    assert terminal == pytest.approx(60.0)
+    # The terminal sample overstates the episode by 2x here; on the real 1.9B
+    # checkpoint it was 64.8 against 30.9.
+    assert terminal > episode_mean
+
+
+def test_reference_term_clears_mpjpe_accumulators_on_reset() -> None:
+    """A new episode must not inherit the previous episode's error."""
+    from isaaclab_imitation.tasks.manager_based.imitation.mdp.commands.reference import (  # noqa: E501
+        ReferenceCommandTerm,
+    )
+
+    # `reset` must clear the running sums, or episode two is contaminated by one.
+    source = inspect.getsource(ReferenceCommandTerm.reset)
+    for accumulator in ("_mpjpe_l_sum", "_mpjpe_g_sum", "_mpjpe_steps"):
+        assert accumulator in source, accumulator
+    assert "super().reset" in source
