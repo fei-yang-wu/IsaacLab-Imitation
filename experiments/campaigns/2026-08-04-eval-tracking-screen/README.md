@@ -304,7 +304,32 @@ it; the fine ordering does not.
 A matched control at train-seed 1 and an s1 repeat are running to put error bars
 on the comparison rather than on the arm alone.
 
-### There is a precision–survival frontier, not a stack
+### Best setting: std 0.05 with weight 2.0 (s11)
+
+At the full 500M checkpoint:
+
+| arm | MPJPE | EE | survival | clips | full-horizon |
+|---|---|---|---|---|---|
+| control (0.30, w1) | 22.03 | 0.0785 | 444.6 | 25/40 | 43.51 |
+| s2 (0.05, w1) | 17.89 | **0.0722** | 439.1 | 23/40 | 43.10 |
+| s4 (0.10, w2) | 18.17 | 0.0820 | 442.6 | 23/40 | 39.81 |
+| s10 (0.025, w1) | 18.21 | 0.0746 | 444.1 | 23/40 | 40.61 |
+| **s11 (0.05, w2)** | **17.90** | 0.0777 | **443.9** | **24/40** | **37.28** |
+
+**s11 is the best overall setting**: it matches s2's MPJPE (−18.8%) while
+keeping essentially the control's survival (443.9 against 444.6) and posting the
+best full-horizon number in the screen (37.28, **−14.3%**). Sharpening the
+kernel alone buys precision at a survival cost; adding the weight back recovers
+the survival without giving up the precision.
+
+**Correction.** An earlier reading of this pair at the 300M checkpoint concluded
+that kernel width and weight were "interchangeable, not additive", because s11
+trailed s2 there (19.35 against 18.51). That does not hold at 500M — the two
+converge on MPJPE and s11 wins survival and full-horizon outright. The 300M
+comparison was made before either had converged, which is exactly the
+scoring-at-an-unreached-mark error the 2026-08-02 campaign documented.
+
+### The precision–survival trade-off
 
 At 300M (control and s2 re-scored at the same checkpoint for a like-for-like
 read):
