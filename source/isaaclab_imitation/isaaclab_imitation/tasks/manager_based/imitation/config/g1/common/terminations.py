@@ -111,6 +111,115 @@ class G1SonicTerminationsCfg(G1TerminationsCfg):
     base_too_low = None
 
 
+SONIC_WINDOW_TERM_NAMES = ("anchor_pos", "anchor_ori", "ee_body_pos", "foot_pos_xyz")
+"""Tracking-error terms that can carry a persistence window.
+
+Deliberately excludes ``base_too_low``: a fall is not a transient, and the M3
+survival definition is stated in terms of that term firing.
+"""
+
+_DEFAULT_WINDOW_MIN_STEPS = 3
+
+_WINDOWED_EQUIVALENT = {
+    mdp.bad_anchor_pos_z_adaptive: mdp.PersistentBadAnchorPosZAdaptive,
+    mdp.bad_anchor_ori_full: mdp.PersistentBadAnchorOriFull,
+    mdp.bad_reference_body_pos_z_adaptive: mdp.PersistentBadReferenceBodyPosZAdaptive,
+    mdp.bad_reference_body_pos_relative: mdp.PersistentBadReferenceBodyPosRelative,
+}
+
+
+def apply_termination_window(
+    terminations: G1SonicTerminationsCfg,
+    *,
+    min_steps: int = _DEFAULT_WINDOW_MIN_STEPS,
+    diagnostic_only: bool = False,
+    term_names: tuple[str, ...] = SONIC_WINDOW_TERM_NAMES,
+) -> None:
+    """Give the strict tracking terms a persistence window, in place.
+
+    Each term keeps its own threshold, anchor, and body set and only swaps the
+    instantaneous predicate for the windowed wrapper around that same
+    predicate, so the error geometry cannot drift away from
+    :class:`G1SonicTerminationsCfg` -- only where the episode ends moves.
+
+    This is the override path (the registered task ids stay on the
+    instantaneous protocol), for launchers and evaluation scripts that already
+    edit ``env_cfg.terminations``::
+
+        apply_termination_window(env_cfg.terminations, min_steps=3)
+
+    Idempotent: re-applying only updates ``min_steps`` / ``diagnostic_only``.
+    Raises on a term whose predicate has no windowed equivalent rather than
+    silently leaving it instantaneous.
+    """
+    for term_name in term_names:
+        term = getattr(terminations, term_name, None)
+        if term is None:
+            continue
+        windowed = _WINDOWED_EQUIVALENT.get(term.func)
+        if windowed is not None:
+            term.func = windowed
+        elif term.func not in _WINDOWED_EQUIVALENT.values():
+            raise ValueError(
+                f"Termination term '{term_name}' uses {term.func!r}, which has no"
+                " windowed equivalent. Windowing is defined for the strict SONIC"
+                f" predicates only: {sorted(f.__name__ for f in _WINDOWED_EQUIVALENT)}."
+            )
+        term.params["min_steps"] = int(min_steps)
+        term.params["diagnostic_only"] = bool(diagnostic_only)
+
+
+def _run_parent_post_init(parent) -> None:
+    parent_post_init = getattr(parent, "__post_init__", None)
+    if callable(parent_post_init):
+        parent_post_init()
+
+
+@configclass
+class G1SonicWindowedTerminationsCfg(G1SonicTerminationsCfg):
+    """SONIC strict thresholds, ended only by a *persistent* violation.
+
+    Every threshold is inherited from :class:`G1SonicTerminationsCfg`; the sole
+    difference is that a tracking-error term must hold for ``min_steps``
+    consecutive control steps before it terminates. That keeps the strict
+    0.15 m / 0.2 bar as the value the policy must return to, while letting a
+    single contact spike, retargeting glitch, or push recovery survive -- which
+    threshold relaxation cannot do without also lowering the bar itself.
+
+    Opt-in. The registered surfaces stay on :class:`G1SonicTerminationsCfg`,
+    because termination causes define oracle qualification, M3 survival, and
+    MPJPE truncation, so switching would make recorded gate numbers
+    non-comparable.
+    """
+
+    def __post_init__(self) -> None:
+        _run_parent_post_init(super())
+        apply_termination_window(self, min_steps=_DEFAULT_WINDOW_MIN_STEPS)
+
+
+@configclass
+class G1SonicTerminationWindowProbeCfg(G1SonicTerminationsCfg):
+    """Shadow measurement: record violation run lengths, terminate on none of them.
+
+    Use this for the full-horizon diagnostic pass. Episodes end only on
+    ``time_out`` / ``reference_finished``, so every violation onset is observed
+    until it either resolves or the horizon runs out, and each term publishes
+    ``Termination_Window/<term>/recovered_below_<k>_frac``: the fraction of
+    onsets a window of length ``k`` would have survived. That measurement, not
+    an assumption about transients, is what should decide whether
+    :class:`G1SonicWindowedTerminationsCfg` is worth its protocol churn.
+
+    The measurement requires not terminating: an instantaneous term destroys
+    the episode before the run length it would have had is observable. So this
+    removes every fall-stopping condition and is a diagnostic protocol only --
+    never a qualification or paper-metric run.
+    """
+
+    def __post_init__(self) -> None:
+        _run_parent_post_init(super())
+        apply_termination_window(self, min_steps=1, diagnostic_only=True)
+
+
 def _sonic_threshold_anneal_params(
     term_name: str,
     start_value: float,

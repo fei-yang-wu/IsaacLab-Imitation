@@ -57,8 +57,11 @@ from .common.rewards import G1RewardsCfg, G1SonicRewardsCfg
 from .common.terminations import (
     G1SonicTerminationCurriculumCfg,
     G1SonicTerminationsCfg,
+    G1SonicTerminationWindowProbeCfg,
+    G1SonicWindowedTerminationsCfg,
     G1TerminationsCfg,
     _sonic_threshold_anneal_params,
+    apply_termination_window,
 )
 from .common.tracking_env import (
     ImitationG1BaseTrackingEnvCfg,
@@ -92,7 +95,10 @@ __all__ = [
     "G1SonicRewardsCfg",
     "G1SonicTerminationCurriculumCfg",
     "G1SonicTerminationsCfg",
+    "G1SonicTerminationWindowProbeCfg",
+    "G1SonicWindowedTerminationsCfg",
     "G1TerminationsCfg",
+    "apply_termination_window",
     "ImitationG1BaseTrackingEnvCfg",
     "ImitationG1LafanTrackEnvCfg",
     "ImitationG1StrictTrackEnvCfg",

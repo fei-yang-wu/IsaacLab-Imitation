@@ -109,6 +109,26 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=ALGORITHMS,
         help="RLOpt algorithm; it must match a task config entry point.",
     )
+    parser.add_argument(
+        "--termination_window",
+        type=int,
+        default=None,
+        help=(
+            "Require this many consecutive violations before a strict tracking "
+            "termination fires. Thresholds are unchanged; only the episode "
+            "boundary moves. Default (unset) is the instantaneous protocol."
+        ),
+    )
+    parser.add_argument(
+        "--termination_window_probe",
+        action="store_true",
+        default=False,
+        help=(
+            "Diagnostic: disable tracking terminations and log how long "
+            "violations actually last, so the payoff of --termination_window "
+            "is measured rather than assumed. Not a qualification protocol."
+        ),
+    )
     parser.add_argument("--ray-proc-id", "-rid", type=int, default=None)
     parser.add_argument(
         "--assert-kitless",
