@@ -62,8 +62,14 @@ DATASET="${DATASET:-./data/lafan1/zarr/g1_hl_diffsr}"
 declare -A ARM_RUNDIR=(
   ["control"]="${REMOTE_DATA_ROOT}/foot_tracking/lafan1_v2_foot_reward_5b_seed0_e12288_r24"
 )
+# TRAIN_SEED selects WHICH RUN to score; SEED is the EVALUATION seed and stays
+# 0. They were one variable, which meant scoring a seed-1 repeat also moved the
+# evaluation seed -- so the difference against seed 0 would have mixed training
+# variance with evaluation variance, and the seed repeat could not measure the
+# thing it exists to measure.
+TRAIN_SEED="${TRAIN_SEED:-0}"
 for name in "${EVAL_SCREEN_ALL_ARM_NAMES[@]}"; do
-    ARM_RUNDIR["${name}"]="${REMOTE_DATA_ROOT}/eval_tracking_screen/lafan1_v2_evaltrack_${name}_500m_seed${SEED}"
+    ARM_RUNDIR["${name}"]="${REMOTE_DATA_ROOT}/eval_tracking_screen/lafan1_v2_evaltrack_${name}_500m_seed${TRAIN_SEED}"
 done
 
 ARMS="${ARMS:-control ${EVAL_SCREEN_ALL_ARM_NAMES[*]}}"
@@ -106,7 +112,10 @@ run_eval() {  # $1=ckpt $2=out.json $3=label $4=extra
 for arm in ${ARMS}; do
     rundir="${ARM_RUNDIR[${arm}]:-}"
     [[ -n "${rundir}" ]] || { log "unknown arm '${arm}'"; continue; }
-    out="${OUT_ROOT}/${arm}"
+    # Seed in the path, or a seed-1 repeat lands on seed 0's directory and the
+    # idempotency skip reports it as already scored -- returning seed 0's
+    # numbers under the repeat's name.
+    out="${OUT_ROOT}/${arm}$([[ "${TRAIN_SEED}" != "0" ]] && printf '_trainseed%s' "${TRAIN_SEED}")"
     mkdir -p "${out}"
 
     if [[ -s "${out}/strict.json" && -s "${out}/full_horizon.json" ]]; then
