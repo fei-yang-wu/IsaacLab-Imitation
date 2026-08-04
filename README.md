@@ -257,6 +257,37 @@ Use the Isaac Lab Pixi environment for Isaac-backed training:
 pixi shell -e isaaclab
 ```
 
+### Start here: the current default pipeline
+
+One script runs the current default end to end — pretrain a **deterministic
+continuous (det-SR)** skill encoder, then train the low-level tracker on the
+**tuned recipe** conditioned on that frozen encoder:
+
+```bash
+bash scripts/rlopt/run_local_v2_pipeline.sh
+
+# quick check first; DRY_RUN=1 prints both commands and runs nothing
+DRY_RUN=1 bash scripts/rlopt/run_local_v2_pipeline.sh
+TOTAL_FRAMES=10000000 bash scripts/rlopt/run_local_v2_pipeline.sh
+```
+
+Defaults: task `Isaac-Imitation-G1-v2`, agent
+`rlopt_ipmd_tuned_cfg_entry_point`, encoder horizon 10 / `z_dim` 256 (published
+command width **258**, including the `sin_cos` phase), `newton_mjwarp` with
+njmax 288 / nconmax 200, 4096 envs, 50M frames, and **instantaneous
+terminations** — the persistence window is opt-in via `TERMINATION_WINDOW=N`.
+
+Budget guidance: ~10M frames for routine debugging, at most ~50M for a serious
+local check, and do not run 100M locally. Local runs qualify code; the cluster
+produces convergence and paper numbers.
+
+Read [wiki/local-experiments.md](wiki/local-experiments.md) before a first run.
+It covers what "the default" currently resolves to, how to evaluate a
+checkpoint (strict **and** the full-horizon diagnostic), how to read MPJPE-L
+against MPJPE-G, and the measurement traps that have cost real time — Newton is
+not run-to-run deterministic at a fixed seed, and every per-minute rate is
+gameable by anything that lengthens an episode.
+
 Train a G1 imitation policy with RLOpt IPMD:
 
 ```bash
@@ -305,7 +336,12 @@ python scripts/rlopt/play.py \
 
 ### LAFAN1 local pretrain + low-level pipeline (reproducible)
 
-The recommended reproducible recipe trains a G1 LAFAN1 policy in two stages — pretrain a
+> **Superseded.** This section documents the PRE-v2 recipe, kept to reproduce
+> runs that predate the v2 command interface. For a new experiment use
+> `scripts/rlopt/run_local_v2_pipeline.sh` (see "Start here" above and
+> [wiki/local-experiments.md](wiki/local-experiments.md)).
+
+The pre-v2 recipe trains a G1 LAFAN1 policy in two stages — pretrain a
 DiffSR skill encoder from expert motion, then train the low-level "oracle" IPMD policy
 conditioned on that encoder. One script chains both stages with the validated defaults
 (builds the zarr cache, wires the fresh skill checkpoint into the low-level run):

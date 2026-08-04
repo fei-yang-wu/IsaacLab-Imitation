@@ -24,6 +24,10 @@ Start with:
 - [BONES Seed Language Planner Memory](bones-seed-language-planner-memory.md):
   durable snapshot for the BONES demo8 merged language-planner experiment,
   including artifacts, metrics, paired video outputs, and rerun commands.
+- [Running Experiments Locally](local-experiments.md): the current default
+  local pipeline (det-SR encoder + tuned low level), what the defaults
+  resolve to, evaluation passes, MPJPE-L vs MPJPE-G, and the measurement
+  traps.
 - [Experiment Workflow](experiment-workflow.md): local tests, full cluster job
   submission, and experiment tracking conventions.
 - [Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md):
