@@ -275,6 +275,35 @@ Three things to read carefully:
   −25%) despite four times less training. That is the SONIC alignment plus the
   foot reward, not the kernel change.
 
+### Training-seed variance is ~10%, not ~2% — headline moderated
+
+| run | MPJPE | EE | survival |
+|---|---|---|---|
+| control (train-seed 0) | 22.03 | 0.0785 | 444.6 |
+| s2 (train-seed 0) | 17.89 | 0.0722 | 439.1 |
+| s2 (train-seed 1) | 19.79 | 0.0752 | 441.8 |
+
+Both seeds beat the control, but the spread **within** s2 is 1.90 mm — about
+10%, and far larger than the ~2% the 2026-08-02 campaign measured on per-minute
+rates. So the honest effect is
+
+- **MPJPE −14.5% mean (range −10.2% to −18.8%)**
+- **EE −6.1% mean**
+
+not the −18.8% a single seed suggested. The direction is solid — two independent
+training seeds both beat the control on both metrics — but any single-seed arm
+in the tables above carries roughly ±10% of uncertainty, which is comparable to
+the differences between several of the arms.
+
+**Read the single-seed rankings with that in mind.** Differences of a few
+percent between arms (s2 vs s4 vs s10, for instance) are inside seed noise and
+should not be treated as an ordering. The large effects — the ~4 mm control-to-
+sharpened-kernel gap, s6's 23.7% EE gain, s3's and s5's degradations — survive
+it; the fine ordering does not.
+
+A matched control at train-seed 1 and an s1 repeat are running to put error bars
+on the comparison rather than on the arm alone.
+
 ### There is a precision–survival frontier, not a stack
 
 At 300M (control and s2 re-scored at the same checkpoint for a like-for-like
