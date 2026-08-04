@@ -97,7 +97,15 @@ export NCONMAX=200
 export ENCODER_TAG
 export LOG_ROOT="/data/eval_tracking_screen"
 export WANDB_PROJECT="g1-lafan1"
-export WANDB_GROUP="eval-tracking-500m"
+# The budget label is DERIVED, never hardcoded: this launcher is used at 500M
+# for the screen and at 5B for the scaled run, and a 5B run recorded under a
+# `500m` tag writes to the screen's directory and reports as a screen arm.
+if (( FRAME_CAP >= 1000000000 )); then
+    BUDGET_TAG="$(python3 -c "print(f'{${FRAME_CAP}/1e9:g}b')")"
+else
+    BUDGET_TAG="$(python3 -c "print(f'{${FRAME_CAP}/1e6:g}m')")"
+fi
+export WANDB_GROUP="${WANDB_GROUP:-eval-tracking-${BUDGET_TAG}}"
 export CLUSTER_SLURM_GPU_GRES="${CLUSTER_SLURM_GPU_GRES:-gpu:h100:1}"
 export CLUSTER_SLURM_TIME_LIMIT="${CLUSTER_SLURM_TIME_LIMIT:-05:00:00}"
 export SEGMENT_WALL_S="${SEGMENT_WALL_S:-18000}"
@@ -107,8 +115,8 @@ export SAVE_INTERVAL=100000000
 out="$(
     env DRY_RUN="${DRY_RUN}" SEED="${SEED}" FRAME_CAP="${FRAME_CAP}" \
     EXTRA_TUNED_OVERRIDES="${S15_OVERRIDES} env.expert_macro_state_terms=${MACRO_TERMS}" \
-    RUN_TAG="lafan1_v2_evaltrack_root_qpos_s15_500m_seed${SEED}" \
-    WANDB_TAGS="sr,det,v2,lafan1,tuned,500m,eval-tracking,root-qpos,s15-rewards" \
+    RUN_TAG="lafan1_v2_evaltrack_root_qpos_s15_${BUDGET_TAG}_seed${SEED}" \
+    WANDB_TAGS="sr,det,v2,lafan1,tuned,${BUDGET_TAG},eval-tracking,root-qpos,s15-rewards" \
     "${DELEGATE}" 2>&1
 )" || { echo "${out}"; fail "submission failed"; }
 echo "${out}"
