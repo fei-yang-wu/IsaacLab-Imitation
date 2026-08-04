@@ -228,6 +228,42 @@ EVAL_SCREEN_ARM_SPECS=(
 # addition to an already-contended queue.
 "s9_foot_swing_allowance|foot_pos_xyz relaxes to 0.5 m for a foot whose REFERENCE is above 0.15 m, i.e. in flight, plus s8's low-root allowance. Targets the jump/run/sprint failures that s8 cannot reach.|env.terminations.foot_pos_xyz.params.down_threshold=0.6 env.terminations.foot_pos_xyz.params.swing_threshold=0.5"
 "s7_ee_reward|Enable the inert wrist term motion_ee_pos at 2.0 -- same geometry as motion_foot_pos, on the hands. The wrists have no horizontal termination and only their 2-of-5 share of tracking_reward_points. Expected to be second-order if drift dominates.|env.rewards.motion_ee_pos.weight=2.0"
+# --- Round 9: the observation space, which no arm has touched -----------------
+#
+# Every arm so far moved a reward std or weight. The seed repeat showed the
+# full-horizon pass is dominated by WHICH CLIPS FALL -- and survival is the
+# low-variance metric (438.7 vs 441.2 across s15's two seeds, under 1%). So the
+# lever with room in it is survival, and the failures are concentrated:
+# fallandgetup 0-1/6, fight 1/5, jump 1/3, run 1/4, against dance 8/8 and
+# walk 11/12.
+#
+# Recovering from a stumble is the case where a single frame is least
+# sufficient: the policy cannot tell a fall it is arresting from one it is
+# starting. SONIC ships 10-step proprioceptive histories for this.
+#
+# PRIOR EVIDENCE, AND WHY IT IS NOT DECISIVE. The 2026-07-21 ablation
+# (5525687 against 5525664) concluded histories "buy little at our scale", and
+# `ImitationG1SonicNoHistorySurfaceEnvCfg` still carries that docstring. But it
+# ran on the pre-v2 `Isaac-Imitation-G1-Latent-v0` surface, before the v2
+# command interface and every reward change in this campaign, and it was a
+# SINGLE SEED -- the same basis this campaign just showed cannot resolve a
+# difference on the pass that matters.
+#
+# Verified before submission: the override is not a silent no-op. The actor
+# observation goes 418 -> 1256 (projected_gravity 3->30, joint_pos_rel 29->290).
+# Applied to policy AND critic, matching SONIC's recipe.
+#
+# NOTE: this arm changes the observation width, so evaluation must reproduce the
+# override or the checkpoint will not load. See ARM_EVAL_EXTRA in the scorer.
+"s17_history10|s15's rewards plus SONIC's 10-step proprioceptive histories on the actor and critic. The first arm to move the observation space rather than a reward coefficient, aimed at the fall-recovery clips where one frame cannot distinguish arresting a fall from starting one.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0 env.observations.policy.projected_gravity.history_length=10 env.observations.policy.base_ang_vel.history_length=10 env.observations.policy.joint_pos_rel.history_length=10 env.observations.policy.joint_vel_rel.history_length=10 env.observations.policy.last_action.history_length=10 env.observations.critic.base_lin_vel.history_length=10 env.observations.critic.base_ang_vel.history_length=10 env.observations.critic.joint_pos_rel.history_length=10 env.observations.critic.joint_vel_rel.history_length=10 env.observations.critic.last_action.history_length=10"
+)
+
+# Arms whose training overrides change the OBSERVATION SPACE or the command
+# interface must have those overrides reproduced at evaluation, or the actor is
+# rebuilt at the wrong width and the checkpoint fails to restore. Reward-only
+# arms need nothing here.
+declare -A EVAL_SCREEN_ARM_EVAL_EXTRA=(
+  ["s17_history10"]="env.observations.policy.projected_gravity.history_length=10 env.observations.policy.base_ang_vel.history_length=10 env.observations.policy.joint_pos_rel.history_length=10 env.observations.policy.joint_vel_rel.history_length=10 env.observations.policy.last_action.history_length=10 env.observations.critic.base_lin_vel.history_length=10 env.observations.critic.base_ang_vel.history_length=10 env.observations.critic.joint_pos_rel.history_length=10 env.observations.critic.joint_vel_rel.history_length=10 env.observations.critic.last_action.history_length=10"
 )
 
 EVAL_SCREEN_ALL_ARM_NAMES=()

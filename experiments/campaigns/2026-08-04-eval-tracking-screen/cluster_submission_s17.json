@@ -1,0 +1,26 @@
+{
+  "agent_entry_point": "rlopt_ipmd_tuned_cfg_entry_point",
+  "arms": {
+    "s17_history10": {
+      "job": "5563887",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "total_frames": 500000000
+    }
+  },
+  "campaign": "2026-08-04-eval-tracking-screen",
+  "control_run": "lafan1_v2_foot_reward_5b_seed0_e12288_r24 (job 5561149) @ 500M",
+  "goal": "lower eval-time MPJPE and EE tracking error",
+  "launcher": "experiments/campaigns/2026-08-04-eval-tracking-screen/submit_eval_tracking_screen_ice.sh",
+  "motivation": "motion_body_pos is 99.5% saturated at 20 mm and supplies 72x less gradient than tracking_reward_points, so the term whose error is MPJPE pays almost nothing for further precision",
+  "scoring": "evaluate_checkpoint --randomization none on the 500M checkpoint (tracking-fidelity protocol, MODE actions). NOT the training curve.",
+  "submitted_at": "2026-08-04T11:14:16.110703-04:00",
+  "task": "Isaac-Imitation-G1-v2",
+  "wandb": {
+    "group": "eval-tracking-500m",
+    "project": "g1-lafan1"
+  },
+  "workspace_dirty": true,
+  "workspace_git_sha": "ea0ee1dfb3826d1fd5d074561785ed03fdf670de"
+}

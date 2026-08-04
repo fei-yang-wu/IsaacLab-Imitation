@@ -143,11 +143,17 @@ for arm in ${ARMS}; do
             log "${arm}: pull failed"; continue; }
     }
 
+    # An arm that changed the observation space or the command interface must be
+    # evaluated with the same override, or the actor is rebuilt at the training
+    # width's wrong value and the checkpoint fails to restore.
+    eval_extra="${EVAL_SCREEN_ARM_EVAL_EXTRA[${arm}]:-}"
+    [[ -n "${eval_extra}" ]] && log "${arm}: eval-side overrides: ${eval_extra}"
+
     log "${arm}: strict"
-    run_eval "${local_ckpt}" "${out}/strict.json" "${arm}_strict" ""
+    run_eval "${local_ckpt}" "${out}/strict.json" "${arm}_strict" "${eval_extra}"
     log "${arm}: full_horizon"
     run_eval "${local_ckpt}" "${out}/full_horizon.json" "${arm}_fullhorizon" \
-        "--disable_early_terminations --keep_after_done"
+        "--disable_early_terminations --keep_after_done ${eval_extra}"
 done
 
 echo
