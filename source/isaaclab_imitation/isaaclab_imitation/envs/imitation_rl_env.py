@@ -280,6 +280,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             motions = getattr(cfg, "motions", None)
             traj_names = getattr(cfg, "trajectories", None)
             keys = getattr(cfg, "keys", None)
+            if isinstance(keys, str):
+                keys = [
+                    key.strip() for key in keys.strip("[]").split(",") if key.strip()
+                ]
 
             rb, traj_info = make_rb_from(
                 zarr_path=str(zarr_path),

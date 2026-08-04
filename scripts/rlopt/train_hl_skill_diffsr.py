@@ -95,14 +95,14 @@ parser.add_argument(
 parser.add_argument(
     "--categorical_groups",
     type=int,
-    default=8,
+    default=64,
     help="Number of categorical groups G for --latent_mode categorical (must divide "
     "z_dim; per-group code dim = z_dim // G).",
 )
 parser.add_argument(
     "--categorical_categories",
     type=int,
-    default=32,
+    default=128,
     help="Categories per group (vocab size) for --latent_mode categorical. Independent "
     "of z_dim; larger = more capacity per group.",
 )
@@ -110,10 +110,10 @@ parser.add_argument(
     "--gumbel_codebook_size", type=int, default=512, help="Codebook size for gumbel/."
 )
 parser.add_argument("--gumbel_tau_start", type=float, default=2.0)
-parser.add_argument("--gumbel_tau_end", type=float, default=0.5)
+parser.add_argument("--gumbel_tau_end", type=float, default=0.1)
 parser.add_argument("--gumbel_tau_anneal_iters", type=int, default=2000)
 parser.add_argument(
-    "--gumbel_hard", action=argparse.BooleanOptionalAction, default=True
+    "--gumbel_hard", action=argparse.BooleanOptionalAction, default=False
 )
 parser.add_argument(
     "--fsq_levels",
