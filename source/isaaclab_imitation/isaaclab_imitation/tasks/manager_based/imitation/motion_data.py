@@ -153,6 +153,28 @@ class MotionDataCfg:
     macro_cache_chunk_size: int = 262_144
     """Rows copied per chunk while materializing ``macro_cache_device``."""
 
+    runtime_cache_device: str | None = None
+    """Optional device for a compact, dense low-level reference cache.
+
+    Large persisted CPU replay buffers are memory mapped. Randomly gathering
+    every full-body field from such a buffer at every simulator step is much
+    slower than simulation. When this is set, the data plane sequentially
+    materializes only ``qpos``, ``qvel``, and the configured body states on the
+    requested device, then uses that dense buffer for live trajectory sampling.
+    ``qvel`` remains an internal reference source for velocity tracking and
+    resets; it does not add velocity terms to the root+qpos macro command.
+    """
+
+    runtime_cache_body_names: list[str] | None = None
+    """Dataset bodies retained by ``runtime_cache_device``.
+
+    ``None`` uses the environment's MPJPE tracking-body set. The anchor and all
+    configured command bodies must be present; construction fails otherwise.
+    """
+
+    runtime_cache_chunk_size: int = 262_144
+    """Rows copied per chunk while materializing ``runtime_cache_device``."""
+
     wrap_steps: bool = False
     """Wrap the reference cursor at the end of a clip instead of terminating."""
 

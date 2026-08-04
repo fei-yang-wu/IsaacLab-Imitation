@@ -162,7 +162,10 @@ for arm in sorted(os.listdir(root)) if os.path.isdir(root) else []:
         m = d.get("metrics", {})
         row[pas] = {
             "mpjpe": (m.get("tracking_mpjpe_mm") or {}).get("mean"),
+            "mpjpe_g": (m.get("tracked_body_pos_error_m") or {}).get("mean"),
             "ee": (m.get("ee_pos_error_m") or {}).get("mean"),
+            "ee_l": (m.get("ee_pos_error_local_m") or {}).get("mean"),
+            "root": (m.get("root_pos_xyz_error_m") or {}).get("mean"),
             "surv": get(d, "survival_steps_mean"),
             "rand": get(d, "randomization_profile"),
         }
@@ -173,22 +176,33 @@ if not rows:
     print("no scored arms yet")
     sys.exit()
 
-hdr = f'{"arm":<26}{"MPJPE_s":>9}{"EE_s":>8}{"surv_s":>8}{"MPJPE_fh":>10}{"EE_fh":>8}{"rand":>7}'
+# GLOBAL metrics are primary. MPJPE-L is root-relative and subtracts the drift
+# that dominates world-frame EE, so ranking on it while reading EE world-frame
+# compares two different frames and inverts the ordering -- that mistake put
+# s13 top and s12 near the bottom when the reverse is true globally.
+hdr = f'{"arm":<26}{"MPJPE-G":>9}{"EE-G":>9}{"root":>9}{"surv":>8}{"MPJPE-G_fh":>12}{"MPJPE-L":>9}'
 print(hdr); print("-" * len(hdr))
 base = next((r for r in rows if r["arm"] == "control"), None)
 for r in rows:
     s = r.get("strict", {}); f = r.get("full_horizon", {})
     fmt = lambda v, n=2: f"{v:.{n}f}" if isinstance(v, (int, float)) else "-"
-    line = (f'{r["arm"]:<26}{fmt(s.get("mpjpe")):>9}{fmt(s.get("ee"),4):>8}'
-            f'{fmt(s.get("surv"),1):>8}{fmt(f.get("mpjpe")):>10}{fmt(f.get("ee"),4):>8}'
-            f'{str(s.get("rand") or f.get("rand")):>7}')
-    if base and r is not base and isinstance(s.get("mpjpe"), float) and isinstance(
-            base.get("strict", {}).get("mpjpe"), float):
-        d = s["mpjpe"] - base["strict"]["mpjpe"]
-        line += f'   {d:+.2f} mm vs control'
+    line = (f'{r["arm"]:<26}{fmt(s.get("mpjpe_g"),4):>9}{fmt(s.get("ee"),4):>9}'
+            f'{fmt(s.get("root"),4):>9}{fmt(s.get("surv"),1):>8}'
+            f'{fmt(f.get("mpjpe_g"),4):>12}{fmt(s.get("mpjpe")):>9}')
+    if base and r is not base and isinstance(s.get("mpjpe_g"), float) and isinstance(
+            base.get("strict", {}).get("mpjpe_g"), float):
+        b = base["strict"]
+        line += f'   {100*(s["mpjpe_g"]-b["mpjpe_g"])/b["mpjpe_g"]:+.1f}%'
+        if isinstance(s.get("ee"), float) and isinstance(b.get("ee"), float):
+            line += f' / {100*(s["ee"]-b["ee"])/b["ee"]:+.1f}%'
     print(line)
 print()
 print("Scored with --randomization none (tracking fidelity), MODE actions.")
+print("GLOBAL frame is primary: MPJPE-G = tracked_body_pos_error_m, EE-G =")
+print("ee_pos_error_m. MPJPE-L is shown last for reference only -- it is")
+print("root-relative and subtracts the drift that dominates the global numbers,")
+print("so ranking on it inverts the ordering.")
+print("Deltas are MPJPE-G / EE-G against the control.")
 print("full_horizon is the honest tracking number; strict can flatter a policy")
 print("that dies early, since it only scores frames a live episode reached.")
 

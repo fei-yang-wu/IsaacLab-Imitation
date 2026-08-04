@@ -204,9 +204,11 @@ class ReferenceCommandTerm(CommandTerm):
         self._build_reset_samplers()
         # Per-env metric buffers; CommandTerm.reset() averages these over the
         # resetting envs into `Metrics/reference/<name>` and zeroes them.
-        # `mpjpe_mm` is MPJPE-L; `mpjpe_l_mm` is the same value under the name
-        # the SONIC/PHC lineage uses, and `mpjpe_g_mm` is the global
-        # counterpart, which counts the drift MPJPE-L removes.
+        # `mpjpe_l_mm` is root-relative (the SONIC/PHC "local" metric) and
+        # `mpjpe_g_mm` is the world-frame counterpart, which counts the drift
+        # MPJPE-L removes. GLOBAL is the one to rank on: ranking on the local
+        # metric while reading a world-frame EE number compares two different
+        # frames and inverts the ordering.
         #
         # These hold the RUNNING EPISODE MEAN, not the current step's value.
         # `CommandTerm.reset` logs `mean(metric[env_ids])` of whatever is in the
@@ -218,15 +220,8 @@ class ReferenceCommandTerm(CommandTerm):
         # evaluated over a rollout. Accumulating instead makes the logged number
         # an episode mean, which is what evaluation reports and what everyone
         # already assumed this was.
-        self.metrics["mpjpe_mm"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["mpjpe_l_mm"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["mpjpe_g_mm"] = torch.zeros(self.num_envs, device=self.device)
-        # The old instantaneous-at-reset value, kept under a name that says what
-        # it is. It is a genuine signal -- how badly the policy was tracking when
-        # it died -- and every run before this change logged it as `mpjpe_mm`.
-        self.metrics["mpjpe_terminal_mm"] = torch.zeros(
-            self.num_envs, device=self.device
-        )
         self._mpjpe_l_sum = torch.zeros(self.num_envs, device=self.device)
         self._mpjpe_g_sum = torch.zeros(self.num_envs, device=self.device)
         self._mpjpe_steps = torch.zeros(self.num_envs, device=self.device)
@@ -409,10 +404,8 @@ class ReferenceCommandTerm(CommandTerm):
         # metric then stays at zero because there is nothing to measure.
         mpjpe_pair = env._compute_mpjpe_metrics()
         if mpjpe_pair is None:
-            self.metrics["mpjpe_mm"].zero_()
             self.metrics["mpjpe_l_mm"].zero_()
             self.metrics["mpjpe_g_mm"].zero_()
-            self.metrics["mpjpe_terminal_mm"].zero_()
         else:
             self._validate_mpjpe_bodies(env)
             mpjpe_local_m, mpjpe_global_m = mpjpe_pair
@@ -423,11 +416,11 @@ class ReferenceCommandTerm(CommandTerm):
             self._mpjpe_steps += 1.0
             steps = self._mpjpe_steps.clamp(min=1.0)
             # Store the running mean, so whichever step `reset` happens to
-            # sample, it reads the episode mean rather than one instant.
-            self.metrics["mpjpe_mm"][:] = self._mpjpe_l_sum / steps
+            # sample, it reads the episode mean rather than one instant. This is
+            # the accumulate-then-average shape `Episode_Reward` uses, and it is
+            # what makes the logged value comparable to what evaluation reports.
             self.metrics["mpjpe_l_mm"][:] = self._mpjpe_l_sum / steps
             self.metrics["mpjpe_g_mm"][:] = self._mpjpe_g_sum / steps
-            self.metrics["mpjpe_terminal_mm"][:] = local_mm
         robot_anchor_pos_w, robot_anchor_quat_w = env._get_robot_anchor_state_w_fast(
             self.cfg.anchor_body_name
         )

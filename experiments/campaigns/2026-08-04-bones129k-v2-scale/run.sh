@@ -41,6 +41,16 @@ DATA_KEYS=(
     joint_pos joint_vel body_pos_w body_quat_w body_lin_vel_w body_ang_vel_w
 )
 DATA_KEYS_OVERRIDE="env.data.keys=[$(IFS=,; echo "${DATA_KEYS[*]}")]"
+RUNTIME_BODY_NAMES=(
+    pelvis
+    left_hip_roll_link left_knee_link left_ankle_roll_link
+    right_hip_roll_link right_knee_link right_ankle_roll_link
+    torso_link
+    left_shoulder_roll_link left_elbow_link left_wrist_yaw_link
+    right_shoulder_roll_link right_elbow_link right_wrist_yaw_link
+)
+RUNTIME_BODY_NAMES_OVERRIDE="env.data.runtime_cache_body_names=[$(IFS=,; echo "${RUNTIME_BODY_NAMES[*]}")]"
+RUNTIME_CACHE_CHUNK_SIZE="${RUNTIME_CACHE_CHUNK_SIZE:-262144}"
 
 HORIZON_STEPS="${HORIZON_STEPS:-10}"
 Z_DIM="${Z_DIM:-256}"
@@ -68,8 +78,8 @@ NCONMAX="${NCONMAX:-200}"
 
 WANDB_PROJECT="${WANDB_PROJECT:-g1-lafan1}"
 WANDB_GROUP="${WANDB_GROUP:-bones129k-v2-scale}"
-WANDB_TAGS="${WANDB_TAGS:-bones-seed,129785,v2,root-qpos,det-sr,h10,z256,tuned,e24576,r6,1b}"
-RUN_TAG="${RUN_TAG:-bones129k_root_qpos_v2_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}_1b_seed${SEED}}"
+WANDB_TAGS="${WANDB_TAGS:-bones-seed,129785,v2,root-qpos,split-cache,runtime-cache,det-sr,h10,z256,tuned,e24576,r6,1b}"
+RUN_TAG="${RUN_TAG:-bones129k_root_qpos_v2_splitcache_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}_1b_seed${SEED}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${DATA_ROOT}/runs/${RUN_TAG}}"
 ENCODER_DIR="${ENCODER_DIR:-${OUTPUT_ROOT}/encoder}"
 ENCODER_CKPT="${ENCODER_CKPT:-${ENCODER_DIR}/checkpoints/latest.pt}"
@@ -161,6 +171,9 @@ lowlevel_cmd=(
     env.data.cache_refresh=false
     env.data.storage_device=cpu
     "env.data.macro_cache_device=${DEVICE}"
+    env.data.runtime_cache_device=cpu
+    "env.data.runtime_cache_chunk_size=${RUNTIME_CACHE_CHUNK_SIZE}"
+    "${RUNTIME_BODY_NAMES_OVERRIDE}"
     "env.data.persist_dir=${BUFFER_PATH}"
     "env.data.persist_id=${PERSIST_ID}"
     "${DATA_KEYS_OVERRIDE}"
@@ -193,6 +206,7 @@ lowlevel_cmd=(
 echo "[PLAN] data        : ${EXPECTED_MOTIONS} motions / ${PERSIST_ID}"
 echo "[PLAN] pretrain    : ${PRETRAIN_UPDATES} updates x ${PRETRAIN_BATCH_SIZE} samples"
 echo "[PLAN] macro state : root+qpos (38/frame, $((HORIZON_STEPS * 38))D h${HORIZON_STEPS} window)"
+echo "[PLAN] live cache  : qpos/qvel + ${#RUNTIME_BODY_NAMES[@]} tracked bodies in host RAM"
 echo "[PLAN] low level   : ${TRAIN_NUM_ENVS} envs x ${ROLLOUT_STEPS} steps = ${FRAMES_PER_ITER} frames/iter"
 echo "[PLAN] frame budget: ${MAX_ITERATIONS} iterations -> $((MAX_ITERATIONS * FRAMES_PER_ITER)) frames"
 echo "[PLAN] output      : ${OUTPUT_ROOT}"
