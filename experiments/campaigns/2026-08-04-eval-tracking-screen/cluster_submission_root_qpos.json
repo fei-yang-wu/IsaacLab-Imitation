@@ -1,0 +1,18 @@
+{
+  "campaign": "2026-08-04-eval-tracking-screen",
+  "run": "root_qpos_s15",
+  "job_id": "5563686",
+  "control": "s15_ee_stack seed 0 (same rewards, full_body interface)",
+  "command_interface": {
+    "expert_macro_state_terms": "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]",
+    "encoder_tag": "lafan1_v2_root_qpos_det_sr_h10_z256_seed0",
+    "encoder_sha256": "a95d6eb308676c5cebe1b9661eb5685afebb6a67ce0d224824b8ed2c7f146b84",
+    "encoder_input_width": 380,
+    "encoder_input_width_full_body": 670,
+    "actor_command_dim": 258
+  },
+  "reward_overrides": "env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0",
+  "seed": 0,
+  "frame_cap": 500000000,
+  "workspace_sha": "102d22378b8e6aa3c37aaeaac18af216db642e00"
+}
