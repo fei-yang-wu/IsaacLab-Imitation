@@ -450,7 +450,9 @@ def _set_comparison_camera(
         lookat = lookat.clone()
         lookat[2] = max(float(lookat[2].item()), 0.9)
 
-    eye = lookat + torch.tensor([3.0, -5.0, 2.0], device=base_env.device)
+    # Keep both 2.5 m-spaced lanes in view while making joint-level deviations
+    # legible in a 1280x720 recording.
+    eye = lookat + torch.tensor([2.0, -3.5, 1.2], device=base_env.device)
     base_env.sim.set_camera_view(
         eye.detach().cpu().tolist(), lookat.detach().cpu().tolist()
     )
@@ -650,6 +652,23 @@ def _force_policy_trajectory_on_reset(
     tm.custom_reset_fn = _custom_reset_fn
     tm.reset_start_step = int(start_step)
 
+    # v2 owns start-frame selection in the live reference command term. Its
+    # SONIC training default samples trajectory rank and frame jointly, which
+    # bypasses the trajectory manager's custom rank callback. Rebuild that
+    # sampler as fixed for explicit playback selection.
+    reference_term = getattr(base_env, "reference_command", None)
+    selection = getattr(getattr(reference_term, "cfg", None), "selection", None)
+    if selection is not None:
+        selection.schedule = "custom"
+        selection.full_trajectory = False
+        selection.start_mode = "fixed"
+        selection.start_frame = int(start_step)
+        selection.random_step_min = int(start_step)
+        selection.random_step_max = int(start_step)
+        selection.adaptive_weight_fn = None
+        reference_term._adaptive_failure_reset_sampler = None
+        reference_term._build_reset_samplers()
+
     # The G1 env can otherwise replace reset_start_step with its adaptive
     # full-trajectory sampler during _reset_idx. For explicit eval trajectory
     # selection, the CLI start step should be literal.
@@ -694,6 +713,8 @@ class _PolicyTrackingMetrics:
         self.root_height: list[float] = []
         self.joint_pos_mae: list[float] = []
         self.ee_xyz_error: list[float] = []
+        self.mpjpe_local_m: list[float] = []
+        self.mpjpe_global_m: list[float] = []
 
     def record(self) -> None:
         env_id = self._env_id
@@ -711,6 +732,12 @@ class _PolicyTrackingMetrics:
         self.ee_xyz_error.append(
             float(torch.linalg.vector_norm(delta, dim=-1).mean().item())
         )
+        mpjpe = self._env._compute_mpjpe_metrics()
+        if mpjpe is None:
+            raise RuntimeError("The environment did not expose MPJPE metric bodies.")
+        mpjpe_local_m, mpjpe_global_m = mpjpe
+        self.mpjpe_local_m.append(float(mpjpe_local_m[env_id].item()))
+        self.mpjpe_global_m.append(float(mpjpe_global_m[env_id].item()))
 
     def summary(self, step_dt: float | None) -> dict:
         fallen_at = next(
@@ -740,6 +767,16 @@ class _PolicyTrackingMetrics:
             # inflate the tracking numbers.
             "joint_pos_mae_rad_prefall": _mean_upto(self.joint_pos_mae),
             "ee_xyz_error_m_prefall": _mean_upto(self.ee_xyz_error),
+            "mpjpe_local_mm_prefall": (
+                None
+                if _mean_upto(self.mpjpe_local_m) is None
+                else 1000.0 * _mean_upto(self.mpjpe_local_m)
+            ),
+            "mpjpe_global_mm_prefall": (
+                None
+                if _mean_upto(self.mpjpe_global_m) is None
+                else 1000.0 * _mean_upto(self.mpjpe_global_m)
+            ),
         }
 
 
@@ -1019,7 +1056,15 @@ def main(
             "disable_logger": True,
         }
         print("[INFO] Recording videos during reference/policy comparison.")
-        print_dict(video_kwargs, nesting=4)
+        try:
+            print_dict(video_kwargs, nesting=4)
+        except Exception as exc:  # noqa: BLE001 - logging must not kill a render
+            # `print_dict` stringifies callables via `inspect.getsourcelines`,
+            # which re-reads THIS FILE from disk and then splits the line on
+            # "lambda". Any edit that shifts line numbers while a render is in
+            # flight makes it read the wrong line and raise IndexError -- which
+            # is how an hour of rendering was lost to a cosmetic log line.
+            print(f"[WARN] could not pretty-print video kwargs ({exc}); continuing.")
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
         video_recorder = env
 
@@ -1149,8 +1194,12 @@ def main(
             if args_cli.metrics_json is not None
             else None
         )
-        td = env.reset()
-        base_env.apply_reference_replay_targets()
+        # env.step() runs under inference mode and therefore refreshes the
+        # cached expert frame with inference tensors. Keep later playlist
+        # resets in the same mode so their row-wise in-place refresh is legal.
+        with torch.inference_mode():
+            td = env.reset()
+            base_env.apply_reference_replay_targets()
 
         reference_marker_stats = None
         if reference_body_markers is not None:
@@ -1284,6 +1333,8 @@ def main(
                 "root_height_m": tracking_metrics.root_height,
                 "joint_pos_mae_rad": tracking_metrics.joint_pos_mae,
                 "ee_xyz_error_m": tracking_metrics.ee_xyz_error,
+                "mpjpe_local_m": tracking_metrics.mpjpe_local_m,
+                "mpjpe_global_m": tracking_metrics.mpjpe_global_m,
             }
         trajectory_results.append(result)
 
@@ -1328,5 +1379,21 @@ def main(
 
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    # Print and flush BEFORE `simulation_app.close()`, and carry a real exit
+    # code. Kit's close() terminates the process itself, discarding any pending
+    # traceback and returning 0, so a render that died during env construction
+    # was indistinguishable from one that wrote every video -- it just silently
+    # produced no MP4. Same fix as `evaluate_checkpoint.py`.
+    _exit_code = 0
+    try:
+        main()
+    except BaseException:
+        import traceback as _traceback
+
+        _traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        sys.stdout.flush()
+        _exit_code = 1
+    finally:
+        simulation_app.close()
+    sys.exit(_exit_code)
