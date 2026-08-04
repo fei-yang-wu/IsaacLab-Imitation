@@ -98,6 +98,24 @@ EVAL_SCREEN_ARM_SPECS=(
 # reward goes flat again below the achievable error, and the survival cost keeps
 # accruing -- so the point is to find the turn rather than to assume 0.05 is it.
 "s10_bodypos_std0025|motion_body_pos kernel 0.05 -> 0.025, continuing a monotone sweep that has not yet turned. Watch survival and the full-horizon pass as well as strict MPJPE: the sharper arms trade a little survival for precision.|env.rewards.motion_body_pos.params.std=0.025"
+# --- Round 5: shape and scale are partly interchangeable, so combine them ----
+#
+#   arm                    MPJPE   EE      surv    full-horizon
+#   control (0.30, w1)     22.03  0.0785  444.6      43.51
+#   s1      (0.10, w1)     19.61  0.0791  442.1      43.42
+#   s2      (0.05, w1)     17.89  0.0722  439.1      43.10
+#   s4      (0.10, w2)     18.17  0.0820  442.6      39.81
+#
+# s4 is the answer to what s1-vs-s4 was built to ask: doubling the WEIGHT gets
+# nearly the same strict MPJPE as halving the STD, so the two are partly
+# interchangeable there. But they differ elsewhere -- s4 is the only arm that
+# meaningfully improves the full-horizon pass (-8.5%) and it costs less
+# survival, while s2 wins strict MPJPE and EE.
+#
+# s11 takes both. If shape and scale act on different failure modes it should
+# beat each; if they are redundant it will land between them, which is equally
+# worth knowing before either is promoted to a 5B default.
+"s11_bodypos_std005_w2|motion_body_pos std 0.05 AND weight 2.0 -- s2's kernel with s4's scale. s2 wins strict MPJPE and EE, s4 wins full-horizon and survival; this tests whether the two are additive.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0"
 "s5_anchor_sharp|motion_global_anchor_pos kernel 0.30 -> 0.10. Targets root drift, which is ~100% of world-frame EE error and the larger half of global MPJPE. 96.7% saturated today.|env.rewards.motion_global_anchor_pos.params.std=0.1"
 "s6_anchor_sharp_w2|s5 plus weight 0.5 -> 2.0, so the term controlling the dominant error source stops being the lowest-weighted tracking term. Gradient 0.59 -> 16.2, i.e. into the band where tracking_reward_points already operates.|env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
 # --- Round 3: the failures are ONE MOTION CLASS, and one missing allowance ---
