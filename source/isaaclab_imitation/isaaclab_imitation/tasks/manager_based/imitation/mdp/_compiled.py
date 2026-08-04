@@ -14,8 +14,39 @@ from isaaclab.utils.math import (
     quat_mul,
     subtract_frame_transforms,
     wrap_to_pi,
-    yaw_quat,
 )
+
+
+def heading_quat(quat: torch.Tensor) -> torch.Tensor:
+    """Twist component about world Z, matching SONIC's ``get_heading_q``.
+
+    Zero the x/y components and renormalize. This is exactly the twist of a
+    swing-twist decomposition about Z, and it is what SONIC applies when it
+    reroots a reference onto the robot anchor.
+
+    ``isaaclab.utils.math.yaw_quat`` -- what this replaced -- returns the ZYX
+    Euler yaw instead. The two agree while the anchor is near upright and
+    diverge as it tilts, but the reason for the change is the singularity, not
+    the disagreement: **ZYX yaw is degenerate at pitch = 90 degrees**, where a
+    two-degree attitude change swings the extracted heading by 180 degrees.
+    A pelvis can reach that (falling forward, a deep bow), and when it does the
+    rerooted reference spins half a turn and every consumer -- ``motion_body_pos``,
+    ``motion_body_ori``, ``foot_pos_xyz`` -- sees a fictitious catastrophic
+    error. This form is continuous there, and stays continuous through full
+    inversion; its own singularity needs an exact 180-degree rotation about a
+    horizontal axis, which is far harder to reach.
+
+    LAYOUT: Isaac Lab quaternions are ``(x, y, z, w)``, so the components to
+    zero are indices 0 and 1. SONIC is scalar-first ``(w, x, y, z)`` and zeroes
+    indices 1 and 2. Transcribing SONIC's indices literally would zero y and z,
+    keep x and w, and yield a *roll* quaternion -- which runs, produces
+    plausible numbers, and is silently wrong.
+    """
+    quat_heading = torch.zeros_like(quat)
+    quat_heading[..., 2] = quat[..., 2]  # z
+    quat_heading[..., 3] = quat[..., 3]  # w
+    norm = torch.linalg.vector_norm(quat_heading, dim=-1, keepdim=True)
+    return quat_heading / norm.clamp(min=1e-9)
 
 
 def _maybe_compile(fn):
@@ -199,7 +230,7 @@ def reroot_body_positions(
     ref_anchor_quat_w: torch.Tensor,
 ) -> torch.Tensor:
     num_bodies = ref_pos_w.shape[1]
-    delta_ori = yaw_quat(quat_mul(robot_anchor_quat_w, quat_inv(ref_anchor_quat_w)))
+    delta_ori = heading_quat(quat_mul(robot_anchor_quat_w, quat_inv(ref_anchor_quat_w)))
     delta_pos = robot_anchor_pos_w.clone()
     delta_pos[:, 2] = ref_anchor_pos_w[:, 2]
     delta_ori_exp = delta_ori.unsqueeze(1).expand(-1, num_bodies, -1).reshape(-1, 4)
@@ -218,7 +249,7 @@ def reroot_body_orientations(
     ref_anchor_quat_w: torch.Tensor,
 ) -> torch.Tensor:
     num_bodies = ref_quat_w.shape[1]
-    delta_ori = yaw_quat(quat_mul(robot_anchor_quat_w, quat_inv(ref_anchor_quat_w)))
+    delta_ori = heading_quat(quat_mul(robot_anchor_quat_w, quat_inv(ref_anchor_quat_w)))
     delta_ori_exp = delta_ori.unsqueeze(1).expand(-1, num_bodies, -1).reshape(-1, 4)
     return quat_mul(delta_ori_exp, ref_quat_w.reshape(-1, 4)).reshape(-1, num_bodies, 4)
 
