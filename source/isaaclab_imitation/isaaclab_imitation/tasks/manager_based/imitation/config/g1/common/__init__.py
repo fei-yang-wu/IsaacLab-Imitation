@@ -45,7 +45,7 @@ from .presets import (
     G1ImitationRobotCfg,
     G1SonicRobotCfg,
 )
-from .rewards import G1RewardsCfg, G1SonicRewardsCfg
+from .rewards import G1RewardsCfg, G1SonicRewardsCfg, G1V2TunedRewardsCfg
 from .terminations import (
     G1SonicTerminationCurriculumCfg,
     G1SonicTerminationsCfg,
@@ -79,6 +79,7 @@ __all__ = [
     "G1SonicRobotCfg",
     "G1RewardsCfg",
     "G1SonicRewardsCfg",
+    "G1V2TunedRewardsCfg",
     "G1SonicTerminationCurriculumCfg",
     "G1SonicTerminationsCfg",
     "G1SonicTerminationWindowProbeCfg",

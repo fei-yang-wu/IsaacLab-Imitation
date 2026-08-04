@@ -36,6 +36,7 @@ from ...command_interface import (
     ReferenceSelectionPreset,
 )
 from .common.terminations import G1SonicTerminationCurriculumCfg
+from .common.rewards import G1SonicRewardsCfg
 from .imitation_g1_env_v2 import ImitationG1V2EnvCfg
 
 _SONIC_HISTORY_TERMS_POLICY = (
@@ -170,13 +171,24 @@ class ImitationG1SonicSurfaceEnvCfg(ImitationG1V2EnvCfg):
 
     Three deltas over the v2 default: SONIC's full-trajectory adaptive-failure
     reset sampler, the termination-threshold anneal, and SONIC's 10-step
-    proprioceptive histories. The rewards, events, and actions are already the
-    v2 components. Thresholds anneal to the strict release values over the
-    curriculum window; disable with ``env.curriculum=null`` for
+    proprioceptive histories. Thresholds anneal to the strict release values
+    over the curriculum window; disable with ``env.curriculum=null`` for
     strict-from-scratch release fidelity.
+
+    The rewards and the macro-state frame are PINNED to the release values
+    rather than inherited. v2's defaults moved on 2026-08-04 -- tuned tracking
+    weights and the ``root_qpos`` encoder frame -- and this surface exists to be
+    the published recipe, so inheriting either would quietly make it something
+    other than SONIC. Other v2 subclasses deliberately do track the default.
     """
 
     curriculum = G1SonicTerminationCurriculumCfg()
+    rewards = G1SonicRewardsCfg()  # type: ignore
+    expert_macro_state_terms: list[str] | None = [
+        "expert_motion",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+    ]
 
     def __post_init__(self):
         super().__post_init__()

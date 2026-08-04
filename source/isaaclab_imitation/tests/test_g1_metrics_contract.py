@@ -298,3 +298,76 @@ def test_macro_state_terms_select_the_encoder_input_width() -> None:
     assert sum(widths[t] for t in full_body) * window == 670
     assert sum(widths[t] for t in root_qpos) * window == 380
     assert full_body != root_qpos
+
+
+def test_v2_default_macro_state_is_root_qpos() -> None:
+    """`-G1-v2` defaults to the root_qpos frame; the SONIC surface does not.
+
+    The arithmetic test above pins the widths but never touches a config, so it
+    passed unchanged when the default moved on 2026-08-04. This pins the config.
+
+    v2's default is root_qpos (qpos + root pose, no joint velocity), which means
+    a v2 run REQUIRES a 380-wide encoder. `ImitationG1SonicSurfaceEnvCfg` stays
+    on the full-body frame deliberately: it is the published SONIC recipe, not a
+    place for our tuned defaults.
+    """
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+        ImitationG1V2EnvCfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.surfaces import (
+        ImitationG1SonicSurfaceEnvCfg,
+    )
+
+    root_qpos = [
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+    ]
+    full_body = ["expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b"]
+
+    assert list(ImitationG1V2EnvCfg().expert_macro_state_terms) == root_qpos
+    assert list(ImitationG1SonicSurfaceEnvCfg().expert_macro_state_terms) == full_body
+
+    # The default must not be a shared mutable: two configs editing one list
+    # would silently couple every surface built in the same process.
+    a, b = ImitationG1V2EnvCfg(), ImitationG1V2EnvCfg()
+    assert a.expert_macro_state_terms is not b.expert_macro_state_terms
+
+
+def test_v2_default_rewards_are_the_tuned_weights() -> None:
+    """v2 carries the 2026-08-04 tuned tracking weights; v1 and SONIC do not.
+
+    Measured over three seeds against two control seeds with randomization off:
+    MPJPE-G -37.3%, EE-G -34.7%, ranges disjoint. v1 is frozen and the SONIC
+    surface is the published recipe, so both keep the previous weights.
+    """
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v1 import (  # noqa: E501
+        ImitationG1EnvV1Cfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+        ImitationG1V2EnvCfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.surfaces import (
+        ImitationG1SonicSurfaceEnvCfg,
+    )
+
+    v2 = ImitationG1V2EnvCfg().rewards
+    assert (v2.motion_body_pos.weight, v2.motion_body_pos.params["std"]) == (2.0, 0.05)
+    assert (
+        v2.motion_global_anchor_pos.weight,
+        v2.motion_global_anchor_pos.params["std"],
+    ) == (2.0, 0.1)
+    assert (
+        v2.motion_global_anchor_ori.weight,
+        v2.motion_global_anchor_ori.params["std"],
+    ) == (2.0, 0.15)
+    # The coarse companion ships inert; enabling it is an explicit override.
+    assert v2.motion_global_anchor_pos_wide.weight == 0.0
+
+    for frozen in (
+        ImitationG1EnvV1Cfg().rewards,
+        ImitationG1SonicSurfaceEnvCfg().rewards,
+    ):
+        assert frozen.motion_body_pos.params["std"] == 0.3
+        assert frozen.motion_global_anchor_pos.weight == 0.5
+        assert frozen.motion_global_anchor_ori.weight == 0.5
