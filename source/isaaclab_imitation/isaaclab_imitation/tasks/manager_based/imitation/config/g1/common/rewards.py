@@ -199,6 +199,17 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             "threshold": 1.0,
         },
     )
+    # SONIC `tracking_vr_5point_local`: pelvis + both wrists + both ankles, with
+    # the wrists pushed 0.18 m forward and 0.025 m outboard so the tracked point
+    # is the hand/controller rather than the wrist joint. This previously
+    # tracked three points -- torso raised 0.5 m, plus bare wrists -- which
+    # dropped both feet from the term entirely.
+    #
+    # The pelvis point is identically zero in the pelvis anchor frame for both
+    # robot and reference, so it contributes no error and only divides the mean
+    # by five instead of four. That is SONIC's own arrangement and is kept
+    # deliberately: the term's scale must match theirs for the weight to mean
+    # the same thing.
     tracking_reward_points = RewTerm(
         func=mdp.reference_local_reward_point_position_error_exp,
         weight=2.0,
@@ -206,18 +217,28 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             "asset_cfg": SceneEntityCfg(
                 "robot",
                 body_names=[
-                    "torso_link",
+                    "pelvis",
                     "left_wrist_yaw_link",
                     "right_wrist_yaw_link",
+                    "left_ankle_roll_link",
+                    "right_ankle_roll_link",
                 ],
                 preserve_order=True,
             ),
             "reference_body_names": [
-                "torso_link",
+                "pelvis",
                 "left_wrist_yaw_link",
                 "right_wrist_yaw_link",
+                "left_ankle_roll_link",
+                "right_ankle_roll_link",
             ],
-            "body_offsets": ((0.0, 0.0, 0.5), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+            "body_offsets": (
+                (0.0, 0.0, 0.0),
+                (0.18, -0.025, 0.0),
+                (0.18, 0.025, 0.0),
+                (0.0, 0.0, 0.0),
+                (0.0, 0.0, 0.0),
+            ),
             "anchor_body_name": "pelvis",
             "std": 0.1,
         },
@@ -240,9 +261,10 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             "threshold": 1.5,
         },
     )
+    # SONIC weights this -2.5e-7; ours was -2.5e-6, a 10x stronger penalty.
     feet_acc = RewTerm(
         func=mdp.joint_acc_l2,
-        weight=-2.5e-6,
+        weight=-2.5e-7,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[r".*ankle.*"]),
         },
