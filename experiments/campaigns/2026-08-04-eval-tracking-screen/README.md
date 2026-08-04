@@ -227,6 +227,20 @@ the **control at matched 500M** (job 5561149), not against the 1.9B baseline.
 | **s7** (wrist reward) | 19.11 | 0.0781 | **445.5** | 24/40 | 40.60 | — |
 | s8 (foot allowance) | 22.37 | 0.0762 | 443.4 | 24/40 | 44.44 | — |
 
+### The body-pos kernel sweep is bracketed: std 0.05 is the optimum
+
+| std | MPJPE | EE | survival | full-horizon |
+|---|---|---|---|---|
+| 0.30 (control) | 22.03 | 0.0785 | 444.6 | 43.51 |
+| 0.10 | 19.61 | 0.0791 | 442.1 | 43.42 |
+| **0.05** | **17.89** | **0.0722** | 439.1 | 43.10 |
+| 0.025 (s10) | 18.21 | 0.0746 | 444.1 | 40.61 |
+
+The sweep turns at 0.025, so 0.05 is a real interior optimum for strict MPJPE
+rather than an edge of the range tried. Going sharper than 0.05 trades MPJPE
+back for survival (439.1 → 444.1) and full-horizon (43.10 → 40.61) — the same
+precision-versus-survival tension the whole screen shows.
+
 **The two goal metrics are won by different arms, with opposing trade-offs.**
 s2 sharpens the root-relative body term and takes MPJPE (−18.8%) while EE moves
 little; s6 upweights the global root term and takes EE (**−23.7%**) while MPJPE
