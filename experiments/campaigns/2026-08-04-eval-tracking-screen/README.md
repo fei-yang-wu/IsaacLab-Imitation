@@ -65,6 +65,38 @@ root is low, so it targets the 6 fallAndGetUp clips. `run`, `jump` and `fight`
 failures happen at normal or high root height and will need something else —
 worth knowing before reading s8's result as a general fix.
 
+## foot_pos_xyz is a tripwire, not the cause
+
+Before spending 500M-frame runs on the allowances, they were applied at
+EVALUATION time to the unchanged baseline checkpoint (40 clips, DR off):
+
+| config | MPJPE | EE | survival | clips full | causes |
+|---|---|---|---|---|---|
+| baseline | 20.98 | 0.1041 | 449.0 | 24/40 | foot 13, ee 2, ori 2, pos 1 |
+| + low-root (s8) | 20.88 | 0.1024 | 447.6 | 24/40 | **foot 7**, ee 4, ori 5, pos 1 |
+| + low-root + swing (s9) | 21.16 | 0.1066 | 450.6 | 25/40 | **foot 5**, ee 4, ori 5, pos 1 |
+
+The allowances do what they were designed to do — foot terminations fall
+13 → 7 → 5 — but **the failures migrate to other terms** rather than
+disappearing. `anchor_ori` goes 2 → 5, `ee_body_pos` 2 → 4, and net survival is
+flat: 449.0 → 447.6 → 450.6, with clips surviving 24 → 24 → 25.
+
+So `foot_pos_xyz` is the first tripwire, not the cause. On these dynamic clips
+the robot is genuinely losing the reference; removing one detector lets the
+failure continue until another catches it.
+
+**Caveat on how far this generalises.** This applies the allowance to a policy
+*trained without* it. Training with it could produce a different policy — one
+that learns to recover from a foot excursion instead of being terminated at it.
+So this does not refute s8/s9 outright; it refutes the "just relax the tripwire"
+reading, and it means s8/s9 should be expected to be roughly neutral on survival
+unless training changes the policy's recovery behaviour.
+
+The consequence is that termination definition is probably not the binding
+constraint, which re-elevates the round-1 reward arms (s1/s2/s4): improving
+tracking capability on dynamic motions is the thing that would actually move
+both metrics.
+
 ## The horizon curve: precision is fine, failures are not
 
 Per-step root-relative MPJPE over a 500-step rollout, DR off, tracking
