@@ -132,6 +132,17 @@ G1_EE_BODY_NAMES: list[str] = [
 # plus the pelvis. Position and rot6d orientation are exposed as separate terms,
 # so configs can select point targets (5 x 3) or full poses (5 x 9). The pelvis
 # is not redundant with the torso_link anchor -- the waist joints separate them.
+G1_FOOT_BODY_NAMES: list[str] = [
+    "left_ankle_roll_link",
+    "right_ankle_roll_link",
+]
+"""The bodies `foot_pos_xyz` terminates on.
+
+Named separately so the reward that mirrors that termination cannot drift away
+from the body set the termination actually uses.
+"""
+
+
 G1_KEYPOINT5_BODY_NAMES: list[str] = [
     "pelvis",
     "left_ankle_roll_link",

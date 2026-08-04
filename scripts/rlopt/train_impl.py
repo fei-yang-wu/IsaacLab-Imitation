@@ -295,8 +295,28 @@ def _apply_termination_window_args(
         return
     if window is None or window < 1:
         raise ValueError(f"--termination_window must be >= 1, got {requested}.")
-    apply_termination_window(terminations, min_steps=window)
-    print(f"[INFO] Tracking terminations require {window} consecutive violations.")
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.terminations import (  # noqa: E501
+        SONIC_WINDOW_TERM_NAMES,
+    )
+
+    requested_terms = getattr(args_cli, "termination_window_terms", None)
+    if requested_terms:
+        term_names = tuple(
+            name.strip() for name in str(requested_terms).split(",") if name.strip()
+        )
+        unknown = sorted(set(term_names) - set(SONIC_WINDOW_TERM_NAMES))
+        if unknown:
+            raise ValueError(
+                f"--termination_window_terms contains unknown term(s) {unknown}; "
+                f"windowing is defined for {list(SONIC_WINDOW_TERM_NAMES)}."
+            )
+    else:
+        term_names = SONIC_WINDOW_TERM_NAMES
+    apply_termination_window(terminations, min_steps=window, term_names=term_names)
+    print(
+        f"[INFO] Tracking terminations require {window} consecutive violations "
+        f"({', '.join(term_names)})."
+    )
 
 
 def train(

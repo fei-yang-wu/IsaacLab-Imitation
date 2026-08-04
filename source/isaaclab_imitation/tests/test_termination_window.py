@@ -298,3 +298,38 @@ def test_train_cli_flags_select_the_protocol():
         )
     with pytest.raises(ValueError, match="must be >= 1"):
         apply_args(_args(termination_window=0), _EnvCfgStub())
+
+
+def test_window_can_be_scoped_to_a_single_term():
+    """Scoping matters: foot_pos_xyz is ~2/3 of non-timeout terminations.
+
+    A window on it alone targets the dominant failure while the height and
+    orientation terms stay strict, so the horizontal bar the policy must return
+    to is unchanged.
+    """
+    terminations = G1SonicTerminationsCfg()
+    instantaneous = {
+        name: getattr(terminations, name).func for name in SONIC_WINDOW_TERM_NAMES
+    }
+
+    apply_termination_window(terminations, min_steps=4, term_names=("foot_pos_xyz",))
+
+    foot = getattr(terminations, "foot_pos_xyz")
+    assert foot.func in _WINDOWED_FUNCS
+    assert foot.params["min_steps"] == 4
+    for name in SONIC_WINDOW_TERM_NAMES:
+        if name == "foot_pos_xyz":
+            continue
+        term = getattr(terminations, name)
+        assert term.func is instantaneous[name], name
+        assert "min_steps" not in term.params, name
+
+
+def test_scoped_window_keeps_the_thresholds_untouched():
+    strict = G1SonicTerminationsCfg()
+    windowed = G1SonicTerminationsCfg()
+    apply_termination_window(windowed, min_steps=4, term_names=("foot_pos_xyz",))
+    for name in SONIC_WINDOW_TERM_NAMES:
+        before = getattr(strict, name).params.get("threshold")
+        after = getattr(windowed, name).params.get("threshold")
+        assert before == after, name

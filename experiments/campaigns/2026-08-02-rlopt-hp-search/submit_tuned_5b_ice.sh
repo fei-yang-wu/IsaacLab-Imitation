@@ -127,6 +127,15 @@ TRAIN_LOG_DIR="${LOG_ROOT}/${RUN_TAG}/rlopt_train"
 # threshold does.
 TERMINATION_WINDOW="${TERMINATION_WINDOW:-}"
 TERMINATION_WINDOW_PROBE="${TERMINATION_WINDOW_PROBE:-0}"
+# Comma-separated terms the window applies to; empty means every strict tracking
+# term. Scoping to `foot_pos_xyz` targets the dominant failure without loosening
+# the height and orientation terms.
+TERMINATION_WINDOW_TERMS="${TERMINATION_WINDOW_TERMS:-}"
+
+# Extra env-side Hydra overrides appended verbatim, for a campaign that needs a
+# knob this launcher does not own (e.g. a new reward term's weight). Agent-side
+# settings do NOT belong here -- they arrive via AGENT_ENTRY_POINT.
+EXTRA_TUNED_OVERRIDES="${EXTRA_TUNED_OVERRIDES:-}"
 
 WANDB_PROJECT="${WANDB_PROJECT:-g1-lafan1}"
 WANDB_GROUP="${WANDB_GROUP:-tuned-5b}"
@@ -230,8 +239,15 @@ checkpoint_args=()
 [[ -n "${TRAIN_CHECKPOINT}" ]] && checkpoint_args=(--checkpoint "${TRAIN_CHECKPOINT}")
 
 window_args=()
-[[ -n "${TERMINATION_WINDOW}" ]] && window_args=(--termination_window "${TERMINATION_WINDOW}")
+if [[ -n "${TERMINATION_WINDOW}" ]]; then
+    window_args=(--termination_window "${TERMINATION_WINDOW}")
+    [[ -n "${TERMINATION_WINDOW_TERMS}" ]] \
+        && window_args+=(--termination_window_terms "${TERMINATION_WINDOW_TERMS}")
+fi
 [[ "${TERMINATION_WINDOW_PROBE}" == "1" ]] && window_args=(--termination_window_probe)
+
+extra_overrides=()
+[[ -n "${EXTRA_TUNED_OVERRIDES}" ]] && read -r -a extra_overrides <<<"${EXTRA_TUNED_OVERRIDES}"
 
 export CLUSTER_LOGIN="${CLUSTER_LOGIN:-login-ice.pace.gatech.edu}"
 export CLUSTER_SLURM_SUBMIT_SCRIPT=pace
@@ -285,6 +301,7 @@ cmd=(./docker/cluster/cluster_interface.sh -c ice_runtime job
     "agent.logger.exp_name=${RUN_TAG}"
     "agent.logger.log_dir=${TRAIN_LOG_DIR}"
     "${TUNED_OVERRIDES[@]}"
+    "${extra_overrides[@]}"
 )
 
 echo "[INFO] run_tag     : ${RUN_TAG}"
@@ -295,7 +312,7 @@ echo "[INFO] save every  : ${SAVE_INTERVAL} frames (bounds TIMEOUT loss)"
 if [[ "${TERMINATION_WINDOW_PROBE}" == "1" ]]; then
     echo "[INFO] terminations: PROBE -- tracking terminations off, run lengths logged (diagnostic only)"
 elif [[ -n "${TERMINATION_WINDOW}" ]]; then
-    echo "[INFO] terminations: window ${TERMINATION_WINDOW} consecutive steps (thresholds unchanged)"
+    echo "[INFO] terminations: window ${TERMINATION_WINDOW} consecutive steps on ${TERMINATION_WINDOW_TERMS:-all strict terms} (thresholds unchanged)"
 else
     echo "[INFO] terminations: instantaneous (the registered protocol)"
 fi
