@@ -149,6 +149,29 @@ parser.add_argument(
     default=False,
     help="Do not extend env.episode_length_s to cover --steps.",
 )
+parser.add_argument(
+    "--agent_entry_point",
+    type=str,
+    default=None,
+    help=(
+        "Agent config entry point to build the network from, e.g. "
+        "rlopt_ipmd_tuned_cfg_entry_point. Must match what the checkpoint was "
+        "TRAINED with: the tuned recipe changes widths and activations, so "
+        "loading a tuned checkpoint under the default contract fails on a "
+        "state-dict mismatch. Defaults to the task's algorithm entry point."
+    ),
+)
+parser.add_argument(
+    "--disable_early_terminations",
+    action="store_true",
+    default=False,
+    help=(
+        "Full-horizon diagnostic: disable every early termination, including "
+        "base_too_low, so MPJPE is scored over the whole horizon instead of a "
+        "termination-truncated rollout. Diagnostic only -- this cannot satisfy "
+        "oracle qualification, which requires the strict protocol."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -167,8 +190,10 @@ from isaaclab.envs import (
     ManagerBasedRLEnvCfg,
 )
 from isaaclab.utils import math as math_utils
+from isaaclab_imitation.envs import ImitationRLEnv
 from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from imitation_experiments.audit.backend_determinism import pin_reference_start
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
@@ -238,22 +263,36 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     raise ValueError(msg)
 
 
-def _unwrap_imitation_env(env: object) -> ImitationRLEnvLegacy:
+#: Both imitation env classes. They are SIBLINGS -- each subclasses
+#: ``ManagerBasedRLEnv`` directly -- so accepting only one silently excludes the
+#: other. This script matched ``ImitationRLEnvLegacy`` alone, which is the
+#: deprecated v0/v1 backing env, so it could not evaluate a ``-G1-v2``
+#: checkpoint at all: it raised here and the traceback was then swallowed by
+#: ``simulation_app.close()``, leaving exit code 0 and no output.
+_IMITATION_ENV_CLASSES = (ImitationRLEnv, ImitationRLEnvLegacy)
+
+ImitationEnv = ImitationRLEnv | ImitationRLEnvLegacy
+
+
+def _unwrap_imitation_env(env: object) -> ImitationEnv:
     current = env
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if isinstance(current, ImitationRLEnvLegacy):
+        if isinstance(current, _IMITATION_ENV_CLASSES):
             return current
         unwrapped = getattr(current, "unwrapped", None)
-        if isinstance(unwrapped, ImitationRLEnvLegacy):
+        if isinstance(unwrapped, _IMITATION_ENV_CLASSES):
             return unwrapped
         current = (
             getattr(current, "base_env", None)
             or getattr(current, "env", None)
             or getattr(current, "_env", None)
         )
-    raise TypeError("Could not unwrap an ImitationRLEnvLegacy.")
+    raise TypeError(
+        "Could not unwrap an imitation env; expected one of "
+        f"{[cls.__name__ for cls in _IMITATION_ENV_CLASSES]}."
+    )
 
 
 def _disable_observation_corruption(env_cfg: object) -> None:
@@ -313,7 +352,7 @@ def _optional_flat_tensor(
 
 
 def _resolve_existing_body_names(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     requested_names: list[str] | tuple[str, ...],
 ) -> list[str]:
     names: list[str] = []
@@ -328,12 +367,12 @@ def _resolve_existing_body_names(
     return names
 
 
-def _body_ids_for_names(base_env: ImitationRLEnvLegacy, names: list[str]) -> list[int]:
+def _body_ids_for_names(base_env: ImitationEnv, names: list[str]) -> list[int]:
     return [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
 
 
 def _mean_body_pose_errors(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     names: list[str],
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
     if len(names) == 0:
@@ -350,7 +389,7 @@ def _mean_body_pose_errors(
 
 
 def _body_tracking_tensors(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     names: list[str],
 ) -> dict[str, torch.Tensor] | None:
     if len(names) == 0:
@@ -374,8 +413,21 @@ def _body_tracking_tensors(
     }
 
 
+def _as_torch(value: Any) -> Any:
+    """Cross the Newton/Isaac Lab 3.0 array boundary.
+
+    Under the Newton backend ``robot.data.*`` returns a Warp-backed
+    ``ProxyArray``. Arithmetic on it happens to work, so most expressions here
+    were silently fine, but a ``torch.jit`` function such as
+    ``quat_error_magnitude`` rejects it outright. The repo convention is the
+    ``.torch`` view; PhysX already hands back real tensors, where this is a
+    no-op.
+    """
+    return value.torch if hasattr(value, "torch") else value
+
+
 def _tracking_metrics(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     tracked_body_names: list[str],
     ee_body_names: list[str],
@@ -387,11 +439,11 @@ def _tracking_metrics(
     joint_pos_ref = base_env.current_expert_frame["joint_pos"]
     joint_vel_ref = base_env.current_expert_frame["joint_vel"]
 
-    root_pos_error = robot_data.root_pos_w - root_pos_ref
-    root_lin_vel_error = robot_data.root_lin_vel_w - root_lin_vel_ref
-    root_ang_vel_error = robot_data.root_ang_vel_w - root_ang_vel_ref
+    root_pos_error = _as_torch(robot_data.root_pos_w) - root_pos_ref
+    root_lin_vel_error = _as_torch(robot_data.root_lin_vel_w) - root_lin_vel_ref
+    root_ang_vel_error = _as_torch(robot_data.root_ang_vel_w) - root_ang_vel_ref
     root_ori_error = math_utils.quat_error_magnitude(
-        robot_data.root_quat_w,
+        _as_torch(robot_data.root_quat_w),
         root_quat_ref,
     )
     root_height_error = root_pos_error[:, 2].abs()
@@ -408,10 +460,14 @@ def _tracking_metrics(
             torch.mean(root_ang_vel_error.square(), dim=-1)
         ),
         "joint_pos_rmse_rad": torch.sqrt(
-            torch.mean((robot_data.joint_pos - joint_pos_ref).square(), dim=-1)
+            torch.mean(
+                (_as_torch(robot_data.joint_pos) - joint_pos_ref).square(), dim=-1
+            )
         ),
         "joint_vel_rmse_radps": torch.sqrt(
-            torch.mean((robot_data.joint_vel - joint_vel_ref).square(), dim=-1)
+            torch.mean(
+                (_as_torch(robot_data.joint_vel) - joint_vel_ref).square(), dim=-1
+            )
         ),
     }
 
@@ -426,7 +482,7 @@ def _tracking_metrics(
             tracked_tensors["ref_quat"].reshape(-1, 4),
         ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
         actual_root_rel = (
-            tracked_tensors["actual_pos"] - robot_data.root_pos_w[:, None, :]
+            tracked_tensors["actual_pos"] - _as_torch(robot_data.root_pos_w)[:, None, :]
         )
         ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
         tracking_mpjpe_m = torch.linalg.vector_norm(
@@ -478,7 +534,7 @@ def _command_reference_kwargs(
 
 def _refresh_tensordict_observations(
     td: TensorDictBase,
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
 ) -> TensorDictBase:
     observations = base_env.observation_manager.compute(update_history=False)
     for group_name, group_obs in observations.items():
@@ -500,7 +556,7 @@ def _refresh_tensordict_observations(
 
 def _certify_streamed_vanilla_equivalence(
     env: TransformedEnv,
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     collector_policy: torch.nn.Module,
     *,
     num_steps: int,
@@ -682,7 +738,7 @@ def _planner_command_terms(command_space: str) -> tuple[str, ...]:
 
 
 def _current_reference_command_terms(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -732,7 +788,7 @@ def _hold_current_command_window(
 
 
 def _build_planner_command_terms(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -779,7 +835,7 @@ def _build_planner_command_terms(
 
 
 def _maybe_publish_planner_command(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -817,7 +873,7 @@ def _maybe_publish_planner_command(
 
 
 def _command_metrics(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -890,7 +946,7 @@ def _clone_observation_terms(
 
 def _debug_compare_command_sources(
     env: TransformedEnv,
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     command_space: str,
     ee_body_names: list[str],
@@ -1107,7 +1163,9 @@ def _sync_env_window_params(env_cfg: object) -> None:
             sync_method()
 
 
-agent_entry_point = resolve_agent_cfg_entry_point(args_cli.task, args_cli.algorithm)
+agent_entry_point = args_cli.agent_entry_point or resolve_agent_cfg_entry_point(
+    args_cli.task, args_cli.algorithm
+)
 
 
 @hydra_task_config(args_cli.task, agent_entry_point)
@@ -1213,16 +1271,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     )
     if hasattr(env_cfg, "reference_start_frame"):
         env_cfg.reference_start_frame = int(args_cli.reference_start_frame)
-    if hasattr(env_cfg, "random_reset_full_trajectory"):
-        env_cfg.random_reset_full_trajectory = False
-    if hasattr(env_cfg, "random_reset_step_min"):
-        env_cfg.random_reset_step_min = int(args_cli.reference_start_frame)
-    if hasattr(env_cfg, "random_reset_step_max"):
-        env_cfg.random_reset_step_max = int(args_cli.reference_start_frame)
+    # Pin the reference start through the shared helper rather than by writing
+    # `random_reset_step_min/max` directly. Those attributes exist only on the
+    # frozen v0/v1 lineage; v2 moved reset sampling to
+    # `command_interface.reference.selection`, so the old `hasattr` guards were
+    # silently False there and `--reference_start_frame` did nothing at all --
+    # every v2 evaluation ran from a random 0-200 start while reporting a pinned
+    # one. `pin_reference_start` raises on a config it cannot pin, so an
+    # unrecognized surface is an error instead of a no-op.
+    reference_selection_surface = pin_reference_start(
+        env_cfg, start_frame=int(args_cli.reference_start_frame)
+    )
     if hasattr(env_cfg, "reset_schedule"):
         env_cfg.reset_schedule = str(args_cli.reset_schedule)
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
+    if args_cli.disable_early_terminations:
+        # The AGENTS.md full-horizon diagnostic: every early termination off,
+        # including `base_too_low`, so MPJPE is measured over the intended
+        # horizon rather than a termination-truncated rollout. Diagnostic only
+        # -- it cannot satisfy oracle qualification, which needs the strict
+        # protocol with every term active.
+        terminations = getattr(env_cfg, "terminations", None)
+        for term_name in (
+            "anchor_pos",
+            "anchor_ori",
+            "ee_body_pos",
+            "foot_pos_xyz",
+            "base_too_low",
+        ):
+            if terminations is not None and getattr(terminations, term_name, None):
+                setattr(terminations, term_name, None)
     if args_cli.certify_streamed_vanilla_equivalence:
         # Certification isolates command/action equivalence from controller
         # quality. Normal evaluation keeps the strict tracking terminations.
@@ -1660,7 +1739,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 )
             ),
             "wrap_steps": bool(getattr(env_cfg, "wrap_steps", False)),
-            "early_terminations_enabled": True,
+            "early_terminations_enabled": not bool(args_cli.disable_early_terminations),
+            # Which reset-sampling surface was actually pinned. Recorded because
+            # v2 and the frozen v0/v1 lineage expose different ones, and writing
+            # the wrong one used to fail silently.
+            "reference_selection_surface": reference_selection_surface,
+            "qualification_eligible": not bool(args_cli.disable_early_terminations),
             "time_out_enabled": True,
             "episode_length_extension_enabled": not bool(
                 args_cli.preserve_episode_length
@@ -1733,7 +1817,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
 
 if __name__ == "__main__":
+    # Print and flush BEFORE `simulation_app.close()`. Kit's close() terminates
+    # the process itself, discarding any pending traceback and returning 0, so
+    # without this an evaluation that crashed was indistinguishable from one
+    # that passed -- including to any gate that shells out and checks $?.
+    _exit_code = 0
     try:
         main()
+    except BaseException:
+        import traceback as _traceback
+
+        _traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        sys.stdout.flush()
+        _exit_code = 1
     finally:
         simulation_app.close()
+    sys.exit(_exit_code)
