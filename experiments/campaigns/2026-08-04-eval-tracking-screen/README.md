@@ -275,6 +275,28 @@ Three things to read carefully:
   −25%) despite four times less training. That is the SONIC alignment plus the
   foot reward, not the kernel change.
 
+### There is a precision–survival frontier, not a stack
+
+At 300M (control and s2 re-scored at the same checkpoint for a like-for-like
+read):
+
+| arm | MPJPE | EE | survival |
+|---|---|---|---|
+| control | 22.35 | 0.0775 | 433.2 |
+| s2 (std 0.05, w1) | **18.51** | 0.0748 | 427.5 |
+| s11 (std 0.05, w2) | 19.35 | 0.0808 | **437.0** |
+
+Adding weight on top of the sharpened kernel makes MPJPE *worse* (−13.4% vs
+s2's −17.2%) and survival better. Combined with s2-vs-s4 at 500M, the picture is
+consistent: kernel width and term weight are largely **interchangeable, not
+additive**, and moving either trades precision against survival rather than
+buying both.
+
+That means there is no single "best" setting — there is a frontier, and where to
+sit on it depends on whether the downstream consumer cares more about tracking
+precision or about episodes surviving. For a planner-training checkpoint,
+survival is arguably worth more than the last 1 mm of MPJPE.
+
 ## Scoring
 
 `score_eval_tracking_screen.sh` pulls each 500M checkpoint and runs
