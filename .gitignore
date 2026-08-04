@@ -24,7 +24,13 @@ docker/.container.cfg
 # IDE
 **/.idea/
 **/.vscode/
-/.claude/
+# Worktrees and session state. Note this is `/*`, not `/.claude/`: git cannot
+# re-include anything under an excluded DIRECTORY, so the negation below only
+# works if the entries are excluded individually.
+/.claude/*
+# Skills are shared guidance, not local state -- they are how another agent
+# learns a repo-specific procedure, so they belong in the repo.
+!/.claude/skills/
 /.codex/worktrees/
 # Don't ignore the top-level .vscode directory as it is
 # used to configure VS Code settings
