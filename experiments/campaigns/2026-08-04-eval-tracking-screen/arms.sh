@@ -81,6 +81,33 @@ EVAL_SCREEN_ARM_SPECS=(
 # assuming.
 "s5_anchor_sharp|motion_global_anchor_pos kernel 0.30 -> 0.10. Targets root drift, which is ~100% of world-frame EE error and the larger half of global MPJPE. 96.7% saturated today.|env.rewards.motion_global_anchor_pos.params.std=0.1"
 "s6_anchor_sharp_w2|s5 plus weight 0.5 -> 2.0, so the term controlling the dominant error source stops being the lowest-weighted tracking term. Gradient 0.59 -> 16.2, i.e. into the band where tracking_reward_points already operates.|env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
+# --- Round 3: the failures are ONE MOTION CLASS, and one missing allowance ---
+#
+# Per-environment survival on the pre-screen checkpoint, DR off, 10 envs:
+#
+#   fallAndGetUp1_subject1  290      dance2_subject1  500
+#   fallAndGetUp2_subject3  328      dance2_subject2  500
+#   fallAndGetUp2_subject2  348      dance2_subject3  500
+#   fallAndGetUp1_subject5  382      dance2_subject4  500
+#   fallAndGetUp1_subject4  403      dance2_subject5  500
+#
+# EVERY fall-and-get-up clip fails; EVERY dance clip survives the full horizon.
+# Causes: foot_pos_xyz x4, anchor_ori x2. And the per-step curve is flat at
+# ~11 mm for 300 steps before diverging, so this is not gradual drift -- it is
+# these clips reaching their hard phase.
+#
+# There is a precise reason foot_pos_xyz is the one that fires. It is the only
+# termination in the config without the crouching allowance: both
+# `bad_anchor_pos_z_adaptive` and `bad_reference_body_pos_z_adaptive` relax to
+# `down_threshold` when the REFERENCE root drops below `root_height_threshold`,
+# and a fall-and-recover reference spends its hard phase exactly there. So the
+# strict 0.2 m horizontal bar was being enforced precisely where the other two
+# terms had already decided it should not be.
+#
+# s8 extends that existing pattern to the one term that lacked it. This is the
+# most directly motivated arm in the screen: it targets the measured cause of
+# the dominant failure, and it changes nothing while the reference is upright.
+"s8_foot_allowance|Give foot_pos_xyz the crouching allowance the other two position terms already have: relax to 0.6 m when the reference root is below 0.5 m. Targets the fall-and-get-up failures that account for every non-surviving clip. No effect while the reference is upright.|env.terminations.foot_pos_xyz.params.down_threshold=0.6"
 "s7_ee_reward|Enable the inert wrist term motion_ee_pos at 2.0 -- same geometry as motion_foot_pos, on the hands. The wrists have no horizontal termination and only their 2-of-5 share of tracking_reward_points. Expected to be second-order if drift dominates.|env.rewards.motion_ee_pos.weight=2.0"
 )
 
