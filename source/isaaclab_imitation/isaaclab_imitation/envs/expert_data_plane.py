@@ -534,6 +534,30 @@ class ExpertDataPlane:
         randomization disabled the value is exactly 0.00 mm, so there is no
         systematic reference-versus-URDF body-frame offset underneath it.
         """
+        local_and_global = self._compute_mpjpe_metrics()
+        return None if local_and_global is None else local_and_global[0]
+
+    def _compute_mpjpe_metrics(self) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Per-environment ``(MPJPE-L, MPJPE-G)`` in metres.
+
+        The two metrics the SONIC/PHC lineage reports, computed from one fetch
+        of the body poses:
+
+        ``MPJPE-L`` (local) subtracts each side's own root **position**, so it
+        measures pose error with global drift removed. Translation only --
+        removing root *orientation* as well would be a different metric, and
+        the literature's name for that is PA-MPJPE (Procrustes-aligned), not
+        MPJPE-L. This is the value historically logged as ``mpjpe_mm``.
+
+        ``MPJPE-G`` (global) is the world-frame body error with no alignment at
+        all, matching SONIC's ``im_eval_callback.py`` term for term. It counts
+        drift, so it is always >= MPJPE-L and is the number comparable to
+        published PHC-lineage results.
+
+        Reporting only MPJPE-L flatters a policy that holds its pose while
+        walking away from the reference: on the 2026-08-03 LAFAN1 checkpoint
+        MPJPE-L was 25 mm with 152 mm of root position error underneath it.
+        """
         if self._mpjpe_metric_body_ids is None:
             return None
         robot_pos_w = self._get_robot_body_pose_w_fast(self._mpjpe_metric_body_ids)[0]
@@ -544,9 +568,13 @@ class ExpertDataPlane:
         reference_root_w = self._get_reference_root_state_w_fast()[0]
         robot_relative = robot_pos_w - robot_root_w[:, None, :]
         reference_relative = reference_pos_w - reference_root_w[:, None, :]
-        return torch.linalg.vector_norm(
+        mpjpe_local = torch.linalg.vector_norm(
             robot_relative - reference_relative, dim=-1
         ).mean(dim=-1)
+        mpjpe_global = torch.linalg.vector_norm(
+            robot_pos_w - reference_pos_w, dim=-1
+        ).mean(dim=-1)
+        return mpjpe_local, mpjpe_global
 
     # ------------------------------------------------------------------
     # MDP fast paths.

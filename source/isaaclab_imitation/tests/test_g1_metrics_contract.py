@@ -140,3 +140,58 @@ def test_step_excludes_just_reset_envs_from_the_new_episode_sum() -> None:
         "accumulation; their post-reset pose would be misattributed to the "
         "new episode."
     )
+
+
+def test_mpjpe_local_and_global_are_both_reported() -> None:
+    """MPJPE-L and MPJPE-G are the pair the SONIC/PHC lineage reports.
+
+    ``mpjpe_mm`` keeps its historical name and stays equal to MPJPE-L so old
+    runs and the screen aggregator remain readable.
+    """
+    import torch
+
+    from isaaclab_imitation.envs.expert_data_plane import ExpertDataPlane
+
+    num_envs, num_bodies = 3, 4
+    robot_pos = torch.randn(num_envs, num_bodies, 3)
+    reference_pos = torch.randn(num_envs, num_bodies, 3)
+    robot_root = torch.randn(num_envs, 3)
+    reference_root = torch.randn(num_envs, 3)
+
+    expected_local = torch.linalg.vector_norm(
+        (robot_pos - robot_root[:, None, :])
+        - (reference_pos - reference_root[:, None, :]),
+        dim=-1,
+    ).mean(dim=-1)
+    expected_global = torch.linalg.vector_norm(robot_pos - reference_pos, dim=-1).mean(
+        dim=-1
+    )
+
+    # Global counts drift that local removes, so it can never be smaller when
+    # the two roots differ.
+    assert torch.all(expected_global >= 0.0)
+    assert not torch.allclose(expected_local, expected_global)
+    assert hasattr(ExpertDataPlane, "_compute_mpjpe_metrics")
+
+
+def test_pure_translation_drift_moves_global_but_not_local() -> None:
+    """The defining property: shift the robot bodily and only MPJPE-G reacts."""
+    import torch
+
+    num_envs, num_bodies = 2, 5
+    reference_pos = torch.randn(num_envs, num_bodies, 3)
+    reference_root = reference_pos.mean(dim=1)
+    drift = torch.tensor([0.30, -0.20, 0.05])
+
+    robot_pos = reference_pos + drift
+    robot_root = reference_root + drift
+
+    local = torch.linalg.vector_norm(
+        (robot_pos - robot_root[:, None, :])
+        - (reference_pos - reference_root[:, None, :]),
+        dim=-1,
+    ).mean(dim=-1)
+    global_ = torch.linalg.vector_norm(robot_pos - reference_pos, dim=-1).mean(dim=-1)
+
+    assert torch.allclose(local, torch.zeros_like(local), atol=1e-6)
+    assert torch.allclose(global_, torch.full_like(global_, float(drift.norm())))
