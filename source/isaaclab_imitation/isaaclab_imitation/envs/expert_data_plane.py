@@ -43,6 +43,8 @@ from iltools.datasets.utils import make_rb_from
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
 from isaaclab_imitation.assets.robots import UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES
 from tensordict import TensorDict
+from torchrl.data.replay_buffers import TensorDictReplayBuffer
+from torchrl.data.replay_buffers.storages import TensorStorage
 
 if TYPE_CHECKING:
     from isaaclab_imitation.envs.imitation_rl_env_v2 import ImitationRLEnv
@@ -201,6 +203,12 @@ class ExpertDataPlane:
             pin_memory=storage_device.type == "cuda",
         )
 
+        dataset_body_names, dataset_site_names = (
+            self._read_reference_metadata_from_zarr(zarr_path)
+        )
+        if not dataset_body_names:
+            dataset_body_names = list(getattr(cfg, "reference_body_names", []) or [])
+
         # Trajectory selection is declared on the reference command channel:
         # the schedule (including the `custom` selector an evaluation driver or
         # per-goal collector supplies) and the start frame come from there, so
@@ -223,6 +231,16 @@ class ExpertDataPlane:
             raise ValueError(
                 "The reference command channel's anchor_body_name must be non-empty."
             )
+
+        rb, runtime_body_names = self._materialize_runtime_reference_cache(
+            rb=rb,
+            traj_info=traj_info,
+            data_cfg=data_cfg,
+            cfg=cfg,
+            dataset_body_names=dataset_body_names,
+        )
+        if runtime_body_names is not None:
+            dataset_body_names = runtime_body_names
 
         reference_joint_names = list(cfg.reference_joint_names)
         target_joint_names = list(cfg.target_joint_names)
@@ -290,16 +308,14 @@ class ExpertDataPlane:
         )
         self._build_reward_input_cache(device=torch.device(device))
 
-        self.reference_body_names: list[str] = []
-        self.reference_site_names: list[str] = []
+        self.reference_body_names = dataset_body_names
+        self.reference_site_names = dataset_site_names
         self._expert_sampler_warned_unknown_terms: set[str] = set()
         self._expert_macro_feature_slices: dict[str, tuple[int, int]] | None = None
         self._expert_macro_split_rank_cache: dict[
             tuple[str, float, int], torch.Tensor
         ] = {}
         self._root_qpos_macro_cache: dict[str, torch.Tensor] | None = None
-
-        self._load_reference_metadata(zarr_path)
 
     # ------------------------------------------------------------------
     # Phase 2: scene-dependent initialization.
@@ -389,31 +405,207 @@ class ExpertDataPlane:
 
         return []
 
-    def _load_reference_metadata(self, zarr_path: Path) -> None:
-        """Load reference body/site names from zarr metadata if available."""
+    @staticmethod
+    def _read_reference_metadata_from_zarr(
+        zarr_path: Path,
+    ) -> tuple[list[str], list[str]]:
+        """Read reference body/site names from Zarr metadata when available."""
         try:
             root = zarr.open(str(zarr_path), mode="r")
         except Exception:
-            return
+            return [], []
 
-        dataset_group = None
         try:
-            group_keys = list(root.group_keys())  # type: ignore[attr-defined]
-            for key in group_keys:
+            for key in list(root.group_keys()):  # type: ignore[attr-defined]
                 group = root[key]
-                if "body_names" in group.attrs:
-                    dataset_group = group
-                    break
+                if "body_names" not in group.attrs:
+                    continue
+                body_names = group.attrs.get("body_names", [])
+                site_names = group.attrs.get("site_names", [])
+                return (
+                    list(body_names) if body_names is not None else [],
+                    list(site_names) if site_names is not None else [],
+                )
         except Exception:
-            dataset_group = None
+            pass
+        return [], []
 
-        if dataset_group is None:
-            return
+    def _load_reference_metadata(self, zarr_path: Path) -> None:
+        """Load reference body/site names from zarr metadata if available."""
+        body_names, site_names = self._read_reference_metadata_from_zarr(zarr_path)
+        self.reference_body_names = body_names
+        self.reference_site_names = site_names
 
-        body_names = dataset_group.attrs.get("body_names", [])
-        site_names = dataset_group.attrs.get("site_names", [])
-        self.reference_body_names = list(body_names) if body_names is not None else []
-        self.reference_site_names = list(site_names) if site_names is not None else []
+    @staticmethod
+    def _available_host_memory_bytes() -> int | None:
+        """Best-effort Linux MemAvailable reading for a fail-fast cache check."""
+        try:
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            return None
+        return None
+
+    def _materialize_runtime_reference_cache(
+        self,
+        *,
+        rb: Any,
+        traj_info: Any,
+        data_cfg: Any,
+        cfg: Any,
+        dataset_body_names: list[str],
+    ) -> tuple[Any, list[str] | None]:
+        """Build a dense qpos/qvel + selected-body cache for live sampling.
+
+        The source is traversed sequentially so a large persisted memmap pays
+        its disk cost once. Subsequent random per-step trajectory gathers hit
+        anonymous RAM (or the explicitly selected device) instead of faulting
+        pages across the full reference tree.
+        """
+        configured_device = getattr(data_cfg, "runtime_cache_device", None)
+        if configured_device is None or not str(configured_device).strip():
+            return rb, None
+        cache_device = torch.device(str(configured_device))
+
+        configured_names = getattr(data_cfg, "runtime_cache_body_names", None)
+        if configured_names is None:
+            configured_names = getattr(cfg, "mpjpe_metric_body_names", None)
+        runtime_body_names = [str(name) for name in (configured_names or [])]
+        if not runtime_body_names:
+            raise ValueError(
+                "env.data.runtime_cache_device requires nonempty body names via "
+                "env.data.runtime_cache_body_names or env.mpjpe_metric_body_names."
+            )
+        if len(runtime_body_names) != len(set(runtime_body_names)):
+            raise ValueError("env.data.runtime_cache_body_names contains duplicates.")
+        if not dataset_body_names:
+            raise ValueError(
+                "The runtime reference cache cannot select bodies because the "
+                "dataset declares no body-name metadata."
+            )
+        missing = [
+            name for name in runtime_body_names if name not in dataset_body_names
+        ]
+        if missing:
+            raise ValueError(
+                f"Runtime reference bodies {missing} are absent from dataset metadata."
+            )
+
+        required_names = {
+            self._expert_anchor_body_name,
+            *list(getattr(cfg, "command_ee_body_names", []) or []),
+            *list(getattr(cfg, "command_keypoint_body_names", []) or []),
+            *list(getattr(cfg, "mpjpe_metric_body_names", []) or []),
+        }
+        omitted = sorted(required_names.difference(runtime_body_names))
+        if omitted:
+            raise ValueError(
+                "Runtime reference cache omits bodies required by the active "
+                f"v2 interface or metrics: {omitted}."
+            )
+
+        storage = getattr(rb, "_storage", None)
+        source = getattr(storage, "_storage", None)
+        if not isinstance(source, TensorDict):
+            raise RuntimeError(
+                "env.data.runtime_cache_device requires tensor-backed replay storage."
+            )
+        source_fields = (
+            "qpos",
+            "qvel",
+            "body_pos_w",
+            "body_quat_w",
+            "body_lin_vel_w",
+            "body_ang_vel_w",
+        )
+        missing_fields = [key for key in source_fields if source.get(key, None) is None]
+        if missing_fields:
+            raise KeyError(
+                "Runtime reference cache is missing source fields "
+                f"{missing_fields}; available keys are {list(source.keys())}."
+            )
+
+        total = int(source.batch_size[0])
+        body_ids = torch.tensor(
+            [dataset_body_names.index(name) for name in runtime_body_names],
+            dtype=torch.long,
+            device=source["body_pos_w"].device,
+        )
+        target_shapes: dict[str, tuple[int, ...]] = {
+            "qpos": tuple(source["qpos"].shape),
+            "qvel": tuple(source["qvel"].shape),
+        }
+        for key in source_fields[2:]:
+            target_shapes[key] = (
+                total,
+                len(runtime_body_names),
+                int(source[key].shape[-1]),
+            )
+        cache_bytes = sum(
+            int(torch.tensor(shape).prod().item()) * source[key].element_size()
+            for key, shape in target_shapes.items()
+        )
+        reserve_bytes = 16 * 1024**3
+        if cache_device.type == "cpu":
+            available_bytes = self._available_host_memory_bytes()
+            if (
+                available_bytes is not None
+                and cache_bytes + reserve_bytes > available_bytes
+            ):
+                raise RuntimeError(
+                    "Insufficient host memory for the compact runtime reference "
+                    f"cache: need {cache_bytes / 1024**3:.1f} GiB plus a 16 GiB "
+                    f"reserve, have {available_bytes / 1024**3:.1f} GiB available."
+                )
+        elif cache_device.type == "cuda":
+            free_bytes, _ = torch.cuda.mem_get_info(cache_device)
+            if cache_bytes + 4 * 1024**3 > free_bytes:
+                raise RuntimeError(
+                    "Insufficient CUDA memory for the compact runtime reference "
+                    f"cache: need {cache_bytes / 1024**3:.1f} GiB plus a 4 GiB "
+                    f"reserve, have {free_bytes / 1024**3:.1f} GiB free."
+                )
+
+        chunk_size = int(getattr(data_cfg, "runtime_cache_chunk_size", 262_144))
+        if chunk_size <= 0:
+            raise ValueError("env.data.runtime_cache_chunk_size must be positive.")
+        logger.warning(
+            "Materializing %.1f GiB compact runtime reference cache (%s rows, "
+            "%s bodies) on %s; qvel is retained internally but is not part of "
+            "the root+qpos macro command.",
+            cache_bytes / 1024**3,
+            f"{total:,}",
+            len(runtime_body_names),
+            cache_device,
+        )
+
+        fields: dict[str, torch.Tensor] = {}
+        for key in source_fields:
+            source_tensor = source[key]
+            target = torch.empty(
+                target_shapes[key], dtype=source_tensor.dtype, device=cache_device
+            )
+            for start in range(0, total, chunk_size):
+                end = min(start + chunk_size, total)
+                chunk = source_tensor[start:end]
+                if key.startswith("body_"):
+                    chunk = chunk.index_select(1, body_ids)
+                target[start:end].copy_(chunk.to(device=cache_device))
+            fields[key] = target
+            logger.warning(
+                "Runtime reference cache field %s ready (%s rows).", key, f"{total:,}"
+            )
+
+        runtime_td = TensorDict(fields, batch_size=[total], device=cache_device)
+        runtime_storage = TensorStorage(runtime_td, device=cache_device)
+        runtime_rb = TensorDictReplayBuffer(storage=runtime_storage, batch_size=1)
+        logger.warning(
+            "Compact runtime reference cache is ready on %s; released full replay "
+            "buffer mapping from the live sampling path.",
+            cache_device,
+        )
+        return runtime_rb, runtime_body_names
 
     def _finalize_reference_body_names(self) -> None:
         """Improve reference body-name mapping for datasets that only provide generic names."""
@@ -1554,8 +1746,10 @@ class ExpertDataPlane:
             raise RuntimeError(
                 "The root_qpos macro cache requires tensor-backed replay storage."
             )
-        required = ("joint_pos", "body_pos_w", "body_quat_w")
+        required = ("body_pos_w", "body_quat_w")
         missing = [key for key in required if source.get(key, None) is None]
+        if source.get("joint_pos", None) is None and source.get("qpos", None) is None:
+            missing.append("joint_pos or qpos")
         if missing:
             raise KeyError(
                 "The root_qpos macro cache is missing replay fields "
@@ -1569,7 +1763,9 @@ class ExpertDataPlane:
 
         anchor_id = self.reference_body_names.index(self._expert_anchor_body_name)
         total = int(tm.end.max().item())
-        joint_source = source["joint_pos"]
+        joint_source = source.get("joint_pos", None)
+        if joint_source is None:
+            joint_source = source["qpos"][..., 7:]
         body_pos_source = source["body_pos_w"]
         body_quat_source = source["body_quat_w"]
         if int(joint_source.shape[0]) < total:

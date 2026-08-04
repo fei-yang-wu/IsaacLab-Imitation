@@ -45,7 +45,15 @@ PROGRESS_METRICS = (
 # arm across surfaces, and so a surface rename does not silently blank the
 # column. First match wins.
 METRIC_ALIASES = {
-    "mpjpe_mm": ("Metrics/reference/mpjpe_mm", "Metrics/mpjpe_mm"),
+    # `mpjpe_l_mm` is the current name; `mpjpe_mm` is the pre-2026-08-04 alias,
+    # kept so older runs still resolve. Note runs before that date logged the
+    # error at the terminal step rather than an episode mean, so a curve that
+    # spans the change is not comparable.
+    "mpjpe_mm": (
+        "Metrics/reference/mpjpe_l_mm",
+        "Metrics/reference/mpjpe_mm",
+        "Metrics/mpjpe_mm",
+    ),
 }
 OPTIMIZER_METRICS = (
     "train/lr",

@@ -299,6 +299,28 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             "std": 0.1,
         },
     )
+    # World-frame body tracking -- the reward counterpart of MPJPE-G.
+    #
+    # `motion_body_pos` above is REROOTED, so it is blind to global drift by
+    # construction, and drift is what dominates the global metrics: on the
+    # 2026-08-04 screen world-frame body error tracked root drift almost 1:1,
+    # and the arms that moved MPJPE-G moved the root rather than the rerooted
+    # body term.
+    #
+    # Inert by default so the current contract is unchanged and
+    # `RewardManager.compute` skips it entirely. Enable per run with
+    # `env.rewards.motion_body_pos_global.weight=<w>`. UNSCREENED.
+    motion_body_pos_global = RewTerm(
+        func=mdp.reference_global_body_position_error_exp,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_TRACKED_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_TRACKED_BODY_NAMES,
+            "std": 0.1,
+        },
+    )
     # Wrist end-effector tracking, INERT BY DEFAULT (weight 0.0).
     #
     # The wrists are the least-constrained bodies in the whole contract: no
@@ -322,6 +344,44 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             ),
             "reference_body_names": G1_WRIST_BODY_NAMES,
             "anchor_body_name": "pelvis",
+            "std": 0.1,
+        },
+    )
+    # World-frame end-effector and foot tracking. Both INERT BY DEFAULT.
+    #
+    # Every position reward in this config except the two anchor terms is
+    # REROOTED, and the anchor terms watch the root alone at weight 0.5 each --
+    # the two lowest weights here. So roughly 8.0 of position-reward weight is
+    # drift-blind and 1.0 anchors the robot in the world, which is why the
+    # policy drifts: it is barely paid not to.
+    #
+    # A rerooted reward is also ambiguous as a target. It says "put the hand
+    # here relative to your own pelvis", which a robot can satisfy perfectly
+    # while standing somewhere else entirely. Measured: adding the LOCAL wrist
+    # term (s13) improved root-relative EE to the best in the screen, 0.0284,
+    # while root drift ROSE 0.0707 -> 0.0949 and MPJPE-G got 28% worse.
+    #
+    # These give the same body sets a world-frame target. Enable per run with
+    # `env.rewards.motion_ee_pos_global.weight=<w>`. UNSCREENED.
+    motion_ee_pos_global = RewTerm(
+        func=mdp.reference_global_body_position_error_exp,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_WRIST_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_WRIST_BODY_NAMES,
+            "std": 0.1,
+        },
+    )
+    motion_foot_pos_global = RewTerm(
+        func=mdp.reference_global_body_position_error_exp,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_FOOT_BODY_NAMES,
             "std": 0.1,
         },
     )

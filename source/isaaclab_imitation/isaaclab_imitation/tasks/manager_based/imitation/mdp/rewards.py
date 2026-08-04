@@ -286,6 +286,35 @@ def reference_relative_body_orientation_error_exp(
     return tracking_exp_from_squared_error(torch.mean(squared_error, dim=1), std)
 
 
+def reference_global_body_position_error_exp(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg | None = None,
+    reference_body_names: Sequence[str] = (),
+    std: float = 0.3,
+) -> torch.Tensor:
+    """World-frame per-body position error. The reward counterpart of MPJPE-G.
+
+    Every other body-position reward here is REROOTED: `motion_body_pos` uses
+    `reference_relative_body_position_error_exp`, which expresses both sides
+    against their own anchor and therefore cannot see global drift at all. The
+    only term that saw drift was `motion_global_anchor_pos`, and that watches
+    the root alone.
+
+    That gap matters because drift dominates the global metrics. Measured on
+    the 2026-08-04 screen, world-frame body error tracked root drift almost 1:1
+    (`EE - root_pos` was a near-constant 4-20 mm across every arm), and the arms
+    that moved MPJPE-G were the ones that moved the root, not the ones that
+    sharpened the rerooted body term.
+
+    This term closes it: no rerooting, so a body that is in the right pose but
+    in the wrong place is penalised for being in the wrong place.
+    """
+    actual_pos_w = env._get_robot_body_pose_w_fast(asset_cfg.body_ids)[0]
+    ref_pos_w = env._get_reference_body_pose_w_fast(reference_body_names)[0]
+    squared_error = torch.sum((actual_pos_w - ref_pos_w) ** 2, dim=-1).mean(-1)
+    return tracking_exp_from_squared_error(squared_error, std)
+
+
 def reference_global_body_linear_velocity_error_exp(
     env: ImitationRLEnv,
     asset_cfg: SceneEntityCfg | None = None,

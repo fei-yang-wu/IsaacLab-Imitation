@@ -38,7 +38,7 @@ WANDB_GROUP=bones129k-v2-scale \
 Metrics are written to:
 
 ```text
-/mnt/storage/fwu91/bones_seed_full/runs/bones129k_root_qpos_v2_e24576_r6_1b_seed0/encoder/metrics.jsonl
+/mnt/storage/fwu91/bones_seed_full/runs/bones129k_root_qpos_v2_splitcache_e24576_r6_1b_seed0/encoder/metrics.jsonl
 ```
 
 Monitor `train/loss_real_z_eval` against `train/loss_zero_z_eval` and
@@ -61,3 +61,10 @@ The launcher pins the manifest SHA-256, persisted-buffer content identity,
 motion count, and exact replay-buffer keys. It opens the 95 GiB CPU memmap and
 materializes a compact 6.7 GiB root+qpos source cache in VRAM once per process;
 encoder batches therefore do not scatter-read the entire replay schema.
+
+For low-level training it also performs a one-time sequential materialization
+of an approximately 45 GiB host-RAM cache containing `qpos`, internal `qvel`,
+and the 14 tracked bodies. Live random trajectory gathers use this dense cache.
+`qvel` remains available for velocity tracking and reset state only; the v2
+encoder/controller command surface is still exactly root+qpos with no qvel
+term.
