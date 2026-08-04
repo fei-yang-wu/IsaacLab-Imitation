@@ -227,6 +227,40 @@ EVAL_SCREEN_ARM_SPECS=(
 # HOLD until round 1 reports. This is a targeted follow-up, not a speculative
 # addition to an already-contended queue.
 "s9_foot_swing_allowance|foot_pos_xyz relaxes to 0.5 m for a foot whose REFERENCE is above 0.15 m, i.e. in flight, plus s8's low-root allowance. Targets the jump/run/sprint failures that s8 cannot reach.|env.terminations.foot_pos_xyz.params.down_threshold=0.6 env.terminations.foot_pos_xyz.params.swing_threshold=0.5"
+# --- Round 11: s15 went SILENT far-field, it did not pull -------------------
+#
+# `reference_global_anchor_position_error_exp` is ABSOLUTE world-frame error, so
+# it is an integral of past velocity error and cannot be fixed within a step.
+# s15 sharpened that kernel to std 0.10 at weight 2.0. Gradient magnitude
+# against the measured 0.215 m mean training drift:
+#
+#   drift     control(0.30,w0.5)   s15(0.10,w2.0)   wide(0.50,w1.0)
+#   0.05 m                  0.54            15.58              0.40
+#   0.215 m                 1.43             0.85              1.43
+#   0.60 m                  0.12             0.00              1.14
+#   1.00 m                  0.00             0.00              0.15
+#
+# s15 TRADED far-field pull for near-field precision -- 29x the gradient at
+# 0.05 m, none at all past ~0.3 m. That is exactly the observed result: strict
+# MPJPE (near-field frames) -37.3% across seeds, full-horizon (drifted frames)
+# unchanged. Once the policy deviates the reward stops asking it to come back.
+#
+# It also re-reads s16. Its failure was not "global targets pull toward an
+# unreachable path"; it was 4.0 of extra weight sharing the same dead zone, so
+# enormous near-field gradients (worst survival in the screen, 430.7) with still
+# nothing far-field.
+#
+# s19 layers a COARSE companion under s15's sharp term rather than adding more
+# sharp ones. It restores gradient at 0.6-1.0 m while adding ~3% at 0.05 m, so
+# the precision s15 bought is not diluted.
+"s19_wide_anchor|s15 plus a coarse global anchor companion at std 0.5, weight 1.0. s15's sharp kernel is numerically zero past ~0.3 m, so a drifted policy has no gradient pointing home; this restores one without touching the near-field precision. Targets the full-horizon pass, which no reward arm has moved.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0 env.rewards.motion_global_anchor_pos_wide.weight=1.0"
+# s20 is the always-achievable channel. `motion_body_lin_vel` is ALREADY
+# world-frame (`reference_global_body_linear_velocity_error_exp`), and unlike
+# position, velocity error IS correctable within a step from any state, so its
+# kernel never goes dead the way the anchor's does. s3 sharpened velocity
+# (lin 1.0->0.3 AND ang 3.14->1.0) and lost, but sharpening recreates the dead
+# zone; raising the WEIGHT at the existing width is the untested version.
+"s20_global_vel_w2|s15 plus motion_body_lin_vel weight 1.0 -> 2.0 at unchanged std. Velocity error is instantaneously correctable from any state, so this channel keeps asking after the policy has drifted. Distinct from s3, which sharpened the kernel and recreated the dead zone.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0 env.rewards.motion_body_lin_vel.weight=2.0"
 "s7_ee_reward|Enable the inert wrist term motion_ee_pos at 2.0 -- same geometry as motion_foot_pos, on the hands. The wrists have no horizontal termination and only their 2-of-5 share of tracking_reward_points. Expected to be second-order if drift dominates.|env.rewards.motion_ee_pos.weight=2.0"
 # --- Round 9: the observation space, which no arm has touched -----------------
 #

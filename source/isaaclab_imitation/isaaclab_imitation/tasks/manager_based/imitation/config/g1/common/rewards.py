@@ -162,6 +162,36 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             "std": 0.4,
         },
     )
+    # Coarse companion to `motion_global_anchor_pos`. INERT by default; enable
+    # by override.
+    #
+    # World-frame anchor error is an INTEGRAL of past velocity error, so it is
+    # not correctable within a step: once the robot has drifted, the only route
+    # back is a sustained velocity bias. A narrow kernel cannot ask for that,
+    # because it is numerically zero long before the drift is large. Measured on
+    # the s15 setting (std 0.10, weight 2.0) against a mean training drift of
+    # 0.215 m:
+    #
+    #   drift    s15 gradient   this term at std 0.5, w 1.0
+    #   0.05 m         15.58                          0.40
+    #   0.215 m         0.85                          1.43
+    #   0.60 m          0.00                          1.14
+    #   1.00 m          0.00                          0.15
+    #
+    # So s15 did not add global pull -- it traded far-field pull for near-field
+    # precision, which is exactly why it moved strict MPJPE by 37% and left the
+    # full-horizon pass untouched. This term restores a gradient that still
+    # points home at 0.6-1.0 m while adding ~3% at 0.05 m, so it does not dilute
+    # the precision s15 bought.
+    motion_global_anchor_pos_wide = RewTerm(
+        func=mdp.reference_global_anchor_position_error_exp,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "anchor_body_name": "pelvis",
+            "std": 0.5,
+        },
+    )
     motion_body_pos = RewTerm(
         func=mdp.reference_relative_body_position_error_exp,
         weight=1.0,
