@@ -116,6 +116,33 @@ EVAL_SCREEN_ARM_SPECS=(
 # beat each; if they are redundant it will land between them, which is equally
 # worth knowing before either is promoted to a 5B default.
 "s11_bodypos_std005_w2|motion_body_pos std 0.05 AND weight 2.0 -- s2's kernel with s4's scale. s2 wins strict MPJPE and EE, s4 wins full-horizon and survival; this tests whether the two are additive.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0"
+# --- Round 6: MPJPE and EE are won by DIFFERENT arms, so combine them --------
+#
+#   arm                  MPJPE     EE     surv   full-horizon
+#   control              22.03  0.0785   444.6      43.51
+#   s2  (body 0.05)      17.89  0.0722   439.1      43.10   best MPJPE  -18.8%
+#   s4  (body 0.10 w2)   18.17  0.0820   442.6      39.81   best full-horizon
+#   s7  (wrist reward)   19.11  0.0781   445.5      40.60   best survival
+#   s6  (anchor 0.10 w2) 24.98  0.0599   443.8      43.35   best EE     -23.7%
+#   s5  (anchor 0.10)    23.47  0.0821   444.2      44.18
+#   s3  (velocity)       23.03  0.0842   442.4      46.34
+#   s8  (foot allowance) 22.37  0.0762   443.4      44.44   neutral, as predicted
+#
+# The two goal metrics are won by different arms with OPPOSING trade-offs. s2
+# sharpens the root-relative body term and wins MPJPE while EE gains little;
+# s6 upweights the global root term and wins EE by 23.7% while MPJPE gets
+# worse. That is exactly the decomposition: MPJPE-L is root-RELATIVE so the
+# body kernel owns it, and world-frame EE is mostly root drift so the anchor
+# term owns that.
+#
+# s12 takes one from each. If they are orthogonal -- and the decomposition says
+# they should be, since they act on different components of the error -- it
+# should win both at once.
+#
+# s8 landing neutral (+1.5%) confirms the pre-run eval-time prediction that
+# foot_pos_xyz is a tripwire rather than the cause.
+"s12_body005_anchor_w2|s2's body kernel (0.05) with s6's anchor term (std 0.10, weight 2.0). MPJPE-L is root-relative and owned by the body kernel; world-frame EE is mostly root drift and owned by the anchor term. Tests whether the two best arms are orthogonal.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
+"s13_body005_wrist|s2's body kernel with s7's wrist reward, the arm with the best survival and second-best full-horizon. Tests whether precision and survival gains stack.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_ee_pos.weight=2.0"
 "s5_anchor_sharp|motion_global_anchor_pos kernel 0.30 -> 0.10. Targets root drift, which is ~100% of world-frame EE error and the larger half of global MPJPE. 96.7% saturated today.|env.rewards.motion_global_anchor_pos.params.std=0.1"
 "s6_anchor_sharp_w2|s5 plus weight 0.5 -> 2.0, so the term controlling the dominant error source stops being the lowest-weighted tracking term. Gradient 0.59 -> 16.2, i.e. into the band where tracking_reward_points already operates.|env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
 # --- Round 3: the failures are ONE MOTION CLASS, and one missing allowance ---
