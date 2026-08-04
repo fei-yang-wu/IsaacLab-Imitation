@@ -57,17 +57,25 @@ ENCODER_LOCAL="${ENCODER_LOCAL:-./logs/monitor_5b/encoders/lafan1_v2_det_sr_h10_
 MANIFEST="${MANIFEST:-./data/lafan1/manifests/g1_lafan1_manifest.json}"
 DATASET="${DATASET:-./data/lafan1/zarr/g1_hl_diffsr}"
 
-# arm -> remote run directory. The control is the current default and is free:
-# it is a 5B run that passes 500M on the way.
-declare -A ARM_RUNDIR=(
-  ["control"]="${REMOTE_DATA_ROOT}/foot_tracking/lafan1_v2_foot_reward_5b_seed0_e12288_r24"
-)
 # TRAIN_SEED selects WHICH RUN to score; SEED is the EVALUATION seed and stays
 # 0. They were one variable, which meant scoring a seed-1 repeat also moved the
 # evaluation seed -- so the difference against seed 0 would have mixed training
 # variance with evaluation variance, and the seed repeat could not measure the
 # thing it exists to measure.
 TRAIN_SEED="${TRAIN_SEED:-0}"
+
+# arm -> remote run directory. At seed 0 the control is free: it is the 5B
+# default run, which passes 500M on the way. Seed repeats of the control are
+# submitted as their own 500M runs, so the control must follow TRAIN_SEED like
+# every other arm -- otherwise a control repeat re-scores the seed-0 5B run and
+# reports zero seed variance for the baseline, which is the one number the
+# repeat exists to measure.
+declare -A ARM_RUNDIR=()
+if [[ "${TRAIN_SEED}" == "0" ]]; then
+    ARM_RUNDIR["control"]="${REMOTE_DATA_ROOT}/foot_tracking/lafan1_v2_foot_reward_5b_seed0_e12288_r24"
+else
+    ARM_RUNDIR["control"]="${REMOTE_DATA_ROOT}/eval_tracking_screen/lafan1_v2_evaltrack_control_500m_seed${TRAIN_SEED}"
+fi
 for name in "${EVAL_SCREEN_ALL_ARM_NAMES[@]}"; do
     ARM_RUNDIR["${name}"]="${REMOTE_DATA_ROOT}/eval_tracking_screen/lafan1_v2_evaltrack_${name}_500m_seed${TRAIN_SEED}"
 done
