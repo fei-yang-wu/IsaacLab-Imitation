@@ -1,6 +1,6 @@
 # Whole-Body VLA and Latent-Action Literature Review
 
-Last reviewed: 2026-07-16.
+Last reviewed: 2026-07-28.
 
 This page records the literature behind the paper's interface comparison. Its
 purpose is to keep three things separate:
@@ -23,8 +23,8 @@ literature:
 
 - **Deployed latent control interface:** the high-level policy outputs a
   learned code that a separate low-level controller consumes. SONIC's
-  universal motion tokens, LeVERB's latent verbs, and our DiffSR code belong
-  here.
+  universal motion tokens, LeVERB's latent verbs, MotionWAM's hybrid motion
+  representation, and our DiffSR code belong here.
 - **Latent labels for pretraining:** a model learns action-like tokens from
   video, but later fine-tuning maps the model to explicit robot actions. LAPA
   is the clearest example. GR00T N1 also uses latent action labels to learn
@@ -42,6 +42,155 @@ Our research question concerns the first case: whether a learned code is a
 better **deployed high-to-low-level interface** than an explicit future
 full-body command packet.
 
+## Formulation
+
+We use a unified notation to describe how information is passed from the high-level model to robot execution at deployment. 
+We distinguish between two time scales: the low-level controller runs at every timestep $t$, while the high-level model produces a new command only at decision step $k$. 
+Each high-level command is executed for $K$ low-level control steps. 
+For example, if the high-level model runs at 5 Hz and the low-level controller runs at 50 Hz, then $K=10$. Let:
+
+- $t$ be the low-level control timestep
+- $k$ be the high-level decision index
+- $K$ be the number of low-level steps between two high-level decisions
+- $L$ be the number of states in the causal history
+- $t_k=kK$ be the low-level timestep of decision $k$
+- $s_t$ be the current proprioceptive robot state
+- $h_k=(s_{t_k-L+1},\ldots,s_{t_k})$ be a causal state history
+- $v_k$ be a visual observation
+- $g$ be a language instruction or task goal
+- $c_k$ be the intermediate command passed from the high-level model to the low-level controller
+- $a_t$ be the joint-level robot action, such as a joint-position target, velocity target, or torque, depending on the method
+
+A generic hierarchical controller is
+
+$$
+c_k=\pi_{\mathrm{H}}(h_k,v_k,g)
+$$
+
+$$
+a_t=\pi_{\mathrm{L}}(s_t,c_k)
+\qquad
+t\in\{t_k,\ldots,t_{k+1}-1\}
+$$
+
+Here, the high-level model $\pi_{\mathrm{H}}$ produces a command $c_k$ once every $K$ low-level control steps. 
+The low-level controller $\pi_{\mathrm{L}}$ then converts this command and the current robot state $s_t$ into joint-level actions. 
+Inputs not used by a particular method are omitted.
+
+Hierarchical approaches mainly differ in how they represent the intermediate command $c_k$. 
+Direct-action methods do not use a separate $c_k$ and are included as a comparison. We group these interfaces into four types.
+
+### A. Explicit motion interface
+
+The high-level model produces an explicit motion command, such as a sequence of poses, keypoints, end-effector targets, locomotion commands, or full-body references:
+
+$$
+c_k=\hat{\mathbf{X}}_k
+=[\hat{x}_{k,0},\ldots,\hat{x}_{k,H_x-1}]
+$$
+
+The low-level controller tracks the active target in the sequence:
+
+$$
+a_t=\pi_{\mathrm{L}}(s_t,\hat{x}_{k,j(t)})
+\qquad
+j(t)\in\{0,\ldots,H_x-1\}
+$$
+
+Here, $H_x$ is the trajectory horizon and $j(t)$ selects the target executed at timestep $t$. A single-step command is represented by $H_x=1$. 
+SONIC's kinematic planner, HuMI, Humanoid-VLA, and BeyondMimic follow this general formulation. 
+They mainly differ in which body parts are represented, how the targets are expressed, and how often the trajectory is replanned.
+
+### B. Continuous latent interface
+
+The high-level model produces a continuous latent command:
+
+$$
+z_k=\pi_{\mathrm{H}}(h_k,v_k,g)
+\qquad
+z_k\in\mathbb{R}^{d_z}
+$$
+
+$$
+c_k=z_k
+\qquad
+a_t=\pi_{\mathrm{L}}(s_t,z_k)
+$$
+
+Here, $d_z$ is the dimension of the latent command. The code $z_k$ is passed to the low-level controller and used during the corresponding high-level
+control interval. 
+It is therefore a deployed control interface rather than only an internal network feature.
+
+LeVERB, ASE, CALM, PULSE, and our DiffSR interface follow this general formulation. 
+They mainly differ in how the latent space is learned, the dimension and update rate of the command, and how the low-level controller is trained.
+
+### C. Discrete or hybrid latent interface
+
+The high-level model produces one or more discrete motion tokens:
+
+$$
+q_k=\pi_{\mathrm{H}}(h_k,v_k,g)
+\qquad
+q_k\in\{1,\ldots,M\}^{N_q}
+$$
+
+The tokens are decoded into a command for the low-level controller:
+
+$$
+c_k=D(q_k)
+\qquad
+a_t=\pi_{\mathrm{L}}(s_t,c_k)
+$$
+
+Here, $M$ is the token vocabulary size, $N_q$ is the number of predicted tokens, and $D$ is a decoder or token-to-command mapping. 
+When the low-level controller consumes the tokens directly, $D$ can be treated as part of $\pi_{\mathrm{L}}$. 
+SONIC's universal motion tokens and WholeBodyVLA follow this general formulation.
+
+Some methods combine continuous and discrete components. MotionWAM, for example, uses a hybrid motion command:
+
+$$
+m_k=\pi_{\mathrm{H}}(h_k,v_k,g)
+=(m_k^{\mathrm{cont}},q_k)
+$$
+
+$$
+c_k=m_k
+\qquad
+a_t=\pi_{\mathrm{L}}(s_t,m_k)
+$$
+
+Here, $m_k^{\mathrm{cont}}$ is the continuous part of the command and $q_k$ is its discrete part. 
+We treat MotionWAM as a hybrid of Types B and C rather than introducing a separate interface type. 
+Methods in this category mainly differ in how the tokens are learned, the vocabulary size, the decoder, and the command update rate.
+
+### D. Direct action policy (comparison)
+
+A direct-action model predicts a chunk of joint-level actions without producing a separate intermediate command:
+
+$$
+\hat{\mathbf{A}}_k
+=\pi_{\mathrm{dir}}(h_k,v_k,g)
+=[\hat{a}_{k,0},\ldots,\hat{a}_{k,H_a-1}]
+$$
+
+The robot executes the first $J$ actions before the model produces a new
+chunk:
+
+$$
+a_{t_k+j}=\hat{a}_{k,j}
+\qquad
+j\in\{0,\ldots,J-1\}
+\qquad
+J\leq H_a
+$$
+
+Here, $H_a$ is the predicted action horizon and $J$ is the number of actions executed before replanning. 
+When $J<H_a$, the model replans before the entire predicted chunk is executed.
+
+Unlike Types A–C, this formulation does not contain a separately deployed intermediate command $c_k$ or a learned low-level policy $\pi_{\mathrm{L}}$.
+The robot may still use an actuator-level PD or servo controller to execute the predicted joint targets. OpenHLM, SENTINEL, LangWBC, GR00T N1, ACT, and Diffusion Policy follow this general formulation. 
+They mainly differ in the action representation, chunk length, replanning strategy, and whether additional residual control is used.
+
 ## Core Method Comparison
 
 | Method | High-level input | Deployed high-level output | High/low rate | What it tests | Relationship to our work |
@@ -51,7 +200,9 @@ full-body command packet.
 | **SONIC kinematic planner** | Four generated context frames plus operator motion commands | Full-body trajectory, up to 64 frames at 30 fps, resampled for the 50 Hz tracker | Up to 10 Hz / 50 Hz | Real-time generation of explicit whole-body reference trajectories | Motivates the strong explicit full-body baseline; distinct from SONIC's token VLA experiment |
 | **HuMI** | Camera streams and proprioception | Receding-horizon task-space keypoints and gripper commands; default keypoints are both grippers and pelvis, with feet optional | 5 Hz / 50 Hz | Whether compact task-space trajectories can drive whole-body manipulation | Best reference for an EE/pelvis chunk diagnostic, not the main full-body baseline |
 | **WholeBodyVLA** | Egocentric image and language | Two learned discrete latent action streams, decoded into dual-arm joint actions and locomotion commands | 10 Hz / 50 Hz locomotion controller | Unified visual latent actions for locomotion and manipulation | Same broad latent-interface motivation; its visual latent and split decoder differ from DiffSR |
+| **MotionWAM** | Egocentric image, language, and robot context | Hybrid continuous and discrete whole-body motion representation decoded through a SONIC-based execution layer | Chunk-wise inference reported at 4.9 Hz on an A100 | World-action modeling with a deployed motion interface | Recent hybrid B/C interface; not a native reproduction |
 | **LeVERB** | Egocentric/third-person vision and language | A continuous 256-value latent verb consumed by a distilled whole-body controller | Hierarchical slow/fast system; exact numeric rates are missing from the paper's HTML conversion | A vision-language policy and whole-body controller connected through a learned latent vocabulary | Closest conceptual predecessor to our language-conditioned Phase 5 study |
+| **OpenHLM** | Language, egocentric images, and robot state | Direct whole-body actions; exact representation requires full-method verification | Exact action horizon and rate require verification | Whole-body-native direct-action VLA | Type D comparison without a separately evaluated intermediate interface |
 | **SENTINEL** | Language and multi-scale proprioceptive history | Flow-matched chunks of low-level robot actions, with an optional residual action head | Action interface at 50 Hz; asynchronous chunk generation on hardware | Fully end-to-end language-to-action whole-body control without an intermediate motion command | Strong direct-action alternative, but it intentionally removes the frozen low-level interface we are studying |
 | **LangWBC** | Language and proprioceptive history | Low-level actions from one distilled CVAE policy | One end-to-end control policy | Language-conditioned whole-body control with no separate high-level command | Relevant alternative system design, not an interface row |
 | **GR00T N1** | Images, language, and embodiment state | A flow-matching DiT directly predicts embodiment-specific action chunks | System 2 at 10 Hz; action module targets high-frequency control | A general VLA trained across heterogeneous embodiments and data sources | Motivates our flow-matching planner family, but original N1 is not a single G1 whole-body command baseline |
@@ -148,6 +299,15 @@ controller. Native comparison would require visual observations, its two
 tokenizers, decoder, locomotion controller, and task suite. The released code
 is [OpenDriveLab/WholebodyVLA](https://github.com/OpenDriveLab/WholebodyVLA).
 
+### MotionWAM
+
+[MotionWAM](https://arxiv.org/abs/2606.09215) conditions a whole-body action
+model on intermediate denoising features from a video world model. It predicts
+a hybrid command containing continuous whole-body motion values and discrete
+motion tokens, which is decoded through a SONIC-based execution layer. In the
+notation above, it is a B/C hybrid deployed interface rather than a
+pretraining-only world-model latent.
+
 ### LeVERB
 
 [LeVERB](https://arxiv.org/abs/2506.13751) is the closest conceptual prior to
@@ -213,6 +373,14 @@ evaluation starts for both interfaces. It is an architecture-family study,
 not a claim that our small state-only models reproduce GR00T, ACT, or pi0.
 
 ### End-to-End Humanoid Language-Action Policies
+
+### OpenHLM
+
+[OpenHLM](https://arxiv.org/abs/2606.22174) maps language, egocentric images,
+and robot state to whole-body actions. We place it under Type D because the
+available method description does not expose a separately deployed
+intermediate command. Its exact action representation, horizon, and rate
+should be verified before quantitative comparison.
 
 [SENTINEL](https://arxiv.org/abs/2511.19236) removes the intermediate
 high-level motion representation entirely. A Transformer consumes language
@@ -583,6 +751,8 @@ one secondary section, never as the headline result.
 - HuMI: <https://arxiv.org/abs/2602.06643>
 - WholeBodyVLA: <https://arxiv.org/abs/2512.11047>
 - WholeBodyVLA code: <https://github.com/OpenDriveLab/WholebodyVLA>
+- MotionWAM: <https://arxiv.org/abs/2606.09215>
+- OpenHLM: <https://arxiv.org/abs/2606.22174>
 - LeVERB: <https://arxiv.org/abs/2506.13751>
 - SENTINEL: <https://arxiv.org/abs/2511.19236>
 - LangWBC: <https://arxiv.org/abs/2504.21738>
