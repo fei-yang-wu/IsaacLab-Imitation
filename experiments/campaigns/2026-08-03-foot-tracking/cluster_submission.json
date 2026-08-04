@@ -1,0 +1,37 @@
+{
+  "agent_entry_point": "rlopt_ipmd_tuned_cfg_entry_point",
+  "arms": {
+    "reward": {
+      "foot_reward_weight": 2.0,
+      "foot_termination_window": null,
+      "job": "5561121",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "total_frames": 1000000000
+    },
+    "reward_window": {
+      "foot_reward_weight": 2.0,
+      "foot_termination_window": 4,
+      "job": "5561123",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "total_frames": 1000000000
+    }
+  },
+  "campaign": "2026-08-03-foot-tracking",
+  "control_run": "lafan1_v2_sonic_aligned_5b_seed0_e12288_r24 (job 5561001) @ 1B",
+  "launcher": "experiments/campaigns/2026-08-03-foot-tracking/submit_foot_tracking_1b_ice.sh",
+  "motivation": "foot_pos_xyz is 66% of LAFAN1 non-timeout terminations and the only horizontal-position constraint",
+  "scoring_note": "MPJPE and the Episode_Termination/foot_pos_xyz share. Both arms lengthen episodes, so return and per-minute rates move for reasons other than a better policy.",
+  "submitted_at": "2026-08-03T22:32:02.740719-04:00",
+  "task": "Isaac-Imitation-G1-v2",
+  "unscreened": "motion_foot_pos.weight has not been through a hyperparameter screen",
+  "wandb": {
+    "group": "foot-tracking-1b",
+    "project": "g1-lafan1"
+  },
+  "workspace_dirty": false,
+  "workspace_git_sha": "077b7d8124acf552b21cb6bc76b8385ecb85b625"
+}
