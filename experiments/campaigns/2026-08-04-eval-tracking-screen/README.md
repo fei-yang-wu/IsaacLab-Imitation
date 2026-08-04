@@ -488,4 +488,21 @@ a difference under ~30% means anything. `per_environment` records survival and
 termination terms but **not** per-environment metrics, so the tail cannot be
 decomposed from a saved run.
 
+### It is training-seed variance, not evaluation noise
+
+The cheap fix would have been averaging evaluation seeds. It is not available.
+Each checkpoint re-evaluated at evaluation seeds 0/1/2, full-horizon MPJPE-G:
+
+| checkpoint | eval 0 | eval 1 | eval 2 | spread |
+|---|---|---|---|---|
+| control | 0.2230 | 0.2100 | 0.2126 | 6.1% |
+| s15 seed 0 | 0.1740 | 0.1743 | 0.1736 | **0.4%** |
+| s15 seed 1 | 0.2303 | 0.2366 | — | 2.7% |
+
+Evaluation is nearly deterministic per checkpoint — 0.4% on s15 seed 0 — while
+the gap between s15's two *training* seeds is **29.2%** on eval-seed means
+(0.1739 against 0.2335). So one evaluation seed per checkpoint is plenty, and
+the only way to resolve an arm is to retrain it. Against the control's eval-seed
+mean of 0.2152, s15 seed 0 is −19.2% and s15 seed 1 is +8.5%.
+
 Next: two more seeds of s15 and of the control before promoting anything.
