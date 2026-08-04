@@ -162,6 +162,21 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--randomization",
+    type=str,
+    default="none",
+    choices=("none", "startup", "reset", "all"),
+    help=(
+        "Which domain-randomization families stay live. Default 'none' is the "
+        "TRACKING-FIDELITY protocol: MPJPE should measure how well the policy "
+        "tracks, not how hard it was pushed, and reset randomization alone "
+        "contributes ~39 mm at frame 0 on the G1's 14-body set. Use 'all' for "
+        "the ROBUSTNESS protocol, which keeps the interval push -- that is what "
+        "the paper comparison requires, since both interfaces must eat the same "
+        "perturbation. Whichever is chosen is recorded in the output."
+    ),
+)
+parser.add_argument(
     "--disable_early_terminations",
     action="store_true",
     default=False,
@@ -193,7 +208,10 @@ from isaaclab.utils import math as math_utils
 from isaaclab_imitation.envs import ImitationRLEnv
 from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
-from imitation_experiments.audit.backend_determinism import pin_reference_start
+from imitation_experiments.audit.backend_determinism import (
+    apply_randomization_profile,
+    pin_reference_start,
+)
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
@@ -1286,6 +1304,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env_cfg.reset_schedule = str(args_cli.reset_schedule)
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
+    # Domain randomization was previously left entirely live here while
+    # `sim2sim_backend_eval.py` disabled it by default, so the two tools
+    # reported MPJPE in different regimes and neither number said which.
+    randomization_kept = apply_randomization_profile(env_cfg, args_cli.randomization)
     if args_cli.disable_early_terminations:
         # The AGENTS.md full-horizon diagnostic: every early termination off,
         # including `base_too_low`, so MPJPE is measured over the intended
@@ -1744,6 +1766,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # v2 and the frozen v0/v1 lineage expose different ones, and writing
             # the wrong one used to fail silently.
             "reference_selection_surface": reference_selection_surface,
+            "randomization_profile": args_cli.randomization,
+            "randomization_kept": randomization_kept,
             "qualification_eligible": not bool(args_cli.disable_early_terminations),
             "time_out_enabled": True,
             "episode_length_extension_enabled": not bool(
