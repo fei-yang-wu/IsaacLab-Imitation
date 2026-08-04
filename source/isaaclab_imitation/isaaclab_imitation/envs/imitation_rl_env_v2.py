@@ -158,6 +158,14 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         return self.expert_data_plane.reference_joint_names
 
     @property
+    def reference_body_names(self) -> list[str]:
+        return self.expert_data_plane.reference_body_names
+
+    @property
+    def reference_site_names(self) -> list[str]:
+        return self.expert_data_plane.reference_site_names
+
+    @property
     def _mpjpe_metric_body_names(self) -> list[str]:
         return self.expert_data_plane._mpjpe_metric_body_names
 

@@ -62,9 +62,10 @@ PRETRAIN_BATCH_SIZE="${PRETRAIN_BATCH_SIZE:-8192}"
 PRETRAIN_LOG_INTERVAL="${PRETRAIN_LOG_INTERVAL:-100}"
 PRETRAIN_EVAL_BATCHES="${PRETRAIN_EVAL_BATCHES:-4}"
 
-# 24,576 x 24 already OOMed in the v2 screen. The 24,576 x 6 geometry fit at
-# 63.2 GiB and is the deliberate wall-clock-convergence probe requested here.
-TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-24576}"
+# 24,576 x 6 used about 64 GiB including the full-dataset caches. Scaling the
+# same r6 geometry to 32,768 projects to roughly 84-86 GiB; 36,864 would leave
+# too little reserve on the 96 GiB RTX PRO 6000.
+TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-32768}"
 ROLLOUT_STEPS="${ROLLOUT_STEPS:-6}"
 TOTAL_FRAMES="${TOTAL_FRAMES:-1000000000}"
 FRAMES_PER_ITER=$((TRAIN_NUM_ENVS * ROLLOUT_STEPS))
@@ -73,12 +74,12 @@ SAVE_INTERVAL="${SAVE_INTERVAL:-25000000}"
 LOG_INTERVAL="${LOG_INTERVAL:-1000000}"
 
 PHYSICS="${PHYSICS:-newton_mjwarp}"
-NJMAX="${NJMAX:-288}"
+NJMAX="${NJMAX:-289}"
 NCONMAX="${NCONMAX:-200}"
 
 WANDB_PROJECT="${WANDB_PROJECT:-g1-lafan1}"
 WANDB_GROUP="${WANDB_GROUP:-bones129k-v2-scale}"
-WANDB_TAGS="${WANDB_TAGS:-bones-seed,129785,Isaac-Imitation-G1-v2,v2,root-qpos,split-cache,runtime-cache,det-sr,h10,z256,tuned,e24576,r6,1b}"
+WANDB_TAGS="${WANDB_TAGS:-bones-seed,129785,Isaac-Imitation-G1-v2,v2,root-qpos,split-cache,runtime-cache,det-sr,h10,z256,tuned,e${TRAIN_NUM_ENVS},r${ROLLOUT_STEPS},1b}"
 RUN_TAG="${RUN_TAG:-bones129k_root_qpos_v2_splitcache_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}_1b_seed${SEED}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${DATA_ROOT}/runs/${RUN_TAG}}"
 ENCODER_DIR="${ENCODER_DIR:-${OUTPUT_ROOT}/encoder}"

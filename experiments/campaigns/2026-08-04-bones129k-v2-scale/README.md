@@ -13,10 +13,12 @@ held-out curve is inspected. The default encoder budget is the collaborator's
 9.6 draws per training transition after the deterministic 90/10 trajectory
 split.
 
-The controller geometry is 24,576 environments by 6 rollout steps. The v2
-screen measured about 63.2 GiB at this geometry; 24,576 by 24 already OOMed.
-This is therefore a wall-clock convergence probe, not the long-rollout v2
-production geometry. The default controller cap is 1 billion frames.
+The controller geometry is 32,768 environments by 6 rollout steps. The first
+24,576-by-6 run used about 64 GiB including both full-dataset caches; the new
+geometry targets roughly 84-86 GiB. A 36,864-environment projection leaves too
+little reserve on the 96 GiB GPU. This is a wall-clock convergence probe, not
+the long-rollout v2 production geometry. The default controller cap is 1
+billion frames.
 
 From the repository root, print and validate the complete plan without
 starting training:
