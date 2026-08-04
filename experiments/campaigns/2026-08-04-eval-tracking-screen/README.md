@@ -538,3 +538,31 @@ full-horizon number requires changing which clips survive, which is what s17
 (observation history) targets.
 
 Next: two more seeds of s15 and of the control before promoting anything.
+
+## Round 10: history is refuted, root_qpos is the direction
+
+| arm | strict MPJPE-G | strict survival | full-horizon MPJPE-G |
+|---|---|---|---|
+| control (n=2) | 0.0744-0.0758 | 444.2-444.6 | 0.1854-0.2230 |
+| s15 (n=3) | 0.0439-0.0533 | 438.7-441.2 | 0.1740-0.2303 |
+| root_qpos + s15 (n=1) | 0.0517 | **445.3** | **0.1503** |
+| s17 history + s15 (n=1) | 0.0590 | 436.6 | 0.2507 |
+
+**s17 (10-step actor history) is refuted.** It sits above s15's three-seed range
+on strict MPJPE, below it on survival, and posts the worst full-horizon number
+of any arm measured -- worse than both controls. The in-training `ep_len` signal
+(~6-8% short of both s15 seeds at matched iteration) predicted this. So the
+2026-07-21 ablation's "buys little at our scale" stands, and
+`SonicNoHistorySurfaceEnvCfg`'s docstring is correct; the pre-v2 single-seed
+basis was weak, but re-testing it on the current surface reproduced the verdict.
+
+**root_qpos is the direction.** Strict MPJPE lands inside s15's three-seed
+range, so the narrower command interface costs nothing in precision, while it
+posts the highest survival in the campaign (445.3, above both controls and every
+s15 seed -- it gives back the 0.9% survival s15 costs) and the best full-horizon
+number anyone has produced (0.1503, below every control and s15 seed). At n=1
+against that pass's ~28% spread this is suggestive rather than established, but
+it is the only intervention that has moved full-horizon at all.
+
+Scaled follow-up: s15 rewards on the root_qpos interface, 5B, H200.
+
