@@ -43,7 +43,12 @@ cd "${REPO_ROOT}"
 source "${SCRIPT_DIR}/arms.sh"
 
 FRAMES="${FRAMES:-500000000}"
-NUM_ENVS="${NUM_ENVS:-10}"
+# One environment per LAFAN1 clip. Round-robin assigns trajectory rank from the
+# environment index, so 10 envs would sample only 10 of the 40 clips -- and on
+# the pre-screen checkpoint that quarter happened to be 5 dance (all survived)
+# and 5 fallAndGetUp (all failed), which is not a representative "overall"
+# number. 40 covers the manifest exactly once.
+NUM_ENVS="${NUM_ENVS:-40}"
 STEPS="${STEPS:-500}"
 SEED="${SEED:-0}"
 OUT_ROOT="${OUT_ROOT:-logs/eval_tracking_screen}"
@@ -186,4 +191,39 @@ print()
 print("Scored with --randomization none (tracking fidelity), MODE actions.")
 print("full_horizon is the honest tracking number; strict can flatter a policy")
 print("that dies early, since it only scores frames a live episode reached.")
+
+# Per-motion-class breakdown. On the pre-screen checkpoint every fallAndGetUp
+# clip failed and every dance clip survived the full horizon, so a single
+# average hides the only split that matters: an arm that only helps the easy
+# class is not progress.
+def motion_class(name):
+    n = (name or "").lower()
+    for key in ("fallandgetup", "dance", "walk", "run", "jump", "fight", "sprint"):
+        if key in n:
+            return key
+    return "other"
+
+print()
+print("per motion class (strict pass):")
+for arm in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+    p = os.path.join(root, arm, "strict.json")
+    if not os.path.exists(p):
+        continue
+    try:
+        d = json.load(open(p))
+    except Exception:
+        continue
+    per_env = d.get("per_environment") or []
+    if not per_env:
+        continue
+    buckets = {}
+    for e in per_env:
+        buckets.setdefault(motion_class(e.get("motion_name")), []).append(e)
+    print(f"  {arm}")
+    for cls in sorted(buckets):
+        envs = buckets[cls]
+        surv = [e.get("survival_steps", 0) for e in envs]
+        full = sum(1 for v in surv if v >= 499)
+        print(f"      {cls:<14} n={len(envs):<3} survived_full={full}/{len(envs):<3} "
+              f"mean_survival={sum(surv)/len(surv):6.1f}")
 PY
