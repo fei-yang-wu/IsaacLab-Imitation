@@ -49,7 +49,10 @@ from .rewards import G1RewardsCfg, G1SonicRewardsCfg
 from .terminations import (
     G1SonicTerminationCurriculumCfg,
     G1SonicTerminationsCfg,
+    G1SonicTerminationWindowProbeCfg,
+    G1SonicWindowedTerminationsCfg,
     G1TerminationsCfg,
+    apply_termination_window,
 )
 from .tracking_env import ImitationG1BaseTrackingEnvCfg
 
@@ -78,6 +81,9 @@ __all__ = [
     "G1SonicRewardsCfg",
     "G1SonicTerminationCurriculumCfg",
     "G1SonicTerminationsCfg",
+    "G1SonicTerminationWindowProbeCfg",
+    "G1SonicWindowedTerminationsCfg",
     "G1TerminationsCfg",
+    "apply_termination_window",
     "ImitationG1BaseTrackingEnvCfg",
 ]

@@ -80,6 +80,11 @@ from .curriculums import (
     anneal_termination_threshold_by_frames,
 )
 from .terminations import (
+    PersistentBadAnchorOriFull,
+    PersistentBadAnchorPosZAdaptive,
+    PersistentBadReferenceBodyPosRelative,
+    PersistentBadReferenceBodyPosZAdaptive,
+    PersistentViolation,
     bad_anchor_ori,
     bad_anchor_ori_full,
     bad_anchor_pos_z_only,
@@ -173,4 +178,9 @@ __all__ = [
     "reference_root_position_xy_deviation_too_much",
     "reference_root_quat_deviation_too_much",
     "reference_trajectory_finished",
+    "PersistentViolation",
+    "PersistentBadAnchorPosZAdaptive",
+    "PersistentBadAnchorOriFull",
+    "PersistentBadReferenceBodyPosZAdaptive",
+    "PersistentBadReferenceBodyPosRelative",
 ]

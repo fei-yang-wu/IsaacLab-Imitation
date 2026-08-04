@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import torch
 
 from isaaclab.assets import Articulation
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg, TerminationTermCfg
 from isaaclab.utils.math import quat_apply_inverse
 from isaaclab_imitation.envs import ImitationRLEnv
 
@@ -208,3 +208,225 @@ def bad_reference_body_pos_relative(
 
 def reference_trajectory_finished(env: ImitationRLEnv) -> torch.Tensor:
     return env.current_reference_is_final_frame()
+
+
+class PersistentViolation(ManagerTermBase):
+    """End the episode only after a predicate holds for ``min_steps`` steps.
+
+    The SONIC release ships this shape (``_CummErrorMixin``: a consecutive
+    violation counter that any in-threshold step resets), but none of the
+    release termination compositions we mirror enable it -- ``tracking_base``,
+    ``tracking_base_adaptive_strict_ori_foot_xyz``, and ``tracking_eval`` all
+    use the instantaneous predicates. Subclasses here wrap our existing
+    predicates unchanged, so a window is purely an opt-in change to where
+    episode boundaries fall, never a change to the error geometry.
+
+    ``min_steps`` and every predicate parameter are read from the per-step call
+    arguments rather than cached at construction, so
+    :func:`~...mdp.curriculums.anneal_termination_threshold_by_frames`, which
+    writes ``term_cfg.params["threshold"]`` in place, keeps working.
+
+    With ``diagnostic_only=True`` the term never terminates and only records
+    run-length statistics. That is the shadow measurement: it answers "what
+    fraction of violation onsets resolve on their own within k steps", which is
+    the same as "what fraction of today's one-step terminations a window of
+    length k would convert into a recovery". Measuring it requires *not*
+    terminating, because an instantaneous term destroys the episode before the
+    run length it would have had is observable.
+    """
+
+    _MAX_TRACKED_RUN = 32
+    """Run lengths at or above this land in a single overflow bucket."""
+
+    _RECOVERY_BUCKETS = (2, 3, 5, 10)
+    """Window lengths reported as "would have recovered" fractions."""
+
+    def __init__(self, cfg: TerminationTermCfg, env: ImitationRLEnv):
+        super().__init__(cfg, env)
+        device = env.device
+        self._run_steps = torch.zeros(env.num_envs, dtype=torch.long, device=device)
+        # Bucket i counts completed runs of exactly i steps; bucket 0 is never
+        # written (a run has length >= 1) and the last bucket is the overflow.
+        self._run_hist = torch.zeros(
+            self._MAX_TRACKED_RUN + 1, dtype=torch.long, device=device
+        )
+        self._fatal_runs = torch.zeros((), dtype=torch.long, device=device)
+        self._censored_runs = torch.zeros((), dtype=torch.long, device=device)
+        self._log_prefix: str | None = None
+
+    def _resolve(
+        self,
+        violated: torch.Tensor,
+        min_steps: int,
+        diagnostic_only: bool,
+    ) -> torch.Tensor:
+        """Advance the per-env counter and return the done mask.
+
+        Every operation stays on device: this runs once per term per control
+        step, so a host sync here would cost more than the term itself.
+        """
+        previous = self._run_steps.clone()
+        self._run_steps.add_(1).mul_(violated)
+        # A run that ends without terminating is a recovery; record its length.
+        recovered = torch.logical_and(torch.logical_not(violated), previous > 0)
+        self._run_hist.index_add_(
+            0, previous.clamp_(max=self._MAX_TRACKED_RUN), recovered.long()
+        )
+        if diagnostic_only:
+            return torch.zeros_like(violated)
+        done = self._run_steps >= max(int(min_steps), 1)
+        self._fatal_runs += done.sum()
+        # Those environments reset next step; clearing now keeps `reset` from
+        # counting a fatal run a second time as censored.
+        self._run_steps.mul_(torch.logical_not(done))
+        return done
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        selected: Sequence[int] | slice = slice(None) if env_ids is None else env_ids
+        self._censored_runs += (self._run_steps[selected] > 0).sum()
+        self._run_steps[selected] = 0
+        self._publish_stats()
+
+    def _resolve_log_prefix(self) -> str:
+        if self._log_prefix is None:
+            name = type(self).__name__
+            manager = getattr(self._env, "termination_manager", None)
+            if manager is not None:
+                for term_name in manager.active_terms:
+                    if manager.get_term_cfg(term_name).func is self:
+                        name = term_name
+                        break
+            self._log_prefix = f"Termination_Window/{name}"
+        return self._log_prefix
+
+    def _publish_stats(self) -> None:
+        """Write cumulative run-length statistics into the episode log.
+
+        Called from ``reset``, which the termination manager runs after
+        ``extras["log"]`` is recreated for this reset, so the entries survive
+        into whatever the training runner reports.
+        """
+        extras = getattr(self._env, "extras", None)
+        log = extras.get("log") if isinstance(extras, dict) else None
+        if not isinstance(log, dict):
+            return
+        # One host transfer for the whole term rather than one per statistic.
+        packed = torch.cat(
+            (
+                self._run_hist,
+                self._fatal_runs.reshape(1),
+                self._censored_runs.reshape(1),
+            )
+        ).tolist()
+        hist = packed[: self._MAX_TRACKED_RUN + 1]
+        fatal, censored = packed[-2], packed[-1]
+        recovered = sum(hist)
+        total = recovered + fatal + censored
+        prefix = self._resolve_log_prefix()
+        log[f"{prefix}/runs_total"] = float(total)
+        log[f"{prefix}/runs_fatal"] = float(fatal)
+        log[f"{prefix}/runs_censored"] = float(censored)
+        if recovered > 0:
+            steps = sum(index * count for index, count in enumerate(hist))
+            log[f"{prefix}/recovered_mean_steps"] = steps / recovered
+        if total > 0:
+            for window in self._RECOVERY_BUCKETS:
+                # Runs shorter than `window` are exactly the ones a window of
+                # that length would have survived.
+                log[f"{prefix}/recovered_below_{window}_frac"] = (
+                    sum(hist[1:window]) / total
+                )
+
+
+class PersistentBadAnchorPosZAdaptive(PersistentViolation):
+    """Windowed :func:`bad_anchor_pos_z_adaptive`."""
+
+    def __call__(  # ty: ignore[invalid-method-override]
+        self,
+        env: ImitationRLEnv,
+        threshold: float = 0.15,
+        down_threshold: float = 0.75,
+        root_height_threshold: float = 0.5,
+        anchor_body_name: str = "pelvis",
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+        min_steps: int = 1,
+        diagnostic_only: bool = False,
+    ) -> torch.Tensor:
+        violated = bad_anchor_pos_z_adaptive(
+            env,
+            threshold=threshold,
+            down_threshold=down_threshold,
+            root_height_threshold=root_height_threshold,
+            anchor_body_name=anchor_body_name,
+            asset_cfg=asset_cfg,
+        )
+        return self._resolve(violated, min_steps, diagnostic_only)
+
+
+class PersistentBadAnchorOriFull(PersistentViolation):
+    """Windowed :func:`bad_anchor_ori_full`."""
+
+    def __call__(  # ty: ignore[invalid-method-override]
+        self,
+        env: ImitationRLEnv,
+        threshold: float = 0.2,
+        anchor_body_name: str = "pelvis",
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+        min_steps: int = 1,
+        diagnostic_only: bool = False,
+    ) -> torch.Tensor:
+        violated = bad_anchor_ori_full(
+            env,
+            threshold=threshold,
+            anchor_body_name=anchor_body_name,
+            asset_cfg=asset_cfg,
+        )
+        return self._resolve(violated, min_steps, diagnostic_only)
+
+
+class PersistentBadReferenceBodyPosZAdaptive(PersistentViolation):
+    """Windowed :func:`bad_reference_body_pos_z_adaptive`."""
+
+    def __call__(  # ty: ignore[invalid-method-override]
+        self,
+        env: ImitationRLEnv,
+        threshold: float = 0.15,
+        down_threshold: float = 0.75,
+        root_height_threshold: float = 0.5,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+        reference_body_names: Sequence[str] = (),
+        min_steps: int = 1,
+        diagnostic_only: bool = False,
+    ) -> torch.Tensor:
+        violated = bad_reference_body_pos_z_adaptive(
+            env,
+            threshold=threshold,
+            down_threshold=down_threshold,
+            root_height_threshold=root_height_threshold,
+            asset_cfg=asset_cfg,
+            reference_body_names=reference_body_names,
+        )
+        return self._resolve(violated, min_steps, diagnostic_only)
+
+
+class PersistentBadReferenceBodyPosRelative(PersistentViolation):
+    """Windowed :func:`bad_reference_body_pos_relative`."""
+
+    def __call__(  # ty: ignore[invalid-method-override]
+        self,
+        env: ImitationRLEnv,
+        threshold: float = 0.2,
+        anchor_body_name: str = "pelvis",
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+        reference_body_names: Sequence[str] = (),
+        min_steps: int = 1,
+        diagnostic_only: bool = False,
+    ) -> torch.Tensor:
+        violated = bad_reference_body_pos_relative(
+            env,
+            threshold=threshold,
+            anchor_body_name=anchor_body_name,
+            asset_cfg=asset_cfg,
+            reference_body_names=reference_body_names,
+        )
+        return self._resolve(violated, min_steps, diagnostic_only)

@@ -251,6 +251,54 @@ def _enable_wandb_video_sync(agent: object, *, video_folder: str, base_dir: str)
     return _log_pending_videos
 
 
+def _apply_termination_window_args(
+    args_cli: argparse.Namespace,
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
+) -> None:
+    """Opt the strict tracking terminations into a persistence window.
+
+    Registered task ids stay on the instantaneous protocol, so a window is
+    requested per run. ``--termination_window_probe`` is the shadow
+    measurement: it never terminates on tracking error, which is the only way
+    to observe how long a violation would have lasted, and therefore how many
+    of today's one-step terminations a window would convert into recoveries.
+    """
+    requested = getattr(args_cli, "termination_window", None)
+    probe = bool(getattr(args_cli, "termination_window_probe", False))
+    if requested is None and not probe:
+        return
+    window = None if requested is None else int(requested)
+
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.terminations import (  # noqa: E501
+        apply_termination_window,
+    )
+
+    terminations = getattr(env_cfg, "terminations", None)
+    if terminations is None:
+        raise ValueError(
+            "--termination_window/--termination_window_probe require a"
+            " manager-based task with a terminations config."
+        )
+    if probe:
+        if window is not None:
+            raise ValueError(
+                "--termination_window_probe measures run lengths with no"
+                " tracking termination active; it cannot be combined with"
+                " --termination_window."
+            )
+        apply_termination_window(terminations, min_steps=1, diagnostic_only=True)
+        print(
+            "[INFO] Termination-window probe: tracking terminations disabled,"
+            " logging Termination_Window/<term>/recovered_below_<k>_frac."
+            " Diagnostic protocol only -- not a qualification run."
+        )
+        return
+    if window is None or window < 1:
+        raise ValueError(f"--termination_window must be >= 1, got {requested}.")
+    apply_termination_window(terminations, min_steps=window)
+    print(f"[INFO] Tracking terminations require {window} consecutive violations.")
+
+
 def train(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     agent_cfg: RLOptConfig,
@@ -350,6 +398,9 @@ def train(
     env_cfg.sim.device = (
         args_cli.device if args_cli.device is not None else env_cfg.sim.device
     )
+    # Applied before `dump_yaml` below so `params/env.yaml` records the
+    # protocol the run actually used, not the task id's default.
+    _apply_termination_window_args(args_cli, env_cfg)
 
     # directory for logging into
     run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
