@@ -65,6 +65,6 @@ encoder batches therefore do not scatter-read the entire replay schema.
 For low-level training it also performs a one-time sequential materialization
 of an approximately 45 GiB host-RAM cache containing `qpos`, internal `qvel`,
 and the 14 tracked bodies. Live random trajectory gathers use this dense cache.
-`qvel` remains available for velocity tracking and reset state only; the v2
-encoder/controller command surface is still exactly root+qpos with no qvel
-term.
+`qvel` remains available for velocity tracking, reset state, and privileged
+training observations; the v2 encoder and deployed actor command surface is
+still exactly root+qpos with no qvel term.

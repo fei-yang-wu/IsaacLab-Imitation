@@ -78,7 +78,7 @@ NCONMAX="${NCONMAX:-200}"
 
 WANDB_PROJECT="${WANDB_PROJECT:-g1-lafan1}"
 WANDB_GROUP="${WANDB_GROUP:-bones129k-v2-scale}"
-WANDB_TAGS="${WANDB_TAGS:-bones-seed,129785,v2,root-qpos,split-cache,runtime-cache,det-sr,h10,z256,tuned,e24576,r6,1b}"
+WANDB_TAGS="${WANDB_TAGS:-bones-seed,129785,Isaac-Imitation-G1-v2,v2,root-qpos,split-cache,runtime-cache,det-sr,h10,z256,tuned,e24576,r6,1b}"
 RUN_TAG="${RUN_TAG:-bones129k_root_qpos_v2_splitcache_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}_1b_seed${SEED}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-${DATA_ROOT}/runs/${RUN_TAG}}"
 ENCODER_DIR="${ENCODER_DIR:-${OUTPUT_ROOT}/encoder}"

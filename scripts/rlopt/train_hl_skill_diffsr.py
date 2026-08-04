@@ -613,6 +613,26 @@ def main(
             "The split runtime cannot start Kit from the offline skill-pretraining entrypoint. "
             "Use Newton with --assert-kitless on compute-only GPUs."
         )
+    # The environment's command interface is the authority on which reference
+    # components the skill encoder reads. Without this binding the agent keeps
+    # its class-default keys, so `env.command_interface.encoder.components` is
+    # silently ignored here -- `train_impl.py` binds, this entrypoint did not,
+    # and the two disagreed.
+    #
+    # The failure was invisible in the worst way: a run asked for the 38-D
+    # root_qpos space, logged no error, and produced a full-body encoder with a
+    # 670-D input (10 frames x 67) instead of 380. Nothing downstream checks the
+    # encoder's input space, so a low level trained on it would have loaded a
+    # qvel-bearing encoder while the experiment record claimed root_qpos.
+    from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+        bind_command_interface,
+    )
+
+    if bind_command_interface(agent_cfg, env_cfg) is None:
+        sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
+        if callable(sync_input_keys):
+            sync_input_keys()
+
     with launch_simulation(env_cfg, args_cli):
         _run_training(env_cfg, agent_cfg)
 

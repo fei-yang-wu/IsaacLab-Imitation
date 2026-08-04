@@ -161,8 +161,9 @@ class MotionDataCfg:
     slower than simulation. When this is set, the data plane sequentially
     materializes only ``qpos``, ``qvel``, and the configured body states on the
     requested device, then uses that dense buffer for live trajectory sampling.
-    ``qvel`` remains an internal reference source for velocity tracking and
-    resets; it does not add velocity terms to the root+qpos macro command.
+    ``qvel`` remains an internal reference source for velocity tracking,
+    resets, and privileged training observations; it does not add velocity
+    terms to the root+qpos macro or deployed actor command.
     """
 
     runtime_cache_body_names: list[str] | None = None

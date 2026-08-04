@@ -269,3 +269,32 @@ def test_reference_term_clears_mpjpe_accumulators_on_reset() -> None:
     for accumulator in ("_mpjpe_l_sum", "_mpjpe_g_sum", "_mpjpe_steps"):
         assert accumulator in source, accumulator
     assert "super().reset" in source
+
+
+def test_macro_state_terms_select_the_encoder_input_width() -> None:
+    """The skill encoder's input width is set by `expert_macro_state_terms`.
+
+    Nothing downstream validates an encoder's input space, so a run that asked
+    for root_qpos and silently got full-body would train, load and evaluate
+    without complaint while the experiment record claimed the wrong interface.
+    The widths are the check:
+
+        full_body  58 + 3 + 6 = 67/frame -> 670 over a 10-frame window
+        root_qpos  29 + 3 + 6 = 38/frame -> 380
+
+    Measured 2026-08-04: overriding `command_interface.encoder.components`
+    alone leaves the encoder at 670. `expert_macro_state_terms` is the knob
+    that moves it.
+    """
+    widths = {
+        "expert_motion": 58,
+        "expert_motion_qpos": 29,
+        "expert_anchor_pos_b": 3,
+        "expert_anchor_ori_b": 6,
+    }
+    full_body = ("expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b")
+    root_qpos = ("expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b")
+    window = 10
+    assert sum(widths[t] for t in full_body) * window == 670
+    assert sum(widths[t] for t in root_qpos) * window == 380
+    assert full_body != root_qpos

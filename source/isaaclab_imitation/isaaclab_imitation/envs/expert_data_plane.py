@@ -572,8 +572,8 @@ class ExpertDataPlane:
             raise ValueError("env.data.runtime_cache_chunk_size must be positive.")
         logger.warning(
             "Materializing %.1f GiB compact runtime reference cache (%s rows, "
-            "%s bodies) on %s; qvel is retained internally but is not part of "
-            "the root+qpos macro command.",
+            "%s bodies) on %s; qvel is retained for internal/privileged training "
+            "signals but is not part of the root+qpos macro or actor command.",
             cache_bytes / 1024**3,
             f"{total:,}",
             len(runtime_body_names),
