@@ -195,3 +195,33 @@ def test_pure_translation_drift_moves_global_but_not_local() -> None:
 
     assert torch.allclose(local, torch.zeros_like(local), atol=1e-6)
     assert torch.allclose(global_, torch.full_like(global_, float(drift.norm())))
+
+
+def test_foot_reward_mirrors_the_foot_termination() -> None:
+    """The foot reward must track exactly what `foot_pos_xyz` terminates on.
+
+    Same predicate geometry (rerooted reference vs robot body), same anchor,
+    same body set. If these drift apart the policy is once again rewarded for
+    one quantity and killed by another, which is the mismatch this term exists
+    to remove.
+    """
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.rewards import (  # noqa: E501
+        G1SonicRewardsCfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.terminations import (  # noqa: E501
+        G1SonicTerminationsCfg,
+    )
+
+    reward = G1SonicRewardsCfg().motion_foot_pos
+    termination = G1SonicTerminationsCfg().foot_pos_xyz
+
+    assert list(reward.params["reference_body_names"]) == list(
+        termination.params["reference_body_names"]
+    )
+    assert reward.params["anchor_body_name"] == termination.params["anchor_body_name"]
+    assert list(reward.params["asset_cfg"].body_names) == list(
+        termination.params["asset_cfg"].body_names
+    )
+    # The kernel's useful gradient must sit inside the survivable band.
+    assert reward.params["std"] < termination.params["threshold"]
+    assert reward.weight > 0.0

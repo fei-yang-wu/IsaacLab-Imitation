@@ -10,7 +10,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.configclass import configclass
 
 from .... import mdp
-from .constants import G1_TRACKED_BODY_NAMES
+from .constants import G1_FOOT_BODY_NAMES, G1_TRACKED_BODY_NAMES
 
 
 @configclass
@@ -259,6 +259,40 @@ class G1SonicRewardsCfg(G1RewardsCfg):
                 preserve_order=True,
             ),
             "threshold": 1.5,
+        },
+    )
+    # The reward counterpart of the `foot_pos_xyz` termination, and a DELIBERATE
+    # deviation from SONIC, which has no equivalent term.
+    #
+    # `foot_pos_xyz` is the only termination in either config that constrains
+    # HORIZONTAL position -- `anchor_pos` and `ee_body_pos` test the Z component
+    # alone, and `anchor_ori` is orientation. It is correspondingly the dominant
+    # failure: measured over the 2026-08-03 5B runs it accounts for 66% of
+    # LAFAN1 and 61% of BONES-SEED terminations that are not a timeout.
+    #
+    # Yet the feet were barely rewarded. Before the 5-point correction they
+    # appeared only in `motion_body_pos`, weight 1.0 averaged over 14 bodies, so
+    # the two ankles carried ~0.14 of effective weight while causing two thirds
+    # of deaths. This term closes that gap directly: same reroot, same anchor,
+    # same body set as the termination predicate
+    # (`mdp.bad_reference_body_pos_relative`), so the policy is rewarded for
+    # exactly the quantity that ends its episode.
+    #
+    # `std` 0.1 against the termination's 0.2 m threshold puts the kernel's
+    # useful gradient inside the survivable band.
+    #
+    # UNSCREENED. The weight has not been through a hyperparameter screen; it is
+    # a considered starting point, not a tuned value.
+    motion_foot_pos = RewTerm(
+        func=mdp.reference_relative_body_position_error_exp,
+        weight=2.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_FOOT_BODY_NAMES,
+            "anchor_body_name": "pelvis",
+            "std": 0.1,
         },
     )
     # SONIC weights this -2.5e-7; ours was -2.5e-6, a 10x stronger penalty.

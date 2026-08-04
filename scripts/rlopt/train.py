@@ -120,6 +120,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--termination_window_terms",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated termination terms the window applies to, e.g. "
+            "'foot_pos_xyz'. Default is every strict tracking term. Scoping "
+            "matters: foot_pos_xyz is the only term constraining horizontal "
+            "position and causes ~2/3 of non-timeout terminations, so a window "
+            "on it alone targets the dominant failure while leaving the height "
+            "and orientation terms strict."
+        ),
+    )
+    parser.add_argument(
         "--termination_window_probe",
         action="store_true",
         default=False,
