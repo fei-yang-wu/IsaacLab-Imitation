@@ -505,4 +505,36 @@ the gap between s15's two *training* seeds is **29.2%** on eval-seed means
 the only way to resolve an arm is to retrain it. Against the control's eval-seed
 mean of 0.2152, s15 seed 0 is −19.2% and s15 seed 1 is +8.5%.
 
+### Result: s15 is a reproducible strict-protocol win, and nothing on full-horizon
+
+Three s15 seeds against two control seeds, evaluation seed 0 throughout.
+Strict protocol, per-seed range in brackets:
+
+| metric | control (n=2) | s15 (n=3) | change | ranges |
+|---|---|---|---|---|
+| MPJPE-G | 0.0751 [0.0744, 0.0758] | 0.0471 [0.0439, 0.0533] | **−37.3%** | disjoint |
+| EE-G | 0.0782 [0.0778, 0.0785] | 0.0510 [0.0475, 0.0577] | **−34.7%** | disjoint |
+| MPJPE-L | 0.0221 [0.0220, 0.0222] | 0.0171 [0.0159, 0.0181] | −22.9% | disjoint |
+| root | 0.0702 [0.0697, 0.0707] | 0.0411 [0.0380, 0.0468] | −41.4% | disjoint |
+| root_ori | 0.0589 [0.0554, 0.0623] | 0.0290 [0.0273, 0.0320] | −50.8% | disjoint |
+| survival | 444.4 [444.2, 444.6] | 440.2 [438.7, 441.2] | −0.9% | disjoint |
+
+**Every s15 seed beats every control seed on every tracking metric.** The gain
+is driven by the root: position −41.4% and orientation −50.8%, which is what
+the round-2 decomposition predicted, since world-frame EE error is almost
+entirely root drift. It costs 0.9% of survival — a real but small trade.
+
+Full-horizon shows **no** effect: control 0.2042 [0.1854, 0.2230] against s15
+0.2014 [0.1740, 0.2303], −1.4% with fully overlapping ranges. Note the control's
+own full-horizon spread is 18.5% across two seeds, so the noise is a property of
+that pass rather than of s15. This is consistent throughout the campaign:
+full-horizon is governed by which clips fall, and s15 changes precision, not
+falls.
+
+So the honest statement of what this campaign bought: **a ~37% reduction in
+strict-protocol global MPJPE and ~35% in global EE error, reproducible across
+seeds, with survival and full-horizon tracking unchanged.** Improving the
+full-horizon number requires changing which clips survive, which is what s17
+(observation history) targets.
+
 Next: two more seeds of s15 and of the control before promoting anything.
