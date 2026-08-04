@@ -1,0 +1,103 @@
+# 2026-08-04 — Eval-time tracking screen
+
+Goal: lower **evaluation-time** MPJPE and end-effector tracking error on the G1
+low level. Seven arms at 500M frames, scored by evaluating the checkpoint, not
+by reading the training curve.
+
+```bash
+DRY_RUN=1 ./submit_eval_tracking_screen_ice.sh       # plan
+DRY_RUN=0 ./submit_eval_tracking_screen_ice.sh       # submit all
+./score_eval_tracking_screen.sh                      # score whatever reached 500M
+```
+
+Arms and their rationale live in `arms.sh`, sourced by both scripts so the table
+has one definition.
+
+## Where the error actually is
+
+Decomposing the DR-off evaluation of the pre-screen checkpoint:
+
+| quantity | value |
+|---|---|
+| MPJPE-L (root-relative) | 20.2 mm |
+| root drift (world) | 54.7 mm |
+| root drift, horizontal only | 44.2 mm |
+| EE error (**world frame**) | 53.5 mm |
+| tracked-body error (world) | 54.3 mm |
+
+`ee_pos_error_m` in the evaluator is world-frame — `actual_pos - ref_pos`, no
+root subtraction. So **world-frame EE error is almost entirely root drift**, not
+the wrists mistracking relative to the body. Any attempt to improve "EE
+tracking" that does not reduce drift is working on the wrong term.
+
+The same holds for global MPJPE: `mpjpe_g_mm` ≈ root drift + pose error, and the
+drift is the larger half.
+
+## Which reward terms still have gradient
+
+Measure, do not assume. IsaacLab logs
+`Episode_Reward/<term> = weight · mean(kernel) · ep_len/500`, so the kernel value
+is recoverable from a live run. Inverted from the control at 260M:
+
+| term | kernel | implied err | gradient |
+|---|---|---|---|
+| `motion_body_pos` | **0.970** | 0.052 | −1.13 |
+| `motion_global_anchor_ori` | 0.933 | 0.106 | −0.62 |
+| `tracking_reward_points` | 0.870 | 0.037 | **−25.94** |
+| `motion_body_lin_vel` | 0.866 | 0.379 | −0.66 |
+| `motion_foot_pos` | 0.849 | 0.040 | −13.73 |
+| `motion_body_ori` | 0.767 | 0.206 | −1.97 |
+| `motion_body_ang_vel` | 0.692 | 1.905 | −0.27 |
+| `motion_global_anchor_pos` | **0.599** | 0.215 | −1.43 |
+
+`motion_body_pos` — the term whose error *is* MPJPE — is the most saturated in
+the config and supplies ~23× less gradient than `tracking_reward_points`. Its
+exp kernel at std 0.30 is flat by the precision we care about, so the policy is
+paid almost nothing for improving. That is a mechanical explanation for the
+plateau and needs no new term to fix, only a narrower kernel.
+
+**Read this at the training operating point, not the evaluation one.** An
+earlier version of this analysis used eval-time errors and concluded
+`motion_global_anchor_pos` was 96.7% saturated. It is not — at training, where
+domain randomization and exploration noise make errors much larger, it is the
+*least* saturated term at 0.599. That mistake is why `s5` is only weakly
+motivated; see `arms.sh` for the correction.
+
+## Scoring
+
+`score_eval_tracking_screen.sh` pulls each 500M checkpoint and runs
+`evaluate_checkpoint --randomization none` in two passes:
+
+- **strict** — every termination active. The protocol number, but MPJPE is
+  scored only over frames a surviving episode reached, so a policy that dies
+  early can post a flattering value.
+- **full_horizon** — every early termination off including `base_too_low`,
+  fixed length, so every arm is scored over identical frames.
+
+On the pre-screen checkpoint these read 25.22 and 68.08 mm. The choice is not
+cosmetic; quote the full-horizon number as tracking quality.
+
+**The training curve cannot substitute for this**, for three measured reasons:
+
+| effect | size |
+|---|---|
+| domain randomization live during training | 20.21 → 25.22 mm |
+| terminal-step vs episode-mean logging (runs before 2026-08-04) | 30.9 → 64.8 mm |
+| exploration noise vs MODE actions | the residual |
+
+## Control
+
+Job 5561149, `lafan1_v2_foot_reward_5b_seed0_e12288_r24`, is the current default
+and passes 500M on its way to 5B. It is the matched control and costs nothing —
+**do not submit a separate one.**
+
+## Caveats
+
+- `tracking_reward_points.weight=4.0` is carried forward unscreened: it was
+  tuned when that term tracked 3 points without the feet, and now tracks
+  SONIC's 5.
+- `motion_foot_pos.weight=2.0` and `motion_ee_pos`'s std are likewise
+  considered starting points, not tuned values.
+- One seed per arm. The 2026-08-02 campaign measured ~2% seed spread on
+  per-minute rates and larger node-to-node variation; treat differences below
+  a few percent as unresolved.
