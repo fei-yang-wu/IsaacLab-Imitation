@@ -251,11 +251,21 @@ EVAL_SCREEN_ARM_SPECS=(
 #
 # Verified before submission: the override is not a silent no-op. The actor
 # observation goes 418 -> 1256 (projected_gravity 3->30, joint_pos_rel 29->290).
-# Applied to policy AND critic, matching SONIC's recipe.
+#
+# POLICY ONLY, and that is a memory constraint rather than a design choice.
+# The first submission (5563887) put history on policy AND critic, matching
+# SONIC, and died at 6:55 with `Warp CUDA error 2: out of memory` in
+# wp_cuda_graph_launch. Each group's five history terms add 837 floats per env
+# per step, so both groups add ~2 GB of rollout buffer at 12288 x 24 on top of
+# the recipe's measured 55.6 GB -- enough that Torch starves Warp's separate
+# allocator, which is why the failure surfaces in physics rather than as a
+# Torch OOM. Policy-only halves that to ~1 GB and keeps the 12288 x 24 geometry
+# every other arm is scored on, which is worth more here than critic history:
+# the actor is what gets deployed.
 #
 # NOTE: this arm changes the observation width, so evaluation must reproduce the
 # override or the checkpoint will not load. See ARM_EVAL_EXTRA in the scorer.
-"s17_history10|s15's rewards plus SONIC's 10-step proprioceptive histories on the actor and critic. The first arm to move the observation space rather than a reward coefficient, aimed at the fall-recovery clips where one frame cannot distinguish arresting a fall from starting one.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0 env.observations.policy.projected_gravity.history_length=10 env.observations.policy.base_ang_vel.history_length=10 env.observations.policy.joint_pos_rel.history_length=10 env.observations.policy.joint_vel_rel.history_length=10 env.observations.policy.last_action.history_length=10 env.observations.critic.base_lin_vel.history_length=10 env.observations.critic.base_ang_vel.history_length=10 env.observations.critic.joint_pos_rel.history_length=10 env.observations.critic.joint_vel_rel.history_length=10 env.observations.critic.last_action.history_length=10"
+"s17_history10|s15's rewards plus SONIC's 10-step proprioceptive histories on the actor and critic. The first arm to move the observation space rather than a reward coefficient, aimed at the fall-recovery clips where one frame cannot distinguish arresting a fall from starting one.|env.rewards.motion_body_pos.params.std=0.05 env.rewards.motion_body_pos.weight=2.0 env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0 env.rewards.motion_global_anchor_ori.params.std=0.15 env.rewards.motion_global_anchor_ori.weight=2.0 env.observations.policy.projected_gravity.history_length=10 env.observations.policy.base_ang_vel.history_length=10 env.observations.policy.joint_pos_rel.history_length=10 env.observations.policy.joint_vel_rel.history_length=10 env.observations.policy.last_action.history_length=10"
 )
 
 # Arms whose training overrides change the OBSERVATION SPACE or the command
@@ -263,7 +273,7 @@ EVAL_SCREEN_ARM_SPECS=(
 # rebuilt at the wrong width and the checkpoint fails to restore. Reward-only
 # arms need nothing here.
 declare -A EVAL_SCREEN_ARM_EVAL_EXTRA=(
-  ["s17_history10"]="env.observations.policy.projected_gravity.history_length=10 env.observations.policy.base_ang_vel.history_length=10 env.observations.policy.joint_pos_rel.history_length=10 env.observations.policy.joint_vel_rel.history_length=10 env.observations.policy.last_action.history_length=10 env.observations.critic.base_lin_vel.history_length=10 env.observations.critic.base_ang_vel.history_length=10 env.observations.critic.joint_pos_rel.history_length=10 env.observations.critic.joint_vel_rel.history_length=10 env.observations.critic.last_action.history_length=10"
+  ["s17_history10"]="env.observations.policy.projected_gravity.history_length=10 env.observations.policy.base_ang_vel.history_length=10 env.observations.policy.joint_pos_rel.history_length=10 env.observations.policy.joint_vel_rel.history_length=10 env.observations.policy.last_action.history_length=10"
 )
 
 EVAL_SCREEN_ALL_ARM_NAMES=()
