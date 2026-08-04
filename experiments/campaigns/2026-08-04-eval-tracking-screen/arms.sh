@@ -44,12 +44,37 @@ EVAL_SCREEN_ARM_SPECS=(
 #
 # So EE tracking is limited by global drift, and a wrist-specific reward is a
 # second-order fix. The term that controls root position is
-# `motion_global_anchor_pos`, and at its shipped setting it is 96.7% saturated
-# AND the lowest-weighted tracking term in the whole config:
+# `motion_global_anchor_pos`.
 #
-#   w=0.5 std=0.30 -> reward 0.967, gradient  -0.59   (shipped)
-#   w=0.5 std=0.10 -> reward 0.741, gradient  -4.06
-#   w=2.0 std=0.10 -> reward 0.741, gradient -16.22
+# CORRECTION, measured rather than assumed. The saturation figures above and in
+# the round-1 block were computed at the EVALUATION operating point, which is
+# the wrong place to judge a training gradient: training runs with domain
+# randomization and exploration noise, so its errors are much larger. Inverting
+# the control run's actual `Episode_Reward` at 260M -- IsaacLab logs
+# `weight * mean(kernel) * ep_len/500`, so the kernel value is recoverable --
+# gives the real training operating point:
+#
+#   term                      kernel  implied err  gradient
+#   motion_body_pos            0.970       0.052     -1.13
+#   motion_global_anchor_ori   0.933       0.106     -0.62
+#   tracking_reward_points     0.870       0.037    -25.94
+#   motion_body_lin_vel        0.866       0.379     -0.66
+#   motion_foot_pos            0.849       0.040    -13.73
+#   motion_body_ori            0.767       0.206     -1.97
+#   motion_body_ang_vel        0.692       1.905     -0.27
+#   motion_global_anchor_pos   0.599       0.215     -1.43
+#
+# `motion_body_pos` is confirmed as the most saturated term at 0.970, so s1/s2/
+# s4 stand -- though the gradient deficit against `tracking_reward_points` is
+# ~23x, not the 72x the eval-time estimate suggested.
+#
+# `motion_global_anchor_pos` is the LEAST saturated term at 0.599, so the
+# "96.7% saturated" claim behind s5 is WRONG and s5 is only weakly motivated;
+# it is kept as the sharpen-only control for s6. s6 survives on a different and
+# independent argument: root drift is ~100% of world-frame EE error, and this
+# term carries the lowest weight of any tracking term (0.5) with 18x less
+# gradient than `tracking_reward_points`. The dominant error source is the
+# least incentivised one, whether or not its kernel is saturated.
 #
 # s7 is kept anyway because it isolates the wrist contribution: if drift is the
 # whole story it should do nothing, and that is worth knowing rather than
