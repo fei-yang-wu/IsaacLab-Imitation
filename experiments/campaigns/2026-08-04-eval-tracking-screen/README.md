@@ -27,6 +27,44 @@ run), 10 envs from frame 0, seed 0:
 Read the full-horizon row as tracking quality: the strict pass scores MPJPE only
 over frames a live episode reached, so it is biased toward whatever survived.
 
+## Full-dataset baseline — the numbers to beat
+
+All 40 LAFAN1 clips, one env each, DR off, seed 0, frame 0
+(`model_step_1900118016`):
+
+| pass | MPJPE mm | EE m | root m | survival |
+|---|---|---|---|---|
+| strict | **20.98** | **0.1041** | 0.1001 | 449.0 |
+| full-horizon | **41.19** | **0.2009** | 0.1939 | 500.0 |
+
+Survival by motion class (strict), and the reason a single average misleads:
+
+| class | survived full | mean survival |
+|---|---|---|
+| dance | 8/8 | 500.0 |
+| walk | 11/12 | 485.0 |
+| sprint | 1/2 | 492.5 |
+| fight | 2/5 | 434.2 |
+| run | 1/4 | 407.2 |
+| jump | 1/3 | 387.0 |
+| **fallAndGetUp** | **0/6** | 365.8 |
+
+**18 of 40 clips fail**, and the cause distribution is lopsided:
+
+| cause | count |
+|---|---|
+| `foot_pos_xyz` | **13** |
+| `ee_body_pos` | 2 |
+| `anchor_ori` | 2 |
+| `anchor_pos` | 1 |
+
+`foot_pos_xyz` is 72% of all failures across the whole dataset.
+
+Note the scope of `s8`: the crouching allowance fires only when the *reference*
+root is low, so it targets the 6 fallAndGetUp clips. `run`, `jump` and `fight`
+failures happen at normal or high root height and will need something else —
+worth knowing before reading s8's result as a general fix.
+
 ## The horizon curve: precision is fine, failures are not
 
 Per-step root-relative MPJPE over a 500-step rollout, DR off, tracking
