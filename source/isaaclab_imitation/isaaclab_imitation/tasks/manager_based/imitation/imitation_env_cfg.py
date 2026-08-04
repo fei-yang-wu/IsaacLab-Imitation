@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from dataclasses import MISSING
-from typing import Literal
 
 import isaaclab.sim as sim_utils
 import isaaclab.terrains as terrain_gen
@@ -296,106 +295,6 @@ class ImitationLearningEnvCfg(ManagerBasedRLEnvCfg):
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     events: EventCfg = EventCfg()
-
-    # Dataset settings
-    dataset_type: str = "zarr"
-    # Dataset and cache settings for ImitationRLEnv
-    dataset_path: str = "/tmp/iltools_zarr"
-    window_size: int = 64  # Window size for per-env cache
-    batch_size: int = 1  # Batch size for Zarr prefetching
-    device: str = "cuda"  # Torch device
-    loader_type: str = "lafan1_csv"  # Loader type (required if Zarr does not exist)
-    loader_kwargs: dict = {
-        "dataset": {"trajectories": {"lafan1_csv": []}},
-    }  # Loader kwargs (required if Zarr does not exist)
-    dataset: dict = {
-        "trajectories": {
-            "default": ["walk"],
-            "amass": [],
-            "lafan1": [],
-        }
-    }
-    replay_reference: bool = False
-    replay_only: bool = False
-    reconstructed_reference_action: bool = True
-    reconstructed_reference_action_mode: Literal["next_pose", "pd_compensated"] = (
-        "pd_compensated"
-    )
-    # Reference joint names for the robot from the historical G1 reference qpos order.
-    reference_joint_names: list[str] = [
-        "root_x",
-        "root_y",
-        "root_z",
-        "root_qw",
-        "root_qx",
-        "root_qy",
-        "root_qz",
-        "left_hip_pitch_joint",
-        "left_hip_roll_joint",
-        "left_hip_yaw_joint",
-        "left_knee_joint",
-        "left_ankle_pitch_joint",
-        "left_ankle_roll_joint",
-        "right_hip_pitch_joint",
-        "right_hip_roll_joint",
-        "right_hip_yaw_joint",
-        "right_knee_joint",
-        "right_ankle_pitch_joint",
-        "right_ankle_roll_joint",
-        "torso_joint",
-        "left_shoulder_pitch_joint",
-        "left_shoulder_roll_joint",
-        "left_shoulder_yaw_joint",
-        "left_elbow_pitch_joint",
-        "left_elbow_roll_joint",
-        "right_shoulder_pitch_joint",
-        "right_shoulder_roll_joint",
-        "right_shoulder_yaw_joint",
-        "right_elbow_pitch_joint",
-        "right_elbow_roll_joint",
-    ]
-
-    # Target joint names for the robot from the reference qpos order (this is the order of G1 in IsaacLab)
-    target_joint_names: list[str] = [
-        "root_x",
-        "root_y",
-        "root_z",
-        "root_qw",
-        "root_qx",
-        "root_qy",
-        "root_qz",
-        "left_hip_pitch_joint",
-        "left_hip_roll_joint",
-        "left_hip_yaw_joint",
-        "left_knee_joint",
-        "left_ankle_pitch_joint",
-        "left_ankle_roll_joint",
-        "right_hip_pitch_joint",
-        "right_hip_roll_joint",
-        "right_hip_yaw_joint",
-        "right_knee_joint",
-        "right_ankle_pitch_joint",
-        "right_ankle_roll_joint",
-        "torso_joint",
-        "left_shoulder_pitch_joint",
-        "left_shoulder_roll_joint",
-        "left_shoulder_yaw_joint",
-        "left_elbow_pitch_joint",
-        "left_elbow_roll_joint",
-        "right_shoulder_pitch_joint",
-        "right_shoulder_roll_joint",
-        "right_shoulder_yaw_joint",
-        "right_elbow_pitch_joint",
-        "right_elbow_roll_joint",
-    ]
-
-    # Bodies used for the root-relative MPJPE training metric; empty disables
-    # it. This cannot be expressed as a ``RewTerm`` with ``weight=0.0`` because
-    # the reward manager skips zero-weight terms without calling them, so the
-    # env logs it on a dedicated ``Metrics/`` channel instead. Set this to the
-    # same body set the closed-loop evaluators use so the training curve and
-    # the evaluation number mean the same thing.
-    mpjpe_metric_body_names: list[str] = []
 
     def __post_init__(self):
         """Post initialization."""

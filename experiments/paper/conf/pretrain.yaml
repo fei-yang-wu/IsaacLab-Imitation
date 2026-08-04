@@ -1,0 +1,105 @@
+# Self-contained configuration for experiments/paper/pipeline/pretrain_latent_encoder.py.
+# Defaults render a local dry run of the paper default: deterministic DiffSR
+# bottleneck on the corrected LAFAN1 tree. Defaults mirror
+# scripts/rlopt/train_hl_skill_diffsr.py so a bare run and a config run agree.
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${oc.env:PWD}/logs/hydra/pretrain/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+
+name: lafan1_pretrain_latent
+output_dir: ${oc.env:PWD}/logs/paper/pretrain/${latent.mode}_seed${seed}
+allow_existing_output: false
+dry_run: true
+deterministic: true
+seed: 0
+
+task: Isaac-Imitation-G1-Latent-Strict-v0
+num_envs: 16
+assert_kitless: true
+physics: newton_mjwarp
+resume_checkpoint: null
+
+python:
+  isaac: [pixi, run, -e, isaaclab, python]
+  plain: [pixi, run, python]
+
+# Replace manifest and cache together for another content-bound tree; never
+# pair a manifest with a stale cache (same rule as low_level.yaml).
+dataset:
+  manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
+  latent_dataset_path: ${oc.env:PWD}/data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557
+  refresh_zarr: false
+
+# Defaults follow the qualified enc380 recipe (2026-07 root_qpos route study):
+# deterministic z256 over the 10-frame root_qpos macro window
+# (29 qpos + anchor pos 3 + anchor rot6d 6 = 38/frame -> 380 total).
+encoder:
+  horizon_steps: 10
+  window_mode: full        # full | intermediate
+  hidden_dims: [1024, 512, 512]
+  macro_state_terms: [expert_motion_qpos, expert_anchor_pos_b, expert_anchor_ori_b]
+
+# The strategy ablation axis. Only the selected mode's hyperparameter group is
+# rendered into the command (see pretrain_latent_encoder.build_command).
+latent:
+  mode: deterministic      # deterministic | gaussian | vq | fsq | sonic_fsq | categorical | gumbel | gumbel_multicat
+  z_dim: 256
+  reg_coeff: 1.0e-3
+  vq:
+    codebook_size: 512
+    ema_decay: 0.99
+    dead_code_reset_iters: 0
+  fsq:
+    levels: [8, 8, 8, 8, 8, 8]
+  sonic_fsq:
+    levels: []             # must match z_dim in length when mode=sonic_fsq
+  categorical:
+    groups: 32
+    categories: 32
+  gumbel:
+    codebook_size: 512
+    tau_start: 2.0
+    tau_end: 0.5
+    tau_anneal_iters: 2000
+    hard: true
+
+diffsr:
+  feature_dim: 128
+  embed_dim: 512
+
+optim:
+  batch_size: 8192
+  num_updates: 50000
+  log_interval: 100
+  grad_clip_norm: 1.0
+
+holdout:
+  train_split: train       # all | train | eval
+  eval_split: eval
+  eval_trajectory_fraction: 0.1
+  trajectory_split_seed: 0
+  eval_batches: 4
+  eval_batch_size: null
+
+diagnostics:
+  reconstruction_eval: true
+  reconstruction_norm_eps: 1.0e-6
+  window_probe_eval: true
+  window_probe_train_batches: 4
+  window_probe_ridge: 1.0e-3
+
+logging:
+  backend: ""
+  project: null
+  entity: null
+  group: null
+  run_name: null
+  mode: null
+
+extra_overrides: []

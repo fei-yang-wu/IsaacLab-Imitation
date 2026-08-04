@@ -9,7 +9,18 @@ workspace_root="$1"
 container_profile="$2"
 shift 2
 common_args=("$@")
-generic_submitter="${workspace_root}/docker/cluster/submit_job_slurm.sh"
+stage_submitter="${CLUSTER_SLURM_STAGE_SUBMIT_SCRIPT:-submit_job_slurm.sh}"
+case "${stage_submitter}" in
+    */*)
+        echo "[ERROR] CLUSTER_SLURM_STAGE_SUBMIT_SCRIPT must name a docker/cluster submitter: ${stage_submitter}" >&2
+        exit 2
+        ;;
+    pace) stage_submitter="submit_job_slurm_pace.sh" ;;
+    skynet) stage_submitter="submit_job_slurm_skynet.sh" ;;
+    *.sh) ;;
+    *) stage_submitter="${stage_submitter}.sh" ;;
+esac
+generic_submitter="${workspace_root}/docker/cluster/${stage_submitter}"
 
 if [[ ! -x "${generic_submitter}" ]]; then
     echo "[ERROR] Generic Slurm submitter is missing: ${generic_submitter}" >&2
@@ -88,7 +99,17 @@ rollout_time="${CLUSTER_SLURM_ROLLOUT_TIME_LIMIT:-12:00:00}"
 finetune_time="${CLUSTER_SLURM_FINETUNE_TIME_LIMIT:-12:00:00}"
 final_eval_time="${CLUSTER_SLURM_FINAL_EVAL_TIME_LIMIT:-4:00:00}"
 summarize_time="${CLUSTER_SLURM_SUMMARIZE_TIME_LIMIT:-1:00:00}"
-archive_sha="$(awk 'NR == 1 {print $1}' "${workspace_root}/workspace.tar.gz.sha256")"
+workspace_sync_mode="archive"
+if [[ -f "${workspace_root}/workspace.tar.gz.sha256" ]]; then
+    archive_sha="$(awk 'NR == 1 {print $1}' "${workspace_root}/workspace.tar.gz.sha256")"
+else
+    # Non-archive rsync is used when local checkpoint directories are supplied
+    # through CLUSTER_EXTRA_RSYNC_SPECS. Bind the submission to the exact repo
+    # sync manifest instead of requiring an archive that does not exist.
+    archive_sha="$(sha256sum "${workspace_root}/repo_sync_manifest.tsv" | awk '{print $1}')"
+    workspace_sync_mode="rsync"
+    echo "[INFO] No workspace archive hash found; using repo sync manifest hash as the workspace snapshot." >&2
+fi
 repo_manifest_sha="$(sha256sum "${workspace_root}/repo_sync_manifest.tsv" | awk '{print $1}')"
 if [[ ! "${archive_sha}" =~ ^[0-9a-f]{64}$ || ! "${repo_manifest_sha}" =~ ^[0-9a-f]{64}$ ]]; then
     echo "[ERROR] Could not record workspace or repository-manifest SHA-256." >&2
@@ -173,6 +194,7 @@ persistent_record="${submission_record_root}/cluster_submission.json"
     printf '  "output_root": "%s",\n' "${output_root}"
     printf '  "cluster_workspace": "%s",\n' "${workspace_root}"
     printf '  "workspace_archive_sha256": "%s",\n' "${archive_sha}"
+    printf '  "workspace_sync_mode": "%s",\n' "${workspace_sync_mode}"
     printf '  "repo_sync_manifest_sha256": "%s",\n' "${repo_manifest_sha}"
     printf '  "pipeline_array": "%s",\n' "${pipeline_array}"
     printf '  "goal_limit": %s,\n' "${goal_limit}"

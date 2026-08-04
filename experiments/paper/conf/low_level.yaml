@@ -1,0 +1,90 @@
+# Self-contained configuration for experiments/paper/pipeline/train_low_level.py.
+# Defaults render a local dry run. Override interface.name and
+# interface.components together to define an explicit-interface ablation.
+
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${oc.env:PWD}/logs/hydra/low_level/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
+
+name: lafan1_low_level
+output_dir: ${oc.env:PWD}/logs/paper/low_level/${interface.name}_seed${seed}
+allow_existing_output: false
+dry_run: true
+deterministic: true
+
+python:
+  isaac: [pixi, run, -e, isaaclab, python]
+  plain: [pixi, run, python]
+
+interface:
+  name: full_body_trajectory
+  components: [joint_qpos_qvel, root_pos, root_ori]
+  tracker_binding: native
+latent_arm: null
+task: null
+algo: IPMD
+agent_entry_point: null
+entrypoint: standard
+assert_kitless: true
+physics: newton_mjwarp
+njmax: 320
+nconmax: 40
+kit_args: --/app/extensions/fsWatcherEnabled=false
+
+num_envs: 4096
+max_iterations: 10173
+frames_per_env_batch: 24
+seed: 0
+save_interval: 100000000
+resume_checkpoint: null
+
+# Corrected LAFAN1 defaults available in this repository checkout. Replace both
+# together for another content-bound tree; never pair a manifest with a stale cache.
+dataset:
+  manifest: ${oc.env:PWD}/data/lafan1/manifests/g1_lafan1_manifest.json
+  dataset_path: ${oc.env:PWD}/data/lafan1/zarr/latent_walk1_subject1_corrected_8e95d557
+  refresh_zarr: false
+  motions: null
+  trajectories: null
+
+reset:
+  schedule: sequential
+  random_reset_step_min: 0
+  random_reset_step_max: 200
+  random_reset_full_trajectory: false
+
+command:
+  observation_source: reference
+  observation_terms: null
+  future_steps: 9
+
+hold:
+  steps: 10
+  phase_mode: sin_cos
+
+encoder:
+  checkpoint: null
+  z_dim: 256
+  latent_command_dim: 258
+  command_mode: z
+  finetune: false
+  finetune_lr: 1.0e-5
+
+video:
+  enabled: false
+  length: 500
+  interval: 100000000
+
+logging:
+  log_dir: null
+  backend: ""
+  project: null
+  run_name: null
+  group: null
+
+extra_overrides: []

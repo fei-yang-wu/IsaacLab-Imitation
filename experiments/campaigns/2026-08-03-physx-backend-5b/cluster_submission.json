@@ -1,0 +1,50 @@
+{
+  "campaign": "2026-08-03-physx-backend-5b",
+  "launcher": "experiments/campaigns/2026-08-03-physx-backend-5b/submit_tuned_5b_physx_ice.sh",
+  "cluster": "ICE (login-ice.pace.gatech.edu)",
+  "workspace_sha": "aaa1fb07466d6f98bafc3337572ebbebe79651f9",
+  "workspace_dirty": true,
+  "rlopt_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
+  "rlopt_dirty": false,
+  "workspace_archive": "/home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab_20260803_125609/workspace.tar.gz",
+  "run_tag": "lafan1_v2_tuned_physx_5b_seed0_e12288_r6",
+  "task": "Isaac-Imitation-G1-v2",
+  "agent_entry_point": "rlopt_ipmd_tuned_cfg_entry_point",
+  "physics": "physx",
+  "compute_only_physx_override": true,
+  "seed": 0,
+  "num_envs": 12288,
+  "rollout_steps": 6,
+  "mini_batch_size": 18432,
+  "frames_per_iteration": 73728,
+  "frame_cap": 5000000000,
+  "save_interval": 50000000,
+  "manifest": "/data/lafan1_corrected_8e95d557/manifests/g1_lafan1_manifest.json",
+  "manifest_sha256": "d972c37c41dadbb68c30fc456a9dc9c1bd6d30ed0b7aa9d34b1797472c945db8",
+  "dataset": "/data/lafan1_corrected_8e95d557/g1_hl_diffsr",
+  "encoder": "/data/pretrain_store/lafan1_v2_det_sr_h10_z256_seed0/checkpoints/latest.pt",
+  "log_dir": "/data/physx_5b/lafan1_v2_tuned_physx_5b_seed0_e12288_r6/rlopt_train",
+  "wandb": {
+    "project": "g1-lafan1",
+    "group": "physx-5b",
+    "tags": ["physx", "sr", "det", "v2", "lafan1", "tuned", "5b"]
+  },
+  "segments": [
+    {
+      "segment": 1,
+      "job": "5560022",
+      "submitted": "2026-08-03T12:56:09",
+      "node": "atl1-1-03-012-18-0",
+      "gres": "gpu:h100:1",
+      "time_limit": "15:59:00",
+      "completed_frames_at_start": 0,
+      "max_iterations": 12783,
+      "planned_frames": 942465024,
+      "assumed_fps": 17000,
+      "measured_fps": 33421,
+      "measured_at_iteration": 136,
+      "startup_s": 320,
+      "note": "PhysX/Kit accepted the H100 under --experimental-compute-only-physx ('PhysX GPU policy accepted: NVIDIA H100 80GB HBM3'). Measured 33,421 fps at iteration 136, ~2x the conservative sizing assumption, so this segment exits at ~7.8 h of a 15:59 wall. Raise SEGMENT_FPS to 30000 for segment 2."
+    }
+  ]
+}

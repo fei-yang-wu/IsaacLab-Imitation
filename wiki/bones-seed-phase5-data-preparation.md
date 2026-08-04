@@ -14,7 +14,7 @@ body-name, language-goal, and temporal-event checks. A fresh, provenance-complet
 The final fresh export completed on 2026-07-14 using:
 
 ```bash
-pixi run -e isaaclab python scripts/prepare_bones_seed_phase5.py \
+pixi run -e isaaclab python scripts/data/prepare_bones_seed_phase5.py \
     --csv-dir data/bones_seed/raw/g1_100 \
     --language-sidecar data/bones_seed_100/language/g1_bones_seed_100_language.json \
     --output-root data/bones_seed_phase5_corrected/bones_seed_100 \
@@ -29,7 +29,7 @@ MiniLM table matches the fresh manifest in exact motion order and has shape
 `100 x 384`.
 
 The fresh tree was also compared with the previously corrected 100-motion
-tree using `scripts/compare_bones_seed_exports.py`. All 100 NPZs are
+tree using `scripts/audit/compare_bones_seed_exports.py`. All 100 NPZs are
 byte-identical, the name order is identical, and both name-keyed aggregate
 hashes are
 `2f373adfd14797c6a3708a4b430344118a3d6f9b0c90e6bbc0fb0d80b4075e74`.
@@ -82,7 +82,7 @@ The code gate is:
 LATENT_LOW_LEVEL_CHECKPOINT=/path/to/latent.pt \
 LATENT_SKILL_CHECKPOINT=/path/to/skill_encoder.pt \
 VANILLA_TRACKER_CHECKPOINT=/path/to/vanilla.pt \
-experiments/interface_baselines/run_bones_seed_language_smoke.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_language_smoke.sh
 ```
 
 The runner performs the body-name/event preflight, writes a separate
@@ -125,7 +125,7 @@ LATENT_QUALIFICATION_AUDIT=/path/to/latent_qualification.json \
 STREAMED_EQUIVALENCE_CERTIFICATE=/path/to/equivalence.json \
 OUTPUT_ROOT=logs/interface_baselines/bones_seed_multigoal_seed0 \
 SEED=0 \
-experiments/interface_baselines/run_bones_seed_multigoal_language_comparison.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.sh
 ```
 
 Use Skynet for the complete motion set and paper seeds. Local work should only
@@ -223,11 +223,11 @@ wrapper below to create the paper dataset with complete provenance.
 Reproduce the audits from the repository root:
 
 ```bash
-pixi run python scripts/audit_bones_seed_phase5.py \
+pixi run python scripts/audit/audit_bones_seed_phase5.py \
     --manifest data/bones_seed/manifests/g1_bones_seed_10_manifest.json \
     --report /tmp/bones_seed_10_phase5_preflight.json
 
-pixi run python scripts/audit_bones_seed_phase5.py \
+pixi run python scripts/audit/audit_bones_seed_phase5.py \
     --manifest data/bones_seed_100/manifests/g1_bones_seed_100_manifest.json \
     --report /tmp/bones_seed_100_phase5_preflight.json
 ```
@@ -292,25 +292,25 @@ hard-negative contrastive fine-tune, not a larger off-the-shelf encoder.
 
 ## Fresh Corrected Export
 
-`scripts/prepare_bones_seed_phase5.py` is the supported wrapper. It:
+`scripts/data/prepare_bones_seed_phase5.py` is the supported wrapper. It:
 
 1. Requires exact CSV/language-sidecar coverage and a language goal for every
    motion.
 2. Refuses an existing output directory and refuses an output directory that
    contains, or is contained by, the raw CSV directory.
-3. Calls the corrected `scripts/batch_csv_to_npz.py` once for the selected
+3. Calls the corrected `scripts/data/batch_csv_to_npz.py` once for the selected
    motions. That exporter removes each Isaac scene origin before saving
    `body_pos_w` and records `body_names`.
 4. Writes relative manifest paths, a normalized language sidecar, source and
    artifact hashes, the exact exporter command, and a preparation record.
-5. Runs `scripts/audit_bones_seed_phase5.py --require-body-names`. The
+5. Runs `scripts/audit/audit_bones_seed_phase5.py --require-body-names`. The
    preparation record is marked complete only when this gate passes.
 
 Use `--dry-run` first. It validates and hashes the inputs without writing any
 files:
 
 ```bash
-pixi run python scripts/prepare_bones_seed_phase5.py \
+pixi run python scripts/data/prepare_bones_seed_phase5.py \
     --csv-dir data/bones_seed/raw/g1 \
     --language-sidecar data/bones_seed/language/g1_bones_seed_10_language.json \
     --output-root data/bones_seed_phase5_corrected/bones_seed_10 \
@@ -322,7 +322,7 @@ Run the real export through the Isaac Lab environment and choose a new output
 root:
 
 ```bash
-pixi run -e isaaclab python scripts/prepare_bones_seed_phase5.py \
+pixi run -e isaaclab python scripts/data/prepare_bones_seed_phase5.py \
     --csv-dir data/bones_seed/raw/g1 \
     --language-sidecar data/bones_seed/language/g1_bones_seed_10_language.json \
     --output-root data/bones_seed_phase5_corrected/bones_seed_10 \
@@ -338,7 +338,7 @@ differed by one motion; it was deleted on 2026-07-14 (see the enrichment
 section above).
 
 ```bash
-pixi run -e isaaclab python scripts/prepare_bones_seed_phase5.py \
+pixi run -e isaaclab python scripts/data/prepare_bones_seed_phase5.py \
     --csv-dir data/bones_seed/raw/g1_100 \
     --language-sidecar data/bones_seed_100/language/g1_bones_seed_100_language.json \
     --output-root data/bones_seed_phase5_corrected/bones_seed_100 \

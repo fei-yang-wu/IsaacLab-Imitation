@@ -104,10 +104,52 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 ## Repo Shape
 
 - `source/isaaclab_imitation/`: installable Isaac Lab extension package for imitation environments.
+- `source/imitation_experiments/`: installable, editable experiment library —
+  the shared planner, evaluation, audit, data, and provenance implementation,
+  organized as `imitation_experiments.{data,planner,lowlevel,evaluation,audit,
+  provenance,pipeline,capacity}` with its tests in
+  `source/imitation_experiments/tests/`. Launchers invoke it with
+  `python -m imitation_experiments.<subpackage>.<module>`. New shared
+  experiment Python goes here with a test, never into a campaign directory.
 - `scripts/rlopt/`: RLOpt train, test, and playback entrypoints.
 - `scripts/rsl_rl/`: RSL-RL training entrypoints.
+- `scripts/data/`, `scripts/audit/`, `scripts/viz/`, `scripts/bench/`:
+  standalone dataset-preparation, audit, visualization, and benchmark tools
+  (see `scripts/README.md`).
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test runners.
 - `docker/`: container and cluster-related workflows.
+- `experiments/README.md`: human-facing pointer to current, historical, and
+  paper-facing experiment surfaces.
+- `experiments/campaigns/YYYY-MM-DD-short-purpose/`: dated protocol/status
+  indexes plus the frozen shell launchers a collaborator invokes. Campaign
+  directories are thin: README, configs, and `.sh` wrappers that call the
+  library. They contain no Python implementation.
+- `experiments/paper/`: stable release-facing entrypoints only — `run.sh`, the
+  Phase-4 and Phase-5 submit plus aggregate scripts, the release-bundle
+  builder, and the reference-buffer workflow. Do not add exploratory launchers,
+  diagnostics, shared implementation, or tests there.
+- Every script in `experiments/paper/` must be **self-contained, current, and
+  runnable as-is**. Concretely:
+  - It runs from the repository root with no undocumented prerequisite step and
+    no hand-editing before use.
+  - Every configurable parameter lives either inside the script as an explicit
+    named constant, or in a config file next to it. Prefer Hydra: a
+    `@hydra.main` entrypoint with its YAML under `experiments/paper/conf/`, so
+    parameters are discoverable, overridable on the command line, and recorded
+    in the run directory. Do not leave required values to be supplied only by
+    environment variables or by editing the source.
+  - It stays updated when the code it drives changes. A stale script here is a
+    defect, not history — move superseded launchers out rather than leaving
+    them to rot.
+  - It fails loudly on a missing input or an unmet gate instead of silently
+    doing less work.
+  `reference_buffer_workflow.py` plus `conf/reference_buffer.yaml` is the
+  reference implementation of this shape.
+- The shared planner modules live in the `imitation_experiments` package and
+  import each other absolutely (`from imitation_experiments.planner...`).
+  Never mutate `sys.path` under `experiments/` and never rely on a fixed
+  `parents[N]` depth to find the repository root: use `REPO_ROOT` and the
+  helpers in `source/imitation_experiments/imitation_experiments/paths.py`.
 - `logs/`, `outputs/`: generated run artifacts; do not treat them as source.
 
 ## Working Rules
@@ -120,10 +162,29 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 - Preserve Isaac Lab / Hydra CLI patterns already used in `scripts/`.
 - Do not assume IDE-only workflows; command-line verification is the default here.
 - Avoid committing generated artifacts, caches, checkpoints, or log directories.
+- For future experiments that use W&B, log runs to the existing shared W&B
+  project rather than creating a separate project for each experiment or
+  feature.
+- Use W&B tags to identify each run's environment or environments, primary
+  change, and other main features.
+- Organize W&B runs with concise, functional group names such as
+  `planner-ablation`, not names based on timestamps or incidental
+  implementation details. Ask the user to confirm the proposed group name
+  before launching the run.
 - For IPMD/Bilinear representation-learning work, use the latent task surface
-  `Isaac-Imitation-G1-Latent-v0` unless the user explicitly requests vanilla.
-  Do not submit `IPMD_BILINEAR` comparison jobs on `Isaac-Imitation-G1-v0`; the
-  vanilla bilinear path is debug-only.
+  `Isaac-Imitation-G1-v2` (the default since 2026-08-01; the frozen
+  `Isaac-Imitation-G1-v1` and its back-compat alias
+  `Isaac-Imitation-G1-Latent-v0` keep the pre-v2 surface) unless the user
+  explicitly requests vanilla. Do not submit `IPMD_BILINEAR` comparison jobs
+  on `Isaac-Imitation-G1-v0`; the vanilla bilinear path is debug-only.
+- G1 latent task versioning (2026-07-31 onward): "the default" is always the
+  highest-numbered `Isaac-Imitation-G1-vN` id. When the Stable recipe's
+  config needs a breaking change, register a new `-G1-vN+1` with the new
+  kwargs instead of mutating the existing vN; once superseded, a vN stays
+  registered with its exact old kwargs forever (for reproducibility) and
+  simply stops being cited as the default. Update the versioning-convention
+  comment in `config/g1/__init__.py`'s "Current defaults" section and this
+  line when the default moves.
 - Unless the user specifies another budget, cluster training jobs should target
   about 1B environment frames per task/run and a two-day SLURM walltime.
 - Prefer Skynet for large training and paper-scale batch evaluation. Prefer the
@@ -217,7 +278,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   broad architecture sweep.
 - Do not use legacy scene-grid-offset LAFAN1 data or stale caches for
   paper-facing runs. Audit the manifest with
-  `scripts/audit_g1_lafan1_body_frames.py` and preserve data/checkpoint
+  `scripts/audit/audit_g1_lafan1_body_frames.py` and preserve data/checkpoint
   hashes.
 - Local smoke tests and 10M-frame blocks are qualification only. About 50M
   total frames is the maximum useful serious local low-level check, not a
@@ -228,7 +289,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   unless the user explicitly changes it. Use Skynet for long convergence,
   final verification, and paper numbers.
 - The paper-facing LAFAN1 no-language launcher is
-  `experiments/interface_baselines/submit_phase4_no_language_skynet.sh`. It is
+  `experiments/paper/submit_phase4_no_language_skynet.sh`. It is
   fixed to planner seeds `0 1 2`, all 40 corrected motions, and planner sample
   budgets `1k/10k/50k`; do not repurpose it for a wider command or budget
   sweep. It must remain blocked until manifest-bound LAFAN1 oracle audits pass
@@ -239,10 +300,10 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   `cluster_submission.json`. Aggregate only a complete passing task grid with
   `aggregate_phase4_no_language_results.py`; it refuses overwrite and emits a
   Markdown table plus `aggregation_manifest.json`. Use
-  `experiments/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh` for
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_lafan1_diffsr_low_level_skynet.sh` for
   the matched corrected-LAFAN1 latent low-level prerequisite; it intentionally
   submits no EE/full-body variants or paper-facing planner stages. Use
-  `experiments/interface_baselines/submit_lafan1_low_level_qualification_skynet.sh`
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_lafan1_low_level_qualification_skynet.sh`
   for the strict two-controller gate. Do not bypass that gate with a local or
   cross-dataset checkpoint.
 - Measure planner inference latency only around the high-level planner's root
@@ -255,7 +316,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   happens on the first control step, temporal-difference metrics are also
   unavailable. Never reject the failure or invent measurements.
 - Build the final paper reproducibility index with
-  `experiments/interface_baselines/build_paper_release_bundle.py` only after
+  `experiments/paper/build_paper_release_bundle.py` only after
   both Phase-4 and Phase-5 paper aggregates exist. It must verify the complete
   aggregate and source-artifact hash chains; do not use it with smoke or
   diagnostic outputs and do not weaken its fixed grids to make an incomplete
@@ -263,7 +324,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
 - Phase 5 uses BONES-SEED language annotations. Prepare corrected data into a
   fresh output tree with recorded input/output hashes and exact commands; do
   not repair source data in place or reuse a cache built from replaced NPZs.
-  Require `scripts/audit_bones_seed_phase5.py --require-body-names` to pass
+  Require `scripts/audit/audit_bones_seed_phase5.py --require-body-names` to pass
   before a Phase-5 run.
 - The provenance-complete 100-motion Phase-5 tree is available inside Skynet
   jobs at `/data/bones_seed_phase5/bones_seed_100`. Use its fresh manifest,
@@ -271,7 +332,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   Zarr cache paths exactly as listed in
   `wiki/bones-seed-phase5-data-preparation.md`; do not use the older in-place
   100-motion manifest or an environment-default cache for final paper jobs.
-- Use `experiments/interface_baselines/run_bones_seed_low_level_skynet.sh` for
+- Use `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_low_level_skynet.sh` for
   the paired Phase-5 low-level candidate jobs. Its default block is fixed at
   4096 environments, 10,173 iterations (about 1B frames), seed 0, and a two-day
   walltime. Always run it first with `DRY_RUN=1`. It uses one verified workspace
@@ -280,7 +341,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   evaluate both resulting oracle checkpoints and regenerate the matching
   streamed-vanilla equivalence certificate first.
 - After both low-level jobs finish, use
-  `experiments/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_bones_seed_low_level_qualification_skynet.sh`
   with the three final container-visible checkpoint paths. Its fixed gate is
   100 environments, 1000 steps from frame 0, seed 0, and 0.8 oracle success for
   both controllers. It also certifies all ten streamed-vanilla phases and
@@ -299,10 +360,10 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   name explicitly at deployment and evaluate it against a matching explicit
   motion selection. Never choose the goal embedding from trajectory rank, expert
   history, or the reference cursor. Use
-  `experiments/interface_baselines/run_bones_seed_language_smoke.sh` for the
+  `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_language_smoke.sh` for the
   tiny local code gate; its two rows, one update, and twenty steps are not a
   performance result.
-- Use `experiments/interface_baselines/run_bones_seed_multigoal_language_comparison.sh`
+- Use `experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/run_bones_seed_multigoal_language_comparison.sh`
   for the shared multi-goal Phase-5 workflow. It must collect balanced rows per
   explicit goal, merge before shared training, evaluate each goal against the
   same named motion, and pass
@@ -319,7 +380,7 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   per-goal row budget. A goal/reference mismatch must fail immediately. Keep
   pretrained and final closed-loop evaluation at one environment per goal.
 - The paper-facing three-seed Skynet entrypoint is
-  `experiments/interface_baselines/submit_bones_seed_multiseed_pipeline_skynet.sh`.
+  `experiments/paper/submit_bones_seed_multiseed_pipeline_skynet.sh`.
   It fixes planner seeds `0 1 2`, preflights all three before submitting the
   first, and calls the guarded single-seed launcher
   `submit_bones_seed_multigoal_pipeline_skynet.sh`. Each seed uses the
@@ -330,18 +391,9 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   job IDs. Array indices are explicit goal indices; never infer them from
   reference rank. Keep the default dry run, all 100 goals, and chunked sample
   writing. Do not run it while qualification is merely pending or running.
-- A user-approved preliminary exception was submitted on 2026-07-15 only to
-  obtain early DiffSR Phase-5 planner behavior before qualification. Use
-  `submit_bones_seed_diffsr_preliminary_skynet.sh` only for explicitly labeled
-  `latent_skill` diagnostics. Its outputs must record
-  `preliminary_unqualified=true`, cannot run the paper audit, cannot satisfy a
-  qualification gate, and cannot enter the paired or multi-seed paper
-  aggregate. The first chain covers ten goals at seed 0 under jobs
-  `3506446 -> 3506447 -> 3506448 -> 3506449 -> 3506450`. This exception does
-  not authorize an unqualified explicit baseline or the guarded 100-goal,
-  three-seed paper launch.
+- A user-approved preliminary exception was submitted on 2026-07-15 only to obtain early DiffSR Phase-5 planner behavior before qualification. Its one-shot launcher was pruned on 2026-07-23 after that diagnostic completed; recover it only from Git history when auditing the recorded chain. Its outputs must record `preliminary_unqualified=true`, cannot run the paper audit, cannot satisfy a qualification gate, and cannot enter the paired or multi-seed paper aggregate. The first chain covers ten goals at seed 0 under jobs `3506446 -> 3506447 -> 3506448 -> 3506449 -> 3506450`. This exception does not authorize recreating the launcher, an unqualified explicit baseline, or the guarded 100-goal, three-seed paper launch.
 - After at least three complete paper-protocol seeds, use
-  `experiments/interface_baselines/aggregate_bones_seed_multiseed_results.py`.
+  `experiments/paper/aggregate_bones_seed_multiseed_results.py`.
   It fixes the exact seed set `0 1 2` by default and must reject failed audits,
   smoke runs, duplicate or substituted seeds, changed stage
   artifacts, and runs with different protocols, source hashes, data, or
@@ -381,6 +433,14 @@ environment:
 
 ```bash
 pixi run test-rlopt
+```
+
+Run the experiment-library and standalone-script tests in the default
+environment after touching `source/imitation_experiments/` or `scripts/`:
+
+```bash
+pixi run test-experiments
+pixi run test-scripts
 ```
 
 Tests that import Isaac Lab or Omniverse modules need Isaac Sim's Python

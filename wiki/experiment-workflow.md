@@ -7,6 +7,18 @@ The rule is simple: local smoke first, then full cluster job. Do not submit a
 cluster job until the local command proves the task, algorithm, manifest, and
 submodule pins are wired correctly.
 
+## Finding the current launcher
+
+Start with [`experiments/README.md`](../experiments/README.md). It explicitly
+names the current campaign, links the latest dated status, and separates
+release-facing entrypoints from historical launchers.
+
+New experiment campaigns use
+`experiments/campaigns/YYYY-MM-DD-short-purpose/`. The dated folder owns the
+human-readable protocol snapshot and an optional thin wrapper; reusable code
+stays in a topical directory. Do not infer that an older top-level script is
+current merely because its path is still preserved.
+
 ## Local Validation Ladder
 
 Start with the cheapest check that matches the change.
@@ -18,8 +30,8 @@ environment for Isaac-backed runtime checks.
 ```bash
 git diff --check
 bash -n docker/cluster/cluster_interface.sh
-bash -n experiments/ipmd_stability/run_local_debug_ablations.sh
-bash -n experiments/ipmd_stability/submit_cluster_ablations.sh
+bash -n experiments/campaigns/2026-07-22-latent-learning-ablation/run.sh
+bash -n experiments/paper/run.sh
 ```
 
 ### 2. Expert-batch or env sampling changes
@@ -95,43 +107,13 @@ The `--kit_args=--/app/extensions/fsWatcherEnabled=false` override is useful on
 local machines where Isaac Kit file watcher startup fails under resource
 pressure.
 
-## Existing Experiment Scripts
+## Classified Experiment Scripts
 
-`experiments/ipmd_stability/run_local_debug_ablations.sh` runs local IPMD reward
-stability sweeps. Useful knobs:
+Use [`experiments/SCRIPT_INVENTORY.md`](../experiments/SCRIPT_INVENTORY.md) as the exhaustive live-file index. It classifies every retained shell and Python file as a front door, guarded launcher, workflow, qualification tool, library, audit/report, diagnostic, supporting study, or test.
 
-```bash
-TASK=Isaac-Imitation-G1-v0 \
-NUM_ENVS=128 \
-TIMEOUT_SECONDS=300 \
-SEEDS=2024 \
-COMBOS="A B C" \
-experiments/ipmd_stability/run_local_debug_ablations.sh
-```
+The current collaborator-facing entrypoints are the dated campaign wrappers in `experiments/campaigns/` and the staging `experiments/paper/run.sh` surface. Reusable implementation stays in topical directories and should normally be reached through one of those front doors.
 
-`experiments/ipmd_stability/submit_cluster_ablations.sh` submits cluster sweeps
-for IPMD and baseline GAIL/AMP/ASE variants:
-
-```bash
-DRY_RUN=1 \
-TASK=Isaac-Imitation-G1-v0 \
-NUM_ENVS=2048 \
-ALGO=ipmd \
-SEEDS="2024" \
-COMBOS="A B" \
-experiments/ipmd_stability/submit_cluster_ablations.sh
-```
-
-Use `DRY_RUN=1` first to inspect the generated commands.
-
-`experiments/vqvae_temporal_ablation.sh` is the current VQ-VAE/FSQ temporal
-ablation helper. It supports `local`, `cluster`, and `print` modes:
-
-```bash
-experiments/vqvae_temporal_ablation.sh print all
-experiments/vqvae_temporal_ablation.sh local vqvae_p10_d64
-experiments/vqvae_temporal_ablation.sh cluster vqvae_p10_d64
-```
+Completed and superseded paths are classified in [`experiments/PRUNED_SCRIPTS.md`](../experiments/PRUNED_SCRIPTS.md). Recover one from Git history only when designing a new dated protocol; do not restore old launchers merely to use them as an archive.
 
 ## Full Cluster Jobs
 
@@ -177,59 +159,7 @@ explicitly asks for a vanilla debug run. Do not submit bilinear comparison jobs
 on `Isaac-Imitation-G1-v0`; the vanilla/non-latent-command path is useful for
 debugging only until it is explicitly fixed and revalidated.
 
-For the current pretrain/scratch/frozen comparison, use:
-
-```bash
-experiments/bilinear_pretrain/submit_cluster_ablation.sh
-```
-
-By default this submits one seed on `Isaac-Imitation-G1-Latent-v0` for five
-feature-only variants at `num_envs=4096`, `max_iterations=10173`, and logs them
-to W&B project `G1-Imitation-RLOpt-Pretrain`. This is a 1B-frame budget because
-each rollout iteration collects `4096 * 24` frames. The script sets
-`agent.bilinear.policy_include_raw_state=false` so the policy sees `F(s)z`, not
-`concat(F(s)z, s)`. The default seed is `42`. The default variants are `scratch`,
-`pretrained_finetune`, `pretrained_frozen`, `random_frozen`, and
-`pretrained_bc_finetune`. The BC variant runs offline policy BC after SR
-pretraining using reconstructed expert actions. Set `DRY_RUN=1` to print the
-commands, or set `SEEDS="2024 2025 2026"` for a three-seed sweep.
-
-For the Dance102 action-label ablation, use the labeled manifest and script:
-
-```bash
-DRY_RUN=1 experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
-experiments/bilinear_pretrain/submit_dance102_action_label_ablation.sh
-```
-
-The default variants are `scratch`, `pretrained_finetune`,
-`pretrained_bc_finetune`, `pretrained_labeled_bc_finetune`, and
-`labeled_bc_finetune`. The labeled BC variants set
-`env.reconstructed_reference_action=false`, so expert actions are read from the
-locally generated action-label NPZ described by
-`data/unitree/manifests/g1_unitree_dance102_rlopt_ipmd_500m_actions_manifest.json`.
-The NPZ itself is intentionally not tracked.
-
-To test whether the offline stage is long enough, run the pretrained+finetune
-update-count sweep:
-
-```bash
-DRY_RUN=1 experiments/bilinear_pretrain/submit_pretrain_update_sweep.sh
-experiments/bilinear_pretrain/submit_pretrain_update_sweep.sh
-```
-
-The default update counts are `500 1000 2000 4000`. Override them with:
-
-```bash
-UPDATE_COUNTS="1000 2000 4000 8000" \
-experiments/bilinear_pretrain/submit_pretrain_update_sweep.sh
-```
-
-Summarize the offline SR traces in W&B with:
-
-```bash
-python experiments/bilinear_pretrain/summarize_pretrain_wandb.py \
-    --group g1_bilinear_sr_pretrain_feature_only_4096
-```
+The exploratory bilinear pretrain, action-label, and update-count launchers were pruned on 2026-07-23 because they were not part of a current campaign or paper dependency. The generic command above remains useful for bounded development, but a new comparison requires a new dated campaign and qualification record. See `experiments/PRUNED_SCRIPTS.md` for the historical paths.
 
 Cluster jobs append the default full G1 manifest unless the submitted command
 already includes `env.lafan1_manifest_path=...`. The default is controlled by
@@ -256,14 +186,14 @@ For a dry run of the high-level skill pipeline on ICE/PACE with video enabled
 and a 2B-frame low-level cap:
 
 ```bash
-DRY_RUN=1 experiments/submit_hl_skill_pipeline_pace_2b.sh
+DRY_RUN=1 experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_hl_skill_pipeline_pace_2b.sh
 ```
 
 For a real submission, set the PACE account first:
 
 ```bash
 CLUSTER_SLURM_ACCOUNT=<pace-account> \
-DRY_RUN=0 experiments/submit_hl_skill_pipeline_pace_2b.sh
+DRY_RUN=0 experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_hl_skill_pipeline_pace_2b.sh
 ```
 
 The helper defaults to:

@@ -9,11 +9,13 @@ version = "0.1.0"
 [tasks]
 lint = "ruff check ."
 format-check = "ruff format --check ."
-typecheck = "pyrefly check"
+typecheck = "ty check"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
-test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
-test-runtime-bootstrap = "pytest -q source/isaaclab_imitation/test_rlopt_runtime_bootstrap.py"
-test-default = { depends-on = ["test-rlopt", "test-runtime-bootstrap"] }
+test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_ipmd_l2t.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py tests/test_hl_skill_encoder.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
+test-runtime-bootstrap = "pytest -q source/isaaclab_imitation/tests/test_rlopt_runtime_bootstrap.py"
+test-experiments = "pytest -q source/imitation_experiments/tests"
+test-scripts = "pytest -q scripts/audit/test_audit_bones_seed_phase5.py scripts/audit/test_compare_bones_seed_exports.py scripts/data/test_prepare_bones_seed_phase5.py"
+test-default = { depends-on = ["test-rlopt", "test-runtime-bootstrap", "test-experiments", "test-scripts"] }
 
 [dependencies]
 python = "3.12.*"
@@ -46,7 +48,9 @@ pyrefly = "*"
 huggingface-hub = "*"
 rlopt = { path = "./RLOpt", editable = true }
 iltools = { path = "./ImitationLearningTools", editable = true }
+imitation-experiments = { path = "./source/imitation_experiments", editable = true }
 sentence-transformers = ">=5.5.1, <6"
+ty = ">=0.0.65, <0.0.66"
 
 [feature.isaaclab.pypi-options]
 extra-index-urls = ["https://pypi.nvidia.com"]
@@ -66,22 +70,23 @@ isaaclab = { version = "==3.0.0b2.post1", extras = [
 # transitive pre-release pin of isaacsim-core 6.0.1.0; uv only accepts pre-releases requested explicitly
 tinyobjloader = "==2.0.0rc13"
 isaaclab_imitation = { path = "./source/isaaclab_imitation", editable = true }
+imitation-experiments = { path = "./source/imitation_experiments", editable = true }
 
 [feature.isaaclab.tasks]
-test-isaaclab = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES pytest source/isaaclab_imitation/test_causal_planner_observation.py source/isaaclab_imitation/test_policy_supervision_contract.py source/isaaclab_imitation/test_g1_backend_joint_contract.py source/isaaclab_imitation/test_g1_metrics_contract.py"
+test-isaaclab = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES pytest source/isaaclab_imitation/tests/test_g1_task_layout_contract.py source/isaaclab_imitation/tests/test_causal_planner_observation.py source/isaaclab_imitation/tests/test_planner_publish_schedule.py source/isaaclab_imitation/tests/test_g1_backend_joint_contract.py source/isaaclab_imitation/tests/test_g1_metrics_contract.py source/isaaclab_imitation/tests/test_command_interface_cfg.py source/isaaclab_imitation/tests/test_termination_window.py source/isaaclab_imitation/tests/test_heading_quat.py"
 zero-agent = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES python scripts/zero_agent.py --task Isaac-Imitation-G1-LafanTrack-v0"
-smoke-ipmd = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --num_envs 16 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"
-smoke-future-cvae = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-Latent-FutureCVAE-v0 --algo IPMD --num_envs 4 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"
-smoke-per-step-vq = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-Latent-PerStepVQ-v0 --algo IPMD --num_envs 4 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"
-smoke-causal-planner = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 python experiments/interface_baselines/smoke_test_causal_planner_env.py --headless --kit_args=--/app/extensions/fsWatcherEnabled=false --task Isaac-Imitation-G1-Latent-v0 --num_envs 4 --motion_manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json"
+smoke-ipmd = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-v2 --algo IPMD --num_envs 16 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.data.manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"
+smoke-future-cvae = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-CVAE-v0 --algo IPMD --num_envs 4 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.data.manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"
+smoke-per-step-vq = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-PerStepVQ-v0 --algo IPMD --num_envs 4 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.data.manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= agent.ipmd.command_source=posterior"
+smoke-causal-planner = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 python -m imitation_experiments.evaluation.smoke_test_causal_planner_env --headless --kit_args=--/app/extensions/fsWatcherEnabled=false --task Isaac-Imitation-G1-v2 --num_envs 4 --motion_manifest=./data/unitree/manifests/g1_unitree_dance102_manifest.json"
 hl-skill-pipeline = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_hl_skill_pipeline.py"
 # Routine physics-backend checks: 1-iteration vanilla PPO smokes per backend, plus
 # the throughput benchmark driver (quick = a few iterations; full ~10M frames/backend).
 smoke-vanilla-physx = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train_physx.py --task Isaac-Imitation-G1-v0 --algo PPO --num_envs 16 --max_iterations 1 --headless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= physics=physx"
 smoke-vanilla-newton = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/rlopt/train.py --task Isaac-Imitation-G1-v0 --algo PPO --num_envs 16 --max_iterations 1 --headless --assert-kitless --kit_args=--/app/extensions/fsWatcherEnabled=false env.lafan1_manifest_path=./data/unitree/manifests/g1_unitree_dance102_manifest.json agent.logger.backend= physics=newton_mjwarp"
-bench-backends-quick = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/benchmark_physics_backends.py --num_envs 1024 --iterations 5"
-bench-backends = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/benchmark_physics_backends.py"
-bench-renderers = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 python scripts/benchmark_renderers.py"
+bench-backends-quick = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/bench/benchmark_physics_backends.py --num_envs 1024 --iterations 5"
+bench-backends = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 python scripts/bench/benchmark_physics_backends.py"
+bench-renderers = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 python scripts/bench/benchmark_renderers.py"
 
 [feature.lerobot.pypi-dependencies]
 datasets = "*"

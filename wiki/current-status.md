@@ -1,38 +1,370 @@
 # Project Live Status
 
-Last verified: 2026-07-22, after the cluster-wide persistent central-log bind
-was validated by ICE checkpoint smoke job `5526584`. Previously, after the
-joint-order fix merged to main
-(PR #24, `900c66c`), the `Isaac-Imitation-G1-Latent-Strict-v0` alias was
-removed (`Isaac-Imitation-G1-Latent-v0` is the single name for the preferred
-strict/legacy-optimizer surface), and both post-fix 5B resumable low-level
-jobs landed on ICE H100s as `5525266` (BONES-SEED-91) and `5525267`
-(corrected LAFAN1) after a Blackwell capacity detour (see "Post-fix
-5B resubmissions" below).
+Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
 
-Earlier the same day: cancelled every running ICE Newton job
-(`5524182`, `5524183`, `5524338`, `5524342`, `5524390`) once a joint-order bug
-fix surfaced on the then-unmerged `sim2sim-verification-transfer-547ca5` /
-`origin/fix/migration` branch (see the new section below) -- all of that day's
-Newton-backend training used the pre-fix, permuted expert-command ordering.
-Before that: reverting the 2026-07-20 "make SONIC the
-default" decision: `Isaac-Imitation-G1-Latent-v0` resolves to the
-Strict/legacy-optimizer surface again (SONIC is opt-in only via
-`Isaac-Imitation-G1-Latent-Sonic-v0`), following the njmax fix in the VRAM
-ablation, confirmation that all ICE GPU partitions hard-cap walltime at
-16-18h, and building a resumable multi-segment BONES-SEED-91 launcher for a
-5B-frame cap.
+Last verified: 2026-07-29. The current working tree repoints
+`Isaac-Imitation-G1-Latent-v0` to the Stable/SONIC recipe with legacy
+LAFAN1 resets; the former strict surface remains available as
+`Isaac-Imitation-G1-Latent-Strict-v0`. ICE job `5542378` already trained the
+new Stable surface through the requested 500M comparison point and onward to
+about 1B frames, so no duplicate 500M job was submitted. The exact 500M
+Stable-versus-Strict inference diagnostic is recorded below.
 
 This is the living memory for the active research project. Read it first when
 returning to the project or starting a new agent session. It answers **where we
 are now**. The detailed protocol and experiment history remain in the linked
 phase documents.
 
+Human-facing launcher navigation now starts at
+[`experiments/README.md`](../experiments/README.md). It marks the
+2026-07-22 latent-learning ablation as the primary current campaign, keeps the
+BONES h10 scale screen as its supporting campaign, and reserves
+`experiments/paper/` for the eventual stable release entrypoint. Dated
+campaign folders index canonical scripts rather than copying their
+implementation.
+
 Update this page after a meaningful code decision, qualification result,
 cluster submission, job failure, or paper result. Verify changing external
 state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
+
+## Stable LAFAN1 5B convergence run submitted (2026-07-29)
+
+ICE job `5548933`, continued by job `5549304`, is the matched-scale follow-up
+to the 500M diagnostic below.
+It runs `Isaac-Imitation-G1-Latent-v0`
+(`ImitationG1LatentStableEnvCfg`) on one H200 with 16,384 environments x 12
+rollout steps, minibatch 24,576, seed 0, and 25,431 PPO iterations =
+4,999,938,048 environment frames. It uses corrected LAFAN1 manifest SHA-256
+`d972c37c...c945db8`, the existing read-only dataset cache, and the same frozen
+h10 DiffSR encoder (`5c84ff72...264ea`) used in the 500M comparison.
+
+Run name: `stable_lafan1_diffsr_det_h10_e16384_s12_5b_seed0_20260729`; W&B
+project/group: `g1-sonic-env-latent-det-ice` /
+`stable-e16384-s12-5b-seed0`, run `yuf0st77`. The persistent ICE run directory
+is `logs/rlopt/ipmd/Isaac-Imitation-G1-Latent-v0/`
+`2026-07-29_17-06-39_wandb-yuf0st77`. Checkpoints are requested every 100M frames and
+the cluster persistent-project-log bind was confirmed in the startup log. The
+submitted workspace archive SHA-256 is
+`560a780d23e7e4c0a1e1ea0594776bbad010601c0c70bb1b93d062a277a52be6`.
+The job resolved to `ImitationG1LatentStableEnvCfg` and the SONIC actor-input
+contract, completed its first PPO update cleanly at about 92.9k FPS, and used
+about 73.9 GB of H200 memory.
+The first persistent checkpoint landed successfully at 100,073,472 frames:
+`models/model_step_100073472.pt`, 25,036,449 bytes, SHA-256
+`38059555818226b6b9cc3c74b306d10a7b925151838563e8725f5338c32d4f6e`.
+At that point the training logger reported mean episode length 187.91, return
+13.82, and 91.6k FPS.
+The matched 500M checkpoint also landed successfully:
+`models/model_step_500170752.pt`, 25,036,449 bytes, SHA-256
+`5a6a03059187f4cc5d81e16a9540f96f8284e4122ec6502c60ff81930ddd5a43`.
+At 500,170,752 frames the logger reported mean episode length 334.96, return
+26.65, and 90.6k FPS.
+
+Job `5548933` reached 1,000,144,896 frames, then failed while writing that
+checkpoint because the ICE Lustre quota had just crossed its 300 GB limit; the
+resulting 732,224-byte file was rejected as truncated. The newest intact
+resume point is `model_step_900071424.pt`, 25,036,449 bytes, SHA-256
+`2082b79a7dd7bf7b203af5deca04fc4a98660d15c8a810c7570d35eb01d51246`.
+The quota was brought back under limit by thinning only redundant periodic
+checkpoint series from completed runs while retaining 500M-spaced and final
+checkpoints. The 900M file was also copied locally and passed a full
+`torch.load`, including policy, value, and optimizer state.
+
+Resume job `5549304` uses the exact original workspace archive above rather
+than the subsequently changed shared worktree, and loads the checkpoint through
+its container-visible persistent-log path. It runs 20,853 additional
+`16384 x 12` iterations = 4,099,866,624 frames, so the credited total is
+exactly 4,999,938,048. Its checkpoint interval is 512,483,328 frames, exactly
+one eighth of the segment, so the eighth checkpoint is the actual endpoint;
+the initially healthy `5549277` continuation was cancelled before its first
+checkpoint after confirming that a round 500M cadence would otherwise leave
+only a 4.9B-credited final checkpoint. W&B run `h874loew`, persistent directory
+`2026-07-29_21-18-25_wandb-h874loew`. Its first resumed metric arrived at
+10,027,008 segment frames at 90.1k FPS, proving that the Stable config,
+checkpoint restore, and optimizer continuation all entered training.
+
+Job `5549304` reached its final iteration and therefore computed the full
+4,999,938,048 credited frames, but failed while serializing the endpoint
+checkpoint. `model_step_4099866624.pt` is a zero-byte file and must not be
+used. The last intact checkpoint is `model_step_3587506176.pt`, SHA-256
+`d7b18bf5...e9f4`, corresponding to 4,487,577,600 credited frames after adding
+the original 900,071,424-frame resume point.
+
+The first requested model-inference diagnostic used that intact checkpoint on
+`walk1_subject1`, starting every environment at frame 0: seed 0, 10
+environments, 700 control steps, corrected manifest/cache, frozen h10 encoder,
+Newton/MJWarp, zero flow noise, and the exact submitted source snapshot. The
+non-terminating, unperturbed pass retained all 7,000 transitions and measured
+**26.622 mm root-relative MPJPE**, with 1.0 survival and tracking success. The
+secondary strict-termination pass kept the Stable environment's configured
+pushes and randomization; all ten environments again completed 700 steps with
+no termination and measured **26.322 mm MPJPE**. Artifacts and the 14-second
+full-horizon video are under
+`logs/interface_baselines/lafan1_stable_4488m_walk1_frame0_700_20260730/`.
+
+The most relevant earlier one-motion reference is 30.482 mm from the former
+Strict environment under the same motion/frame-0/700-step/seed-0 full-horizon
+geometry. The new Stable result is 3.860 mm (12.66%) lower, but this is not a
+single-variable convergence claim: the evaluated checkpoint was trained on the
+Stable/SONIC reward and actor-input recipe, whereas the reference checkpoint
+used the former Strict environment.
+
+The remaining broader convergence diagnostic is the all-40 corrected-motion,
+1,000-step deterministic pass plus its strict secondary pass.
+
+## Stable latent reset/phase follow-ups submitted (2026-07-30)
+
+Two H200 follow-ups were submitted on ICE from the exact original Stable-run
+workspace archive (SHA-256
+`560a780d23e7e4c0a1e1ea0594776bbad010601c0c70bb1b93d062a277a52be6`).
+Both use `Isaac-Imitation-G1-Latent-v0`, corrected LAFAN1, the same frozen h10
+DiffSR encoder, 16,384 environments x 12 rollout steps, minibatch 24,576,
+seed 0, Newton/MJWarp, and 25,431 PPO updates = 4,999,938,048 new frames.
+They log to the existing `g1-sonic-env-latent-det-ice` W&B project.
+
+- Job `5551147`, group `stable-fulltraj-continuation`, resumes the intact
+  4,487,577,600-credited-frame checkpoint and trains for another
+  4,999,938,048 frames (about 9.488B credited total). The command remains the
+  258D z256+sin/cos phase vector held for ten control steps. Relative to the
+  source checkpoint's training contract, only reset sampling changes:
+  `random_reset_full_trajectory=true`, reset bounds `0/0`, and adaptive-failure
+  max/mean ratio `200`. Episode length remains 500 control steps, so the result
+  is a full-trajectory-reset continuation/domain-adaptation experiment rather
+  than a clean from-scratch environment comparison.
+- Job `5551148`, group `stable-phase-ablation`, trains from scratch for
+  4,999,938,048 frames. It removes only the two appended sin/cos phase values:
+  command width `258 -> 256` and `command_phase_mode=sin_cos -> none`.
+  Encoder, z256 code, horizon/hold/code period 10, reset sampler, environment,
+  geometry, optimizer, seed, and data remain matched to the previous Stable
+  run. A one-update local Isaac/Newton smoke passed with the expected 256D
+  latent observation and actor/critic widths before submission.
+
+At submission both jobs were pending on `ice-gpu` for H200 capacity. A
+scheduler preflight showed that `coe-gpu` accepts the same `coe-ice` QOS, has
+the same 16-hour limit, and offered a materially earlier H200 opportunity, so
+both still-unstarted jobs were moved in place to `coe-gpu` on 2026-07-30. No
+training state was lost in the partition move.
+
+The first submissions (`5551147` and `5551148`) subsequently received H200s but
+failed before entering the container or creating W&B runs. The staged wrapper
+inherited the repository's legacy `ice_runtime.tar` default, while this
+campaign uses the verified shared immutable SIF; that tar archive does not
+exist. No frames or checkpoints were produced. Corrected replacements
+`5551339` (full-trajectory continuation) and `5551340` (no phase) explicitly
+pin `CLUSTER_USE_SHARED_SIF=1`, the 14 GB
+`isaaclab-runtime-3.0.0b2-cu130.sif`, the immutable CU130 runtime root, and
+cache-copy suppression. They were pending on `coe-gpu` for priority immediately
+after resubmission.
+
+Persistent staging and logs are under
+`/home/hice1/fwu91/scratch/Research/IsaacLab/`
+`isaaclab_stable_followups_20260730/`. The staging archive, encoder, and resume
+checkpoint hashes were reverified before `sbatch`.
+
+## LAFAN1 Stable-vs-Strict 500M inference diagnostic (2026-07-29)
+
+ICE already retained both requested checkpoints, contrary to the earlier
+checkpoint-loss generalization:
+
+- Stable/SONIC recipe, `Isaac-Imitation-G1-Latent-v0`: completed job `5542378`,
+  checkpoint `model_step_500072448.pt` from run
+  `2026-07-27_14-07-04_wandb-3xz1v8k1`.
+- Former Strict recipe, `Isaac-Imitation-G1-Latent-Strict-v0`: checkpoint
+  `model_step_500170752.pt` from run
+  `2026-07-22_19-42-12_wandb-gha4nlhl`.
+
+Both commands reference the same h10 DiffSR skill checkpoint; its encoder SHA-256
+is `5c84ff7261c5a3aca732e370ca39f889d68a5d39fb498fa9fde72c653eb264ea`.
+The local copies and inference artifacts live under
+`logs/downloaded_checkpoints/lafan1_stable_vs_strict_500m_20260729/` and
+`logs/interface_baselines/lafan1_stable_vs_strict_500m_20260729/`.
+
+The decisive matched inference pass used all 40 corrected LAFAN1 motions, one
+environment per motion, seed 0, 1,000 steps, deterministic tracking, and all
+early terminations disabled. Both rows therefore contain exactly 40,000
+body-frame samples:
+
+| Recipe at ~500M frames | Root-relative MPJPE | Root XYZ | Joint RMSE | EE position | Velocity | Acceleration | Action change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Stable/SONIC | 111.17 mm | 0.899 m | 0.303 rad | 0.914 m | 0.654 m/s | 11.884 m/s2 | 1.692 |
+| Strict | 129.84 mm | 0.911 m | 0.275 rad | 0.928 m | 0.576 m/s | 8.009 m/s2 | 1.085 |
+
+Stable reduced MPJPE by 18.67 mm (`14.38%`) in this single deterministic pass,
+but it increased joint error, temporal errors, and action change. Treat this as
+a diagnostic trend, not a win: prior repeated inference showed roughly 12%
+relative MPJPE variation in this error regime, and the retained checkpoints
+also have different training geometry (Stable `4096 x 24`, Strict
+`16384 x 12`). A same-geometry Strict legacy-reset run stopped near 300M and
+cannot provide a matched 500M row.
+
+The strict-termination pass is retained as a secondary diagnostic. It reported
+33.32 mm / 0.19 success for Stable and 40.79 mm / 0.24 success for Strict, but
+its unequal termination-truncated sample counts make those MPJPE values
+unsuitable for the headline comparison. Videos were retained from the same
+non-terminating full-horizon passes.
+
+A second Stable checkpoint at 500,170,752 frames from the new `16384 x 12`
+run removes the training-geometry confound. On the same 40-motion,
+40,000-sample non-terminating inference pass it measured **111.996 mm MPJPE**,
+only 0.74% above the earlier `4096 x 24` Stable result and 13.74% below the
+Strict row. Its other metrics were 0.919 m root XYZ, 0.295 rad joint RMSE,
+0.929 m EE position, 0.627 m/s velocity, 10.787 m/s2 acceleration, and 1.428
+action change. The strict pass measured 33.257 mm over its valid,
+termination-truncated transitions and 0.23 tracking success. Artifacts,
+including the verified 20-second full-horizon video, are under
+`logs/interface_baselines/lafan1_stable_e16384_s12_500m_20260729/`.
+
+## Latent hold-out horizon ablation submitted (2026-07-29)
+
+New campaign
+[`experiments/campaigns/2026-07-29-latent-holdout-horizon/`](../experiments/campaigns/2026-07-29-latent-holdout-horizon/README.md).
+It ablates the **command interface at a fixed latent space**: every arm is
+frozen against one shared h10 DiffSR encoder, and only the number of 50 Hz
+control steps a published latent is held for moves — hold in {5, 1} against the
+hold=10 control. This is the GR00T-style "predict H, execute k" axis, and the
+complement of the 2026-07-22 latent-learning ablation (which moved the
+bottleneck at fixed hold=10).
+
+**Live jobs (ice-gpu H100, submitted 2026-07-29 ~14:21):** `5548369` (hold=5)
+and `5548370` (hold=1). One 16h segment each, no resume chain (user-decided);
+28,883 iterations ~ 4.26B frames at the measured ~76k fps. Both booted clean on
+`ImitationG1LatentStrictEnvCfg` with checkpoints written to
+`/data/holdout_store/<run_tag>/rlopt_train`.
+
+Three facts worth carrying forward:
+
+1. **The ablation is provably single-variable.** The launcher's emitted command
+   was token-diffed against the control's recorded `command.txt`: of 34 Hydra
+   overrides, 31 are byte-identical and only `latent_steps_min`,
+   `latent_steps_max`, and `latent_learning.code_period` move. The encoder
+   window (`hl_skill_horizon_steps=10`) is checkpoint-bound
+   (`hl_skill_diffsr.py:579-584`), so it cannot drift silently.
+2. **`code_period` must move with the hold.** It feeds `phase_period`
+   (`ipmd.py:1248,1315`) and the sampler computes
+   `phase = (phase_period - latent_steps)/phase_period`
+   (`hl_skill_diffsr.py:1078`). Holding it at 10 while hold=5 would emit
+   0.5..0.9 instead of 0..0.8 and desynchronize the clock. Command width stays
+   258 for every arm, which is the confound the 2026-07-22 hold isolation had
+   (it switched `phase-mode` to `none`, changing 258 -> 256).
+3. **The hold=10 control's policy checkpoints are gone.** Only `params/` and
+   `command.txt` survived under `/data/ckpt_store/<control_run_tag>/`; the
+   TIMEOUT SIGKILL wiped the rest. Its **encoder survived** on the `/data` bind,
+   which is what makes this campaign possible. Consequence: the control is a
+   **curve-only** comparison (W&B `g1-lafan1-strict`, group
+   `scaled-e12288-5b-resumable-jointfix`, ~4.56B frames, ep_len 413.8), and
+   there is no hold=10 policy for oracle evaluation or a planner row until one
+   is retrained.
+
+Expectation: the 2026-07-22 isolation showed hold=1 collapsing (ep_len 2.76 vs
+46.38 at 30M). hold=1 is submitted as a declared-risk arm; a collapse is a
+citable negative result, not a bug to tune away. Note hold=1 also costs 2580
+floats per 200 ms against the explicit packet's 670 — more bandwidth than the
+baseline it is meant to beat.
+
+## Reconstruction-family arms resubmitted with persistent checkpoints (2026-07-29)
+
+The Study A `vqvae` and `fsq_recon` arms (h10 held code, sin/cos phase,
+`code_period=10`, 66-d command) were resubmitted because the original
+2026-07-22 H200 runs lost every checkpoint to the ICE TIMEOUT wipe — the Study
+A launcher had no `agent.logger.log_dir`, so checkpoints lived in the
+per-submission workspace. Only W&B curves survive from those runs, and no
+run directory for any of the twelve ablation arms remains on ICE scratch.
+
+Fix: `submit_lafan1_reconstruction_ablation_ice.sh` now writes
+`agent.logger.log_dir=/data/latent_ablation_store/<exp_name>/rlopt_train`
+for every arm, following the persistent-bind convention. New jobs also override
+`SAVE_INTERVAL` to 100M (the launcher's 25M default is what filled scratch and
+forced the 07-26 thinning).
+
+**Live jobs (submitted 2026-07-29 ~15:10):** `5548489` vqvae (ice-gpu H200,
+running) and `5548504` fsq_recon (coe-gpu H200; first attempt `5548500` was
+pinned to the single unavailable ice-gpu H200 node and was cancelled/resubmitted
+on coe-gpu). Approved H200 profile, 16,384 x 12, 23,071 iterations ~ 4.54B
+frames in one segment, seed 0.
+
+## Grouped-VQ capacity ablation prepared (2026-07-26)
+
+New campaign
+[`experiments/campaigns/2026-07-26-groupvq-capacity-ablation/`](../experiments/campaigns/2026-07-26-groupvq-capacity-ablation/),
+documented as "Study C" in
+[`wiki/latent-learning-ablation-plan.md`](latent-learning-ablation-plan.md).
+It fixes the DiffSR spectral bottleneck at the grouped product codebook
+(`gumbel_multicat`, hard straight-through) and sweeps only its two capacity
+axes around the `G=64, C=128` anchor that previously tracked the continuous
+deterministic latent: `G` in {16, 32, 64, 128} at `C=128`, and `C` in
+{16, 64, 128, 512} at `G=64` — seven arms, seed 0, corrected LAFAN1, approved
+H200 geometry, 5B cap.
+
+Status: CPU pre-flight passed for all seven grid points (build, quantize,
+checkpoint round-trip), and all seven passed the local 10M wiring gate in
+`logs/groupvq_ablation/local_10m_gate_20260726/`.
+
+**Live jobs (coe-gpu H100, submitted 2026-07-26 ~19:15):** `5540442`
+g16_c128, `5540443` g32_c128, `5540445` g64_c128, `5540446` g128_c128,
+`5540448` g64_c16, `5540449` g64_c64, `5540450` g64_c512. All seven confirmed
+RUNNING with clean logs and falling DiffSR pretrain loss. Each needs one
+continuation segment: 12,288 x 12 at ~80k FPS covers about 4.0B of the 5B cap
+in one 14h segment.
+
+Getting there took three submission rounds and exposed three defects, two
+pre-existing:
+
+1. `submit_hl_skill_pipeline_pace_2b.sh` computed `REPO_ROOT` from a fixed
+   `..`, which broke when the 07-23 reorg moved it into
+   `experiments/campaigns/<dated>/`. Now marker-based. This had also silently
+   broken the 2026-07-22 campaign's launchers.
+2. **Concurrent dataset-cache rebuild.** Seven arms sharing
+   `/data/lafan1_corrected_8e95d557/g1_hl_diffsr` each ran with
+   `env.refresh_zarr_dataset=true`; they rebuilt it underneath each other,
+   four arms died on `FileNotFoundError`, and the cache was truncated to
+   56 KB. Rebuilt to the full 1.2 GB / 40 motions by one-time job `5540413`
+   from the intact NPZ source and the hash-matching manifest. Arms now always
+   pass `refresh=false` and the cache is owned by
+   `groupvq_ablation/build_lafan1_cache_ice.sh`. **The 07-22 launcher has the
+   same pattern across twelve overlapping arms and is the likely explanation
+   for its checkpoint-less `continuous_ae` arm.**
+3. **`atl1-1-03-010-15-0` has a dead GPU** (`No devices were found`,
+   `no CUDA-capable device is detected`) while Slurm still advertises it as
+   `mix` with no drain reason, so it keeps accepting and killing jobs. Both
+   launchers exclude it via `CLUSTER_SLURM_EXCLUDE`; worth a PACE ticket.
+
+An initial six-arm submission to ice-gpu H200 (`5539991`-`5539999`) sat
+PENDING for two hours without starting and was cancelled: every H200 GPU on
+ice-gpu and coe-gpu was allocated (one free cluster-wide) and the sixth ice-gpu
+H200 node has been admin-drained since 07-24. coe-gpu had about 40 free H100s,
+so the grid was moved there at 12,288 envs x 12 steps, minibatch 18,432 --
+the 07-22 `h100_e12288_lr1e3` geometry, because an 80 GB H100 cannot hold the
+16,384-environment point.
+
+Consequence: **all seven arms including `g64_c128` are re-run on H100.** The
+finished 4.53B H200 `lafan1_diffsr_gumbel_multicat_b448_h10_z256_seed0` run
+differs in env count and minibatch, so it is not a row of this grid and the
+07-22 study remains a separate table.
+
+Save interval for these arms is 100M frames, not the 25M of the 07-22 study,
+because ICE scratch had roughly 20-40 GB of headroom. The 07-22 runs were
+thinned to the same 100M granularity to make room (see below), so
+plateau-checkpoint selection now resolves to 100M across both studies.
+
+Two corrections to earlier entries on this page:
+
+- **The 2026-07-22 latent-learning H200 ablation did run.** Eleven of its
+  twelve arms reached 4,525,129,728 frames on ICE (the twelfth,
+  `continuous_ae`, has no checkpoints in its run dir and needs a separate
+  look). Any statement that no H200 jobs from that study were submitted is
+  stale.
+- **07-22 checkpoints were thinned on 2026-07-26.** ICE scratch hit 300/300 GB
+  and blocked submission. With user approval, intermediate checkpoints were
+  deleted from the eleven finished runs, keeping every ~100M-frame checkpoint
+  plus each run's final one (181 -> 84 per run, 1,062 files, ~42 GB). No run
+  directory, metric CSV, or final checkpoint was removed.
+
+Caveat to carry into any table: bandwidth, per-group code dim, and encoder head
+width all move together across this grid (encoder parameters span 2.4M-18.8M),
+and grouped code usage/perplexity are currently pooled over groups rather than
+reported per group.
 
 ## Data-loss incident: Slurm TIMEOUT destroys node-local output (2026-07-22)
 
@@ -116,7 +448,7 @@ all other PPO/environment settings are fixed. Checkpoints are written every
 25M frames. Compare arms by sustained wall-clock time to matched episodic
 return and episodic-length levels, not final sample count alone. The W&B
 project is `g1-bones-seed-h10-gpu-lr-ablation-ice`. Launcher:
-`experiments/submit_bones_seed_h10_gpu_lr_ablation_ice.sh`.
+`experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_bones_seed_h10_gpu_lr_ablation_ice.sh`.
 
 PACE submission now accepts the same restricted
 `CLUSTER_SLURM_DEPENDENCY=afterok:<job>[:<job>...]` contract as the general
@@ -435,7 +767,7 @@ comparable quality to 4096 x 24 while finishing faster (~4.5h at ~65k fps vs.
 choice to carry forward once re-validated post-fix.
 
 Full detail, the audit tool
-(`scripts/dump_backend_index_contract.py`), and the fix commits are on the
+(`scripts/audit/dump_backend_index_contract.py`), and the fix commits are on the
 unmerged branch; see `wiki/sim2sim-backend-verification.md` there. Not yet
 reviewed for merge into `main`, and not yet reconciled against the
 Strict/legacy-default reversal above (both branches diverged from a shared
@@ -741,6 +1073,52 @@ preparation data reached planner training or evaluation. These failed chains
 are not paper results and must not be resumed without auditing the partial
 artifacts.
 
+**2026-07-23 latent-only H200 language pilot submitted.** The new H200
+controller is intentionally being tested outside the paper comparison: it was
+trained on the 91-motion SONIC-filtered manifest and has no matched qualified
+vanilla checkpoint. The campaign therefore sets `INTERFACES=latent_skill` and
+does not run a full-body baseline, controller comparison, or GPU/parameter
+ablation. It uses ten goals common to the 91-motion and fresh 100-motion trees,
+150 demonstration rows plus 150 planner-rollout rows per goal, ten same-goal
+rollout environments, and the fixed 500-step evaluation.
+
+The guarded dependency chain is:
+
+| Stage | Slurm job |
+| --- | ---: |
+| Prepare | `3560697` |
+| Rollout array | `3560698` |
+| Fine-tune | `3560699` |
+| Final eval array | `3560700` |
+| Summarize | `3560701` |
+
+Output root: `logs/interface_baselines/bones_seed_h200_language_preliminary_seed0_20260723`.
+The persistent record is on Skynet at the corresponding `cluster_submission.json`.
+At submission verification, all five jobs were `PENDING`; no stage had begun.
+The H200 checkpoint SHA-256 is
+`6765a324a840b33a84f9a0b5a817c60303979bbec7a36ebc31242086d61d1572` and the
+encoder binding passed all 14 tensor checks. This run is
+`preliminary_unqualified=true` and cannot enter the paper aggregate.
+
+**2026-07-23 local ten-goal baseline campaign added.** To obtain the two basic
+planner baselines without waiting on cluster queues, the campaign
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/` runs the same
+shared Phase-5 workflow entirely on the local workstation: latent-only, the
+same ten goals and frozen H200 checkpoints as the H200 pilot, a derived
+ten-motion subset manifest (`data/bones_seed_phase5_local10/`, source-hash
+recorded) so Isaac only loads the needed references, 150 demonstration plus
+150 rollout rows per goal, and 500-step episodes. Its two deliverables are the
+demonstration-pretrained planner and the rollout-finetuned planner under
+`logs/interface_baselines/bones_seed_phase5_local10_seed0/latent_skill/`. As
+part of this, the canonical stage driver
+`run_bones_seed_multigoal_language_comparison.{py,sh}` (now under
+`experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/`)
+was made location-independent: it resolves its sibling workflow scripts and the
+repository root from its own path instead of the hardcoded pre-reorganization
+`experiments/interface_baselines/` prefix, which had left the pipeline
+unrunnable after the 2026-07-23 script reorganization. Like the H200 pilot,
+this local run is `preliminary_unqualified=true` and is not paper evidence.
+
 Data-budget interpretation is important: one saved row is one 5 Hz planner
 decision containing a ten-frame 50 Hz command chunk. The failed configuration
 requested 100,000 demonstration rows plus 100,000 rollout rows per interface,
@@ -753,13 +1131,134 @@ The current recommended Phase 5 budget is:
 - 30,000 unique rows in the merged fine-tuning dataset.
 
 The old 100,000 plus 100,000 configuration should become an optional
-large-data scaling point, not the default paper run. This budget change has
-not yet been encoded into a replacement launcher or submitted. Before doing
-so, verify that the four difficult motions can reach 150 rows and increase the
-collection safety limit without changing the 500-step episode protocol.
+large-data scaling point, not the default paper run. The 150-row setting is
+encoded in the latent-only preliminary campaign above; it has not replaced the
+guarded paper launcher. Before changing the paper launcher, verify that the
+four difficult motions can reach 150 rows and increase the collection safety
+limit without changing the 500-step episode protocol.
 
 Data preparation and hashes:
 [BONES-SEED Phase-5 Data Preparation](bones-seed-phase5-data-preparation.md).
+
+## Enc380 5B Qualification and Revised Planner Diagnostic (2026-07-30)
+
+The root+qpos-content latent tracker reached a durable 5,000,085,504 credited
+frames at
+`/data/resume_store/lafan1_enc380_rootqpos_h10_z256_seed0/model_5b.pt`
+(SHA-256 `d33fa146f54222848da8b9a92eb5579f5acb8b3a46c484399c906b076c219260`).
+Historical qualification job `5550527` explicitly used the
+`Isaac-Imitation-G1-Latent-Strict-v0` environment that trained the tracker.
+Saved training and evaluation configs agree on the pelvis anchor, all strict
+termination functions and thresholds, no curriculum, and the legacy reset
+family. The only intervening environment-config addition is an unused expert
+keypoint observation, not an actor input. The job passed the
+checkpoint-completion audit, fixed four-motion selection audit, all 14
+frozen-encoder tensor bindings, and its then-current protocol checks. Its 0.35
+strict tracking success is no longer treated as the qualification headline:
+the launcher forced 1,000 control steps from frame 0, while the training
+contract is 500 control steps from a start in `[0, 200]` and therefore never
+advances beyond reference cursor 700. Fall-free survival was 1.0; failures came
+from the original
+tracking limits (`foot_pos_xyz`: 17, `ee_body_pos`: 11, `anchor_ori`: 2, with
+overlaps).
+
+The same rollout retains 80% of motions at 500 frame-0 control steps and 65% at
+reference cursor 700; the additional failures that produced 35% occurred
+outside the training support. A matched rerun also removed the apparent
+full-body-versus-enc380 contradiction: under the same 1,000-step disturbed
+strict test, the original 670D-input latent tracker scored 35% and enc380 scored
+37.5%, with both trackers fully fall-free. The strict-pass MPJPE near 39 mm is
+termination-truncated and cannot be read as a full-horizon average.
+
+The achieved-state evaluator initially assumed the full 58D `expert_motion`
+term. That code defect was fixed to replace configured qpos, EE, and five-body
+keypoint pose components independently; the full focused gate now passes 48
+tests. The qualification launcher previously hard-coded four environments for
+the full-horizon diagnostic; it now uses the same 40 environments as the
+strict pass. Job `5550527` completed that corrected non-terminating pass for
+1,000 steps per motion: 102.76 mm root-relative MPJPE, 0.236 rad joint RMSE,
+0.590 m EE position error, and fall-free survival 1.0 over 40,000 transitions.
+Its retained video is
+`/home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab/logs/interface_baselines/lafan1_enc380_route_capacity_5b_20260730_historical_strict_r3/qualification/full_horizon_oracle/videos/play/rl-video-step-0.mp4`
+(SHA-256 `fec18dab52cde69970f3ef93a9613994c8c989713325332cee340f96acb0262e`).
+The earlier four-motion job `5549977` is superseded.
+
+Both earlier submitted planner chains remained behind `afterok` and were
+canceled; no demonstrations or planner results came from them. The replacement
+gate keeps the old Strict-v0 environment and strict limits but matches the
+training support: 100 parallel `walk1_subject1` starts in `[0, 200]`, 500
+control steps, and the original disturbances. The local gate passed at 0.89
+strict success and 1.0 fall-free survival (31.06 mm termination-truncated
+MPJPE). Its separate deterministic, non-terminating pass measured all 50,000
+requested transitions without survivorship bias. The 1,000-step result remains
+only an out-of-distribution stress diagnostic; the 0.80 threshold is not being
+tuned post hoc.
+
+The revised planner workflow removes the learned-planner rollout loop for time
+and first returns to the previous `walk1_subject1` continuity motion. One
+persistent Isaac session uses 100 environments and commits exactly 100
+completed variable-length trajectory segments. Rows are buffered by
+`(env_id, episode_id)` until reset, so partial live segments at the cutoff are
+discarded and temporal histories never cross a reset. The completed local
+collection has 4,864 high-level rows and paired targets from the same causal
+`10 x 93` histories: 380D root+qpos packets for the explicit-planner route and
+256D latent targets for the direct latent route. It is therefore usable for
+both planners without another collection.
+
+Each of the 12 logical capacity cells (four sizes x three seeds) trains both
+planners once from the same paired oracle data and evaluates them. The frozen
+progressive optimizer schedule is 10k/20k/30k/50k updates for
+tiny/small/medium/large at effective batch 1024, with microbatches
+1024/512/256/128. Evaluation uses the minimum held-out normalized-target-RMSE
+checkpoint. ICE's 16-hour wall is assigned per route, so the 12 paired cells are
+implemented as 24 independent array tasks.
+
+The guarded replacement chain was submitted on 2026-07-30:
+`5550598 -> 5550599 -> 5550601[0-23]%8 -> 5550602`
+(qualification, one-session oracle collection, planner/evaluation route array,
+aggregate). Its fresh output root is
+`logs/interface_baselines/lafan1_enc380_route_capacity_5b_oracle100_progressive_b1024_20260730`.
+There is no separate planner pretrain, planner-driven collection, merge,
+retrain, or finetune stage. Because the motion was chosen for continuity with
+prior results, this is a preliminary one-motion diagnostic rather than a
+representative paper sample.
+
+The follow-up strong-explicit screen reuses these same 4,864 rows for H30
+supervision rather than collecting again. Offline reconstruction preserves the
+causal state, trajectory identity, and trajectory split and reproduces every
+stored H10 prefix with maximum absolute error `1.062e-6`. One medium seed-0 H30
+planner is trained for 30k updates at effective batch 1024 (microbatch 256), then
+the identical checkpoint is evaluated with either its first H10 executed and
+H20 discarded or with exponential temporal ensembling of the three overlapping
+H10 subwindows. Ensembling happens in explicit root+qpos space before the frozen
+enc380 encoder, with old root poses re-expressed against the current pelvis and
+per-environment histories cleared on asynchronous reset. H30 is recorded as a
+higher-bandwidth diagnostic (5,700 values/s versus H10's 1,900), not as a
+replacement for the fixed main explicit row.
+
+The implementation and local gates passed on 2026-07-30: the materializer
+validated all 4,864 rows; the medium H30 model completed a batch-1024,
+microbatch-256 update with target width 1,140; and 20-step one-environment Isaac
+rollouts passed for both first-H10 and exponential execution. The guarded
+launcher is `submit_enc380_h30_temporal_ensemble_ice.sh`; it depends on source
+demo job `5550599`, and its aggregate also waits for source route-array job
+`5550717` so the repaired matching H10 medium/seed-0 baseline is present.
+
+During the original route array, the explicit tasks exposed a defect in the
+packet-encoder pin *audit*: it compared the command held for ten 50 Hz control
+steps against a fresh target recomputed on every control step, producing a false
+MSE near 0.123. The packet contents and encoder layout checks passed, and the
+latent-route sibling tasks completed. Pin v2 compares the expert-packet encoder
+output directly to the oracle encoder output inside the same 5 Hz publication;
+the local actual-encoder gate measured exactly zero MSE and zero max error over
+three publications. Recovery array `5550717[0-11]%8` waits for the original
+array, reuses all existing explicit `best.pt` files, and runs only pin v2 plus
+missing evaluations. Repaired main aggregation is job `5550718`.
+
+The H30 screen is now running as ICE job `5550720`; its audited aggregate is job
+`5550721`, dependent on both the H30 screen and explicit recovery array
+`5550717`. Output:
+`logs/interface_baselines/lafan1_enc380_h30_temporal_medium_seed0_20260730`.
 
 ## Preliminary Planner Evidence
 
@@ -815,6 +1314,11 @@ Exact diagnostic tables and artifact paths are in
 
 ## Document Map
 
+- [Project Progress Report](progress-report.md): results-facing summary in
+  three fixed sections (latent encoder ablations, interface design,
+  hardware), updated on every result change.
+- [Experiment Navigation](../experiments/README.md): current dated campaign,
+  historical launcher indexes, and staged paper-facing entrypoint.
 - [Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md):
   authoritative research design and phase contract.
 - [Whole-Body VLA and Latent-Action Literature Review](whole-body-vla-literature-review.md):

@@ -1,5 +1,7 @@
 # Ablation Experiment Plan: Interface Comparison and Language Conditioning
 
+Status: **archived 2026-07-21 plan**. Its one-off 5B tracker, per-step-token, and capacity launchers were pruned on 2026-07-23 after the current latent-learning campaign and focused two-row paper protocol superseded this execution surface. Paths below are chronology, not live commands.
+
 Drafted 2026-07-21; protocol decisions confirmed by the user the same day
 (see "User-decided protocol" below). Status: **implementation started —
 nothing submitted.** All cells in this plan are post-joint-order-fix (PR #24,

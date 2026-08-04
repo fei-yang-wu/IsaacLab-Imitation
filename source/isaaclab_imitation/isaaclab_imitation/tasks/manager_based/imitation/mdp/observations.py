@@ -63,11 +63,25 @@ def expert_motion_command(
 
 
 def policy_expert_motion_command(
-    env: ImitationRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+    env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
-    """Full-body command for the actor, optionally streamed from a chunk."""
+    """Full-body command for the actor, optionally streamed from a chunk.
+
+    In reference mode this is the windowed view of the explicit motion command
+    (past/future steps from the term params); with 0/0 it is exactly the
+    single-frame command. The same term therefore serves both the single-frame
+    actor and the windowed encoder surfaces.
+    """
     if env.policy_command_mode == "reference":
-        return expert_motion_command(env, asset_cfg)
+        return expert_window_motion(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            asset_cfg=asset_cfg,
+        )
     return env.current_full_body_tracker_command_term(
         "expert_motion",
         joint_ids=asset_cfg.joint_ids,
@@ -88,15 +102,6 @@ def agent_latent_command(
 ) -> torch.Tensor:
     del asset_cfg
     return env.get_agent_latent_command()
-
-
-def reconstructed_reference_action(
-    env: ImitationRLEnv,
-    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
-) -> torch.Tensor:
-    """Aligned raw action label for training; never include it in actor inputs."""
-    del asset_cfg
-    return env.current_reconstructed_reference_action()
 
 
 def expert_anchor_pos_b(
@@ -143,12 +148,20 @@ def expert_anchor_ori_b(
 
 def policy_expert_anchor_pos_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Actor anchor-position command, direct or streamed from a chunk."""
     if env.policy_command_mode == "reference":
-        return expert_anchor_pos_b(env, anchor_body_name, asset_cfg)
+        return expert_window_anchor_pos_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            anchor_body_name=anchor_body_name,
+            asset_cfg=asset_cfg,
+        )
     return env.current_full_body_tracker_command_term(
         "expert_anchor_pos_b",
         anchor_body_name=anchor_body_name,
@@ -157,15 +170,47 @@ def policy_expert_anchor_pos_b(
 
 def policy_expert_anchor_ori_b(
     env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
     anchor_body_name: str = "torso_link",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ) -> torch.Tensor:
     """Actor anchor-orientation command, direct or streamed from a chunk."""
     if env.policy_command_mode == "reference":
-        return expert_anchor_ori_b(env, anchor_body_name, asset_cfg)
+        return expert_window_anchor_ori_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            anchor_body_name=anchor_body_name,
+            asset_cfg=asset_cfg,
+        )
     return env.current_full_body_tracker_command_term(
         "expert_anchor_ori_b",
         anchor_body_name=anchor_body_name,
+    )
+
+
+def command_component(
+    env: ImitationRLEnv,
+    channel: str = "actor",
+    component: str = "joint_qpos_qvel",
+    past_steps: int = 0,
+    future_steps: int = 0,
+) -> torch.Tensor:
+    """One command component, from one of the two command channels.
+
+    This is the single observation-side reader of the v2 command surface. The
+    ``actor`` channel serves whatever the configured actor emitter produces
+    (explicit view, published packet slot) over its own window; the
+    ``reference`` channel serves privileged reference data at the requested
+    window -- single-frame for the critic, the recipe's window for the skill
+    encoder's view.
+    """
+    term = env.command_manager.get_term(channel)
+    if int(past_steps) == 0 and int(future_steps) == 0:
+        return term.component(component)
+    return term.component(
+        component, past_steps=int(past_steps), future_steps=int(future_steps)
     )
 
 
@@ -177,6 +222,28 @@ def expert_window_motion(
 ) -> torch.Tensor:
     return env.get_current_command_window_term(
         term_name="expert_motion",
+        past_steps=past_steps,
+        future_steps=future_steps,
+        joint_ids=asset_cfg.joint_ids,
+    )
+
+
+def expert_window_motion_qpos(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Window form of :func:`policy_expert_motion_qpos`.
+
+    Exists so the DiffSR macro state can be built over the ``root_qpos`` command
+    space (29 joint positions + 9 root = 38/frame -> 380 per 10-frame window)
+    instead of the full-body space (67/frame -> 670). That makes the skill
+    encoder's input width byte-identical to the ``root_qpos`` packet, exactly as
+    the existing 670-wide encoder matches the full-body packet.
+    """
+    return env.get_current_command_window_term(
+        term_name="expert_motion_qpos",
         past_steps=past_steps,
         future_steps=future_steps,
         joint_ids=asset_cfg.joint_ids,
@@ -212,6 +279,189 @@ def expert_window_anchor_ori_b(
         past_steps=past_steps,
         future_steps=future_steps,
         anchor_body_name=anchor_body_name,
+    )
+
+
+def policy_expert_motion_qpos(
+    env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor joint-position command (no velocities), direct or streamed.
+
+    ``root_qpos`` drops the 29 joint-velocity channels the full-body packet
+    carries, halving the joint payload. Its controller is trained on this space,
+    so the velocities are absent by design. In reference mode the term is the
+    windowed view (past/future from the term params; 0/0 = single frame).
+    """
+    if env.policy_command_mode == "reference":
+        return expert_window_motion_qpos(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            asset_cfg=asset_cfg,
+        )
+    return env.current_full_body_tracker_command_term(
+        "expert_motion_qpos",
+        joint_ids=asset_cfg.joint_ids,
+    )
+
+
+def policy_expert_ee_pos_b(
+    env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor EE-position command, direct or streamed from a published chunk.
+
+    Mirrors :func:`policy_expert_anchor_pos_b`. Under ``ee_chunk_current_slot``
+    the tracker receives the slot of the held packet that is time-aligned with
+    the current control step (the window is phase-shifted before slot zero is
+    taken), so a 5 Hz packet drives 50 Hz control one frame at a time. In
+    reference mode the term is the windowed view (0/0 = the single current
+    frame, exactly what the EE tracker saw during training).
+    """
+    del asset_cfg
+    if env.policy_command_mode == "reference":
+        return expert_window_ee_pos_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            reference_body_names=reference_body_names,
+            anchor_body_name=anchor_body_name,
+        )
+    return env.current_full_body_tracker_command_term(
+        "expert_ee_pos_b",
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def policy_expert_ee_ori_b(
+    env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor EE-orientation (rot6d) command, direct or streamed from a chunk."""
+    del asset_cfg
+    if env.policy_command_mode == "reference":
+        return expert_window_ee_ori_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            reference_body_names=reference_body_names,
+            anchor_body_name=anchor_body_name,
+        )
+    return env.current_full_body_tracker_command_term(
+        "expert_ee_ori_b",
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def policy_expert_keypoint_pos_b(
+    env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor sparse-keypoint command, direct or streamed from a published chunk.
+
+    ``root_points5`` carries keypoint POSITIONS only (no per-keypoint rot6d), so
+    this is the position half of the same anchor-frame body transform the EE
+    terms use, exposed under its own name so its body set and its slot in the
+    held packet stay independent of the EE interface's.
+    """
+    del asset_cfg
+    if env.policy_command_mode == "reference":
+        return expert_window_keypoint_pos_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            reference_body_names=reference_body_names,
+            anchor_body_name=anchor_body_name,
+        )
+    return env.current_full_body_tracker_command_term(
+        "expert_keypoint_pos_b",
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def policy_expert_keypoint_ori_b(
+    env: ImitationRLEnv,
+    past_steps: int = 0,
+    future_steps: int = 0,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Actor sparse-keypoint orientation command, direct or streamed.
+
+    Orientations use the same anchor frame and rot6d representation as the
+    end-effector orientation term. Keeping position and orientation as separate
+    observation terms lets an explicit interface select either point targets
+    or full keypoint poses without another hard-coded command space.
+    """
+    del asset_cfg
+    if env.policy_command_mode == "reference":
+        return expert_window_keypoint_ori_b(
+            env,
+            past_steps=past_steps,
+            future_steps=future_steps,
+            reference_body_names=reference_body_names,
+            anchor_body_name=anchor_body_name,
+        )
+    return env.current_full_body_tracker_command_term(
+        "expert_keypoint_ori_b",
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def expert_window_keypoint_pos_b(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    del asset_cfg
+    return env.get_current_command_window_term(
+        term_name="expert_keypoint_pos_b",
+        past_steps=past_steps,
+        future_steps=future_steps,
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
+    )
+
+
+def expert_window_keypoint_ori_b(
+    env: ImitationRLEnv,
+    past_steps: int = 1,
+    future_steps: int = 1,
+    reference_body_names: tuple[str, ...] = (),
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Window of sparse-keypoint rot6d orientations in the anchor frame."""
+    del asset_cfg
+    return env.get_current_command_window_term(
+        term_name="expert_keypoint_ori_b",
+        past_steps=past_steps,
+        future_steps=future_steps,
+        anchor_body_name=anchor_body_name,
+        reference_body_names=reference_body_names,
     )
 
 

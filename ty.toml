@@ -1,0 +1,17 @@
+# ty (Astral) configuration for the IsaacLab-Imitation workspace.
+# Mirrors the module-resolution layout previously used by pyrefly.toml so the
+# same import roots work for both the `ty check` CLI task and the language
+# server. A ty.toml in this directory takes precedence over any [tool.ty]
+# tables in nested pyproject.toml files.
+
+[environment]
+python = ".pixi/envs/isaaclab/bin/python"
+python-version = "3.12"
+# Isaac Lab is installed as a pip wheel whose top-level package is empty; the
+# real source tree must be added explicitly for static analysis to resolve it.
+# The first-party packages and dependency checkouts follow.
+extra-paths = [
+    ".pixi/envs/isaaclab/lib/python3.12/site-packages/isaaclab/source/isaaclab",
+    "source/isaaclab_imitation",
+    "source/imitation_experiments",
+]

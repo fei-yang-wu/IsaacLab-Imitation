@@ -1,6 +1,8 @@
 # LAFAN1 Motion Tracking Evaluation
 
-This file records how to rerun the LAFAN1 motion tracking experiment.
+Status: **historical record**. The per-motion runner and summarizer were pruned on 2026-07-23 because this is not the current paper protocol. The commands below describe the completed workflow and are not live rerun instructions. Their paths and recovery commands are in [`experiments/PRUNED_SCRIPTS.md`](../experiments/PRUNED_SCRIPTS.md).
+
+This file records how the LAFAN1 motion tracking experiment was run.
 
 ## Goal
 
@@ -186,7 +188,7 @@ The baseline horizon defaults to `HORIZON_STEPS`.
 
 ```bash
 MODE=lafan1-motion-tracking \
-experiments/interface_baselines/submit_cluster_interface_baselines.sh
+experiments/campaigns/2026-07-23-bones-phase5-language-local10/interface_baselines/submit_cluster_interface_baselines.sh
 ```
 
 Useful variables:
