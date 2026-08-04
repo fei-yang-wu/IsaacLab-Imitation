@@ -209,6 +209,35 @@ domain randomization and exploration noise make errors much larger, it is the
 *least* saturated term at 0.599. That mistake is why `s5` is only weakly
 motivated; see `arms.sh` for the correction.
 
+## Results at 500M
+
+Scored with `--randomization none`, 40 clips, seed 0, frame 0. Compared against
+the **control at matched 500M** (job 5561149), not against the 1.9B baseline.
+
+| arm | MPJPE strict | EE strict | survival | clips full | MPJPE full-horiz | EE full-horiz |
+|---|---|---|---|---|---|---|
+| baseline (1.9B, pre-screen) | 20.98 | 0.1041 | 449.0 | 24/40 | 41.19 | 0.2009 |
+| **control** (std 0.30) | 22.03 | 0.0785 | 444.6 | 25/40 | 43.51 | 0.2272 |
+| s1 (std 0.10) | 19.61 | 0.0791 | 442.1 | 24/40 | 43.42 | 0.1902 |
+| **s2 (std 0.05)** | **17.89** | **0.0722** | 439.1 | 23/40 | 43.10 | 0.2034 |
+
+**Sharpening `motion_body_pos` works, and is monotone**: 22.03 → 19.61 → 17.89
+strict MPJPE, i.e. **−18.8%** at std 0.05, with EE **−8.0%**. Both are well
+outside the ~2% seed spread the 2026-08-02 campaign measured.
+
+Three things to read carefully:
+
+- **Full-horizon barely moves** (43.51 → 43.42 → 43.10). That is exactly what
+  the failure-dominance finding predicts: the full-horizon pass is governed by
+  the clips that fail, not by precision on the ones that do not. Sharpening the
+  kernel buys precision, not survival.
+- **There is a survival cost**: 444.6 → 442.1 → 439.1, clips-full 25 → 24 → 23.
+  Small, but consistently in the wrong direction, and it is the reason to find
+  where the sweep turns rather than assuming sharper is always better.
+- **The control already beat the 1.9B baseline on EE** (0.0785 against 0.1041,
+  −25%) despite four times less training. That is the SONIC alignment plus the
+  foot reward, not the kernel change.
+
 ## Scoring
 
 `score_eval_tracking_screen.sh` pulls each 500M checkpoint and runs

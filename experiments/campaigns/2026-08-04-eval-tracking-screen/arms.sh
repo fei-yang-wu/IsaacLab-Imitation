@@ -79,6 +79,25 @@ EVAL_SCREEN_ARM_SPECS=(
 # s7 is kept anyway because it isolates the wrist contribution: if drift is the
 # whole story it should do nothing, and that is worth knowing rather than
 # assuming.
+# --- Round 4: the trend has not turned, so find where it does ----------------
+#
+# At matched 500M against the control, sharpening motion_body_pos is monotone
+# and large on the goal metric:
+#
+#   std 0.30 (control)  MPJPE 22.03  EE 0.0785  survival 444.6
+#   std 0.10 (s1)       MPJPE 19.61  EE 0.0791  survival 442.1
+#   std 0.05 (s2)       MPJPE 17.89  EE 0.0722  survival 439.1
+#
+# -18.8% MPJPE and -8.0% EE at std 0.05, well outside the ~2% seed spread, with
+# a small survival cost (444.6 -> 439.1). Full-horizon MPJPE barely moves
+# (43.51 -> 43.10), which is what the failure-dominance finding predicts: that
+# pass is governed by the clips that fail, not by precision on the ones that do
+# not.
+#
+# s10 continues the sweep. A kernel this narrow eventually stops helping -- the
+# reward goes flat again below the achievable error, and the survival cost keeps
+# accruing -- so the point is to find the turn rather than to assume 0.05 is it.
+"s10_bodypos_std0025|motion_body_pos kernel 0.05 -> 0.025, continuing a monotone sweep that has not yet turned. Watch survival and the full-horizon pass as well as strict MPJPE: the sharper arms trade a little survival for precision.|env.rewards.motion_body_pos.params.std=0.025"
 "s5_anchor_sharp|motion_global_anchor_pos kernel 0.30 -> 0.10. Targets root drift, which is ~100% of world-frame EE error and the larger half of global MPJPE. 96.7% saturated today.|env.rewards.motion_global_anchor_pos.params.std=0.1"
 "s6_anchor_sharp_w2|s5 plus weight 0.5 -> 2.0, so the term controlling the dominant error source stops being the lowest-weighted tracking term. Gradient 0.59 -> 16.2, i.e. into the band where tracking_reward_points already operates.|env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
 # --- Round 3: the failures are ONE MOTION CLASS, and one missing allowance ---
