@@ -204,7 +204,13 @@ class ReferenceCommandTerm(CommandTerm):
         self._build_reset_samplers()
         # Per-env metric buffers; CommandTerm.reset() averages these over the
         # resetting envs into `Metrics/reference/<name>` and zeroes them.
+        # `mpjpe_mm` is MPJPE-L and keeps its name so every historical run and
+        # the screen aggregator stay readable; `mpjpe_l_mm` is the same value
+        # under the name the SONIC/PHC lineage uses, and `mpjpe_g_mm` is the
+        # global counterpart, which counts the drift MPJPE-L removes.
         self.metrics["mpjpe_mm"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["mpjpe_l_mm"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["mpjpe_g_mm"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["anchor_pos_err_m"] = torch.zeros(
             self.num_envs, device=self.device
         )
@@ -382,12 +388,17 @@ class ReferenceCommandTerm(CommandTerm):
         # (metres; converted to mm at this logging boundary). It returns None
         # when the environment was built without an MPJPE body set, and the
         # metric then stays at zero because there is nothing to measure.
-        mpjpe_m = env._compute_mpjpe_metric()
-        if mpjpe_m is None:
+        mpjpe_pair = env._compute_mpjpe_metrics()
+        if mpjpe_pair is None:
             self.metrics["mpjpe_mm"].zero_()
+            self.metrics["mpjpe_l_mm"].zero_()
+            self.metrics["mpjpe_g_mm"].zero_()
         else:
             self._validate_mpjpe_bodies(env)
-            self.metrics["mpjpe_mm"][:] = mpjpe_m * _METRES_TO_MM
+            mpjpe_local_m, mpjpe_global_m = mpjpe_pair
+            self.metrics["mpjpe_mm"][:] = mpjpe_local_m * _METRES_TO_MM
+            self.metrics["mpjpe_l_mm"][:] = mpjpe_local_m * _METRES_TO_MM
+            self.metrics["mpjpe_g_mm"][:] = mpjpe_global_m * _METRES_TO_MM
         robot_anchor_pos_w, robot_anchor_quat_w = env._get_robot_anchor_state_w_fast(
             self.cfg.anchor_body_name
         )

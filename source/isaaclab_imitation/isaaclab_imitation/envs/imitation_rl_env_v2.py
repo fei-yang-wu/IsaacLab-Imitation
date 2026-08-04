@@ -314,6 +314,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     def _compute_mpjpe_metric(self) -> torch.Tensor | None:
         return self.expert_data_plane._compute_mpjpe_metric()
 
+    def _compute_mpjpe_metrics(self) -> tuple[torch.Tensor, torch.Tensor] | None:
+        return self.expert_data_plane._compute_mpjpe_metrics()
+
     def _compute_rollout_reference_state_log(self) -> dict[str, float]:
         return self.expert_data_plane._compute_rollout_reference_state_log()
 
