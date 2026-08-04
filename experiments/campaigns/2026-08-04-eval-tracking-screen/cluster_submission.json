@@ -8,6 +8,13 @@
       "seed": 0,
       "total_frames": 500000000
     },
+    "s11_bodypos_std005_w2": {
+      "job": "5561284",
+      "num_envs": 12288,
+      "rollout_steps": 24,
+      "seed": 0,
+      "total_frames": 500000000
+    },
     "s1_bodypos_std010": {
       "job": "5561175",
       "num_envs": 12288,
@@ -71,7 +78,7 @@
   "launcher": "experiments/campaigns/2026-08-04-eval-tracking-screen/submit_eval_tracking_screen_ice.sh",
   "motivation": "motion_body_pos is 99.5% saturated at 20 mm and supplies 72x less gradient than tracking_reward_points, so the term whose error is MPJPE pays almost nothing for further precision",
   "scoring": "evaluate_checkpoint --randomization none on the 500M checkpoint (tracking-fidelity protocol, MODE actions). NOT the training curve.",
-  "submitted_at": "2026-08-04T01:14:02.889929-04:00",
+  "submitted_at": "2026-08-04T01:35:47.000759-04:00",
   "task": "Isaac-Imitation-G1-v2",
   "wandb": {
     "group": "eval-tracking-500m",
