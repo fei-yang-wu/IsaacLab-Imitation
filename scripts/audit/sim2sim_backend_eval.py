@@ -69,6 +69,18 @@ parser.add_argument("--steps", type=int, default=300)
 parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--output", type=Path, default=None)
 parser.add_argument(
+    "--agent_entry_point",
+    type=str,
+    default=None,
+    help=(
+        "Agent config entry point to build the network from, e.g. "
+        "rlopt_ipmd_tuned_cfg_entry_point. Must match what the checkpoint was "
+        "TRAINED with -- the tuned recipe adds input normalization and changes "
+        "widths, so a tuned checkpoint fails on a state-dict mismatch under the "
+        "default contract. Defaults to the task's algorithm entry point."
+    ),
+)
+parser.add_argument(
     "--keep_terminations",
     action="store_true",
     default=False,
@@ -304,7 +316,9 @@ def _agent_entry_point(task_name: str, algorithm: str) -> str:
     return entry
 
 
-agent_entry_point = _agent_entry_point(args_cli.task, args_cli.algorithm)
+agent_entry_point = args_cli.agent_entry_point or _agent_entry_point(
+    args_cli.task, args_cli.algorithm
+)
 
 
 @hydra_task_config(args_cli.task, agent_entry_point)
