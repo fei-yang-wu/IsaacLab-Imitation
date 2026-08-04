@@ -65,6 +65,30 @@ root is low, so it targets the 6 fallAndGetUp clips. `run`, `jump` and `fight`
 failures happen at normal or high root height and will need something else —
 worth knowing before reading s8's result as a general fix.
 
+## Clip statistics do not predict failure
+
+Correlating per-clip reference statistics against survival on the baseline
+(40 clips):
+
+| statistic | correlation with survival |
+|---|---|
+| mean \|joint velocity\| | **+0.012** |
+| mean \|joint acceleration\| | **+0.027** |
+| root speed | −0.270 |
+| min root height | +0.233 |
+
+Joint velocity and acceleration are uncorrelated with survival. The dance clips
+carry the *highest* joint velocities in the dataset (1.35–1.74) and all eight
+survive the full horizon; fallAndGetUp sits mid-range and all six fail. Within
+run, jump, fight and sprint, some clips survive and some fail.
+
+So "dynamic motions fail" is **not** supported — it was an over-reading of the
+first 10-env sample, where the split happened to be dance against fallAndGetUp.
+Only fallAndGetUp is a uniform class. Failure is per-clip and is not predicted
+by any simple statistic tried here, which rules out a cheap clip-level
+intervention (difficulty weighting, speed-gated thresholds) and points back at
+general tracking capability as the lever.
+
 ## foot_pos_xyz is a tripwire, not the cause
 
 Before spending 500M-frame runs on the allowances, they were applied at
