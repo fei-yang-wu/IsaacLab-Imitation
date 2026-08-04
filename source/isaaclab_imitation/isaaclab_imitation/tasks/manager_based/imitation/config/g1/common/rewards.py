@@ -10,7 +10,11 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils.configclass import configclass
 
 from .... import mdp
-from .constants import G1_FOOT_BODY_NAMES, G1_TRACKED_BODY_NAMES
+from .constants import (
+    G1_FOOT_BODY_NAMES,
+    G1_TRACKED_BODY_NAMES,
+    G1_WRIST_BODY_NAMES,
+)
 
 
 @configclass
@@ -291,6 +295,32 @@ class G1SonicRewardsCfg(G1RewardsCfg):
                 "robot", body_names=G1_FOOT_BODY_NAMES, preserve_order=True
             ),
             "reference_body_names": G1_FOOT_BODY_NAMES,
+            "anchor_body_name": "pelvis",
+            "std": 0.1,
+        },
+    )
+    # Wrist end-effector tracking, INERT BY DEFAULT (weight 0.0).
+    #
+    # The wrists are the least-constrained bodies in the whole contract: no
+    # termination bounds them horizontally -- `ee_body_pos` checks the Z
+    # component alone and `foot_pos_xyz` covers only the ankles -- and their
+    # only positional reward is their share of `tracking_reward_points`, where
+    # they are 2 of 5 points. Feet by contrast have a 3D termination and a
+    # dedicated 3D reward.
+    #
+    # Same geometry as `motion_foot_pos`, on the hands instead. Left at 0.0 so
+    # the default is unchanged and the term costs nothing --
+    # `RewardManager.compute` skips zero-weight terms without calling them --
+    # and a screen arm enables it with
+    # `env.rewards.motion_ee_pos.weight=<w>`.
+    motion_ee_pos = RewTerm(
+        func=mdp.reference_relative_body_position_error_exp,
+        weight=0.0,
+        params={
+            "asset_cfg": SceneEntityCfg(
+                "robot", body_names=G1_WRIST_BODY_NAMES, preserve_order=True
+            ),
+            "reference_body_names": G1_WRIST_BODY_NAMES,
             "anchor_body_name": "pelvis",
             "std": 0.1,
         },

@@ -132,6 +132,19 @@ G1_EE_BODY_NAMES: list[str] = [
 # plus the pelvis. Position and rot6d orientation are exposed as separate terms,
 # so configs can select point targets (5 x 3) or full poses (5 x 9). The pelvis
 # is not redundant with the torso_link anchor -- the waist joints separate them.
+G1_WRIST_BODY_NAMES: list[str] = [
+    "left_wrist_yaw_link",
+    "right_wrist_yaw_link",
+]
+"""The hands, for an end-effector tracking reward.
+
+Separate from :data:`G1_EE_BODY_NAMES`, which also contains the ankles: those
+already carry a dedicated 3D reward (`motion_foot_pos`) and a 3D termination
+(`foot_pos_xyz`), so including them here would double-count the feet and
+dilute the wrist signal this term exists to supply.
+"""
+
+
 G1_FOOT_BODY_NAMES: list[str] = [
     "left_ankle_roll_link",
     "right_ankle_roll_link",

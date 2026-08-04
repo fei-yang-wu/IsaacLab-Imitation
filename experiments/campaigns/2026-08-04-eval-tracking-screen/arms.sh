@@ -33,6 +33,30 @@ EVAL_SCREEN_ARM_SPECS=(
 "s2_bodypos_std005|motion_body_pos kernel 0.30 -> 0.05. Reward at 20 mm falls to 0.85, gradient 29x. Brackets s1 from below; if precision is kernel-limited this should beat it, and if it is too sharp early training will destabilise.|env.rewards.motion_body_pos.params.std=0.05"
 "s3_vel_sharp|Velocity kernels sharpened, lin 1.0 -> 0.3 and ang 3.14 -> 1.0, both ~96-98% saturated today. Velocity error is the derivative channel of position tracking, so this tests whether position precision is limited by an unrewarded velocity mismatch.|env.rewards.motion_body_lin_vel.params.std=0.3 env.rewards.motion_body_ang_vel.params.std=1.0"
 "s4_bodypos_std010_w2|s1 plus double weight on the same term, 1.0 -> 2.0. Separates 'the kernel was flat' from 'the term was underweighted' -- if s1 wins and this does not add, the shape mattered and the scale did not.|env.rewards.motion_body_pos.params.std=0.1 env.rewards.motion_body_pos.weight=2.0"
+# --- Round 2: EE tracking is a DRIFT problem, not a wrist problem -----------
+#
+# `ee_pos_error_m` in the evaluator is WORLD-frame (`actual_pos - ref_pos`, no
+# root subtraction). Decomposing the DR-off operating point:
+#
+#   root drift (world)       54.7 mm
+#   EE error (world)         53.5 mm   <- essentially all root drift
+#   MPJPE-L (root-relative)  20.2 mm   <- the actual pose error
+#
+# So EE tracking is limited by global drift, and a wrist-specific reward is a
+# second-order fix. The term that controls root position is
+# `motion_global_anchor_pos`, and at its shipped setting it is 96.7% saturated
+# AND the lowest-weighted tracking term in the whole config:
+#
+#   w=0.5 std=0.30 -> reward 0.967, gradient  -0.59   (shipped)
+#   w=0.5 std=0.10 -> reward 0.741, gradient  -4.06
+#   w=2.0 std=0.10 -> reward 0.741, gradient -16.22
+#
+# s7 is kept anyway because it isolates the wrist contribution: if drift is the
+# whole story it should do nothing, and that is worth knowing rather than
+# assuming.
+"s5_anchor_sharp|motion_global_anchor_pos kernel 0.30 -> 0.10. Targets root drift, which is ~100% of world-frame EE error and the larger half of global MPJPE. 96.7% saturated today.|env.rewards.motion_global_anchor_pos.params.std=0.1"
+"s6_anchor_sharp_w2|s5 plus weight 0.5 -> 2.0, so the term controlling the dominant error source stops being the lowest-weighted tracking term. Gradient 0.59 -> 16.2, i.e. into the band where tracking_reward_points already operates.|env.rewards.motion_global_anchor_pos.params.std=0.1 env.rewards.motion_global_anchor_pos.weight=2.0"
+"s7_ee_reward|Enable the inert wrist term motion_ee_pos at 2.0 -- same geometry as motion_foot_pos, on the hands. The wrists have no horizontal termination and only their 2-of-5 share of tracking_reward_points. Expected to be second-order if drift dominates.|env.rewards.motion_ee_pos.weight=2.0"
 )
 
 EVAL_SCREEN_ALL_ARM_NAMES=()
