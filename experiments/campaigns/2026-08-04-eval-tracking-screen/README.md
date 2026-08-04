@@ -13,9 +13,27 @@ DRY_RUN=0 ./submit_eval_tracking_screen_ice.sh       # submit all
 Arms and their rationale live in `arms.sh`, sourced by both scripts so the table
 has one definition.
 
+## Baseline
+
+The pre-screen checkpoint (`model_step_1900118016`, the 2026-08-03 aligned 5B
+run), 10 envs from frame 0, seed 0:
+
+| pass | MPJPE mm | EE (world) m | root drift m | survival |
+|---|---|---|---|---|
+| strict, DR off | 20.21 | 0.0535 | 0.0547 | 425.1 |
+| strict, DR on | 25.22 | 0.1631 | 0.1521 | 420.2 |
+| **full-horizon, DR off** | **59.68** | **0.1339** | **0.1295** | 500.0 |
+
+Read the full-horizon row as tracking quality: the strict pass scores MPJPE only
+over frames a live episode reached, so it is biased toward whatever survived.
+
 ## Where the error actually is
 
-Decomposing the DR-off evaluation of the pre-screen checkpoint:
+**Root drift accumulates, and it is the dominant eval-time failure.** It grows
+54.7 mm → 129.5 mm between the strict pass and the full horizon, and world-frame
+EE error tracks it almost exactly (133.9 vs 129.5 mm).
+
+Decomposing the DR-off strict pass:
 
 | quantity | value |
 |---|---|
