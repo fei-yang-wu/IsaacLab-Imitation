@@ -28,9 +28,11 @@ no duplicated counters.
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -42,6 +44,12 @@ from iltools.datasets.manager import ParallelTrajectoryManager, ResetSchedule
 from iltools.datasets.utils import make_rb_from
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
 from isaaclab_imitation.assets.robots import UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES
+from isaaclab_imitation.envs.reference_arrays import (
+    MACRO_FIELDS,
+    RUNTIME_FIELDS,
+    ReferenceArrayStore,
+    copy_to_device_parallel,
+)
 from tensordict import TensorDict
 from torchrl.data.replay_buffers import TensorDictReplayBuffer
 from torchrl.data.replay_buffers.storages import TensorStorage
@@ -64,6 +72,9 @@ _REFERENCE_QUAT_KEYS = (
 _WXYZ_TO_XYZW = [1, 2, 3, 0]
 
 _METRES_TO_MM = 1000.0
+
+_PERSIST_MANIFEST_NAME = "iltools_rb_manifest.json"
+_PERSIST_FORMAT_VERSION = 1
 
 
 def _get_mdp_compiled_module() -> Any:
@@ -122,11 +133,94 @@ def _build_zarr_cache(loader_kwargs: dict[str, Any], zarr_path: Path) -> None:
     )
 
 
+def _normalize_persist_selection(value: Any) -> list[str] | None:
+    """Match ILTools' persisted-cache key normalization."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [value]
+    return [str(item) for item in value]
+
+
+def _require_matching_persisted_replay(
+    *,
+    zarr_path: Path,
+    persist_dir: str | None,
+    persist_id: str | None,
+    persist_rebuild: bool,
+    motions: Any,
+    keys: Any,
+) -> None:
+    """Refuse an implicit rebuild of a nonempty persisted replay directory.
+
+    ILTools intentionally treats a cache-key mismatch as a cache miss and
+    refills the same directory. That behavior is unsafe for the v2 integration
+    surface: selecting one motion for evaluation can overwrite the sidecar and
+    leading rows of a 95 GiB full-dataset cache. A first build into an empty
+    directory is still automatic, and ``persist_rebuild=True`` remains the
+    explicit escape hatch for callers that intentionally own the target.
+    """
+    if persist_dir is None or persist_rebuild:
+        return
+    path = Path(persist_dir).expanduser()
+    if not path.exists() or not any(path.iterdir()):
+        return
+
+    manifest_path = path / _PERSIST_MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise RuntimeError(
+            "Refusing to build into a nonempty replay persist_dir without "
+            f"{_PERSIST_MANIFEST_NAME}: {path}. Choose a fresh, versioned "
+            "env.data.persist_dir or set env.data.persist_rebuild=true only "
+            "for an intentional rebuild."
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            f"Refusing to replace unreadable persisted replay metadata at "
+            f"{manifest_path}: {error}. Choose a fresh, versioned "
+            "env.data.persist_dir."
+        ) from error
+
+    expected_key = {
+        "source": (
+            {"persist_id": str(persist_id)}
+            if persist_id is not None
+            else {"zarr_path": str(zarr_path.resolve())}
+        ),
+        "datasets": None,
+        "motions": _normalize_persist_selection(motions),
+        "trajectories": None,
+        "keys": _normalize_persist_selection(keys),
+    }
+    if (
+        manifest.get("format_version") != _PERSIST_FORMAT_VERSION
+        or manifest.get("key") != expected_key
+    ):
+        raise RuntimeError(
+            "Refusing to replace a persisted replay cache built for different "
+            f"content or selection at {path}. Existing key="
+            f"{manifest.get('key')!r}; requested key={expected_key!r}. Choose "
+            "a fresh, content-specific env.data.persist_dir."
+        )
+
+
 class ExpertDataPlane:
     """Reference dataset, fast paths, frame refresh, and expert sampling.
 
     See the module docstring for the ownership split and lifecycle.
     """
+
+    # Both of these are lazily populated and read through accessors that must
+    # work before, or without, a full `__init__`. Declaring them on the class
+    # keeps those accessors honest instead of raising AttributeError.
+
+    #: Set when `env.data.reference_arrays_dir` supplied the reference data.
+    _reference_array_store: ReferenceArrayStore | None = None
+
+    #: Built on the first macro sample, from whichever source is in use.
+    _root_qpos_macro_cache: dict[str, torch.Tensor] | None = None
 
     def __init__(self, cfg: Any, env: ImitationRLEnv) -> None:
         """Phase 1: load the dataset and build the trajectory manager.
@@ -138,6 +232,7 @@ class ExpertDataPlane:
         self._env = env
         device = torch.device(cfg.sim.device)
         num_envs = int(cfg.scene.num_envs)
+        self._reference_array_store: ReferenceArrayStore | None = None
 
         # The dataset layout is derived by `MotionDataCfg.resolve`, which the
         # environment config runs before the env reaches here. Nothing about
@@ -154,65 +249,12 @@ class ExpertDataPlane:
                 "note that `cfg.resolve()` must run before the env loads."
             )
 
-        zarr_path = _zarr_path_of(resolved.cache_dir)
-        if data_cfg.cache_refresh and zarr_path.exists():
-            if not resolved.can_build:
-                raise ValueError(
-                    "cache_refresh=True would delete the cache with no way to "
-                    "rebuild it: set `env.data.manifest` to the clip manifest "
-                    "the cache was built from."
-                )
-            if zarr_path.is_dir():
-                shutil.rmtree(zarr_path)
-            else:
-                zarr_path.unlink()
-
-        if not zarr_path.exists():
-            if not resolved.can_build:
-                raise FileNotFoundError(
-                    f"No motion cache at {zarr_path} and no manifest to build "
-                    "one from. Set `env.data.manifest=/path/to/manifest.json`."
-                )
-            _build_zarr_cache(resolved.loader_kwargs, zarr_path)
-
-        # The reference replay buffer normally lives in VRAM. A reference set
-        # larger than the GPU (e.g. the 129,785-clip BONES-SEED tree, about
-        # 135 GB of transitions) needs CPU storage instead; `make_rb_from`
-        # then builds a LazyMemmapStorage, and ParallelTrajectoryManager
-        # already indexes on the storage device and copies each sampled batch
-        # to the compute device.
-        storage_device = torch.device(str(data_cfg.storage_device))
-        rb, traj_info = make_rb_from(
-            zarr_path=str(zarr_path),
-            datasets=None,
-            motions=resolved.motions(),
-            trajectories=None,
-            keys=list(data_cfg.keys) if data_cfg.keys else None,
-            device=storage_device,
-            persist_dir=data_cfg.persist_dir,
-            persist_id=(
-                data_cfg.persist_id if data_cfg.persist_dir is not None else None
-            ),
-            persist_rebuild=bool(data_cfg.persist_rebuild),
-            verbose_tree=False,
-            # Prefetch threads only help the CPU-storage path; on a
-            # GPU-resident buffer the gather is already ~15 us.
-            prefetch=3,
-            # Pinning a >100 GB CPU buffer would exhaust pinned memory and
-            # is unnecessary: samples are copied one small batch at a time.
-            pin_memory=storage_device.type == "cuda",
-        )
-
-        dataset_body_names, dataset_site_names = (
-            self._read_reference_metadata_from_zarr(zarr_path)
-        )
-        if not dataset_body_names:
-            dataset_body_names = list(getattr(cfg, "reference_body_names", []) or [])
-
         # Trajectory selection is declared on the reference command channel:
         # the schedule (including the `custom` selector an evaluation driver or
         # per-goal collector supplies) and the start frame come from there, so
-        # nothing about which motion an env resets onto is decided here.
+        # nothing about which motion an env resets onto is decided here. This is
+        # read before any data is opened because the anchor body is part of a
+        # reference-array directory's identity.
         reference_channel = cfg.command_interface.reference
         selection = reference_channel.selection
         reset_schedule = str(selection.schedule)
@@ -232,24 +274,29 @@ class ExpertDataPlane:
                 "The reference command channel's anchor_body_name must be non-empty."
             )
 
-        rb, runtime_body_names = self._materialize_runtime_reference_cache(
-            rb=rb,
-            traj_info=traj_info,
-            data_cfg=data_cfg,
-            cfg=cfg,
-            dataset_body_names=dataset_body_names,
+        # Two ways in. Prebuilt reference arrays are already in the layout the
+        # macro and runtime caches want, so they open neither the Zarr nor a
+        # persisted replay; everything downstream of here is identical.
+        loader = (
+            self._open_reference_arrays
+            if resolved.reference_arrays_dir is not None
+            else self._open_replay_backed_reference
         )
-        if runtime_body_names is not None:
-            dataset_body_names = runtime_body_names
+        (
+            rb,
+            traj_info,
+            dataset_body_names,
+            dataset_site_names,
+            dataset_joint_names,
+        ) = loader(data_cfg=data_cfg, cfg=cfg, resolved=resolved)
 
         reference_joint_names = list(cfg.reference_joint_names)
         target_joint_names = list(cfg.target_joint_names)
-        dataset_joint_names = self._read_reference_joint_names_from_zarr(zarr_path)
         if len(dataset_joint_names) > 0:
-            # The dataset (zarr) is authoritative for the reference joint order.
-            # The zarr is written in canonical (articulation) order at build time,
-            # so this normally equals the configured order; adopt it whenever it
-            # differs so `reference -> target` remaps correctly for any source.
+            # The dataset is authoritative for the reference joint order. It is
+            # written in canonical (articulation) order at build time, so this
+            # normally equals the configured order; adopt it whenever it differs
+            # so `reference -> target` remaps correctly for any source.
             if (
                 len(reference_joint_names) == 0
                 or reference_joint_names != dataset_joint_names
@@ -316,6 +363,207 @@ class ExpertDataPlane:
             tuple[str, float, int], torch.Tensor
         ] = {}
         self._root_qpos_macro_cache: dict[str, torch.Tensor] | None = None
+
+    # ------------------------------------------------------------------
+    # Reference loading: two interchangeable sources.
+    # ------------------------------------------------------------------
+
+    def _open_replay_backed_reference(
+        self, *, data_cfg: Any, cfg: Any, resolved: Any
+    ) -> tuple[Any, Any, list[str], list[str], list[str]]:
+        """The generic path: Zarr -> persisted replay -> derived runtime cache."""
+        if resolved.cache_dir is None:
+            raise ValueError(
+                "No motion cache is configured. Set `env.data.cache_dir`, "
+                "`env.data.manifest`, or `env.data.reference_arrays_dir`."
+            )
+        zarr_path = _zarr_path_of(resolved.cache_dir)
+        if data_cfg.cache_refresh and zarr_path.exists():
+            if not resolved.can_build:
+                raise ValueError(
+                    "cache_refresh=True would delete the cache with no way to "
+                    "rebuild it: set `env.data.manifest` to the clip manifest "
+                    "the cache was built from."
+                )
+            if zarr_path.is_dir():
+                shutil.rmtree(zarr_path)
+            else:
+                zarr_path.unlink()
+
+        if not zarr_path.exists():
+            if not resolved.can_build:
+                raise FileNotFoundError(
+                    f"No motion cache at {zarr_path} and no manifest to build "
+                    "one from. Set `env.data.manifest=/path/to/manifest.json`."
+                )
+            _build_zarr_cache(resolved.loader_kwargs, zarr_path)
+
+        # The reference replay buffer normally lives in VRAM. A reference set
+        # larger than the GPU (e.g. the 129,785-clip BONES-SEED tree, about
+        # 135 GB of transitions) needs CPU storage instead; `make_rb_from`
+        # then builds a LazyMemmapStorage, and ParallelTrajectoryManager
+        # already indexes on the storage device and copies each sampled batch
+        # to the compute device.
+        storage_device = torch.device(str(data_cfg.storage_device))
+        selected_motions = resolved.motions()
+        selected_keys = list(data_cfg.keys) if data_cfg.keys else None
+        _require_matching_persisted_replay(
+            zarr_path=zarr_path,
+            persist_dir=data_cfg.persist_dir,
+            persist_id=data_cfg.persist_id,
+            persist_rebuild=bool(data_cfg.persist_rebuild),
+            motions=selected_motions,
+            keys=selected_keys,
+        )
+        rb, traj_info = make_rb_from(
+            zarr_path=str(zarr_path),
+            datasets=None,
+            motions=selected_motions,
+            trajectories=None,
+            keys=selected_keys,
+            device=storage_device,
+            persist_dir=data_cfg.persist_dir,
+            persist_id=(
+                data_cfg.persist_id if data_cfg.persist_dir is not None else None
+            ),
+            persist_rebuild=bool(data_cfg.persist_rebuild),
+            verbose_tree=False,
+            # Prefetch threads only help the CPU-storage path; on a
+            # GPU-resident buffer the gather is already ~15 us.
+            prefetch=3,
+            # Pinning a >100 GB CPU buffer would exhaust pinned memory and
+            # is unnecessary: samples are copied one small batch at a time.
+            pin_memory=storage_device.type == "cuda",
+        )
+
+        dataset_body_names, dataset_site_names = (
+            self._read_reference_metadata_from_zarr(zarr_path)
+        )
+        if not dataset_body_names:
+            dataset_body_names = list(getattr(cfg, "reference_body_names", []) or [])
+
+        rb, runtime_body_names = self._materialize_runtime_reference_cache(
+            rb=rb,
+            traj_info=traj_info,
+            data_cfg=data_cfg,
+            cfg=cfg,
+            dataset_body_names=dataset_body_names,
+        )
+        if runtime_body_names is not None:
+            dataset_body_names = runtime_body_names
+
+        return (
+            rb,
+            traj_info,
+            dataset_body_names,
+            dataset_site_names,
+            self._read_reference_joint_names_from_zarr(zarr_path),
+        )
+
+    def _open_reference_arrays(
+        self, *, data_cfg: Any, cfg: Any, resolved: Any
+    ) -> tuple[Any, Any, list[str], list[str], list[str]]:
+        """The prebuilt path: memory-map arrays already in the consumers' layout.
+
+        Nothing is derived here. The directory is refused outright if it was
+        built for a different body set, anchor body, or source content, because
+        those are column positions and identity, not preferences.
+        """
+        runtime_body_names = self._resolve_runtime_body_names(
+            data_cfg=data_cfg, cfg=cfg
+        )
+        store = ReferenceArrayStore.open(
+            resolved.reference_arrays_dir,
+            body_names=runtime_body_names,
+            anchor_body=self._expert_anchor_body_name,
+            persist_id=data_cfg.persist_id,
+        )
+        self._reference_array_store = store
+
+        configured_device = getattr(data_cfg, "runtime_cache_device", None) or (
+            data_cfg.storage_device
+        )
+        cache_device = torch.device(str(configured_device))
+        missing = [
+            name for name in RUNTIME_FIELDS if name not in store.available_arrays
+        ]
+        if missing:
+            raise KeyError(
+                f"{store.directory} lacks runtime fields {missing}; it holds "
+                f"{sorted(store.available_arrays)}. Rebuild it from a source that "
+                "carries body states."
+            )
+
+        warm_workers = int(getattr(data_cfg, "reference_arrays_warm_workers", 8) or 0)
+        if cache_device.type == "cpu":
+            # The mapping IS the cache: no private allocation, so resident bytes
+            # are reclaimable page cache rather than anonymous memory, which
+            # matters beside a 32,768-environment scene.
+            fields = {name: store.array(name) for name in RUNTIME_FIELDS}
+            if warm_workers > 0:
+                store.warm(RUNTIME_FIELDS, workers=warm_workers)
+            logger.warning(
+                "Mapped %.1f GiB of reference arrays from %s; no replay buffer was "
+                "opened.",
+                store.total_bytes / 1024**3,
+                store.directory,
+            )
+        else:
+            fields = {
+                name: copy_to_device_parallel(
+                    store.array(name),
+                    device=cache_device,
+                    workers=max(warm_workers, 1),
+                    chunk_rows=int(
+                        getattr(data_cfg, "runtime_cache_chunk_size", 262_144)
+                    ),
+                )
+                for name in RUNTIME_FIELDS
+            }
+            logger.warning(
+                "Materialized the runtime reference cache on %s from %s.",
+                cache_device,
+                store.directory,
+            )
+
+        total = store.num_rows
+        runtime_td = TensorDict(fields, batch_size=[total], device=cache_device)
+        storage = TensorStorage(runtime_td, device=cache_device)
+        rb = TensorDictReplayBuffer(storage=storage, batch_size=1)
+        return (
+            rb,
+            store.traj_info(),
+            list(store.body_names),
+            [],
+            list(store.joint_names),
+        )
+
+    def _resolve_runtime_body_names(self, *, data_cfg: Any, cfg: Any) -> list[str]:
+        """Ordered bodies the runtime reference cache must carry."""
+        configured_names = getattr(data_cfg, "runtime_cache_body_names", None)
+        if configured_names is None:
+            configured_names = getattr(cfg, "mpjpe_metric_body_names", None)
+        runtime_body_names = [str(name) for name in (configured_names or [])]
+        if not runtime_body_names:
+            raise ValueError(
+                "A runtime reference cache requires nonempty body names via "
+                "env.data.runtime_cache_body_names or env.mpjpe_metric_body_names."
+            )
+        if len(runtime_body_names) != len(set(runtime_body_names)):
+            raise ValueError("env.data.runtime_cache_body_names contains duplicates.")
+        required_names = {
+            self._expert_anchor_body_name,
+            *list(getattr(cfg, "command_ee_body_names", []) or []),
+            *list(getattr(cfg, "command_keypoint_body_names", []) or []),
+            *list(getattr(cfg, "mpjpe_metric_body_names", []) or []),
+        }
+        omitted = sorted(required_names.difference(runtime_body_names))
+        if omitted:
+            raise ValueError(
+                "Runtime reference cache omits bodies required by the active "
+                f"v2 interface or metrics: {omitted}."
+            )
+        return runtime_body_names
 
     # ------------------------------------------------------------------
     # Phase 2: scene-dependent initialization.
@@ -468,17 +716,9 @@ class ExpertDataPlane:
             return rb, None
         cache_device = torch.device(str(configured_device))
 
-        configured_names = getattr(data_cfg, "runtime_cache_body_names", None)
-        if configured_names is None:
-            configured_names = getattr(cfg, "mpjpe_metric_body_names", None)
-        runtime_body_names = [str(name) for name in (configured_names or [])]
-        if not runtime_body_names:
-            raise ValueError(
-                "env.data.runtime_cache_device requires nonempty body names via "
-                "env.data.runtime_cache_body_names or env.mpjpe_metric_body_names."
-            )
-        if len(runtime_body_names) != len(set(runtime_body_names)):
-            raise ValueError("env.data.runtime_cache_body_names contains duplicates.")
+        runtime_body_names = self._resolve_runtime_body_names(
+            data_cfg=data_cfg, cfg=cfg
+        )
         if not dataset_body_names:
             raise ValueError(
                 "The runtime reference cache cannot select bodies because the "
@@ -580,18 +820,36 @@ class ExpertDataPlane:
             cache_device,
         )
 
+        workers = max(
+            int(getattr(data_cfg, "reference_arrays_warm_workers", 8) or 1), 1
+        )
         fields: dict[str, torch.Tensor] = {}
         for key in source_fields:
             source_tensor = source[key]
             target = torch.empty(
                 target_shapes[key], dtype=source_tensor.dtype, device=cache_device
             )
-            for start in range(0, total, chunk_size):
-                end = min(start + chunk_size, total)
-                chunk = source_tensor[start:end]
+
+            def _fill(bound: tuple[int, int], key: str = key) -> None:
+                start, end = bound
+                chunk = source[key][start:end]
                 if key.startswith("body_"):
                     chunk = chunk.index_select(1, body_ids)
                 target[start:end].copy_(chunk.to(device=cache_device))
+
+            bounds = [
+                (start, min(start + chunk_size, total))
+                for start in range(0, total, chunk_size)
+            ]
+            # A single thread reading a large memmap is page-fault bound well
+            # below the device's bandwidth, and `copy_` releases the GIL, so the
+            # chunks genuinely overlap here.
+            if workers > 1 and len(bounds) > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    list(pool.map(_fill, bounds))
+            else:
+                for bound in bounds:
+                    _fill(bound)
             fields[key] = target
             logger.warning(
                 "Runtime reference cache field %s ready (%s rows).", key, f"{total:,}"
@@ -1731,12 +1989,104 @@ class ExpertDataPlane:
             )
         return torch.device(str(configured))
 
+    def _root_qpos_macro_cache_from_arrays(
+        self, store: ReferenceArrayStore, cache_device: torch.device
+    ) -> dict[str, torch.Tensor]:
+        """Read the macro fields straight out of the prebuilt arrays.
+
+        The derived path gathers ``body_pos_w`` and ``body_quat_w`` in full --
+        about 40 GB on the 129k set -- to keep 1.3 GB of anchor pose. Here the
+        anchor arrays already exist, and ``joint_pos`` is ``qpos[:, 7:]``, a
+        1.24x read amplification rather than 30x.
+        """
+        anchor_column = store.anchor_source(self._expert_anchor_body_name)
+        if anchor_column is None:
+            missing = [
+                name for name in MACRO_FIELDS if name not in store.available_arrays
+            ]
+            if missing:
+                raise KeyError(
+                    f"{store.directory} lacks macro fields {missing}. It was built "
+                    "without an anchor body; rebuild it with --anchor_body "
+                    f"{self._expert_anchor_body_name}."
+                )
+        total = int(self.trajectory_manager.end.max().item())
+        if store.num_rows < total:
+            raise RuntimeError(
+                "Reference arrays are shorter than the trajectory index table: "
+                f"arrays={store.num_rows}, indexed={total}."
+            )
+        workers = max(
+            int(getattr(self._env.cfg.data, "reference_arrays_warm_workers", 8) or 1),
+            1,
+        )
+        chunk_rows = int(getattr(self._env.cfg.data, "macro_cache_chunk_size", 262_144))
+        logger.warning(
+            "Reading the root_qpos macro cache from %s onto %s.",
+            store.directory,
+            cache_device,
+        )
+        if anchor_column is None:
+            # Baked: read the anchor arrays directly.
+            anchor_pos_source, anchor_pos_transform = (
+                store.array("anchor_pos_w")[:total],
+                None,
+            )
+            # Already stored XYZW by the builder, matching what this cache holds.
+            anchor_quat_source, anchor_quat_transform = (
+                store.array("anchor_quat_w")[:total],
+                None,
+            )
+        else:
+            # Derived: select the anchor column out of the retained body block
+            # and swizzle WXYZ -> XYZW, exactly as the replay path does. The
+            # transform runs per chunk, so the selection is never materialized
+            # for the whole array at once.
+            anchor_pos_source = store.array("body_pos_w")[:total]
+            anchor_quat_source = store.array("body_quat_w")[:total]
+
+            def anchor_pos_transform(chunk: torch.Tensor) -> torch.Tensor:
+                return chunk[:, anchor_column]
+
+            def anchor_quat_transform(chunk: torch.Tensor) -> torch.Tensor:
+                return chunk[:, anchor_column][..., _WXYZ_TO_XYZW]
+
+        cache = {
+            "joint_pos": copy_to_device_parallel(
+                store.array("qpos")[:total, 7:],
+                device=cache_device,
+                workers=workers,
+                chunk_rows=chunk_rows,
+            ),
+            "anchor_pos_w": copy_to_device_parallel(
+                anchor_pos_source,
+                device=cache_device,
+                workers=workers,
+                chunk_rows=chunk_rows,
+                transform=anchor_pos_transform,
+            ),
+            "anchor_quat_w": copy_to_device_parallel(
+                anchor_quat_source,
+                device=cache_device,
+                workers=workers,
+                chunk_rows=chunk_rows,
+                transform=anchor_quat_transform,
+            ),
+        }
+        logger.warning("Root_qpos macro cache is ready on %s.", cache_device)
+        return cache
+
     def _ensure_root_qpos_macro_cache(self) -> dict[str, torch.Tensor] | None:
         """Materialize the compact root+qpos source fields on the cache device."""
         cache_device = self._root_qpos_macro_cache_device()
         if cache_device is None:
             return None
         if self._root_qpos_macro_cache is not None:
+            return self._root_qpos_macro_cache
+        if self._reference_array_store is not None:
+            self._root_qpos_macro_cache = self._root_qpos_macro_cache_from_arrays(
+                self._reference_array_store, cache_device
+            )
             return self._root_qpos_macro_cache
 
         tm = self.trajectory_manager
@@ -1817,10 +2167,20 @@ class ExpertDataPlane:
             ("anchor_pos_w", body_pos_source),
             ("anchor_quat_w", body_quat_source),
         )
+        workers = max(
+            int(getattr(self._env.cfg.data, "reference_arrays_warm_workers", 8) or 1),
+            1,
+        )
         for target_name, source_tensor in sources:
             target = cache[target_name]
-            for start in range(0, total, chunk_size):
-                end = min(start + chunk_size, total)
+
+            def _fill(
+                bound: tuple[int, int],
+                target_name: str = target_name,
+                source_tensor: torch.Tensor = source_tensor,
+                target: torch.Tensor = target,
+            ) -> None:
+                start, end = bound
                 if target_name == "joint_pos":
                     chunk = source_tensor[start:end]
                 else:
@@ -1828,6 +2188,17 @@ class ExpertDataPlane:
                     if target_name == "anchor_quat_w":
                         chunk = chunk[..., _WXYZ_TO_XYZW]
                 target[start:end].copy_(chunk.to(device=cache_device))
+
+            bounds = [
+                (start, min(start + chunk_size, total))
+                for start in range(0, total, chunk_size)
+            ]
+            if workers > 1 and len(bounds) > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    list(pool.map(_fill, bounds))
+            else:
+                for bound in bounds:
+                    _fill(bound)
             logger.info(
                 "Materialized root_qpos macro cache field %s (%s rows).",
                 target_name,

@@ -129,7 +129,11 @@ class MotionDataCfg:
 
     A persisted buffer is NOT invalidated by a Zarr rebuilt in place, nor by a
     ``persist_id`` reused for changed content; set this whenever the source
-    content changes.
+    content changes. Without this explicit flag, v2 refuses a nonempty
+    ``persist_dir`` whose source, motion selection, or key list differs instead
+    of allowing ILTools to replace it implicitly. Prefer a fresh, versioned
+    directory even for intentional rebuilds so interrupted fills cannot damage
+    a previously valid cache.
     """
 
     keys: list[str] | None = None
@@ -176,6 +180,30 @@ class MotionDataCfg:
     runtime_cache_chunk_size: int = 262_144
     """Rows copied per chunk while materializing ``runtime_cache_device``."""
 
+    reference_arrays_dir: str | None = None
+    """Prebuilt training-shaped reference arrays to load instead of a replay.
+
+    Built by ``python -m imitation_experiments.data.build_reference_arrays``
+    straight from the NPZ tree. When set, neither the Zarr nor a persisted
+    replay is opened: the arrays are already in the layout the macro and runtime
+    caches want, so the runtime cache is memory-mapped in place and the macro
+    cache is one contiguous read. On the 129,785-motion set that replaces about
+    133 GB of gathered reads per process start with about 55 GB of sequential
+    ones.
+
+    The directory is keyed by the body list and anchor body baked into it, and
+    loading refuses a directory built for a different set rather than reading
+    the wrong columns. ``manifest`` and ``cache_dir`` may both be ``None`` here;
+    that is the only configuration in which they may.
+    """
+
+    reference_arrays_warm_workers: int = 8
+    """Threads used to fault in the mapped arrays before the first step.
+
+    Zero skips the warm pass and lets the first training iterations take the
+    page faults inline.
+    """
+
     wrap_steps: bool = False
     """Wrap the reference cursor at the end of a clip instead of terminating."""
 
@@ -205,6 +233,20 @@ class MotionDataCfg:
         over with a fallback.
         """
         control_rate = _control_rate(sim_dt=sim_dt, decimation=decimation)
+        if self.reference_arrays_dir is not None:
+            # Checked before the manifest, and loudly: a task whose default
+            # config names a manifest would otherwise take the Zarr branch and
+            # ignore the arrays entirely, which looks like a slow run rather
+            # than a misconfiguration.
+            if self.manifest is not None:
+                raise ValueError(
+                    "env.data declares both reference_arrays_dir="
+                    f"{self.reference_arrays_dir!r} and manifest={self.manifest!r}. "
+                    "The arrays are a complete reference set; set "
+                    "`env.data.manifest=null` to use them, or drop "
+                    "`reference_arrays_dir` to build from the manifest."
+                )
+            return self._resolve_reference_arrays(control_rate=control_rate)
         if self.manifest is None:
             if self.cache_dir is None:
                 return None
@@ -249,6 +291,30 @@ class MotionDataCfg:
         )
 
     # -- resolution steps ---------------------------------------------------
+
+    def _resolve_reference_arrays(self, *, control_rate: float) -> ResolvedMotionData:
+        """Resolve against prebuilt reference arrays, with no Zarr at all.
+
+        The arrays carry their own body and joint names, trajectory spans, and
+        row count, so there is nothing left for a cache directory to supply.
+        """
+        assert self.reference_arrays_dir is not None
+        return ResolvedMotionData(
+            manifest_path=None,
+            clip_names=(),
+            selected_clips=tuple(self.clips) if self.clips is not None else None,
+            selected_takes=tuple(self.takes) if self.takes is not None else None,
+            control_freq=control_rate,
+            cache_dir=(
+                str(Path(self.cache_dir).expanduser().resolve())
+                if self.cache_dir is not None
+                else None
+            ),
+            loader_kwargs={},
+            reference_arrays_dir=str(
+                Path(self.reference_arrays_dir).expanduser().resolve()
+            ),
+        )
 
     def _resolve_prebuilt_cache(self, *, control_rate: float) -> ResolvedMotionData:
         """Resolve against an already-built cache, with no manifest to read.
@@ -329,9 +395,14 @@ class ResolvedMotionData:
     control_freq: float
     """Clip rate, equal to the task's control rate (they are checked to agree)."""
 
-    cache_dir: str
+    cache_dir: str | None
+    """Zarr cache location, or ``None`` when prebuilt reference arrays replace it."""
+
     loader_kwargs: dict[str, Any] = field(default_factory=dict)
     """ILTools clip-loader call arguments; empty when loading a prebuilt cache."""
+
+    reference_arrays_dir: str | None = None
+    """Prebuilt training-shaped arrays, which bypass the Zarr and the replay."""
 
     @property
     def loader_type(self) -> str:

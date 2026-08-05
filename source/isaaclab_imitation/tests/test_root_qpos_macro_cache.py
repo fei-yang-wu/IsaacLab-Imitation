@@ -1,11 +1,98 @@
+import json
 from types import SimpleNamespace
 
+import pytest
 import torch
 from tensordict import TensorDict
 from torchrl.data.replay_buffers import TensorDictReplayBuffer
 from torchrl.data.replay_buffers.storages import TensorStorage
 
-from isaaclab_imitation.envs.expert_data_plane import ExpertDataPlane
+from isaaclab_imitation.envs.expert_data_plane import (
+    ExpertDataPlane,
+    _require_matching_persisted_replay,
+)
+
+
+def _persist_manifest(*, motions: list[str] | None) -> dict:
+    return {
+        "format_version": 1,
+        "key": {
+            "source": {"persist_id": "full@abc123"},
+            "datasets": None,
+            "motions": motions,
+            "trajectories": None,
+            "keys": ["qpos", "qvel"],
+        },
+        "traj_info": {},
+    }
+
+
+def test_persisted_replay_guard_accepts_exact_identity(tmp_path) -> None:
+    persist_dir = tmp_path / "full"
+    persist_dir.mkdir()
+    (persist_dir / "iltools_rb_manifest.json").write_text(
+        json.dumps(_persist_manifest(motions=None)), encoding="utf-8"
+    )
+
+    _require_matching_persisted_replay(
+        zarr_path=tmp_path / "source.zarr",
+        persist_dir=str(persist_dir),
+        persist_id="full@abc123",
+        persist_rebuild=False,
+        motions=None,
+        keys=["qpos", "qvel"],
+    )
+
+
+def test_persisted_replay_guard_refuses_subset_overwrite(tmp_path) -> None:
+    persist_dir = tmp_path / "full"
+    persist_dir.mkdir()
+    manifest_path = persist_dir / "iltools_rb_manifest.json"
+    original = json.dumps(_persist_manifest(motions=None))
+    manifest_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="different content or selection"):
+        _require_matching_persisted_replay(
+            zarr_path=tmp_path / "source.zarr",
+            persist_dir=str(persist_dir),
+            persist_id="full@abc123",
+            persist_rebuild=False,
+            motions=["one_motion"],
+            keys=["qpos", "qvel"],
+        )
+
+    assert manifest_path.read_text(encoding="utf-8") == original
+
+
+def test_persisted_replay_guard_refuses_nonempty_partial_build(tmp_path) -> None:
+    persist_dir = tmp_path / "partial"
+    persist_dir.mkdir()
+    (persist_dir / "qpos.memmap").write_bytes(b"partial")
+
+    with pytest.raises(RuntimeError, match="nonempty replay persist_dir"):
+        _require_matching_persisted_replay(
+            zarr_path=tmp_path / "source.zarr",
+            persist_dir=str(persist_dir),
+            persist_id="full@abc123",
+            persist_rebuild=False,
+            motions=None,
+            keys=["qpos", "qvel"],
+        )
+
+
+def test_persisted_replay_guard_allows_explicit_rebuild(tmp_path) -> None:
+    persist_dir = tmp_path / "owned"
+    persist_dir.mkdir()
+    (persist_dir / "sentinel").write_text("owned", encoding="utf-8")
+
+    _require_matching_persisted_replay(
+        zarr_path=tmp_path / "source.zarr",
+        persist_dir=str(persist_dir),
+        persist_id="full@abc123",
+        persist_rebuild=True,
+        motions=["replacement"],
+        keys=["qpos"],
+    )
 
 
 def test_expert_macro_split_ranks_are_cached() -> None:
