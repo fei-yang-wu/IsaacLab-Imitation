@@ -204,13 +204,27 @@ class ReferenceCommandTerm(CommandTerm):
         self._build_reset_samplers()
         # Per-env metric buffers; CommandTerm.reset() averages these over the
         # resetting envs into `Metrics/reference/<name>` and zeroes them.
-        # `mpjpe_mm` is MPJPE-L and keeps its name so every historical run and
-        # the screen aggregator stay readable; `mpjpe_l_mm` is the same value
-        # under the name the SONIC/PHC lineage uses, and `mpjpe_g_mm` is the
-        # global counterpart, which counts the drift MPJPE-L removes.
-        self.metrics["mpjpe_mm"] = torch.zeros(self.num_envs, device=self.device)
+        # `mpjpe_l_mm` is root-relative (the SONIC/PHC "local" metric) and
+        # `mpjpe_g_mm` is the world-frame counterpart, which counts the drift
+        # MPJPE-L removes. GLOBAL is the one to rank on: ranking on the local
+        # metric while reading a world-frame EE number compares two different
+        # frames and inverts the ordering.
+        #
+        # These hold the RUNNING EPISODE MEAN, not the current step's value.
+        # `CommandTerm.reset` logs `mean(metric[env_ids])` of whatever is in the
+        # buffer at the reset step and then zeroes it, so a buffer holding the
+        # instantaneous error reports the error AT THE MOMENT THE EPISODE ENDED
+        # -- and since most episodes end on a tracking-error termination, that
+        # is by construction a sample taken at the failure threshold. It read
+        # ~55 mm during training against ~20 mm when the same checkpoint was
+        # evaluated over a rollout. Accumulating instead makes the logged number
+        # an episode mean, which is what evaluation reports and what everyone
+        # already assumed this was.
         self.metrics["mpjpe_l_mm"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["mpjpe_g_mm"] = torch.zeros(self.num_envs, device=self.device)
+        self._mpjpe_l_sum = torch.zeros(self.num_envs, device=self.device)
+        self._mpjpe_g_sum = torch.zeros(self.num_envs, device=self.device)
+        self._mpjpe_steps = torch.zeros(self.num_envs, device=self.device)
         self.metrics["anchor_pos_err_m"] = torch.zeros(
             self.num_envs, device=self.device
         )
@@ -390,15 +404,23 @@ class ReferenceCommandTerm(CommandTerm):
         # metric then stays at zero because there is nothing to measure.
         mpjpe_pair = env._compute_mpjpe_metrics()
         if mpjpe_pair is None:
-            self.metrics["mpjpe_mm"].zero_()
             self.metrics["mpjpe_l_mm"].zero_()
             self.metrics["mpjpe_g_mm"].zero_()
         else:
             self._validate_mpjpe_bodies(env)
             mpjpe_local_m, mpjpe_global_m = mpjpe_pair
-            self.metrics["mpjpe_mm"][:] = mpjpe_local_m * _METRES_TO_MM
-            self.metrics["mpjpe_l_mm"][:] = mpjpe_local_m * _METRES_TO_MM
-            self.metrics["mpjpe_g_mm"][:] = mpjpe_global_m * _METRES_TO_MM
+            local_mm = mpjpe_local_m * _METRES_TO_MM
+            global_mm = mpjpe_global_m * _METRES_TO_MM
+            self._mpjpe_l_sum += local_mm
+            self._mpjpe_g_sum += global_mm
+            self._mpjpe_steps += 1.0
+            steps = self._mpjpe_steps.clamp(min=1.0)
+            # Store the running mean, so whichever step `reset` happens to
+            # sample, it reads the episode mean rather than one instant. This is
+            # the accumulate-then-average shape `Episode_Reward` uses, and it is
+            # what makes the logged value comparable to what evaluation reports.
+            self.metrics["mpjpe_l_mm"][:] = self._mpjpe_l_sum / steps
+            self.metrics["mpjpe_g_mm"][:] = self._mpjpe_g_sum / steps
         robot_anchor_pos_w, robot_anchor_quat_w = env._get_robot_anchor_state_w_fast(
             self.cfg.anchor_body_name
         )
@@ -411,6 +433,20 @@ class ReferenceCommandTerm(CommandTerm):
         self.metrics["anchor_ori_err_rad"][:] = torch.sqrt(
             quat_error_squared(robot_anchor_quat_w, ref_anchor_quat_w[:, 0, :])
         )
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
+        """Log the metrics, then clear this episode's MPJPE accumulators.
+
+        ``super().reset`` reads the buffers and zeroes them; the running sums
+        behind them have to be cleared too or the next episode's mean would be
+        contaminated by the previous one.
+        """
+        extras = super().reset(env_ids)
+        selected: Sequence[int] | slice = slice(None) if env_ids is None else env_ids
+        self._mpjpe_l_sum[selected] = 0.0
+        self._mpjpe_g_sum[selected] = 0.0
+        self._mpjpe_steps[selected] = 0.0
+        return extras
 
     def _resample_command(self, env_ids: Sequence[int]):
         """No-op: Isaac Lab's reset ordering forbids cursor sampling here.

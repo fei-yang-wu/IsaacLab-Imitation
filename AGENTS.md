@@ -177,6 +177,15 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   `Isaac-Imitation-G1-Latent-v0` keep the pre-v2 surface) unless the user
   explicitly requests vanilla. Do not submit `IPMD_BILINEAR` comparison jobs
   on `Isaac-Imitation-G1-v0`; the vanilla bilinear path is debug-only.
+- `Isaac-Imitation-G1-v2` changed IN PLACE on 2026-08-04, by explicit decision:
+  its rewards are now `G1V2TunedRewardsCfg` (-37.3% MPJPE-G / -34.7% EE-G over
+  three seeds against two control seeds, ranges disjoint) and its DiffSR macro
+  state is the `root_qpos` frame (qpos + root pose, 380-wide encoder input)
+  instead of full-body (670). A v2 checkpoint from before that date needs
+  `env.expert_macro_state_terms=[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]`
+  plus its original reward overrides to reproduce; pairing an old encoder with
+  the new default fails loudly, never silently. Invoke the
+  `g1-encoder-interface` skill before changing or pairing an encoder.
 - G1 latent task versioning (2026-07-31 onward): "the default" is always the
   highest-numbered `Isaac-Imitation-G1-vN` id. When the Stable recipe's
   config needs a breaking change, register a new `-G1-vN+1` with the new

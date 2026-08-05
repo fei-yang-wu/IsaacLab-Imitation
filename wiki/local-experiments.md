@@ -145,6 +145,44 @@ Report both. MPJPE-L alone flatters a policy that holds its pose while walking
 away from the reference: the LAFAN1 checkpoint read 25 mm local with 152 mm of
 root error underneath it.
 
+## Diagnosing a plateaued reward
+
+If a tracking metric stops improving, check whether the reward term that owns it
+still has gradient before changing anything else. IsaacLab logs
+
+```
+Episode_Reward/<term> = weight · mean(kernel) · ep_len / max_episode_length_steps
+```
+
+so the kernel value is recoverable from any live run:
+
+```python
+kernel = episode_reward / (weight * ep_len / 500)      # 500-step horizon
+err    = std * sqrt(-log(kernel))                       # implied error
+grad   = weight * (-2 * err / std**2) * kernel          # d(w·r)/d(err)
+```
+
+A kernel near 1.0 means the exp term is saturated — the policy is paid almost
+nothing for further precision there.
+
+Measured on the G1 low level in August 2026, `motion_body_pos` — the term whose
+error *is* MPJPE — sat at kernel 0.970 and supplied ~23× less gradient than
+`tracking_reward_points`. Narrowing its `std` from 0.30 to 0.05 cut eval MPJPE
+by 18.8% with no new reward term. See
+`experiments/campaigns/2026-08-04-eval-tracking-screen/`.
+
+**Do this at the TRAINING operating point, not the evaluation one.** Training
+runs with domain randomization and exploration noise, so its errors are much
+larger and a term can be saturated at eval while having plenty of gradient
+during training. Computing it from eval numbers produced a confidently wrong
+answer about which term to change.
+
+**And check what the metric is actually made of first.** For the G1, per-step
+MPJPE was flat at ~11 mm for 300 steps and then diverged, so the horizon-averaged
+number was mostly failures rather than precision — which meant the reward work
+moved the strict pass and barely touched the full-horizon one. Decompose before
+optimising.
+
 ## Gotchas that have cost real time
 
 - **The env is not run-to-run deterministic on Newton at a fixed seed.** Three

@@ -2,7 +2,7 @@
   "agent_entry_point": "rlopt_ipmd_tuned_cfg_entry_point",
   "arms": {
     "bones91": {
-      "job": "5561002",
+      "job": "5561132",
       "num_envs": 12288,
       "rollout_steps": 24,
       "seed": 0,
@@ -27,7 +27,7 @@
   "physics": "newton_mjwarp (njmax 288, nconmax 200)",
   "rlopt_git_sha": "ba0dd1d858ac04fb3a870fc6edb2e028bd75776e",
   "sonic_reference": "NVlabs/GR00T-WholeBodyControl main aa263a8 (2026-07-31)",
-  "submitted_at": "2026-08-03T21:32:40.993797-04:00",
+  "submitted_at": "2026-08-03T22:44:04.898887-04:00",
   "task": "Isaac-Imitation-G1-v2",
   "wandb": {
     "group": "sonic-aligned-5b",

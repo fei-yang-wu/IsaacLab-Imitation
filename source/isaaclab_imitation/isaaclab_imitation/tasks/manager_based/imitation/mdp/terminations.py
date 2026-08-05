@@ -184,8 +184,43 @@ def bad_reference_body_pos_relative(
     anchor_body_name: str = "pelvis",
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     reference_body_names: Sequence[str] = (),
+    down_threshold: float | None = None,
+    root_height_threshold: float = 0.5,
+    swing_threshold: float | None = None,
+    swing_height_threshold: float = 0.15,
 ) -> torch.Tensor:
-    """Terminate when a rerooted reference body is too far from the robot body."""
+    """Terminate when a rerooted reference body is too far from the robot body.
+
+    ``down_threshold`` is the crouching allowance the other two position
+    terminations already carry: when the REFERENCE root is below
+    ``root_height_threshold`` the bar relaxes to ``down_threshold``. Default
+    ``None`` keeps the single strict threshold, so existing configs are
+    unchanged.
+
+    Why it matters here. This is the only termination in the config that
+    constrains horizontal position, and the only one without the allowance --
+    `bad_anchor_pos_z_adaptive` and `bad_reference_body_pos_z_adaptive` both
+    have it. Measured on the 2026-08-03 checkpoint, every `fallAndGetUp` clip
+    failed and every `dance2` clip survived the full horizon, with
+    `foot_pos_xyz` the cause in 4 of 6 failures. A fall-and-recover reference
+    spends its hard phase exactly where the root is low, which is the condition
+    the allowance exists to detect -- so the strict 0.2 m horizontal bar was
+    being applied precisely where the other terms had already decided it should
+    not be.
+
+    ``swing_threshold`` is the symmetric allowance for the opposite regime.
+    Measured on the same checkpoint, the failing clips are the DYNAMIC ones --
+    jumps, runs, sprints, fights and falls -- while every dance clip and 11 of
+    12 walks survive. The low-root allowance covers the falls; the airborne
+    cases have a HIGH root, so it cannot fire there. During a flight phase the
+    foot's horizontal position is not correctable at that instant and
+    self-corrects on landing, so terminating for it punishes what the policy
+    cannot fix.
+
+    Applied PER BODY, keyed on the reference foot's own height: one foot is
+    usually airborne while the other is planted, and a per-environment test
+    would relax the stance foot too. Both allowances default to ``None``.
+    """
     robot_anchor_pos_w, robot_anchor_quat_w = env._get_robot_anchor_state_w_fast(
         anchor_body_name
     )
@@ -201,9 +236,23 @@ def bad_reference_body_pos_relative(
         ref_anchor_quat_w[:, 0, :],
     )
     actual_pos_w = env._get_robot_body_pose_w_fast(asset_cfg.body_ids)[0]
-    return torch.any(
-        torch.linalg.vector_norm(target_pos_w - actual_pos_w, dim=-1) > threshold, dim=1
-    )
+    error = torch.linalg.vector_norm(target_pos_w - actual_pos_w, dim=-1)
+    if down_threshold is None and swing_threshold is None:
+        return torch.any(error > threshold, dim=1)
+    thresholds = torch.full_like(error, threshold)
+    if down_threshold is not None:
+        low_reference = _reference_root_height(env) < root_height_threshold
+        thresholds[low_reference] = down_threshold
+    if swing_threshold is not None:
+        # PER BODY, not per environment: one foot is usually airborne while the
+        # other is planted, so a whole-environment test would relax the stance
+        # foot too. `ref_pos_w` is the reference body height above the ground
+        # plane, so this asks "is the REFERENCE foot in flight right now".
+        airborne = ref_pos_w[..., 2] > swing_height_threshold
+        thresholds = torch.where(
+            airborne, torch.full_like(thresholds, swing_threshold), thresholds
+        )
+    return torch.any(error > thresholds, dim=1)
 
 
 def reference_trajectory_finished(env: ImitationRLEnv) -> torch.Tensor:
@@ -419,6 +468,10 @@ class PersistentBadReferenceBodyPosRelative(PersistentViolation):
         anchor_body_name: str = "pelvis",
         asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
         reference_body_names: Sequence[str] = (),
+        down_threshold: float | None = None,
+        root_height_threshold: float = 0.5,
+        swing_threshold: float | None = None,
+        swing_height_threshold: float = 0.15,
         min_steps: int = 1,
         diagnostic_only: bool = False,
     ) -> torch.Tensor:
@@ -428,5 +481,9 @@ class PersistentBadReferenceBodyPosRelative(PersistentViolation):
             anchor_body_name=anchor_body_name,
             asset_cfg=asset_cfg,
             reference_body_names=reference_body_names,
+            down_threshold=down_threshold,
+            root_height_threshold=root_height_threshold,
+            swing_threshold=swing_threshold,
+            swing_height_threshold=swing_height_threshold,
         )
         return self._resolve(violated, min_steps, diagnostic_only)
