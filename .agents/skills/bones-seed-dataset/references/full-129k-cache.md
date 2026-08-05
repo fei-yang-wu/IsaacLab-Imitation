@@ -172,11 +172,20 @@ pixi run python -m imitation_experiments.data.publish_reference_arrays fetch \
 
 Both directions run the same validation the environment applies at load time, so
 a directory that would be refused by training is refused before 49 GB moves.
-The repo is private; a compute node needs `HF_TOKEN`.  `HF_HUB_DISABLE_XET=1` is
-set automatically — the Xet backend has stalled partway through large uploads on
-this account.  The 10.87 MB `reference_arrays_manifest.json` must travel with the
-arrays: it carries the identity *and* the 129,785-entry trajectory table, and
-without it the arrays are unloadable.
+`HF_HUB_DISABLE_XET=1` is set automatically — the Xet backend has stalled
+partway through large uploads on this account.  The 10.87 MB
+`reference_arrays_manifest.json` must travel with the arrays: it carries the
+identity *and* the 129,785-entry trajectory table, and without it the arrays are
+unloadable.
+
+The repo is **public**, so no token is needed on a compute node.  That was not
+the first choice: a private upload of this size exceeded the `GeorgiaTech` org's
+private-storage limit and returned
+`403 Forbidden: Private repository storage limit reached` on **every private
+repo in the org**, including other people's.  Private storage is metered and
+org-wide; public storage is not.  Do not push 49 GB privately here.  The 103 GB
+source NPZ tree is already public in the same org and this artifact is a strict
+subset of it, so publishing exposes nothing new.
 
 Fetch validates sizes and identity, not contents against the source NPZs.  Do
 that once at build time with `--verify_load`.

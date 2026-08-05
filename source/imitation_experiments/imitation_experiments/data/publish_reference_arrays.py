@@ -15,6 +15,17 @@ Files upload as-is. The largest array is 10.6 GB, under the per-file limit, so
 none of the 2 GB part-splitting that ``experiments/paper/reference_buffer_workflow.py``
 does for the 95 GiB replay is needed. ``HF_HUB_DISABLE_XET`` is set because the
 Xet backend has stalled on this account's large uploads.
+
+``--public`` is not a convenience. Private storage on the Hub is metered per
+namespace and the limit is shared across an organization: a 49.4 GB private
+upload took ``GeorgiaTech`` over its ceiling and returned
+``403 Forbidden: Private repository storage limit reached`` on *every private
+repo in the org*, including unrelated ones belonging to other people. The
+upload itself reported success and the file listing resolved -- only fetching
+content failed, which is why the round trip is worth running before announcing
+a publish. Public storage is not metered. Check the namespace's headroom before
+pushing an artifact this size privately, and prefer public whenever the source
+it derives from is already public.
 """
 
 from __future__ import annotations
@@ -205,12 +216,50 @@ def push(
     os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     from huggingface_hub import HfApi, upload_large_folder
 
-    HfApi().create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
+    api = HfApi()
+    api.create_repo(repo_id, repo_type="dataset", private=private, exist_ok=True)
+    # upload_large_folder resumes from <folder>/.cache/huggingface. That state
+    # names commits, not repos, so after the target repo is deleted and
+    # recreated it reports every large file as already committed and uploads
+    # nothing. Clear it whenever the destination is not the one the cache was
+    # built against.
     upload_large_folder(
         folder_path=str(source_dir), repo_id=repo_id, repo_type="dataset"
     )
+    verify_remote(repo_id, source_dir)
     print(f"[PASS] pushed {total / 1e9:.1f} GB to {repo_id}")
     return {"card": card, "files": files, "bytes": total}
+
+
+def verify_remote(repo_id: str, source_dir: Path) -> None:
+    """Confirm the Hub actually holds every local file at its local size.
+
+    A successful-looking upload is not evidence of an upload. Both failures seen
+    on this artifact -- a resumed cache that skipped nine files, and a private
+    repo over its storage quota -- left the client reporting success.
+    """
+    from huggingface_hub import HfApi
+
+    info = HfApi().repo_info(repo_id, repo_type="dataset", files_metadata=True)
+    remote = {s.rfilename: (s.size or 0) for s in info.siblings}
+    problems = []
+    for path in sorted(source_dir.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        local = path.stat().st_size
+        if path.name not in remote:
+            problems.append(f"{path.name} is absent from {repo_id}")
+        elif remote[path.name] != local:
+            problems.append(
+                f"{path.name} is {remote[path.name]} bytes on the Hub, {local} locally"
+            )
+    if problems:
+        raise RuntimeError(
+            f"Upload to {repo_id} did not land: "
+            + "; ".join(problems)
+            + f". If the repo was recreated, delete {source_dir / '.cache'} so "
+            "upload_large_folder re-hashes instead of resuming."
+        )
 
 
 def fetch(
