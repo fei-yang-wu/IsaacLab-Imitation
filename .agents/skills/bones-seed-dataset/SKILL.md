@@ -1,6 +1,6 @@
 ---
 name: bones-seed-dataset
-description: BONES-SEED dataset workflow for this IsaacLab-Imitation repo, including Hugging Face access, Skynet data paths, metadata counts, G1 archive layout, trajectory shortlists, CSV extraction, G1 joint-order validation, root/unit conversion, NPZ export, manifest/language sidecar generation, and MiniLM language embeddings. Use when the user mentions BONES-SEED, bones seed, bones-studio/seed, G1 CSV/NPZ conversion, language-conditioned planner dataset prep, or dataset metadata/joint-order issues.
+description: BONES-SEED dataset workflow for this IsaacLab-Imitation repo, including Hugging Face access, Skynet data paths, metadata counts, G1 archive layout, trajectory shortlists, CSV extraction, G1 joint-order validation, root/unit conversion, NPZ export, manifest/language sidecar generation, MiniLM language embeddings, and safe full-dataset Zarr/replay-cache reuse. Use when the user mentions BONES-SEED, bones seed, bones-studio/seed, G1 CSV/NPZ conversion, language-conditioned planner dataset prep, dataset metadata/joint-order issues, or the 129k cache.
 ---
 
 # BONES-SEED Dataset
@@ -212,6 +212,25 @@ When the full pipeline runs, stages are:
 7. train low-level IPMD bilinear policy
 8. run rollout finetune/eval
 
+## Full 129k Cache Workflow
+
+When a task touches the 129,785-motion local export, persisted replay buffers,
+the 6.x GiB root+qpos cache, the 44.8 GiB runtime cache, or a small evaluation
+manifest, read and follow
+[`references/full-129k-cache.md`](references/full-129k-cache.md).
+
+Use the skill-owned safe builder/validator instead of launching an environment
+just to fill a replay directory:
+
+```bash
+pixi run python \
+  .agents/skills/bones-seed-dataset/scripts/build_replay_cache.py --help
+```
+
+The full cache and every subset cache must use different, content-specific
+directories and identities. Never pass `env.data.clips`, a subset manifest, or
+a one-motion visualization together with the full replay `persist_dir`.
+
 ## Validation Checks
 
 Use these checks before training:
@@ -238,3 +257,4 @@ Expected for paper24: `manifest_entries=24`, `language_motions=24`, and `npz/g1`
 - `g1.tar.gz` scan is slow: avoid full tar enumeration when metadata is enough; extract only selected CSVs.
 - Existing manifest causes data prep skip in `run_bones_seed_language_pipeline.py`: delete/rename the manifest or pass a new data root if intentional regeneration is needed.
 - Short trajectories and zarr chunking: rely on manifest `loader_kwargs.chunk_size=1`; do not pad NPZs unless explicitly needed.
+- Persisted replay silently rebuilds for a different selection: never reuse a nonempty `persist_dir`; validate it or choose a fresh, versioned directory. A large memmap directory is not proof that its sidecar still describes the full dataset.

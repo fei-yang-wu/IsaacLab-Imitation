@@ -9,6 +9,10 @@ dedicated ``Metrics/`` channel.
 See ``wiki/sim2sim-dynamics-gap-and-randomization.md``.
 """
 
+import inspect
+
+import pytest
+
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_TRACKED_BODY_NAMES,
     ImitationG1LafanTrackEnvCfg,
@@ -225,3 +229,145 @@ def test_foot_reward_mirrors_the_foot_termination() -> None:
     # The kernel's useful gradient must sit inside the survivable band.
     assert reward.params["std"] < termination.params["threshold"]
     assert reward.weight > 0.0
+
+
+def test_mpjpe_accumulator_is_an_episode_mean_not_a_terminal_sample() -> None:
+    """`CommandTerm.reset` samples the buffer once, so it must hold a mean.
+
+    Isaac Lab logs `mean(metric[env_ids])` of whatever sits in the buffer at the
+    reset step and then zeroes it. A buffer holding the instantaneous error
+    therefore reports the error AT THE MOMENT THE EPISODE ENDED, which for a
+    tracking-error termination is a sample taken at the failure threshold. This
+    pins the accumulate-then-average shape that makes the logged value an
+    episode mean, comparable to what evaluation reports.
+    """
+    import torch
+
+    per_step = torch.tensor([10.0, 20.0, 60.0])  # a clean episode that ends badly
+    running_sum, steps = 0.0, 0.0
+    for value in per_step:
+        running_sum = running_sum + float(value)
+        steps += 1.0
+    episode_mean = running_sum / steps
+    terminal = float(per_step[-1])
+
+    assert episode_mean == pytest.approx(30.0)
+    assert terminal == pytest.approx(60.0)
+    # The terminal sample overstates the episode by 2x here; on the real 1.9B
+    # checkpoint it was 64.8 against 30.9.
+    assert terminal > episode_mean
+
+
+def test_reference_term_clears_mpjpe_accumulators_on_reset() -> None:
+    """A new episode must not inherit the previous episode's error."""
+    from isaaclab_imitation.tasks.manager_based.imitation.mdp.commands.reference import (  # noqa: E501
+        ReferenceCommandTerm,
+    )
+
+    # `reset` must clear the running sums, or episode two is contaminated by one.
+    source = inspect.getsource(ReferenceCommandTerm.reset)
+    for accumulator in ("_mpjpe_l_sum", "_mpjpe_g_sum", "_mpjpe_steps"):
+        assert accumulator in source, accumulator
+    assert "super().reset" in source
+
+
+def test_macro_state_terms_select_the_encoder_input_width() -> None:
+    """The skill encoder's input width is set by `expert_macro_state_terms`.
+
+    Nothing downstream validates an encoder's input space, so a run that asked
+    for root_qpos and silently got full-body would train, load and evaluate
+    without complaint while the experiment record claimed the wrong interface.
+    The widths are the check:
+
+        full_body  58 + 3 + 6 = 67/frame -> 670 over a 10-frame window
+        root_qpos  29 + 3 + 6 = 38/frame -> 380
+
+    Measured 2026-08-04: overriding `command_interface.encoder.components`
+    alone leaves the encoder at 670. `expert_macro_state_terms` is the knob
+    that moves it.
+    """
+    widths = {
+        "expert_motion": 58,
+        "expert_motion_qpos": 29,
+        "expert_anchor_pos_b": 3,
+        "expert_anchor_ori_b": 6,
+    }
+    full_body = ("expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b")
+    root_qpos = ("expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b")
+    window = 10
+    assert sum(widths[t] for t in full_body) * window == 670
+    assert sum(widths[t] for t in root_qpos) * window == 380
+    assert full_body != root_qpos
+
+
+def test_v2_default_macro_state_is_root_qpos() -> None:
+    """`-G1-v2` defaults to the root_qpos frame; the SONIC surface does not.
+
+    The arithmetic test above pins the widths but never touches a config, so it
+    passed unchanged when the default moved on 2026-08-04. This pins the config.
+
+    v2's default is root_qpos (qpos + root pose, no joint velocity), which means
+    a v2 run REQUIRES a 380-wide encoder. `ImitationG1SonicSurfaceEnvCfg` stays
+    on the full-body frame deliberately: it is the published SONIC recipe, not a
+    place for our tuned defaults.
+    """
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+        ImitationG1V2EnvCfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.surfaces import (
+        ImitationG1SonicSurfaceEnvCfg,
+    )
+
+    root_qpos = [
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+    ]
+    full_body = ["expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b"]
+
+    assert list(ImitationG1V2EnvCfg().expert_macro_state_terms) == root_qpos
+    assert list(ImitationG1SonicSurfaceEnvCfg().expert_macro_state_terms) == full_body
+
+    # The default must not be a shared mutable: two configs editing one list
+    # would silently couple every surface built in the same process.
+    a, b = ImitationG1V2EnvCfg(), ImitationG1V2EnvCfg()
+    assert a.expert_macro_state_terms is not b.expert_macro_state_terms
+
+
+def test_v2_default_rewards_are_the_tuned_weights() -> None:
+    """v2 carries the 2026-08-04 tuned tracking weights; v1 and SONIC do not.
+
+    Measured over three seeds against two control seeds with randomization off:
+    MPJPE-G -37.3%, EE-G -34.7%, ranges disjoint. v1 is frozen and the SONIC
+    surface is the published recipe, so both keep the previous weights.
+    """
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v1 import (  # noqa: E501
+        ImitationG1EnvV1Cfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_v2 import (  # noqa: E501
+        ImitationG1V2EnvCfg,
+    )
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.surfaces import (
+        ImitationG1SonicSurfaceEnvCfg,
+    )
+
+    v2 = ImitationG1V2EnvCfg().rewards
+    assert (v2.motion_body_pos.weight, v2.motion_body_pos.params["std"]) == (2.0, 0.05)
+    assert (
+        v2.motion_global_anchor_pos.weight,
+        v2.motion_global_anchor_pos.params["std"],
+    ) == (2.0, 0.1)
+    assert (
+        v2.motion_global_anchor_ori.weight,
+        v2.motion_global_anchor_ori.params["std"],
+    ) == (2.0, 0.15)
+    # The coarse companion ships inert; enabling it is an explicit override.
+    assert v2.motion_global_anchor_pos_wide.weight == 0.0
+
+    for frozen in (
+        ImitationG1EnvV1Cfg().rewards,
+        ImitationG1SonicSurfaceEnvCfg().rewards,
+    ):
+        assert frozen.motion_body_pos.params["std"] == 0.3
+        assert frozen.motion_global_anchor_pos.weight == 0.5
+        assert frozen.motion_global_anchor_ori.weight == 0.5

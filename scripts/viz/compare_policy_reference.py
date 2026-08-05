@@ -53,6 +53,15 @@ parser.add_argument(
     "--checkpoint", type=str, default=None, help="Path to model checkpoint (.pt)."
 )
 parser.add_argument(
+    "--agent_entry_point",
+    type=str,
+    default=None,
+    help=(
+        "Agent config entry point used to rebuild the policy, e.g. "
+        "rlopt_ipmd_tuned_cfg_entry_point. It must match training."
+    ),
+)
+parser.add_argument(
     "--output_dir",
     type=str,
     default=None,
@@ -112,6 +121,17 @@ parser.add_argument(
     type=int,
     default=None,
     help="Trajectory rank used by the policy env and therefore the language planner.",
+)
+parser.add_argument(
+    "--policy_trajectory_ranks",
+    type=str,
+    default=None,
+    help=(
+        "Comma-separated trajectory ranks to render sequentially in one process. "
+        "This keeps a large runtime dataset cache resident while writing one "
+        "video per trajectory. Mutually exclusive with the singular trajectory "
+        "selectors."
+    ),
 )
 parser.add_argument(
     "--policy_motion",
@@ -210,7 +230,7 @@ from isaaclab.envs import (
 )
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.utils.dict import print_dict
-from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
+from isaaclab_imitation.envs import ImitationRLEnv, ImitationRLEnvLegacy
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
 )
@@ -227,7 +247,9 @@ import isaaclab_imitation.tasks  # noqa: F401
 # Reuse the trusted evaluator's exact domain-randomization disabling so the
 # comparison rollout is deterministic and independent of the reference-replay
 # lane (see --keep_domain_randomization).
-from imitation_experiments.provenance.paper_protocol_metadata import disable_domain_randomization
+from imitation_experiments.provenance.paper_protocol_metadata import (
+    disable_domain_randomization,
+)
 
 ALGORITHM_CLASS_MAP = {
     "PPO": PPO,
@@ -278,22 +300,25 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     raise ValueError(msg)
 
 
-def _unwrap_imitation_env(env) -> ImitationRLEnvLegacy:
+ImitationEnv = ImitationRLEnv | ImitationRLEnvLegacy
+
+
+def _unwrap_imitation_env(env) -> ImitationEnv:
     current = env
     visited: set[int] = set()
     while current is not None and id(current) not in visited:
         visited.add(id(current))
-        if isinstance(current, ImitationRLEnvLegacy):
+        if isinstance(current, (ImitationRLEnv, ImitationRLEnvLegacy)):
             return current
         current_unwrapped = getattr(current, "unwrapped", None)
-        if isinstance(current_unwrapped, ImitationRLEnvLegacy):
+        if isinstance(current_unwrapped, (ImitationRLEnv, ImitationRLEnvLegacy)):
             return current_unwrapped
         current = (
             getattr(current, "base_env", None)
             or getattr(current, "env", None)
             or getattr(current, "_env", None)
         )
-    raise TypeError("Could not unwrap an ImitationRLEnvLegacy from the provided environment.")
+    raise TypeError("Could not unwrap an imitation RL environment.")
 
 
 def _create_role_markers() -> VisualizationMarkers:
@@ -318,7 +343,7 @@ def _create_role_markers() -> VisualizationMarkers:
 
 
 def _update_role_markers(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     role_markers: VisualizationMarkers,
     *,
     reference_root_pos_w: torch.Tensor | None = None,
@@ -364,7 +389,7 @@ def _reference_body_pose_keys(reference) -> tuple[str, str | None]:
 
 
 def _reference_body_positions_w(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     source_env_id: int,
     target_env_id: int,
@@ -387,10 +412,13 @@ def _reference_body_positions_w(
 
 
 def _update_reference_body_markers(
-    base_env: ImitationRLEnvLegacy, reference_body_markers: VisualizationMarkers
+    base_env: ImitationEnv,
+    reference_body_markers: VisualizationMarkers,
+    *,
+    target_env_id: int = POLICY_ENV_ID,
 ) -> tuple[torch.Tensor | None, str, int, int]:
     positions_w, pos_key = _reference_body_positions_w(
-        base_env, source_env_id=POLICY_ENV_ID, target_env_id=REFERENCE_ENV_ID
+        base_env, source_env_id=POLICY_ENV_ID, target_env_id=target_env_id
     )
     finite_mask = torch.isfinite(positions_w).all(dim=-1)
     num_total = int(positions_w.shape[0])
@@ -407,7 +435,7 @@ def _update_reference_body_markers(
 
 
 def _set_comparison_camera(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     reference_root_pos_w: torch.Tensor | None = None,
 ) -> None:
@@ -422,7 +450,9 @@ def _set_comparison_camera(
         lookat = lookat.clone()
         lookat[2] = max(float(lookat[2].item()), 0.9)
 
-    eye = lookat + torch.tensor([3.0, -5.0, 2.0], device=base_env.device)
+    # Keep both 2.5 m-spaced lanes in view while making joint-level deviations
+    # legible in a 1280x720 recording.
+    eye = lookat + torch.tensor([2.0, -3.5, 1.2], device=base_env.device)
     base_env.sim.set_camera_view(
         eye.detach().cpu().tolist(), lookat.detach().cpu().tolist()
     )
@@ -488,14 +518,14 @@ def _disable_reward_terms(env_cfg) -> None:
         )
 
 
-def _ordered_trajectories(base_env: ImitationRLEnvLegacy) -> list[tuple[str, str, str]]:
+def _ordered_trajectories(base_env: ImitationEnv) -> list[tuple[str, str, str]]:
     ordered = getattr(base_env.trajectory_manager, "_ordered_traj_list", None)
     if not ordered:
         raise RuntimeError("The trajectory manager does not expose trajectories.")
     return [(str(dataset), str(motion), str(traj)) for dataset, motion, traj in ordered]
 
 
-def _print_trajectories(base_env: ImitationRLEnvLegacy) -> None:
+def _print_trajectories(base_env: ImitationEnv) -> None:
     print("[INFO] Available trajectories:")
     for rank, (dataset, motion, trajectory) in enumerate(
         _ordered_trajectories(base_env)
@@ -503,7 +533,7 @@ def _print_trajectories(base_env: ImitationRLEnvLegacy) -> None:
         print(f"{rank:04d}\t{dataset}\t{motion}\t{trajectory}")
 
 
-def _resolve_policy_trajectory_rank(base_env: ImitationRLEnvLegacy) -> int | None:
+def _resolve_policy_trajectory_rank(base_env: ImitationEnv) -> int | None:
     if args_cli.policy_trajectory_rank is not None:
         rank = int(args_cli.policy_trajectory_rank)
         num_trajectories = len(_ordered_trajectories(base_env))
@@ -550,8 +580,58 @@ def _resolve_policy_trajectory_rank(base_env: ImitationRLEnvLegacy) -> int | Non
     return matches[0][0]
 
 
+def _resolve_policy_trajectory_playlist(base_env: ImitationEnv) -> list[int | None]:
+    value = args_cli.policy_trajectory_ranks
+    if value is None:
+        return [_resolve_policy_trajectory_rank(base_env)]
+
+    singular_selectors = {
+        "--policy_trajectory_rank": args_cli.policy_trajectory_rank,
+        "--policy_motion": args_cli.policy_motion,
+        "--policy_dataset": args_cli.policy_dataset,
+        "--policy_trajectory": args_cli.policy_trajectory,
+    }
+    active = [
+        name for name, selector in singular_selectors.items() if selector is not None
+    ]
+    if active:
+        raise ValueError(
+            "--policy_trajectory_ranks is mutually exclusive with " + ", ".join(active)
+        )
+
+    fields = [field.strip() for field in str(value).split(",")]
+    if not fields or any(not field for field in fields):
+        raise ValueError(
+            "--policy_trajectory_ranks must be a nonempty comma-separated list."
+        )
+    try:
+        ranks = [int(field) for field in fields]
+    except ValueError as exc:
+        raise ValueError(
+            "--policy_trajectory_ranks must contain only integers."
+        ) from exc
+    if len(ranks) != len(set(ranks)):
+        raise ValueError("--policy_trajectory_ranks contains duplicate ranks.")
+
+    num_trajectories = len(_ordered_trajectories(base_env))
+    invalid = [rank for rank in ranks if not 0 <= rank < num_trajectories]
+    if invalid:
+        raise ValueError(
+            f"Trajectory ranks {invalid} are outside [0, {num_trajectories - 1}]."
+        )
+    return ranks
+
+
+def _video_stem(rank: int, motion: str) -> str:
+    safe_motion = "".join(
+        character if character.isalnum() or character in ("-", "_") else "_"
+        for character in motion
+    ).strip("_")
+    return f"rank-{rank:06d}-{safe_motion or 'motion'}"
+
+
 def _force_policy_trajectory_on_reset(
-    base_env: ImitationRLEnvLegacy,
+    base_env: ImitationEnv,
     *,
     rank: int,
     start_step: int,
@@ -571,6 +651,23 @@ def _force_policy_trajectory_on_reset(
     tm.reset_schedule = "custom"
     tm.custom_reset_fn = _custom_reset_fn
     tm.reset_start_step = int(start_step)
+
+    # v2 owns start-frame selection in the live reference command term. Its
+    # SONIC training default samples trajectory rank and frame jointly, which
+    # bypasses the trajectory manager's custom rank callback. Rebuild that
+    # sampler as fixed for explicit playback selection.
+    reference_term = getattr(base_env, "reference_command", None)
+    selection = getattr(getattr(reference_term, "cfg", None), "selection", None)
+    if selection is not None:
+        selection.schedule = "custom"
+        selection.full_trajectory = False
+        selection.start_mode = "fixed"
+        selection.start_frame = int(start_step)
+        selection.random_step_min = int(start_step)
+        selection.random_step_max = int(start_step)
+        selection.adaptive_weight_fn = None
+        reference_term._adaptive_failure_reset_sampler = None
+        reference_term._build_reset_samplers()
 
     # The G1 env can otherwise replace reset_start_step with its adaptive
     # full-trajectory sampler during _reset_idx. For explicit eval trajectory
@@ -616,6 +713,8 @@ class _PolicyTrackingMetrics:
         self.root_height: list[float] = []
         self.joint_pos_mae: list[float] = []
         self.ee_xyz_error: list[float] = []
+        self.mpjpe_local_m: list[float] = []
+        self.mpjpe_global_m: list[float] = []
 
     def record(self) -> None:
         env_id = self._env_id
@@ -633,6 +732,12 @@ class _PolicyTrackingMetrics:
         self.ee_xyz_error.append(
             float(torch.linalg.vector_norm(delta, dim=-1).mean().item())
         )
+        mpjpe = self._env._compute_mpjpe_metrics()
+        if mpjpe is None:
+            raise RuntimeError("The environment did not expose MPJPE metric bodies.")
+        mpjpe_local_m, mpjpe_global_m = mpjpe
+        self.mpjpe_local_m.append(float(mpjpe_local_m[env_id].item()))
+        self.mpjpe_global_m.append(float(mpjpe_global_m[env_id].item()))
 
     def summary(self, step_dt: float | None) -> dict:
         fallen_at = next(
@@ -662,6 +767,16 @@ class _PolicyTrackingMetrics:
             # inflate the tracking numbers.
             "joint_pos_mae_rad_prefall": _mean_upto(self.joint_pos_mae),
             "ee_xyz_error_m_prefall": _mean_upto(self.ee_xyz_error),
+            "mpjpe_local_mm_prefall": (
+                None
+                if _mean_upto(self.mpjpe_local_m) is None
+                else 1000.0 * _mean_upto(self.mpjpe_local_m)
+            ),
+            "mpjpe_global_mm_prefall": (
+                None
+                if _mean_upto(self.mpjpe_global_m) is None
+                else 1000.0 * _mean_upto(self.mpjpe_global_m)
+            ),
         }
 
 
@@ -781,7 +896,9 @@ def _language_phrase_for_motion(
     return None, str(table_path)
 
 
-agent_entry_point = resolve_agent_cfg_entry_point(args_cli.task, args_cli.algorithm)
+agent_entry_point = args_cli.agent_entry_point or resolve_agent_cfg_entry_point(
+    args_cli.task, args_cli.algorithm
+)
 
 
 @hydra_task_config(args_cli.task, agent_entry_point)
@@ -881,7 +998,8 @@ def main(
         env.close()
         return
 
-    policy_rank = _resolve_policy_trajectory_rank(raw_base_env)
+    policy_ranks = _resolve_policy_trajectory_playlist(raw_base_env)
+    policy_rank = policy_ranks[0]
     if policy_rank is not None:
         _force_policy_trajectory_on_reset(
             raw_base_env,
@@ -902,12 +1020,19 @@ def main(
     rollout_step_limit = min(step_limits) if len(step_limits) > 0 else None
 
     tm = raw_base_env.trajectory_manager
-    if policy_rank is not None:
-        selected_reference_steps = int(tm._length[int(policy_rank)].item())
-        selected_start_step = min(
-            int(args_cli.policy_start_step), max(selected_reference_steps - 1, 0)
-        )
-        default_run_steps = max(1, selected_reference_steps - selected_start_step)
+    selected_ranks = [rank for rank in policy_ranks if rank is not None]
+    if selected_ranks:
+        selected_reference_steps = [
+            int(tm._length[int(rank)].item()) for rank in selected_ranks
+        ]
+        selected_run_steps = [
+            max(
+                1,
+                steps - min(int(args_cli.policy_start_step), max(steps - 1, 0)),
+            )
+            for steps in selected_reference_steps
+        ]
+        default_run_steps = max(selected_run_steps)
     else:
         default_run_steps = max(1, int(tm._length.max().item()))
     video_length = (
@@ -917,16 +1042,31 @@ def main(
 
     _set_comparison_camera(raw_base_env)
 
+    playlist_mode = args_cli.policy_trajectory_ranks is not None
+    video_recorder = None
     if args_cli.video:
         video_kwargs = {
             "video_folder": os.path.join(log_dir, "videos", "compare_policy_reference"),
-            "step_trigger": lambda step: step == 0,
-            "video_length": video_length,
+            "step_trigger": (lambda _step: False)
+            if playlist_mode
+            else lambda step: step == 0,
+            # Playlist clips are stopped manually. Leave enough headroom that
+            # RecordVideo does not close the longest clip one frame early.
+            "video_length": video_length + (2 if playlist_mode else 0),
             "disable_logger": True,
         }
         print("[INFO] Recording videos during reference/policy comparison.")
-        print_dict(video_kwargs, nesting=4)
+        try:
+            print_dict(video_kwargs, nesting=4)
+        except Exception as exc:  # noqa: BLE001 - logging must not kill a render
+            # `print_dict` stringifies callables via `inspect.getsourcelines`,
+            # which re-reads THIS FILE from disk and then splits the line on
+            # "lambda". Any edit that shifts line numbers while a render is in
+            # flight makes it read the wrong line and raise IndexError -- which
+            # is how an hour of rendering was lost to a cosmetic log line.
+            print(f"[WARN] could not pretty-print video kwargs ({exc}); continuing.")
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
+        video_recorder = env
 
     env = IsaacLabWrapper(env)
     env = env.set_info_dict_reader(
@@ -971,7 +1111,9 @@ def main(
     # optimizer entries into a temp checkpoint before loading so only the
     # module weights (policy, value, reward estimator, skill encoder, etc.) are
     # restored; this does not modify the RLOpt submodule.
-    _load_checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    _load_checkpoint = torch.load(
+        checkpoint_path, map_location="cpu", weights_only=False
+    )
     if isinstance(_load_checkpoint, dict) and (
         "optimizer_state_dict" in _load_checkpoint
         or "reward_optimizer_state_dict" in _load_checkpoint
@@ -1020,162 +1162,238 @@ def main(
             "order. This run is not a valid performance measurement."
         )
 
-    tracking_metrics = None
-    if args_cli.metrics_json is not None:
-        tracking_metrics = _PolicyTrackingMetrics(
-            base_env, POLICY_ENV_ID, args_cli.fall_height
-        )
-
-    td = env.reset()
-    base_env.apply_reference_replay_targets()
-
-    reference_root_pos_w = None
-    reference_marker_stats = None
-    if reference_body_markers is not None:
-        reference_root_pos_w, reference_pos_key, rendered_bodies, total_bodies = (
-            _update_reference_body_markers(base_env, reference_body_markers)
-        )
-        reference_marker_stats = (reference_pos_key, rendered_bodies, total_bodies)
-    _set_comparison_camera(base_env, reference_root_pos_w=reference_root_pos_w)
-    _update_role_markers(
-        base_env, role_markers, reference_root_pos_w=reference_root_pos_w
-    )
-    timestep = 0
-    if args_cli.reference_visualization == "body_markers":
+    if args_cli.reference_visualization in ("body_markers", "both"):
         print(
-            "[INFO] Starting comparison loop. env 0 shows reference body-state markers "
-            "with expert qpos robot replay; env 1 runs policy."
-        )
-    elif args_cli.reference_visualization == "both":
-        print(
-            "[INFO] Starting comparison loop. env 0 shows reference body-state markers "
-            "plus qpos robot replay; env 1 runs policy."
+            "[INFO] Comparison view: env 0 shows expert qpos robot replay; "
+            "env 1 runs policy with expert body-state markers overlaid."
         )
     else:
         print(
-            "[INFO] Starting comparison loop. env 0 replays reference qpos robot; "
+            "[INFO] Comparison view: env 0 replays reference qpos robot; "
             "env 1 runs policy."
         )
     print("[INFO] Visual markers: blue = REFERENCE body state/role, red = POLICY role.")
-    dataset, motion, trajectory = base_env.trajectory_manager.get_env_traj_info(
-        POLICY_ENV_ID
-    )
-    tm = base_env.trajectory_manager
-    loaded_rank = int(tm.env_traj_rank[POLICY_ENV_ID].item())
-    loaded_step = int(tm.env_step[POLICY_ENV_ID].item())
-    embeddings_path = _skill_commander_embeddings_path(agent_cfg)
-    language_phrase, resolved_embeddings_path = _language_phrase_for_motion(
-        motion, embeddings_path
-    )
-    print(
-        "[INFO] Loaded env 1 trajectory for policy/language conditioning: "
-        f"rank={loaded_rank}, local_step={loaded_step}, dataset={dataset!r}, "
-        f"motion={motion!r}, trajectory={trajectory!r}."
-    )
-    if language_phrase is None:
-        print(
-            "[INFO] Language conditioning: "
-            f"motion_name={motion!r}, phrase=<unresolved>, "
-            f"embeddings={resolved_embeddings_path!r}."
-        )
-    else:
-        print(
-            "[INFO] Language conditioning: "
-            f"motion_name={motion!r}, phrase={language_phrase!r}, "
-            f"embeddings={resolved_embeddings_path!r}."
-        )
-
-    if reference_marker_stats is not None:
-        reference_pos_key, rendered_bodies, total_bodies = reference_marker_stats
-        print(
-            "[INFO] Reference visualization source: "
-            f"env={POLICY_ENV_ID} current_expert_frame[{reference_pos_key!r}] -> "
-            f"env={REFERENCE_ENV_ID} marker lane, "
-            f"rendered_bodies={rendered_bodies}/{total_bodies}."
-        )
     if use_reference_robot_replay:
         print(
             "[INFO] qpos robot replay is enabled for env 0. This is diagnostic; "
             "training losses/observations use the body-state tensors above."
         )
 
-    while simulation_app.is_running():
-        start_time = time.time()
-        with (
-            torch.inference_mode(),
-            set_exploration_type(InteractionType.DETERMINISTIC),
-        ):
-            if joint_order_emulator is not None:
-                # The reset event rewrites the offset, so reassert it every step.
-                joint_order_emulator.apply_action_offset()
-                joint_order_emulator.permute_observations(td)
-            td = collector_policy(td)
-            action = td.get("action")
-            if action is None:
-                raise KeyError(
-                    "Collector output is missing the top-level 'action' tensor."
-                )
-            action[REFERENCE_ENV_ID].zero_()
-            td = env.step(td)
-            if tracking_metrics is not None:
-                tracking_metrics.record()
-            reference_root_pos_w = None
-            if reference_body_markers is not None:
-                reference_root_pos_w, _, _, _ = _update_reference_body_markers(
-                    base_env, reference_body_markers
-                )
-            _set_comparison_camera(base_env, reference_root_pos_w=reference_root_pos_w)
-            _update_role_markers(
-                base_env, role_markers, reference_root_pos_w=reference_root_pos_w
-            )
-            td = step_mdp(
-                td, exclude_reward=True, exclude_done=False, exclude_action=True
+    trajectory_results: list[dict] = []
+    embeddings_path = _skill_commander_embeddings_path(agent_cfg)
+    for playlist_index, requested_rank in enumerate(policy_ranks):
+        if playlist_index > 0 and requested_rank is not None:
+            _force_policy_trajectory_on_reset(
+                base_env,
+                rank=requested_rank,
+                start_step=int(args_cli.policy_start_step),
             )
 
-        timestep += 1
-        if rollout_step_limit is not None and timestep >= rollout_step_limit:
-            print(f"[INFO] Stopping comparison after step limit: {rollout_step_limit}.")
-            break
+        tracking_metrics = (
+            _PolicyTrackingMetrics(base_env, POLICY_ENV_ID, args_cli.fall_height)
+            if args_cli.metrics_json is not None
+            else None
+        )
+        # env.step() runs under inference mode and therefore refreshes the
+        # cached expert frame with inference tensors. Keep later playlist
+        # resets in the same mode so their row-wise in-place refresh is legal.
+        with torch.inference_mode():
+            td = env.reset()
+            base_env.apply_reference_replay_targets()
 
-        reference_done = base_env.current_reference_is_final_frame()[POLICY_ENV_ID]
-        if bool(reference_done.item()):
+        reference_marker_stats = None
+        if reference_body_markers is not None:
+            _, reference_pos_key, rendered_bodies, total_bodies = (
+                _update_reference_body_markers(
+                    base_env,
+                    reference_body_markers,
+                    target_env_id=POLICY_ENV_ID,
+                )
+            )
+            reference_marker_stats = (
+                reference_pos_key,
+                rendered_bodies,
+                total_bodies,
+            )
+        replay_root_pos_w = base_env.robot.data.root_pos_w.torch[REFERENCE_ENV_ID]
+        _set_comparison_camera(base_env, reference_root_pos_w=replay_root_pos_w)
+        _update_role_markers(
+            base_env, role_markers, reference_root_pos_w=replay_root_pos_w
+        )
+
+        dataset, motion, trajectory = base_env.trajectory_manager.get_env_traj_info(
+            POLICY_ENV_ID
+        )
+        tm = base_env.trajectory_manager
+        loaded_rank = int(tm.env_traj_rank[POLICY_ENV_ID].item())
+        loaded_step = int(tm.env_step[POLICY_ENV_ID].item())
+        language_phrase, resolved_embeddings_path = _language_phrase_for_motion(
+            motion, embeddings_path
+        )
+        print(
+            f"[INFO] Starting comparison {playlist_index + 1}/{len(policy_ranks)}: "
+            f"rank={loaded_rank}, local_step={loaded_step}, dataset={dataset!r}, "
+            f"motion={motion!r}, trajectory={trajectory!r}."
+        )
+        if language_phrase is None:
             print(
-                f"[INFO] Stopping comparison because env 1 reference ended at step {timestep}."
+                "[INFO] Language conditioning: "
+                f"motion_name={motion!r}, phrase=<unresolved>, "
+                f"embeddings={resolved_embeddings_path!r}."
             )
-            break
+        else:
+            print(
+                "[INFO] Language conditioning: "
+                f"motion_name={motion!r}, phrase={language_phrase!r}, "
+                f"embeddings={resolved_embeddings_path!r}."
+            )
+        if reference_marker_stats is not None:
+            reference_pos_key, rendered_bodies, total_bodies = reference_marker_stats
+            print(
+                "[INFO] Reference visualization source: "
+                f"env={POLICY_ENV_ID} current_expert_frame[{reference_pos_key!r}] -> "
+                f"env={POLICY_ENV_ID} policy overlay, "
+                f"rendered_bodies={rendered_bodies}/{total_bodies}."
+            )
 
-        if args_cli.real_time and dt is not None:
-            sleep_time = dt - (time.time() - start_time)
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+        if playlist_mode and video_recorder is not None:
+            video_recorder.start_recording(_video_stem(loaded_rank, motion))
 
-    if tracking_metrics is not None:
+        timestep = 0
+        while simulation_app.is_running():
+            start_time = time.time()
+            with (
+                torch.inference_mode(),
+                set_exploration_type(InteractionType.DETERMINISTIC),
+            ):
+                if joint_order_emulator is not None:
+                    # The reset event rewrites the offset, so reassert it every step.
+                    joint_order_emulator.apply_action_offset()
+                    joint_order_emulator.permute_observations(td)
+                td = collector_policy(td)
+                action = td.get("action")
+                if action is None:
+                    raise KeyError(
+                        "Collector output is missing the top-level 'action' tensor."
+                    )
+                action[REFERENCE_ENV_ID].zero_()
+                td = env.step(td)
+                if tracking_metrics is not None:
+                    tracking_metrics.record()
+                if reference_body_markers is not None:
+                    _update_reference_body_markers(
+                        base_env,
+                        reference_body_markers,
+                        target_env_id=POLICY_ENV_ID,
+                    )
+                replay_root_pos_w = base_env.robot.data.root_pos_w.torch[
+                    REFERENCE_ENV_ID
+                ]
+                _set_comparison_camera(base_env, reference_root_pos_w=replay_root_pos_w)
+                _update_role_markers(
+                    base_env, role_markers, reference_root_pos_w=replay_root_pos_w
+                )
+                td = step_mdp(
+                    td, exclude_reward=True, exclude_done=False, exclude_action=True
+                )
+
+            timestep += 1
+            if rollout_step_limit is not None and timestep >= rollout_step_limit:
+                print(
+                    f"[INFO] Stopping comparison after step limit: {rollout_step_limit}."
+                )
+                break
+
+            reference_done = base_env.current_reference_is_final_frame()[POLICY_ENV_ID]
+            if bool(reference_done.item()):
+                print(
+                    "[INFO] Stopping comparison because env 1 reference ended "
+                    f"at step {timestep}."
+                )
+                break
+
+            if args_cli.real_time and dt is not None:
+                sleep_time = dt - (time.time() - start_time)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+        if playlist_mode and video_recorder is not None and video_recorder.recording:
+            video_recorder.stop_recording()
+
+        result = {
+            "trajectory_rank": loaded_rank,
+            "dataset": dataset,
+            "motion": motion,
+            "trajectory": trajectory,
+            "start_step": loaded_step,
+        }
+        if tracking_metrics is not None:
+            result["summary"] = tracking_metrics.summary(dt)
+            result["per_step"] = {
+                "root_height_m": tracking_metrics.root_height,
+                "joint_pos_mae_rad": tracking_metrics.joint_pos_mae,
+                "ee_xyz_error_m": tracking_metrics.ee_xyz_error,
+                "mpjpe_local_m": tracking_metrics.mpjpe_local_m,
+                "mpjpe_global_m": tracking_metrics.mpjpe_global_m,
+            }
+        trajectory_results.append(result)
+
+    if args_cli.metrics_json is not None:
         import json
 
-        summary = tracking_metrics.summary(dt)
         payload = {
             "checkpoint": checkpoint_path,
             "task": args_cli.task,
             "physics_cfg": type(env_cfg.sim.physics).__name__,
             "emulated_joint_order_from": args_cli.emulate_joint_order_from,
-            "motion": motion,
             "seed": args_cli.seed,
-            "summary": summary,
-            "per_step": {
-                "root_height_m": tracking_metrics.root_height,
-                "joint_pos_mae_rad": tracking_metrics.joint_pos_mae,
-                "ee_xyz_error_m": tracking_metrics.ee_xyz_error,
-            },
+            "trajectories": trajectory_results,
         }
         metrics_path = Path(args_cli.metrics_json).expanduser().resolve()
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         metrics_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        print("POLICY_TRACKING_SUMMARY " + json.dumps(summary, sort_keys=True))
+        for result in trajectory_results:
+            print(
+                "POLICY_TRACKING_SUMMARY "
+                + json.dumps(
+                    {
+                        "trajectory_rank": result["trajectory_rank"],
+                        "motion": result["motion"],
+                        **result["summary"],
+                    },
+                    sort_keys=True,
+                )
+            )
         print(f"[INFO] Policy tracking metrics written to {metrics_path}")
 
     env.close()
+    if args_cli.video:
+        video_dir = Path(log_dir) / "videos" / "compare_policy_reference"
+        retained_videos = sorted(video_dir.glob("*.mp4"))
+        if not retained_videos:
+            raise RuntimeError(
+                f"Video recording completed without an MP4 in {video_dir}."
+            )
+        for video_path in retained_videos:
+            print(f"[INFO] Retained video: {video_path.resolve()}")
 
 
 if __name__ == "__main__":
-    main()
-    simulation_app.close()
+    # Print and flush BEFORE `simulation_app.close()`, and carry a real exit
+    # code. Kit's close() terminates the process itself, discarding any pending
+    # traceback and returning 0, so a render that died during env construction
+    # was indistinguishable from one that wrote every video -- it just silently
+    # produced no MP4. Same fix as `evaluate_checkpoint.py`.
+    _exit_code = 0
+    try:
+        main()
+    except BaseException:
+        import traceback as _traceback
+
+        _traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        sys.stdout.flush()
+        _exit_code = 1
+    finally:
+        simulation_app.close()
+    sys.exit(_exit_code)

@@ -60,6 +60,10 @@ SEED="${SEED:-0}"
 FRAME_CAP="${FRAME_CAP:-1000000000}"
 FOOT_REWARD_WEIGHT="${FOOT_REWARD_WEIGHT:-2.0}"
 FOOT_WINDOW="${FOOT_WINDOW:-4}"
+# Label the run by its actual budget. A fixed "1b" in the tag would collide with
+# a concurrent run at a different budget -- same RUN_TAG means same
+# LOG_ROOT/<tag>/rlopt_train, i.e. two jobs writing each other's checkpoints.
+BUDGET_LABEL="$(awk -v f="${FRAME_CAP}" 'BEGIN{ if (f>=1e9) printf "%gb", f/1e9; else printf "%gm", f/1e6 }')"
 SUBMISSION_RECORD="${SUBMISSION_RECORD:-${SCRIPT_DIR}/cluster_submission.json}"
 
 fail() { echo "[FATAL] $*" >&2; exit 1; }
@@ -83,10 +87,10 @@ export NCONMAX=200
 export ENCODER_TAG="lafan1_v2_det_sr_h10_z256_seed0"
 export LOG_ROOT="/data/foot_tracking"
 export WANDB_PROJECT="g1-lafan1"
-export WANDB_GROUP="foot-tracking-1b"
+export WANDB_GROUP="${WANDB_GROUP:-foot-tracking-${BUDGET_LABEL}}"
 export CLUSTER_SLURM_GPU_GRES="${CLUSTER_SLURM_GPU_GRES:-gpu:h200:1}"
-export CLUSTER_SLURM_TIME_LIMIT="05:00:00"
-export SEGMENT_WALL_S=18000
+export CLUSTER_SLURM_TIME_LIMIT="${CLUSTER_SLURM_TIME_LIMIT:-05:00:00}"
+export SEGMENT_WALL_S="${SEGMENT_WALL_S:-18000}"
 export SEGMENT_FPS=105000
 export SAVE_INTERVAL=100000000
 
@@ -105,8 +109,8 @@ for arm in ${ARMS}; do
     out="$(
         env DRY_RUN="${DRY_RUN}" SEED="${SEED}" FRAME_CAP="${FRAME_CAP}" \
         EXTRA_TUNED_OVERRIDES="env.rewards.motion_foot_pos.weight=${FOOT_REWARD_WEIGHT}" \
-        RUN_TAG="lafan1_v2_foot_${arm}_1b_seed${SEED}_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}" \
-        WANDB_TAGS="sr,det,v2,lafan1,tuned,1b,foot-tracking,${arm}" \
+        RUN_TAG="lafan1_v2_foot_${arm}_${BUDGET_LABEL}_seed${SEED}_e${TRAIN_NUM_ENVS}_r${ROLLOUT_STEPS}" \
+        WANDB_TAGS="sr,det,v2,lafan1,tuned,${BUDGET_LABEL},foot-tracking,${arm}" \
         "${window_env[@]}" \
         "${DELEGATE}" 2>&1
     )" || { echo "${out}"; fail "submission failed for ${arm}"; }
@@ -127,6 +131,7 @@ fi
 
 arms_tsv="$(for a in "${!ARM_JOBS[@]}"; do printf '%s\t%s\n' "${a}" "${ARM_JOBS[$a]}"; done)"
 ARMS_TSV="${arms_tsv}" WEIGHT="${FOOT_REWARD_WEIGHT}" WINDOW="${FOOT_WINDOW}" \
+BUDGET_LABEL="${BUDGET_LABEL}" WANDB_GROUP_RECORD="${WANDB_GROUP}" \
 WORKSPACE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)" \
 WORKSPACE_DIRTY="$(git -C "${REPO_ROOT}" status --porcelain | head -1)" \
 SEED="${SEED}" FRAME_CAP="${FRAME_CAP}" RECORD="${SUBMISSION_RECORD}" \
@@ -140,6 +145,7 @@ for line in os.environ["ARMS_TSV"].splitlines():
     arms[name] = {
         "job": job,
         "foot_reward_weight": float(os.environ["WEIGHT"]),
+        "run_tag_budget": os.environ.get("BUDGET_LABEL"),
         "foot_termination_window": int(os.environ["WINDOW"]) if name == "reward_window" else None,
         "num_envs": 12288,
         "rollout_steps": 24,
@@ -155,7 +161,7 @@ record = {
     "motivation": "foot_pos_xyz is 66% of LAFAN1 non-timeout terminations and the only horizontal-position constraint",
     "scoring_note": "MPJPE and the Episode_Termination/foot_pos_xyz share. Both arms lengthen episodes, so return and per-minute rates move for reasons other than a better policy.",
     "unscreened": "motion_foot_pos.weight has not been through a hyperparameter screen",
-    "wandb": {"project": "g1-lafan1", "group": "foot-tracking-1b"},
+    "wandb": {"project": "g1-lafan1", "group": os.environ.get("WANDB_GROUP_RECORD", "foot-tracking")},
     "workspace_git_sha": os.environ["WORKSPACE_SHA"],
     "workspace_dirty": bool(os.environ["WORKSPACE_DIRTY"]),
     "submitted_at": datetime.datetime.now().astimezone().isoformat(),

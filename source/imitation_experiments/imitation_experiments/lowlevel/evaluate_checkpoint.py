@@ -103,6 +103,16 @@ parser.add_argument(
     help="Optional single motion name to evaluate from the manifest.",
 )
 parser.add_argument(
+    "--trajectory_rank",
+    type=int,
+    default=None,
+    help=(
+        "Optional exact trajectory rank in the loaded dataset. Unlike "
+        "--motion_name, this preserves the full-store data path and is useful "
+        "for reproducing one row from a large parallel evaluation."
+    ),
+)
+parser.add_argument(
     "--dataset_path",
     type=Path,
     default=None,
@@ -162,6 +172,21 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--randomization",
+    type=str,
+    default="none",
+    choices=("none", "startup", "reset", "all"),
+    help=(
+        "Which domain-randomization families stay live. Default 'none' is the "
+        "TRACKING-FIDELITY protocol: MPJPE should measure how well the policy "
+        "tracks, not how hard it was pushed, and reset randomization alone "
+        "contributes ~39 mm at frame 0 on the G1's 14-body set. Use 'all' for "
+        "the ROBUSTNESS protocol, which keeps the interval push -- that is what "
+        "the paper comparison requires, since both interfaces must eat the same "
+        "perturbation. Whichever is chosen is recorded in the output."
+    ),
+)
+parser.add_argument(
     "--disable_early_terminations",
     action="store_true",
     default=False,
@@ -193,7 +218,10 @@ from isaaclab.utils import math as math_utils
 from isaaclab_imitation.envs import ImitationRLEnv
 from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
-from imitation_experiments.audit.backend_determinism import pin_reference_start
+from imitation_experiments.audit.backend_determinism import (
+    apply_randomization_profile,
+    pin_reference_start,
+)
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
@@ -510,6 +538,24 @@ def _tracking_metrics(
     if ee_errors is not None:
         metrics["ee_pos_error_m"] = ee_errors[0]
         metrics["ee_ori_error_rad"] = ee_errors[1]
+        # Root-relative EE, the counterpart of MPJPE-L. `ee_pos_error_m` is
+        # WORLD frame, and measurement shows it tracks root position almost
+        # 1:1 -- so it answers "how far is the hand from where it should be in
+        # the world", which is mostly a drift question. This answers the
+        # different question "is the hand in the right place relative to the
+        # body", which is what a wrist-specific reward could actually move.
+        # Without the split, a drift fix and an articulation fix are
+        # indistinguishable in the reported number.
+        ee_ids = _body_ids_for_names(base_env, ee_body_names)
+        actual_ee = _as_torch(base_env._get_robot_body_pose_w_fast(ee_ids)[0])
+        ref_ee = _as_torch(
+            base_env._get_reference_body_pose_w_fast(tuple(ee_body_names))[0]
+        )
+        metrics["ee_pos_error_local_m"] = torch.linalg.vector_norm(
+            (actual_ee - _as_torch(robot_data.root_pos_w)[:, None, :])
+            - (ref_ee - root_pos_ref[:, None, :]),
+            dim=-1,
+        ).mean(dim=-1)
 
     return metrics, tracked_body_lin_vel
 
@@ -1282,10 +1328,56 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     reference_selection_surface = pin_reference_start(
         env_cfg, start_frame=int(args_cli.reference_start_frame)
     )
-    if hasattr(env_cfg, "reset_schedule"):
+    reference_channel = getattr(
+        getattr(env_cfg, "command_interface", None), "reference", None
+    )
+    reference_selection = getattr(reference_channel, "selection", None)
+    if reference_selection is not None:
+        # v2 owns trajectory assignment on the reference command channel. The
+        # old flat field is absent (or ignored) there, which previously made
+        # --reset_schedule metadata disagree with the actual ranks.
+        reference_selection.schedule = str(args_cli.reset_schedule)
+    elif hasattr(env_cfg, "reset_schedule"):
+        # Frozen v0/v1 surfaces retain the legacy flat field.
         env_cfg.reset_schedule = str(args_cli.reset_schedule)
+    if args_cli.trajectory_rank is not None:
+        if args_cli.motion_name is not None:
+            raise ValueError(
+                "--trajectory_rank and --motion_name are mutually exclusive."
+            )
+        trajectory_rank = int(args_cli.trajectory_rank)
+        if trajectory_rank < 0:
+            raise ValueError("--trajectory_rank must be non-negative.")
+
+        def _fixed_trajectory_rank(
+            env_ids: torch.Tensor, num_trajectories: int
+        ) -> torch.Tensor:
+            if trajectory_rank >= int(num_trajectories):
+                raise ValueError(
+                    f"--trajectory_rank={trajectory_rank} is outside the loaded "
+                    f"dataset with {num_trajectories} trajectories."
+                )
+            return torch.full(
+                (int(env_ids.numel()),),
+                trajectory_rank,
+                dtype=torch.long,
+                device=env_ids.device,
+            )
+
+        if reference_selection is not None:
+            reference_selection.schedule = "custom"
+            reference_selection.custom_fn = _fixed_trajectory_rank
+        elif hasattr(env_cfg, "reset_schedule"):
+            env_cfg.reset_schedule = "custom"
+            env_cfg.custom_reset_fn = _fixed_trajectory_rank
+        else:
+            raise RuntimeError("The environment has no trajectory selection surface.")
     if not args_cli.enable_observation_corruption:
         _disable_observation_corruption(env_cfg)
+    # Domain randomization was previously left entirely live here while
+    # `sim2sim_backend_eval.py` disabled it by default, so the two tools
+    # reported MPJPE in different regimes and neither number said which.
+    randomization_kept = apply_randomization_profile(env_cfg, args_cli.randomization)
     if args_cli.disable_early_terminations:
         # The AGENTS.md full-horizon diagnostic: every early termination off,
         # including `base_too_low`, so MPJPE is measured over the intended
@@ -1706,6 +1798,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             if motion_manifest is not None
             else None,
             "motion_name": args_cli.motion_name,
+            "trajectory_rank": args_cli.trajectory_rank,
             "dataset_path": str(getattr(env_cfg, "dataset_path", "")),
             "command_space": command_space,
             "low_level_command_mode": low_level_command_mode,
@@ -1744,6 +1837,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # v2 and the frozen v0/v1 lineage expose different ones, and writing
             # the wrong one used to fail silently.
             "reference_selection_surface": reference_selection_surface,
+            "randomization_profile": args_cli.randomization,
+            "randomization_kept": randomization_kept,
             "qualification_eligible": not bool(args_cli.disable_early_terminations),
             "time_out_enabled": True,
             "episode_length_extension_enabled": not bool(

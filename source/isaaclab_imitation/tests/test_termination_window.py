@@ -333,3 +333,45 @@ def test_scoped_window_keeps_the_thresholds_untouched():
         before = getattr(strict, name).params.get("threshold")
         after = getattr(windowed, name).params.get("threshold")
         assert before == after, name
+
+
+def test_foot_termination_allowance_defaults_to_off():
+    """`down_threshold=None` must leave the strict single-threshold behaviour.
+
+    The allowance is opt-in so that adding it cannot silently change any
+    recorded gate number.
+    """
+    import inspect
+
+    from isaaclab_imitation.tasks.manager_based.imitation.mdp.terminations import (
+        bad_reference_body_pos_relative,
+    )
+
+    sig = inspect.signature(bad_reference_body_pos_relative)
+    assert sig.parameters["down_threshold"].default is None
+    assert sig.parameters["root_height_threshold"].default == 0.5
+    # The default config must not enable it.
+    term = G1SonicTerminationsCfg().foot_pos_xyz
+    assert term.params.get("down_threshold") is None
+
+
+def test_windowed_foot_term_forwards_the_allowance():
+    """The windowed wrapper must not drop the new parameters.
+
+    It forwards explicit kwargs rather than **kwargs, so a parameter added to
+    the predicate and not to the wrapper would be silently ignored whenever a
+    window is active.
+    """
+    import inspect
+
+    from isaaclab_imitation.tasks.manager_based.imitation.mdp.terminations import (
+        PersistentBadReferenceBodyPosRelative,
+        bad_reference_body_pos_relative,
+    )
+
+    predicate = set(inspect.signature(bad_reference_body_pos_relative).parameters)
+    wrapper = set(
+        inspect.signature(PersistentBadReferenceBodyPosRelative.__call__).parameters
+    )
+    missing = predicate - wrapper - {"env"}
+    assert not missing, f"windowed wrapper drops {sorted(missing)}"

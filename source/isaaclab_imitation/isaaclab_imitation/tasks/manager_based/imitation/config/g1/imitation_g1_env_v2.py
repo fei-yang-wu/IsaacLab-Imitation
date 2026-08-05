@@ -77,7 +77,7 @@ from .common.presets import (
     G1ImitationPhysicsCfg,
     G1SonicRobotCfg,
 )
-from .common.rewards import G1SonicRewardsCfg
+from .common.rewards import G1V2TunedRewardsCfg
 from .common.terminations import (
     G1SonicTerminationCurriculumCfg,
     G1SonicTerminationsCfg,
@@ -137,6 +137,14 @@ class G1V2CommandsCfg:
     actor = None
 
 
+# The v2 default DiffSR macro-state frame: qpos + root pose, no joint velocity.
+_ROOT_QPOS_MACRO_STATE_TERMS: list[str] = [
+    "expert_motion_qpos",
+    "expert_anchor_pos_b",
+    "expert_anchor_ori_b",
+]
+
+
 @configclass
 class ImitationG1V2EnvCfg(ImitationLearningEnvCfg):
     """The single configurable v2 G1 tracking environment.
@@ -151,7 +159,7 @@ class ImitationG1V2EnvCfg(ImitationLearningEnvCfg):
     # -- components (shared SONIC blocks from common) --
     actions = G1SonicActionsCfg()
     observations = G1V2ObservationCfg()  # type: ignore
-    rewards = G1SonicRewardsCfg()  # type: ignore
+    rewards = G1V2TunedRewardsCfg()  # type: ignore
     terminations = G1SonicTerminationsCfg()  # type: ignore
     events = G1SonicEventCfg()
     curriculum = None
@@ -196,7 +204,27 @@ class ImitationG1V2EnvCfg(ImitationLearningEnvCfg):
 
     # Expert-window terms making up one DiffSR macro-state frame (consumed by
     # the env API `current_expert_macro_transition_batch`, not an obs group).
-    expert_macro_state_terms: list[str] | None = None
+    #
+    # ROOT_QPOS: 29 joint qpos + 3 root pos + 6 root ori = 38 per frame, so a
+    # 380-wide encoder input over the 10-frame window. The previous default was
+    # the full-body frame (`expert_motion`, 58 = qpos + qvel), which is 67 per
+    # frame and 670 over the window. Joint velocity is the only difference.
+    #
+    # Measured at 500M on LAFAN1 with matched rewards (2026-08-04): strict
+    # MPJPE-G landed inside the full-body arm's three-seed range, so dropping
+    # qvel costs nothing in precision, while survival was the highest measured
+    # (445.3, above every control and full-body seed) and full-horizon MPJPE-G
+    # the best produced by any arm (0.1503 against full-body's 0.1740-0.2303).
+    # Single seed on a pass with ~28% training-seed spread.
+    #
+    # THE ENCODER MUST MATCH. An encoder is built for one input width, so this
+    # default requires a `root_qpos` encoder; a full-body (670) one fails at the
+    # first forward with `hl/state shape mismatch: expected (N, 38), got
+    # (N, 67)`. Loud, never silent -- but it does mean a v2 checkpoint trained
+    # against the old default now needs
+    # `env.expert_macro_state_terms=[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]`
+    # to reproduce. See the `g1-encoder-interface` skill.
+    expert_macro_state_terms: list[str] | None = _ROOT_QPOS_MACRO_STATE_TERMS.copy()
 
     # Master switch for the reward_input observation group (parked IPMD
     # reward-estimation stack).
