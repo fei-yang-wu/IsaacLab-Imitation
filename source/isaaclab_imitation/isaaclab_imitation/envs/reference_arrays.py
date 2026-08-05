@@ -23,7 +23,7 @@ contiguous read.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
@@ -361,3 +361,72 @@ def copy_to_device_parallel(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(_copy, bounds))
     return target
+
+
+def pack_cpu_fields_parallel(
+    sources: Mapping[str, torch.Tensor],
+    *,
+    names: Sequence[str],
+    workers: int = 8,
+    chunk_rows: int = 262_144,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Copy row-aligned CPU fields into one anonymous row-major tensor.
+
+    The returned field tensors are shaped views into the packed allocation.
+    Keeping every field for a row adjacent turns the live reference lookup into
+    one ``index_select`` instead of six scattered gathers. It also touches every
+    source page during the copy, so training never pays mmap faults inline.
+    """
+    ordered_names = tuple(str(name) for name in names)
+    if not ordered_names:
+        raise ValueError("names must contain at least one field.")
+    missing = [name for name in ordered_names if name not in sources]
+    if missing:
+        raise KeyError(f"Cannot pack missing fields {missing}.")
+
+    first = sources[ordered_names[0]]
+    if first.ndim == 0:
+        raise ValueError("Packed fields must have a row dimension.")
+    if first.device.type != "cpu":
+        raise ValueError("Packed resident fields must be on CPU.")
+    total = int(first.shape[0])
+    dtype = first.dtype
+    widths: dict[str, int] = {}
+    for name in ordered_names:
+        value = sources[name]
+        if value.ndim == 0 or int(value.shape[0]) != total:
+            raise ValueError("Packed fields must have the same leading dimension.")
+        if value.device.type != "cpu" or value.dtype != dtype:
+            raise ValueError("Packed fields must share one CPU device and dtype.")
+        widths[name] = math.prod(int(size) for size in value.shape[1:])
+
+    packed = torch.empty((total, sum(widths.values())), dtype=dtype, device="cpu")
+    views: dict[str, torch.Tensor] = {}
+    spans: dict[str, tuple[int, int]] = {}
+    offset = 0
+    for name in ordered_names:
+        end = offset + widths[name]
+        spans[name] = (offset, end)
+        views[name] = packed[:, offset:end].view(total, *sources[name].shape[1:])
+        offset = end
+
+    bounds = [
+        (start, min(start + chunk_rows, total))
+        for start in range(0, total, max(int(chunk_rows), 1))
+    ]
+
+    def _copy(bound: tuple[int, int]) -> None:
+        start, end = bound
+        for name in ordered_names:
+            left, right = spans[name]
+            packed[start:end, left:right].copy_(
+                sources[name][start:end].reshape(end - start, -1)
+            )
+
+    if len(bounds) == 1 or workers <= 1:
+        for bound in bounds:
+            _copy(bound)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(_copy, bounds))
+    return packed, views
