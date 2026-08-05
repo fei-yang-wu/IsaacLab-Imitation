@@ -1,4 +1,4 @@
 interface:
   display_name: "BONES-SEED Dataset"
-  short_description: "Manage BONES-SEED metadata and NPZ conversion"
-  default_prompt: "Use $bones-seed-dataset to prepare BONES-SEED G1 trajectories and metadata."
+  short_description: "Manage BONES-SEED data, manifests, and caches"
+  default_prompt: "Use $bones-seed-dataset to prepare BONES-SEED G1 trajectories, metadata, manifests, and safe reusable caches."

@@ -70,3 +70,9 @@ and the 14 tracked bodies. Live random trajectory gathers use this dense cache.
 `qvel` remains available for velocity tracking, reset state, and privileged
 training observations; the v2 encoder and deployed actor command surface is
 still exactly root+qpos with no qvel term.
+
+Post-run cache note (2026-08-04): a later one-motion evaluation replaced the
+unversioned replay sidecar, so that directory no longer represents this run's
+129,785-motion input and must not be reused. The adaptive 10B follow-up builds
+and validates a fresh versioned replay directory under the separate
+`2026-08-04-bones129k-v2-adaptive-10b` campaign.

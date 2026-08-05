@@ -25,7 +25,8 @@ Classes:
 
 | Path | Class | Responsibility |
 | --- | --- | --- |
-| `experiments/campaigns/2026-08-04-bones129k-v2-scale/run.sh` | guarded launcher | Runs the staged full-129,785-motion v2 DiffSR pretrain and local 24,576-environment low-level scale probe. |
+| `experiments/campaigns/2026-08-04-bones129k-v2-adaptive-10b/run.sh` | guarded launcher | Validates the fresh full replay cache and accepted root+qpos encoder, then launches the local 32,768 × 6 low-level-from-scratch run with full-trajectory adaptive resets under a 10B cap. |
+| `experiments/campaigns/2026-08-04-bones129k-v2-scale/run.sh` | guarded launcher | Runs the staged full-129,785-motion v2 DiffSR pretrain and completed local 32,768-environment 1B low-level scale probe. |
 | `experiments/campaigns/2026-07-22-bones-h10-scale/submit.sh` | front door | Dated wrapper for the retained BONES h10 scale screen. |
 | `experiments/campaigns/2026-07-29-sonic-official-fsq/run.sh` | front door | Dated wrapper for the official-window SONIC FSQ32 low-level campaign. |
 | `experiments/campaigns/2026-07-29-sonic-official-fsq/sonic_official_fsq/submit_sonic_official_fsq_ice.sh` | guarded launcher | Validates corrected LAFAN1 inputs and submits one resumable ICE H200 segment under the 5B cap. |
@@ -95,6 +96,8 @@ Classes:
 | `source/imitation_experiments/imitation_experiments/audit/audit_vanilla_tracker_qualification.py` | qualification | Checks direct and streamed vanilla qualification. |
 | `source/imitation_experiments/imitation_experiments/data/balanced_motion_rows.py` | library | Enforces balanced per-motion sample selection. |
 | `experiments/paper/build_paper_release_bundle.py` | audit/report | Builds the hash-verified Phase-4/5 release index. |
+| `source/imitation_experiments/imitation_experiments/data/build_reference_arrays.py` | workflow | Builds training-shaped reference arrays from an NPZ tree, bypassing the Zarr and the persisted replay. |
+| `source/imitation_experiments/imitation_experiments/data/publish_reference_arrays.py` | workflow | Validates, publishes, and retrieves a built reference-array directory via Hugging Face. |
 | `source/imitation_experiments/imitation_experiments/evaluation/closed_loop_metrics.py` | library | Defines retained closed-loop paper metrics. |
 | `source/imitation_experiments/imitation_experiments/data/collect_interface_rollout_samples.py` | workflow | Collects planner samples with the frozen causal protocol. |
 | `source/imitation_experiments/imitation_experiments/evaluation/eval_interface_planner_closed_loop.py` | workflow | Evaluates planners in the Isaac closed loop. |
