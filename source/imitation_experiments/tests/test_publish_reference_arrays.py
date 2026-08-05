@@ -174,6 +174,59 @@ def test_fetch_validates_what_it_downloaded(
         )
 
 
+def test_verify_remote_catches_an_upload_that_did_not_land(
+    built: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The failure mode that mattered: the client reports success anyway.
+
+    A resumed upload cache pointed at a recreated repo skips every large file
+    and still exits 0, so only comparing against the Hub listing catches it.
+    """
+    from imitation_experiments.data import publish_reference_arrays as mod
+
+    class FakeSibling:
+        def __init__(self, name, size):
+            self.rfilename, self.size = name, size
+
+    class FakeInfo:
+        def __init__(self, siblings):
+            self.siblings = siblings
+
+    class FakeApi:
+        def __init__(self, siblings):
+            self._siblings = siblings
+
+        def repo_info(self, repo_id, *, repo_type, files_metadata):
+            return FakeInfo(self._siblings)
+
+    local = {
+        p.name: p.stat().st_size
+        for p in built.iterdir()
+        if p.is_file() and not p.name.startswith(".")
+    }
+    import huggingface_hub
+
+    # Everything present at the right size: passes.
+    monkeypatch.setattr(
+        huggingface_hub,
+        "HfApi",
+        lambda: FakeApi([FakeSibling(n, s) for n, s in local.items()]),
+    )
+    mod.verify_remote("org/whatever", built)
+
+    # Nine of ten committed to a repo that no longer exists.
+    partial = [FakeSibling("README.md", 10), FakeSibling(".gitattributes", 5)]
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda: FakeApi(partial))
+    with pytest.raises(RuntimeError, match="did not land"):
+        mod.verify_remote("org/whatever", built)
+
+    # Present but truncated.
+    short = [FakeSibling(n, max(s - 4, 0)) for n, s in local.items()]
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda: FakeApi(short))
+    with pytest.raises(RuntimeError, match="bytes on the Hub"):
+        mod.verify_remote("org/whatever", built)
+
+
 def test_card_records_identity_and_conventions(built: Path) -> None:
     sidecar = json.loads((built / SIDECAR_NAME).read_text(encoding="utf-8"))
     card = dataset_card(sidecar, source_repo="org/source")
