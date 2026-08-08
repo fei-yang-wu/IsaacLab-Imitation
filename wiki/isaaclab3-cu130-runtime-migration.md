@@ -29,8 +29,11 @@ blocks are too short to distinguish a learning recipe from a flat one.
 - Run the SIF read-only with targeted writable binds for caches, data, logs,
   home, and `/tmp`; do not create an Apptainer overlay.
 - Support both strict kit-less Newton execution and Kit-based PhysX execution.
-- Qualify compute-only GPUs for Newton and RT-capable GPUs for either Newton or
-  PhysX without silently selecting an unsupported renderer.
+- Run either backend on any qualified GPU without silently selecting an
+  unsupported renderer. (Corrected 2026-08-05: this originally read "compute-only
+  GPUs for Newton and RT-capable GPUs for either", on the theory that Kit needs
+  RT hardware. Headless PhysX runs on H100 and H200 -- see
+  `experiments/campaigns/2026-08-03-physx-backend-5b/README.md`.)
 
 ## Runtime layout
 

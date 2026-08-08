@@ -65,6 +65,28 @@ As of 2026-07-16:
 | 5. BONES-SEED language study | The fresh 100-motion data, paired low-level qualification, and staged planner code gates pass; three paper-seed pipelines are active on Skynet | Monitor the fixed seed 0/1/2 stage chains, require every per-seed audit to pass, then run the guarded multi-seed aggregate. |
 | 6. Final analysis | Pending | Use Skynet only for final verification and paper-scale runs. |
 
+### Selected-ten trajectory-first development protocol (2026-08-05)
+
+The current local BONES-SEED ten-goal development run uses complete
+oracle-policy trajectories instead of row budgets. It launches ten motions x
+100 environments in one process, starts every reference at frame 0, retains
+domain randomization, disables only pushes, uses deterministic actions, and
+runs until SONIC tracking failure or reference completion with foot XYZ and
+base-height termination disabled. The collector stores keyed completed
+trajectories, causal planner state, oracle latent targets, current
+expert/achieved root-qpos, and 30 future expert root-qpos frames with a validity
+mask. A medium planner is pretrained only on this oracle data for 10k updates
+and evaluated every 2k before any planner-driven collection. This is the
+working selected-ten protocol; it does not silently rewrite the frozen 100-goal
+paper Phase-5 grid described later on this page.
+
+The first full seed-0 curve completed on 2026-08-05. At 2k/4k/6k/8k/10k,
+SONIC SR is 0.295/0.293/0.307/0.306/0.339 and success-only MPJPE-L is
+47.79/53.39/52.60/49.08/46.68 mm. The agreed plateau heuristic is not met.
+Offline cosine reaches 0.983, but closed-loop success is concentrated in three
+motions, so do not treat offline convergence as deployable planner convergence.
+No planner-driven data was collected after this oracle-only decision gate.
+
 The streamed path has passed a local multi-environment equivalence check over
 all ten packet phases, including asynchronous per-environment republication.
 On the corrected LAFAN1 data, all seven actor inputs agree within `3.28e-7`
