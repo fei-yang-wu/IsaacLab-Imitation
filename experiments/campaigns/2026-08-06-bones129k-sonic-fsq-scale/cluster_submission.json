@@ -1,0 +1,87 @@
+{
+  "campaign": "2026-08-06-bones129k-sonic-fsq-scale",
+  "submitted_utc": "2026-08-06T19:57:48Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "f0ed584c537619907a98c294ca80b4c39259102158cc651c8b4916ba198c4228",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "skill-encoding-ablation"
+  },
+  "pretrain": {
+    "job_id": 5570673,
+    "gpu_gres": "gpu:h200:1",
+    "macro_interface": "root_qpos",
+    "encoder_input_dim": 380,
+    "latent": "sonic_fsq64_levels32",
+    "encoder_hidden_dims": [
+      2048,
+      1024,
+      512,
+      512
+    ],
+    "encoder_activation": "silu",
+    "encoder_layer_norm": false,
+    "diffsr_feature_dim": 256,
+    "diffsr_embed_dim": 1024,
+    "diffsr_g_hidden_dims": [
+      1024,
+      1024,
+      512
+    ],
+    "diffsr_mu_hidden_dims": [
+      1024,
+      1024,
+      512
+    ],
+    "updates": 50000,
+    "batch_size": 8192
+  },
+  "controllers": [
+    {
+      "arm": "tuned",
+      "job_id": 5570680,
+      "dependency": "afterok:5570673",
+      "gpu_gres": "gpu:h100:1",
+      "retargeted_from": "gpu:h200:1",
+      "retargeted_utc": "2026-08-06T22:18:13Z",
+      "start_node": "atl1-1-03-012-28-0"
+    },
+    {
+      "arm": "sonic",
+      "job_id": 5570681,
+      "dependency": "afterok:5570673",
+      "gpu_gres": "gpu:h100:1",
+      "retargeted_from": "gpu:h200:1",
+      "retargeted_utc": "2026-08-06T22:18:13Z",
+      "start_node": "atl1-1-03-013-8-0",
+      "state": "FAILED",
+      "failure": "Warp CUDA out of memory before the first training iteration"
+    }
+  ],
+  "controller_retries": [
+    {
+      "arm": "sonic",
+      "attempt": 1,
+      "job_id": 5570936,
+      "submitted_utc": "2026-08-06T22:41:04Z",
+      "partition": "coe-gpu",
+      "qos": "coe-ice",
+      "gpu_gres": "gpu:h200:1",
+      "encoder_checkpoint_sha256": "6a4a724872273a6a2850e433881e7746dbce2b7ccb92e4ee18153cffad77da14",
+      "output": "/data/bones129k_sonic_fsq_scale/sonic_tracker_h200_retry1/rlopt_train",
+      "start_node": "atl1-1-03-013-26-0",
+      "replaces_failed_job_id": 5570681
+    }
+  ],
+  "common": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "command_dim": 66,
+    "hold_steps": 10,
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "gamma": 0.97,
+    "frame_cap": 5000000000,
+    "checkpoint_interval_frames": 250000000
+  }
+}

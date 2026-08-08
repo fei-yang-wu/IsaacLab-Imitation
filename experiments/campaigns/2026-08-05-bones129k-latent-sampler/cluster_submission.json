@@ -1,0 +1,75 @@
+{
+  "submitted_at": "2026-08-05T21:05:49-04:00",
+  "cluster": "ICE",
+  "gpu": "h200:1",
+  "frame_cap": 10000000000,
+  "allocation_walltime": "15:59:00",
+  "workspace_archive_sha256": "e20e93be390a9985df0472893f20ce2b68050dd12a89366743a9dfc66f951d05",
+  "source_repo_commit": "1e234237a81f44ee305f4b1d27a069221be75f4c",
+  "source_repo_state": "dirty (24 files captured in the immutable workspace archive)",
+  "source_contract_sha256_prefix": "c4da91677a2576f4",
+  "startup_status_at": "2026-08-05T21:12:00-04:00",
+  "startup_status": "all five RUNNING; training entrypoint reached; 393216-frame replay buffer resolved; first update pending",
+  "local_smoke_root": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones129k_latent_sampler_smoke/20260805_210320",
+  "common_training": {
+    "task": "Isaac-Imitation-G1-v2",
+    "num_envs": 16384,
+    "frames_per_batch_per_env": 24,
+    "batch_frames": 393216,
+    "mini_batch_size": 294912,
+    "max_iterations": 25432,
+    "gamma": 0.97,
+    "seed": 0,
+    "physics": "newton_mjwarp",
+    "reset_sampler": "random80_adaptive20"
+  },
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "bones129k-ablation",
+    "common_tags": [
+      "bones-seed",
+      "129785",
+      "v2",
+      "reset80-adaptive20",
+      "rollout24",
+      "gamma097",
+      "newton"
+    ]
+  },
+  "jobs": [
+    {
+      "arm": "reset80_diffsr",
+      "job_id": 5567801,
+      "tags": ["reset80_diffsr", "diffsr", "root-qpos", "z256", "h10", "hold10", "frozen-encoder"]
+    },
+    {
+      "arm": "sonic_fsq32",
+      "job_id": 5567802,
+      "tags": ["sonic_fsq32", "sonic-style", "fsq", "fsq32x64", "future10", "hold1", "online-pg", "recon001"]
+    },
+    {
+      "arm": "vqvae_k32",
+      "job_id": 5567803,
+      "tags": ["vqvae_k32", "vqvae", "vq-ema", "k32", "future10", "hold10", "reconstruction"]
+    },
+    {
+      "arm": "autoencoder",
+      "job_id": 5567804,
+      "tags": ["autoencoder", "continuous", "future10", "hold10", "reconstruction"]
+    },
+    {
+      "arm": "root_qpos_explicit",
+      "job_id": 5567809,
+      "tags": ["root_qpos_explicit", "explicit", "root-qpos", "window1", "hold1", "command38"]
+    },
+    {
+      "arm": "sonic_fsq32_v2",
+      "job_id": 5571455,
+      "submitted_at": "2026-08-07T00:25:31-04:00",
+      "source_contract_sha256": "8b01580a1cb703054694c96549f7aec6875cd338281c0e6f2bf287593ee2745a",
+      "local_smoke_root": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones129k_latent_sampler_smoke/20260807_002348",
+      "note": "SONIC-release-aligned tokenizer contract: future10 at frame_stride 5 (0.1 s spacing, 0.9 s span), encoder input = 14-body keypoint positions + 6D root-orientation difference (480 values), hold1, PG + recon 0.01. Submitted after the 2026-08-07 SONIC fidelity audit; see README.",
+      "tags": ["sonic_fsq32_v2", "sonic-style", "fsq", "fsq32x64", "future10-dt0.1", "keypoint14", "hold1", "online-pg", "recon001"]
+    }
+  ]
+}

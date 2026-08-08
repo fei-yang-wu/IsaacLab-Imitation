@@ -168,6 +168,8 @@ def test_completed_trajectory_writer_keeps_variable_lengths_and_exact_budget(
         env_ids=[0, 1],
         episode_ids=[1, 0],
         motion_names=["a", "b"],
+        termination_reasons=[["reference_finished"], ["anchor_pos"]],
+        tracking_success=[True, False],
     )
     # This unfinished segment must not leak through the global cutoff.
     writer.add(sample([2], [0], ["a"], 4.0))
@@ -176,6 +178,8 @@ def test_completed_trajectory_writer_keeps_variable_lengths_and_exact_budget(
     assert writer.complete_budget
     assert writer.counts() == {"a": 1, "b": 1}
     assert writer.completed_trajectory_count == 2
+    assert writer.records()[-1]["termination_reasons"] == ["anchor_pos"]
+    assert writer.records()[-1]["tracking_success"] is False
     assert writer.buffered_trajectory_count == 1
     assert writer.row_count == 5
     saved = torch.load(

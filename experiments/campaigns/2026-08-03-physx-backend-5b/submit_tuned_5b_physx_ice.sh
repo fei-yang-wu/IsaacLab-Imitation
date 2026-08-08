@@ -38,16 +38,16 @@ set -euo pipefail
 # against every run that does not. Compare MPJPE and episode length, which no
 # reward weight can inflate.
 #
-# GPU POLICY. `runtime_bootstrap.validate_gpu_policy` rejects PhysX/Kit on
-# compute-only GPUs (A100/H100/H200) because Kit wants an RT-capable device.
-# ICE's PhysX-qualified parts are L40S / A40 / RTX6000. This launcher defaults to
-# H100 plus `--experimental-compute-only-physx`, which is the documented escape
-# hatch (headless only) and is untried on this cluster. If Kit refuses to start,
-# switch to the qualified path with one knob and resubmit:
+# GPU POLICY -- SETTLED 2026-08-03, DO NOT REINSTATE THE OLD BELIEF.
+# Headless PhysX/Kit runs on Hopper. This launcher's own run logged
+# `PhysX GPU policy accepted: NVIDIA H100 80GB HBM3` and sustained 33,421 fps to
+# 300M frames on `gpu:h100:1`. The earlier claim that Kit needs an RT-capable
+# device, and that ICE's only PhysX-qualified parts are L40S / A40 / RTX6000,
+# was wrong; `validate_gpu_policy` no longer gates H100/H200 and no override
+# flag is required for them. Only A100 remains gated, and only because nobody
+# has run it. Choose the GPU on throughput and queue depth, not on PhysX:
 #
-#   GPU_GRES=gpu:l40s:1 DRY_RUN=0 ./submit_tuned_5b_physx_ice.sh
-#
-# The override flag is added automatically only for compute-only GRES.
+#   GPU_GRES=gpu:h200:1 DRY_RUN=0 ./submit_tuned_5b_physx_ice.sh
 #
 # THROUGHPUT IS AN ESTIMATE. Newton was measured at 62,406 fps at this geometry;
 # PhysX has never been measured on ICE. The two anchors available are the local

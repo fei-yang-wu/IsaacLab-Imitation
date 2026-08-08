@@ -65,6 +65,28 @@ parser.add_argument(
         "'intermediate' hides target s_{t+W} and uses s_{t+1:t+W-1}."
     ),
 )
+parser.add_argument(
+    "--transition_objective",
+    type=str,
+    default="endpoint",
+    choices=("endpoint", "state_occupancy", "semimarkov_chain", "endpoint_delta"),
+    help=(
+        "DiffSR skill factorization. 'endpoint' predicts s[t+H] from (s[t], z); "
+        "'state_occupancy' predicts a sampled checkpoint s[t+h_k] from (s[t], z); "
+        "'semimarkov_chain' predicts each checkpoint from the preceding checkpoint "
+        "under one held z; 'endpoint_delta' predicts s[t+H]-s[t]."
+    ),
+)
+parser.add_argument(
+    "--transition_offsets",
+    type=int,
+    nargs="*",
+    default=None,
+    help=(
+        "Strictly increasing h_k checkpoints ending at --horizon_steps. Empty uses "
+        "only H for endpoint objectives and every step for occupancy/chain."
+    ),
+)
 parser.add_argument("--z_dim", type=int, default=256, help="Skill latent dimension.")
 parser.add_argument(
     "--latent_mode",
@@ -143,6 +165,26 @@ parser.add_argument(
     default=None,
     help="Skill-encoder trunk MLP hidden widths (default: config default).",
 )
+parser.add_argument(
+    "--encoder_activation",
+    type=str,
+    choices=("elu", "mish", "relu", "silu"),
+    default="mish",
+    help="Skill-encoder trunk activation.",
+)
+parser.add_argument(
+    "--encoder_layer_norm",
+    dest="encoder_layer_norm",
+    action="store_true",
+    default=True,
+    help="Apply LayerNorm after every skill-encoder hidden linear layer.",
+)
+parser.add_argument(
+    "--no_encoder_layer_norm",
+    dest="encoder_layer_norm",
+    action="store_false",
+    help="Disable skill-encoder hidden LayerNorm, matching SONIC's MLP recipe.",
+)
 parser.add_argument("--vq_codebook_size", type=int, default=512)
 parser.add_argument("--vq_ema_decay", type=float, default=0.99)
 parser.add_argument(
@@ -162,6 +204,30 @@ parser.add_argument(
     type=int,
     default=512,
     help="DiffSR bilinear embedding dimension.",
+)
+parser.add_argument(
+    "--diffsr_f_hidden_dims",
+    type=int,
+    nargs="+",
+    default=None,
+    help="DiffSR legacy bilinear state-encoder hidden widths.",
+)
+parser.add_argument(
+    "--diffsr_g_hidden_dims",
+    type=int,
+    nargs="+",
+    default=None,
+    help=(
+        "DiffSR concat state, skill, and phi encoder hidden widths. This is the "
+        "active state-encoder knob under --diffsr_phi_parameterization concat."
+    ),
+)
+parser.add_argument(
+    "--diffsr_mu_hidden_dims",
+    type=int,
+    nargs="+",
+    default=None,
+    help="DiffSR next-state diffusion encoder hidden widths.",
 )
 parser.add_argument(
     "--diffsr_phi_parameterization",
@@ -402,11 +468,21 @@ def _wandb_log(run: Any, row: dict[str, Any]) -> None:
         run.log(payload, step=step)
 
 
-def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
+def _build_trainer_config(
+    env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg | None = None,
+) -> HighLevelSkillDiffSRConfig:
     grad_clip_norm = None if args_cli.grad_clip_norm <= 0 else args_cli.grad_clip_norm
+    # The environment owns the macro-window cadence; this only records it, so
+    # the checkpoint carries the stride its encoder was actually trained on and
+    # a low-level run cannot pair with the wrong one. There is deliberately no
+    # CLI flag: two sources for one value is how they drift apart.
+    macro_frame_stride = int(getattr(env_cfg, "expert_macro_frame_stride", 1) or 1)
     config = HighLevelSkillDiffSRConfig(
         horizon_steps=args_cli.horizon_steps,
+        macro_frame_stride=macro_frame_stride,
         encoder_window_mode=args_cli.encoder_window_mode,
+        transition_objective=args_cli.transition_objective,
+        transition_offsets=tuple(args_cli.transition_offsets or ()),
         z_dim=args_cli.z_dim,
         latent_mode=args_cli.latent_mode,
         reg_coeff=args_cli.reg_coeff,
@@ -424,12 +500,29 @@ def _build_trainer_config() -> HighLevelSkillDiffSRConfig:
             if args_cli.encoder_hidden_dims
             else {}
         ),
+        encoder_activation=args_cli.encoder_activation,
+        encoder_layer_norm=bool(args_cli.encoder_layer_norm),
         vq_codebook_size=args_cli.vq_codebook_size,
         vq_ema_decay=args_cli.vq_ema_decay,
         vq_dead_code_reset_iters=args_cli.vq_dead_code_reset_iters,
         diffsr_feature_dim=args_cli.diffsr_feature_dim,
         diffsr_embed_dim=args_cli.diffsr_embed_dim,
         diffsr_phi_parameterization=args_cli.diffsr_phi_parameterization,
+        **(
+            {"diffsr_f_hidden_dims": tuple(args_cli.diffsr_f_hidden_dims)}
+            if args_cli.diffsr_f_hidden_dims
+            else {}
+        ),
+        **(
+            {"diffsr_g_hidden_dims": tuple(args_cli.diffsr_g_hidden_dims)}
+            if args_cli.diffsr_g_hidden_dims
+            else {}
+        ),
+        **(
+            {"diffsr_mu_hidden_dims": tuple(args_cli.diffsr_mu_hidden_dims)}
+            if args_cli.diffsr_mu_hidden_dims
+            else {}
+        ),
         batch_size=args_cli.batch_size,
         num_updates=args_cli.num_updates,
         log_interval=args_cli.log_interval,
@@ -488,7 +581,7 @@ def _run_training(
     checkpoint_path = checkpoints_dir / "latest.pt"
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    trainer_config = _build_trainer_config()
+    trainer_config = _build_trainer_config(env_cfg)
     config_payload = {
         "task": args_cli.task,
         "num_envs": int(env_cfg.scene.num_envs),

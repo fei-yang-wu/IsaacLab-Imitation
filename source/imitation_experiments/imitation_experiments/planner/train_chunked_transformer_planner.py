@@ -109,6 +109,16 @@ def _parse_args() -> argparse.Namespace:
         help="Optional matching planner-family checkpoint used to initialize finetuning.",
     )
     parser.add_argument(
+        "--resume_checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Resume an extended run from latest.pt, restoring model and optimizer "
+            "state and treating --num_updates as the total target. Unlike "
+            "--checkpoint, this does not start a new finetuning stage."
+        ),
+    )
+    parser.add_argument(
         "--planner_family",
         choices=("flow", "diffusion", "deterministic"),
         default="flow",
@@ -434,6 +444,8 @@ def _evaluate(
 
 def main() -> None:
     args = _parse_args()
+    if args.checkpoint is not None and args.resume_checkpoint is not None:
+        raise ValueError("--checkpoint and --resume_checkpoint are mutually exclusive.")
     if args.batch_size <= 0:
         raise ValueError("--batch_size must be > 0.")
     if args.micro_batch_size < 0:
@@ -519,9 +531,10 @@ def main() -> None:
 
     model_kwargs = _model_kwargs(args)
     planner_class = PLANNER_FAMILIES[str(args.planner_family)]
-    if args.checkpoint is not None:
+    initialization_checkpoint = args.resume_checkpoint or args.checkpoint
+    if initialization_checkpoint is not None:
         loaded_planner, checkpoint_spec, checkpoint_metadata = load_planner_checkpoint(
-            args.checkpoint.expanduser(), map_location=device
+            initialization_checkpoint.expanduser(), map_location=device
         )
         if checkpoint_spec != target_spec:
             raise ValueError(
@@ -535,7 +548,7 @@ def main() -> None:
                 f"{args.planner_family}."
             )
         planner = loaded_planner.to(device)
-        init_checkpoint = str(args.checkpoint.expanduser().resolve())
+        init_checkpoint = str(initialization_checkpoint.expanduser().resolve())
     else:
         checkpoint_metadata = {}
         planner = planner_class(
@@ -561,7 +574,7 @@ def main() -> None:
             f"Planner language_dim={planner.language_dim} does not match samples "
             f"{language_dim}."
         )
-    if not args.use_checkpoint_normalization:
+    if not args.use_checkpoint_normalization and args.resume_checkpoint is None:
         # Training rows only: statistics over the full set would leak the
         # held-out trajectories into the model through the normalizer.
         stats = _normalization_stats(
@@ -576,6 +589,30 @@ def main() -> None:
         lr=float(args.lr),
         weight_decay=float(args.weight_decay),
     )
+    resume_start_update = 0
+    optimizer_resumed = False
+    if args.resume_checkpoint is not None:
+        resume_path = args.resume_checkpoint.expanduser().resolve()
+        payload = torch.load(resume_path, map_location=device, weights_only=False)
+        optimizer_state = payload.get("optimizer_state_dict")
+        if not isinstance(optimizer_state, dict):
+            raise ValueError(
+                f"Resume checkpoint has no optimizer state: {resume_path}. "
+                "Use latest.pt, not an optimizer-free milestone."
+            )
+        last_metrics = checkpoint_metadata.get("last_metrics", {})
+        resume_start_update = int(last_metrics.get("update", 0))
+        if resume_start_update <= 0:
+            raise ValueError(
+                f"Resume checkpoint does not record a positive last update: {resume_path}."
+            )
+        if int(args.num_updates) <= resume_start_update:
+            raise ValueError(
+                "--num_updates is the total target during resume and must exceed "
+                f"the checkpoint update ({args.num_updates} <= {resume_start_update})."
+            )
+        optimizer.load_state_dict(optimizer_state)
+        optimizer_resumed = True
     selected_index_list = (
         selected_indices.detach().cpu().tolist()
         if selected_indices is not None
@@ -589,6 +626,13 @@ def main() -> None:
     training_stage = str(args.training_stage)
     if training_stage == "auto":
         training_stage = "finetune" if args.checkpoint is not None else "pretrain"
+    if args.resume_checkpoint is not None:
+        checkpoint_stage = str(checkpoint_metadata.get("training_stage", ""))
+        if checkpoint_stage and checkpoint_stage != training_stage:
+            raise ValueError(
+                "Resume must preserve training_stage: checkpoint has "
+                f"{checkpoint_stage!r}, requested {training_stage!r}."
+            )
     is_finetune_stage = training_stage == "finetune"
     is_oracle_stage = training_stage == "oracle"
     selected_sample_count = int(state.shape[0])
@@ -654,6 +698,13 @@ def main() -> None:
         "planner_config": planner.config_dict(),
         **parameter_counts(planner),
         "init_checkpoint": init_checkpoint,
+        "resume_checkpoint": (
+            str(args.resume_checkpoint.expanduser().resolve())
+            if args.resume_checkpoint is not None
+            else None
+        ),
+        "resume_start_update": resume_start_update,
+        "optimizer_resumed": optimizer_resumed,
         "checkpoint_metadata": checkpoint_metadata,
         "args": vars(args),
         "sample_metadata": sample_metadata,
@@ -693,10 +744,24 @@ def main() -> None:
             f"(got {milestone_interval} vs log_interval={args.log_interval}); "
             "otherwise milestone updates never coincide with a save point."
         )
-    best_validation_metric = float("inf")
-    best_validation_update = 0
+    best_validation_metric = float(
+        checkpoint_metadata.get("best_validation_metric", float("inf"))
+        if args.resume_checkpoint is not None
+        else float("inf")
+    )
+    best_validation_update = int(
+        checkpoint_metadata.get("best_validation_update", 0)
+        if args.resume_checkpoint is not None
+        else 0
+    )
     best_validation_metric_name = "val/normalized_target_rmse_mean"
-    for update in range(1, int(args.num_updates) + 1):
+    if args.resume_checkpoint is not None:
+        print(
+            "[INFO] Resuming optimizer-preserving training at "
+            f"update {resume_start_update} -> {args.num_updates}.",
+            flush=True,
+        )
+    for update in range(resume_start_update + 1, int(args.num_updates) + 1):
         indices = torch.randint(
             low=0,
             high=num_samples,
@@ -765,7 +830,7 @@ def main() -> None:
         optimizer.step()
 
         if (
-            update == 1
+            update == resume_start_update + 1
             or update % int(args.log_interval) == 0
             or update == int(args.num_updates)
         ):
