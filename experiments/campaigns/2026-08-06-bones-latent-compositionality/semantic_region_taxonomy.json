@@ -1,0 +1,79 @@
+{
+  "schema": "semantic_region_taxonomy_v1",
+  "definition": "A semantic region is a deliberately coarse, mutually exclusive movement class shared by phases from different source motions. Rules are evaluated in order; the first match wins.",
+  "purpose": "The source phase descriptions remain the detailed ground truth. These shared regions make cross-motion retrieval, held-out classification, and unsupervised-cluster agreement measurable without pretending that two differently worded descriptions are different classes.",
+  "regions": [
+    {
+      "name": "jumping",
+      "display_name": "Jumping",
+      "description": "Intentional jumps, whether traveling or in place.",
+      "all_true": ["jumping"],
+      "color": "#D95F59"
+    },
+    {
+      "name": "loaded_locomotion",
+      "display_name": "Loaded locomotion",
+      "description": "Locomotion while manipulating, holding, or supporting an object or environmental control.",
+      "all_true": ["locomoting"],
+      "any_true": ["manipulating", "object_loaded"],
+      "color": "#B66DCE"
+    },
+    {
+      "name": "turning_locomotion",
+      "display_name": "Turning locomotion",
+      "description": "Locomotion whose defining change is root heading or a curved path.",
+      "all_true": ["locomoting", "turning"],
+      "color": "#E79B32"
+    },
+    {
+      "name": "backward_sideways_locomotion",
+      "display_name": "Backward / sideways",
+      "description": "Locomotion primarily backward, diagonal, or sideways.",
+      "all_true": ["locomoting"],
+      "any_true": ["moving_backward", "moving_sideways"],
+      "color": "#CCB532"
+    },
+    {
+      "name": "forward_locomotion",
+      "display_name": "Forward locomotion",
+      "description": "Remaining locomotion, predominantly forward or starting and stopping a forward gait.",
+      "all_true": ["locomoting"],
+      "color": "#3AA76D"
+    },
+    {
+      "name": "lowered_manipulation",
+      "display_name": "Lowered manipulation",
+      "description": "Object interaction while stooped, crouched, or substantially lowered.",
+      "all_true": ["manipulating", "torso_lowered"],
+      "color": "#2EA7A0"
+    },
+    {
+      "name": "upright_manipulation",
+      "display_name": "Upright manipulation",
+      "description": "Remaining object or environment interaction without purposeful root locomotion.",
+      "all_true": ["manipulating"],
+      "color": "#3A8EDB"
+    },
+    {
+      "name": "gesture",
+      "display_name": "Gesture",
+      "description": "Expressive or bodily action without object or environment manipulation.",
+      "activity_in": ["gesture"],
+      "color": "#6877D8"
+    },
+    {
+      "name": "stationary",
+      "display_name": "Stationary",
+      "description": "A predominantly still task phase.",
+      "activity_in": ["stationary"],
+      "color": "#7D8797"
+    },
+    {
+      "name": "transition",
+      "display_name": "Transition",
+      "description": "A recovery, start, stop, or hand-lowering interval not captured by the movement-first rules above.",
+      "default": true,
+      "color": "#A78B72"
+    }
+  ]
+}

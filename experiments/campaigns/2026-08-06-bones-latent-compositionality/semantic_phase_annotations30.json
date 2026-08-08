@@ -1,0 +1,2657 @@
+{
+  "schema": "semantic_phase_annotations_v1",
+  "phase_definition": "A contiguous human-described BONES temporal event, converted from seconds to exact zero-based, end-exclusive 50 Hz steps.",
+  "annotation_method": "Phase descriptions and times come from the BONES-SEED temporal language sidecar. Boolean traits were manually curated for this analysis; event endpoints were rounded to the prepared 50 Hz reference and the final endpoint was clamped to the exact reference length.",
+  "semantic_axes": {
+    "locomoting": "The root intentionally translates or performs cyclic locomotion such as walking, running, or jumping.",
+    "manipulating": "The arms or hands intentionally operate on, support, or carry an object or environmental control.",
+    "object_loaded": "The intended behavior is holding, carrying, or supporting an object, including implicit props.",
+    "torso_lowered": "The task intentionally places the torso in a stooped, crouched, or substantially forward-lowered posture.",
+    "turning": "The task intentionally changes root heading or follows a curved path.",
+    "moving_forward": "The root intentionally translates primarily forward in the actor's current heading frame.",
+    "moving_backward": "The root intentionally translates primarily backward in the actor's current heading frame.",
+    "moving_sideways": "The root intentionally translates primarily sideways or diagonally rather than straight forward/backward.",
+    "jumping": "The body intentionally performs repeated or isolated jumps.",
+    "slow_locomotion": "The described locomotion is explicitly slow or uses small deliberate steps.",
+    "fast_locomotion": "The described locomotion is explicitly a run, panic escape, or otherwise fast.",
+    "active_left_hand": "The left arm or hand is deliberately active in the task phase.",
+    "active_right_hand": "The right arm or hand is deliberately active in the task phase.",
+    "active_both_hands": "Both arms or hands are deliberately active in the task phase."
+  },
+  "activity_definition": {
+    "locomotion": "Root locomotion without object interaction.",
+    "manipulation": "Object or environment interaction without purposeful root locomotion.",
+    "combined_loco_manip": "Purposeful locomotion while manipulating, carrying, or supporting an object.",
+    "gesture": "Expressive or bodily action without object/environment manipulation.",
+    "stationary": "Task phase is predominantly stationary.",
+    "transition": "Short recovery, start, or stop interval between task activities."
+  },
+  "output_fps": 50.0,
+  "motions": [
+    {
+      "rank": 0,
+      "motion_name": "Neutral_stoop_down_001_A057",
+      "trajectory_rank": 110918,
+      "reference_frames": 340,
+      "category": "Other",
+      "language_goal": "picking up object from the ground while walking",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 90,
+          "label": "steadily-walking-forward",
+          "activity": "locomotion",
+          "source_description": "A person is steadily walking forward.",
+          "source_event_interval_s": [
+            0.0,
+            1.8
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 90,
+          "end_step": 178,
+          "label": "bends-down-walking-forward-picks-up-object",
+          "activity": "combined_loco_manip",
+          "source_description": "A person bends down while walking forward, picks up an object and then straightens up.",
+          "source_event_interval_s": [
+            1.8,
+            3.55
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 178,
+          "end_step": 340,
+          "label": "steadily-walking-forward-comes-to-stop",
+          "activity": "locomotion",
+          "source_description": "A person steadily walking forward comes to a stop.",
+          "source_event_interval_s": [
+            3.55,
+            6.75
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank110918/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 1,
+      "motion_name": "big_heavy_one_hand_front_high_to_front_low_R_001_A524",
+      "trajectory_rank": 34945,
+      "reference_frames": 419,
+      "category": "Object Manipulation",
+      "language_goal": "picks up big heavy object with one hand from high up front and puts it away up front low height",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 112,
+          "label": "rises-on-toes-lifts-right-hand-picks",
+          "activity": "manipulation",
+          "source_description": "A person rises on their toes, lifts their right hand, and picks up an object from a higher elevation.",
+          "source_event_interval_s": [
+            0.0,
+            2.25
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 112,
+          "end_step": 302,
+          "label": "lowers-right-hand-bends-down-places-object",
+          "activity": "manipulation",
+          "source_description": "A person lowers their right hand, bends down, and places an object near the ground.",
+          "source_event_interval_s": [
+            2.25,
+            6.05
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 302,
+          "end_step": 372,
+          "label": "straightens-body",
+          "activity": "transition",
+          "source_description": "A person straightens their body.",
+          "source_event_interval_s": [
+            6.05,
+            7.45
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 372,
+          "end_step": 419,
+          "label": "stands-still-in-upright-posture",
+          "activity": "stationary",
+          "source_description": "A person stands still in an upright posture.",
+          "source_event_interval_s": [
+            7.45,
+            8.3
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank34945/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 2,
+      "motion_name": "big_heavy_one_hand_front_low_to_front_high_R_001_A524",
+      "trajectory_rank": 55219,
+      "reference_frames": 510,
+      "category": "Object Manipulation",
+      "language_goal": "picks up big heavy object with one hand from low up front and puts it away high up front",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 55,
+          "label": "bending-down-placing-hands-on-object",
+          "activity": "manipulation",
+          "source_description": "A person bending down and placing the hands on the object.",
+          "source_event_interval_s": [
+            0.0,
+            1.1
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": false,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 55,
+          "end_step": 295,
+          "label": "picking-up-object-placed-at-low-height",
+          "activity": "manipulation",
+          "source_description": "A person is picking up an object placed at a low height in the front and placing it on top towards the front.",
+          "source_event_interval_s": [
+            1.1,
+            5.9
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 295,
+          "end_step": 378,
+          "label": "lowers-right-hand-places-it-on-side",
+          "activity": "transition",
+          "source_description": "A person lowers the right hand and places it on the side.",
+          "source_event_interval_s": [
+            5.9,
+            7.55
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 378,
+          "end_step": 510,
+          "label": "standing-still-in-upright-posture",
+          "activity": "stationary",
+          "source_description": "A person is standing still in an upright posture.",
+          "source_event_interval_s": [
+            7.55,
+            10.15
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank55219/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 3,
+      "motion_name": "big_light_two_hands_put_down_right_side_high_R_001_A520",
+      "trajectory_rank": 88877,
+      "reference_frames": 377,
+      "category": "Object Manipulation",
+      "language_goal": "puts down big light object with two hands from high right side",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 245,
+          "label": "holding-object-turns-to-right-places-it",
+          "activity": "manipulation",
+          "source_description": "A person holding an object turns to their right and places it at a higher place.",
+          "source_event_interval_s": [
+            0.0,
+            4.9
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": true,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 245,
+          "end_step": 377,
+          "label": "turns-to-left-stands-idle-facing-forward",
+          "activity": "transition",
+          "source_description": "A person turns to their left and stands idle facing forward.",
+          "source_event_interval_s": [
+            4.9,
+            7.5
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": true,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank88877/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 4,
+      "motion_name": "casual_greeting_R_001_A428",
+      "trajectory_rank": 8384,
+      "reference_frames": 203,
+      "category": "Communication",
+      "language_goal": "casually greeting someone",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 148,
+          "label": "casually-greeting-someone-by-gesturing-with-right",
+          "activity": "gesture",
+          "source_description": "A person is casually greeting someone by gesturing with their right hand.",
+          "source_event_interval_s": [
+            0.0,
+            2.95
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 148,
+          "end_step": 172,
+          "label": "standing-with-raised-hand-lowering-hand",
+          "activity": "transition",
+          "source_description": "A person standing with a raised hand is lowering their hand.",
+          "source_event_interval_s": [
+            2.95,
+            3.45
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 172,
+          "end_step": 203,
+          "label": "standing-slightly-nodding-head-quickly",
+          "activity": "stationary",
+          "source_description": "A person is standing, slightly nodding their head quickly.",
+          "source_event_interval_s": [
+            3.45,
+            4.05
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank8384/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 5,
+      "motion_name": "cellphone_typing_sequence_one_hand_idle_R_001_A423",
+      "trajectory_rank": 25562,
+      "reference_frames": 814,
+      "category": "Object Interaction",
+      "language_goal": "typing on phone with one hand",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 150,
+          "label": "standing-idle-then-lifts-right-hand-near",
+          "activity": "manipulation",
+          "source_description": "The person is standing idle and then lifts their right hand near their chest while taking out their phone.",
+          "source_event_interval_s": [
+            0.0,
+            3.0
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 150,
+          "end_step": 348,
+          "label": "standing-still-holding-phone-in-right-hand",
+          "activity": "stationary",
+          "source_description": "A person is standing still while holding the phone in their right hand.",
+          "source_event_interval_s": [
+            3.0,
+            6.95
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 348,
+          "end_step": 530,
+          "label": "lowering-right-hand-placing-phone",
+          "activity": "manipulation",
+          "source_description": "A person is lowering their right hand while placing their phone.",
+          "source_event_interval_s": [
+            6.95,
+            10.6
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 530,
+          "end_step": 814,
+          "label": "standing-still-then-lowers-head",
+          "activity": "stationary",
+          "source_description": "A person is standing still and then lowers their head.",
+          "source_event_interval_s": [
+            10.6,
+            16.2
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank25562/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 6,
+      "motion_name": "cough_tuberculosis_R_001_A500",
+      "trajectory_rank": 91817,
+      "reference_frames": 614,
+      "category": "Gestures",
+      "language_goal": "covers mouth, then coughs agonizingly three times",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 35,
+          "label": "standing-idle",
+          "activity": "stationary",
+          "source_description": "A person is standing idle.",
+          "source_event_interval_s": [
+            0.0,
+            0.7
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 35,
+          "end_step": 110,
+          "label": "coughs-slowly-slightly-leaning-forward-with-jerk",
+          "activity": "gesture",
+          "source_description": "A person coughs slowly, slightly leaning forward with a jerk.",
+          "source_event_interval_s": [
+            0.7,
+            2.2
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 110,
+          "end_step": 182,
+          "label": "bends-coughing-heavily",
+          "activity": "gesture",
+          "source_description": "A person bends while coughing heavily.",
+          "source_event_interval_s": [
+            2.2,
+            3.65
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 182,
+          "end_step": 332,
+          "label": "coughing-heavily-bending-down",
+          "activity": "gesture",
+          "source_description": "A person is coughing heavily while bending down.",
+          "source_event_interval_s": [
+            3.65,
+            6.65
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 332,
+          "end_step": 548,
+          "label": "coughs-heavily-bending-down-then-covers-mouth",
+          "activity": "gesture",
+          "source_description": "A person coughs heavily while bending down, then covers their mouth with their right hand.",
+          "source_event_interval_s": [
+            6.65,
+            10.95
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 548,
+          "end_step": 614,
+          "label": "straightens-up-faces-forward",
+          "activity": "transition",
+          "source_description": "A person straightens up and faces forward.",
+          "source_event_interval_s": [
+            10.95,
+            12.1
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank91817/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 7,
+      "motion_name": "crossed_arms_idle_R_001_A456",
+      "trajectory_rank": 78136,
+      "reference_frames": 474,
+      "category": "Basic Locomotion Neutral",
+      "language_goal": "standing with arms crossed",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 474,
+          "label": "stands-still-with-arms-folded-in-serious",
+          "activity": "stationary",
+          "source_description": "A person stands still with their arms folded in a serious way.",
+          "source_event_interval_s": [
+            0.0,
+            9.5
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank78136/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 8,
+      "motion_name": "drinking_standing_mug_R_001_A282",
+      "trajectory_rank": 92016,
+      "reference_frames": 551,
+      "category": "Consuming",
+      "language_goal": "standing and drinking from a mug",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 88,
+          "label": "standing-still-slightly-swaying-arms",
+          "activity": "stationary",
+          "source_description": "A person is standing still while slightly swaying their arms.",
+          "source_event_interval_s": [
+            0.0,
+            1.766667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 88,
+          "end_step": 140,
+          "label": "standing-lifts-right-hand-to-pick-up",
+          "activity": "manipulation",
+          "source_description": "A person standing lifts their right hand to pick up a mug in front of them.",
+          "source_event_interval_s": [
+            1.766667,
+            2.8
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 140,
+          "end_step": 243,
+          "label": "standing-moves-mug-in-right-hand-near",
+          "activity": "manipulation",
+          "source_description": "A person standing moves the mug in their right hand near their mouth and drinks from it.",
+          "source_event_interval_s": [
+            2.8,
+            4.866667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 243,
+          "end_step": 303,
+          "label": "holding-mug-in-right-hand-near-mouth",
+          "activity": "manipulation",
+          "source_description": "A person holding a mug in their right hand near their mouth lowers it in front of them like pausing from taking a sip.",
+          "source_event_interval_s": [
+            4.866667,
+            6.066667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 303,
+          "end_step": 353,
+          "label": "holding-mug-places-it-in-front-of",
+          "activity": "manipulation",
+          "source_description": "A person holding a mug places it in front of them.",
+          "source_event_interval_s": [
+            6.066667,
+            7.066667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 353,
+          "end_step": 405,
+          "label": "lowers-raised-right-hand-in-front-of",
+          "activity": "transition",
+          "source_description": "A person lowers their raised right hand in front of their torso to their side.",
+          "source_event_interval_s": [
+            7.066667,
+            8.1
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 405,
+          "end_step": 551,
+          "label": "standing-still-slightly-swaying-arms",
+          "activity": "stationary",
+          "source_description": "A person is standing still while slightly swaying their arms.",
+          "source_event_interval_s": [
+            8.1,
+            11.066667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank92016/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 9,
+      "motion_name": "exercise_3_A029",
+      "trajectory_rank": 79050,
+      "reference_frames": 488,
+      "category": "Sports",
+      "language_goal": "scissor jump",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 210,
+          "label": "jumping-stretching-one-leg-behind-alternately-they",
+          "activity": "locomotion",
+          "source_description": "The person is jumping while stretching their one leg behind alternately. They do this a total of four times.",
+          "source_event_interval_s": [
+            0.0,
+            4.2
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": true,
+            "slow_locomotion": false,
+            "fast_locomotion": true,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 210,
+          "end_step": 488,
+          "label": "standing-straight-upright",
+          "activity": "stationary",
+          "source_description": "The person is standing straight and upright.",
+          "source_event_interval_s": [
+            4.2,
+            9.7
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank79050/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 10,
+      "motion_name": "feeding_birds_start_R_001_A456",
+      "trajectory_rank": 78342,
+      "reference_frames": 792,
+      "category": "Environments",
+      "language_goal": "feeds birds",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 792,
+          "label": "feeding-birds-three-times-by-moving-right",
+          "activity": "manipulation",
+          "source_description": "A person is feeding the birds three times by moving their right hand back and forth.",
+          "source_event_interval_s": [
+            0.0,
+            15.35
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank78342/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 11,
+      "motion_name": "fishing_standing_loop_R_001_A500",
+      "trajectory_rank": 15901,
+      "reference_frames": 1055,
+      "category": "Sports",
+      "language_goal": "is fishing, checking from time to time if something has been caught",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 1055,
+          "label": "fishing-checking-if-something-has-caught-on",
+          "activity": "manipulation",
+          "source_description": "A person while fishing is checking if something has caught on the fishing rod from time to time.",
+          "source_event_interval_s": [
+            0.0,
+            21.05
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank15901/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 12,
+      "motion_name": "hurry_idle_001_A277",
+      "trajectory_rank": 100233,
+      "reference_frames": 505,
+      "category": "Basic Locomotion Styles",
+      "language_goal": "in a hurry position",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 505,
+          "label": "in-hurry-stands-upright-swaying-arms-slightly",
+          "activity": "stationary",
+          "source_description": "A person in a hurry stands upright, swaying their arms slightly and breathing heavily.",
+          "source_event_interval_s": [
+            0.0,
+            10.133333
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank100233/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 13,
+      "motion_name": "inside_door_handle_right_side_open_walk_turn_close_R_001_A514",
+      "trajectory_rank": 98875,
+      "reference_frames": 316,
+      "category": "Object Interaction",
+      "language_goal": "opening the right side door from inside, walking out, and closing door by turning to the side",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 75,
+          "label": "holds-doorknob-opens-door",
+          "activity": "manipulation",
+          "source_description": "A person holds a doorknob and opens the door.",
+          "source_event_interval_s": [
+            0.0,
+            1.507936
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 75,
+          "end_step": 262,
+          "label": "enters-door-turns-around-to-close-it",
+          "activity": "combined_loco_manip",
+          "source_description": "A person enters a door, turns around to close it and faces the other side of the door.",
+          "source_event_interval_s": [
+            1.507936,
+            5.230385
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": true,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": true,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 262,
+          "end_step": 316,
+          "label": "holding-doorknob-lowers-hand-stands-upright",
+          "activity": "transition",
+          "source_description": "A person holding a doorknob lowers their hand and stands upright.",
+          "source_event_interval_s": [
+            5.230385,
+            6.333333
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank98875/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 14,
+      "motion_name": "injured_R_leg_turn_walk_360_001_A069",
+      "trajectory_rank": 66884,
+      "reference_frames": 364,
+      "category": "Basic Locomotion Styles",
+      "language_goal": "turn walk back over right shoulder with injured right leg",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 56,
+          "label": "standing-with-feet-hip-width-apart-arms",
+          "activity": "stationary",
+          "source_description": "A person is standing with their feet hip-width apart, their arms at their sides, and their shoulders relaxed, facing ahead.",
+          "source_event_interval_s": [
+            0.0,
+            1.122449
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 56,
+          "end_step": 155,
+          "label": "turns-around-over-right-shoulder-stumbling-slightly",
+          "activity": "locomotion",
+          "source_description": "A person turns around over their right shoulder while stumbling slightly due to their injured right leg.",
+          "source_event_interval_s": [
+            1.122449,
+            3.1
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": true,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": true,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 155,
+          "end_step": 364,
+          "label": "walks-forward-slowly-stumbling-slightly-due-to",
+          "activity": "locomotion",
+          "source_description": "A person walks forward slowly, stumbling slightly due to an injured right leg.",
+          "source_event_interval_s": [
+            3.1,
+            7.333333
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": true,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank66884/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 15,
+      "motion_name": "injured_torso_walk_ff_start_315_R_001_A214",
+      "trajectory_rank": 64762,
+      "reference_frames": 444,
+      "category": "Basic Locomotion Styles",
+      "language_goal": "start walk right back diagonally with injured torso",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 444,
+          "label": "slowly-walks-backward-to-right-back-diagonal",
+          "activity": "locomotion",
+          "source_description": "A person slowly walks backward to the right back diagonal with small, deliberate steps while their right hand gently resting on the injured torso.",
+          "source_event_interval_s": [
+            0.0,
+            8.9
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": true,
+            "moving_sideways": true,
+            "jumping": false,
+            "slow_locomotion": true,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank64762/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 16,
+      "motion_name": "jump_around_001_A492",
+      "trajectory_rank": 48146,
+      "reference_frames": 567,
+      "category": "Advanced Locomotion",
+      "language_goal": "jumping with hands raised in the air",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 472,
+          "label": "energetically-jumping-in-place-with-arms-raised",
+          "activity": "locomotion",
+          "source_description": "A person is energetically jumping in place with their arms raised above their head.",
+          "source_event_interval_s": [
+            0.0,
+            9.45
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": true,
+            "slow_locomotion": false,
+            "fast_locomotion": true,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 472,
+          "end_step": 567,
+          "label": "lowering-arms-to-sides-standing-upright-facing",
+          "activity": "transition",
+          "source_description": "A person is lowering their arms to their sides and standing upright, facing forward.",
+          "source_event_interval_s": [
+            9.45,
+            11.3
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank48146/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 17,
+      "motion_name": "lift_crate_walk_ff_start_180_R_001_A140",
+      "trajectory_rank": 65955,
+      "reference_frames": 247,
+      "category": "Object Interaction",
+      "language_goal": "lifting a crate walk start walk forward",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 247,
+          "label": "walks-several-steps-forward-at-slow-pace",
+          "activity": "combined_loco_manip",
+          "source_description": "A person walks several steps forward at a slow pace with short strides while strenuously lifting a crate with both hands, their body turning in left and right diagonals.",
+          "source_event_interval_s": [
+            0.3,
+            4.9
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": true,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": true,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank65955/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 18,
+      "motion_name": "looking_in_the_mirror_amateur_001_A001",
+      "trajectory_rank": 22415,
+      "reference_frames": 786,
+      "category": "Object Interaction",
+      "language_goal": "amateurly looking in the mirror",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 98,
+          "label": "standing-with-arms-raised-sideways-lowers-them",
+          "activity": "transition",
+          "source_description": "A person standing with their arms raised sideways lowers them to the sides.",
+          "source_event_interval_s": [
+            0.0,
+            1.95
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 98,
+          "end_step": 748,
+          "label": "standing-looking-in-mirror-subtly-moving-head",
+          "activity": "stationary",
+          "source_description": "The person is standing and looking in the mirror while subtly moving the head.",
+          "source_event_interval_s": [
+            1.95,
+            14.95
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 748,
+          "end_step": 786,
+          "label": "raises-arms-sideways-lowers-them-again-raises",
+          "activity": "gesture",
+          "source_description": "The person raises their arms sideways, lowers them, and again raises them at shoulder level in a t-pose.",
+          "source_event_interval_s": [
+            14.95,
+            15.65
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank22415/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 19,
+      "motion_name": "medium_big_light_one_hand_walk_ff_start_360_R_001_A504",
+      "trajectory_rank": 6615,
+      "reference_frames": 399,
+      "category": "Object Manipulation",
+      "language_goal": "holds medium big light object with one hand and starts walking backwards",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 108,
+          "label": "standing-facing-forward-holding-object-in-right",
+          "activity": "combined_loco_manip",
+          "source_description": "A person is standing, facing forward, holding an object in their right hand and starting to walk backwards.",
+          "source_event_interval_s": [
+            0.0,
+            2.15
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": true,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 108,
+          "end_step": 399,
+          "label": "holding-object-in-right-hand-walking-backwards",
+          "activity": "combined_loco_manip",
+          "source_description": "A person is holding an object in their right hand and walking backwards.",
+          "source_event_interval_s": [
+            2.15,
+            7.95
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": true,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank6615/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 20,
+      "motion_name": "mosquito_drive_away_R_001_A500",
+      "trajectory_rank": 37518,
+      "reference_frames": 309,
+      "category": "Gestures",
+      "language_goal": "tries to drive away a mosquito",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 212,
+          "label": "upright-tries-to-swat-away-mosquito-by",
+          "activity": "gesture",
+          "source_description": "An upright person tries to swat away a mosquito by briskly swiping their right hand to the sides.",
+          "source_event_interval_s": [
+            0.35,
+            4.25
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 212,
+          "end_step": 265,
+          "label": "lowers-right-hand-gains-upright-stance",
+          "activity": "transition",
+          "source_description": "A person lowers their right hand and gains the upright stance.",
+          "source_event_interval_s": [
+            4.25,
+            5.3
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 265,
+          "end_step": 309,
+          "label": "in-upright-posture-standing-idle",
+          "activity": "stationary",
+          "source_description": "A person in an upright posture is standing idle.",
+          "source_event_interval_s": [
+            5.3,
+            6.1
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank37518/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 21,
+      "motion_name": "painting_R_001_A097",
+      "trajectory_rank": 83696,
+      "reference_frames": 302,
+      "category": "Gestures",
+      "language_goal": "painting",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 78,
+          "label": "lifts-left-hand-moves-right-hand-across",
+          "activity": "manipulation",
+          "source_description": "The person lifts their left hand and moves their right hand across it to the left side.",
+          "source_event_interval_s": [
+            0.0,
+            1.566667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 78,
+          "end_step": 150,
+          "label": "moves-right-hand-up-down-over-left",
+          "activity": "manipulation",
+          "source_description": "The person moves their right hand up and down over their left palm.",
+          "source_event_interval_s": [
+            1.566667,
+            3.0
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 150,
+          "end_step": 233,
+          "label": "performs-painting-motion-with-right-hand-facing",
+          "activity": "manipulation",
+          "source_description": "The person performs a painting motion with the right hand while facing forward.",
+          "source_event_interval_s": [
+            3.0,
+            4.666667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 233,
+          "end_step": 302,
+          "label": "lowers-both-hands-toward-right-facing-forward",
+          "activity": "transition",
+          "source_description": "The person lowers both their hands toward the right while facing forward.",
+          "source_event_interval_s": [
+            4.666667,
+            6.066667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank83696/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 22,
+      "motion_name": "panic_run_away_180_R_001_A423",
+      "trajectory_rank": 34733,
+      "reference_frames": 229,
+      "category": "Advanced Locomotion",
+      "language_goal": "running away in panic forward",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 73,
+          "label": "standing-bends-down-to-defensive-crouch-showing",
+          "activity": "transition",
+          "source_description": "The person standing bends down to a defensive crouch, showing signs of panic as they protect their head with their hands.",
+          "source_event_interval_s": [
+            0.0,
+            1.468798
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 73,
+          "end_step": 125,
+          "label": "in-crouched-position-begins-running-forward-in",
+          "activity": "locomotion",
+          "source_description": "The person in a crouched position begins running forward in a protective stance.",
+          "source_event_interval_s": [
+            1.468798,
+            2.508934
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": true,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 125,
+          "end_step": 229,
+          "label": "slows-down-transitions-from-panicked-run-to",
+          "activity": "transition",
+          "source_description": "The person slows down and transitions from the panicked run to an upright, still posture.",
+          "source_event_interval_s": [
+            2.508934,
+            4.633333
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank34733/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 23,
+      "motion_name": "rock_out_002_A484",
+      "trajectory_rank": 25107,
+      "reference_frames": 833,
+      "category": "Gestures",
+      "language_goal": "playing on a guitar flexing skills",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 53,
+          "label": "standing-upright-leans-to-right-begins-to",
+          "activity": "manipulation",
+          "source_description": "A person standing upright leans to the right and begins to play guitar with their right hand.",
+          "source_event_interval_s": [
+            0.0,
+            1.066667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 53,
+          "end_step": 312,
+          "label": "playing-guitar-swaying-back-forth-flexing-skills",
+          "activity": "manipulation",
+          "source_description": "A person is playing a guitar and swaying back and forth while flexing their skills.",
+          "source_event_interval_s": [
+            1.066667,
+            6.233333
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 312,
+          "end_step": 410,
+          "label": "swiftly-spinning-right-arm-in-circular-motion",
+          "activity": "gesture",
+          "source_description": "A person is swiftly spinning their right arm in a circular motion toward the left.",
+          "source_event_interval_s": [
+            6.233333,
+            8.2
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": true,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 410,
+          "end_step": 477,
+          "label": "leans-to-left-then-sways-to-right",
+          "activity": "manipulation",
+          "source_description": "A person leans to the left and then sways to the right while holding a guitar.",
+          "source_event_interval_s": [
+            8.2,
+            9.533333
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 477,
+          "end_step": 593,
+          "label": "raises-arms-swaying-right-hand-above-head",
+          "activity": "gesture",
+          "source_description": "A person raises their arms while swaying their right hand above their head.",
+          "source_event_interval_s": [
+            9.533333,
+            11.866667
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 593,
+          "end_step": 740,
+          "label": "swiftly-drops-off-arms-begins-to-play",
+          "activity": "manipulation",
+          "source_description": "A person swiftly drops off their arms and begins to play guitar while leaning forward.",
+          "source_event_interval_s": [
+            11.866667,
+            14.8
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": true,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 740,
+          "end_step": 833,
+          "label": "leaning-forward-holding-guitar-returns-to-upright",
+          "activity": "transition",
+          "source_description": "A person leaning forward while holding a guitar returns to an upright stance and stands still.",
+          "source_event_interval_s": [
+            14.8,
+            16.7
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank25107/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 24,
+      "motion_name": "surrender_stop_R_001_A468",
+      "trajectory_rank": 75217,
+      "reference_frames": 369,
+      "category": "Gestures",
+      "language_goal": "stops to surrender",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 42,
+          "label": "surrendering-with-both-arms-lifted-above-head",
+          "activity": "gesture",
+          "source_description": "A person is surrendering with both arms lifted above their head and swaying them slightly.",
+          "source_event_interval_s": [
+            0.0,
+            0.85
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 42,
+          "end_step": 328,
+          "label": "surrendering-with-both-arms-lifted-above-head",
+          "activity": "gesture",
+          "source_description": "A person surrendering with both arms lifted above their head slowly lowers them down to the sides.",
+          "source_event_interval_s": [
+            0.85,
+            6.55
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 328,
+          "end_step": 369,
+          "label": "standing-upright-slightly-lifts-head-moves-arms",
+          "activity": "transition",
+          "source_description": "A person standing upright slightly lifts their head and moves their arms.",
+          "source_event_interval_s": [
+            6.55,
+            7.3
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank75217/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 25,
+      "motion_name": "talking_with_adult_turn_walk_360_R_walk_ff_loop_270_R_004_A476",
+      "trajectory_rank": 71850,
+      "reference_frames": 653,
+      "category": "Complex Actions",
+      "language_goal": "talks with adult then turns back over right shoulder to walk right while facing forward",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 308,
+          "label": "standing-at-place-making-various-hand-gestures",
+          "activity": "gesture",
+          "source_description": "A person is standing at a place and making various hand gestures.",
+          "source_event_interval_s": [
+            0.0,
+            6.15
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 308,
+          "end_step": 360,
+          "label": "turning-back-over-right-shoulder",
+          "activity": "locomotion",
+          "source_description": "A person is turning back over the right shoulder.",
+          "source_event_interval_s": [
+            6.15,
+            7.2
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": true,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 360,
+          "end_step": 482,
+          "label": "walking-forward-at-normal-pace",
+          "activity": "locomotion",
+          "source_description": "A person is walking forward at a normal pace.",
+          "source_event_interval_s": [
+            7.2,
+            9.65
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 482,
+          "end_step": 653,
+          "label": "starts-walking-sideways-in-right-direction-at",
+          "activity": "locomotion",
+          "source_description": "A person starts walking sideways in the right direction at a medium pace.",
+          "source_event_interval_s": [
+            9.65,
+            13.0
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": true,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank71850/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 26,
+      "motion_name": "triumph_001_A033",
+      "trajectory_rank": 61625,
+      "reference_frames": 294,
+      "category": "Gestures",
+      "language_goal": "triumphing",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 294,
+          "label": "stands-raises-hands-in-air-triumphing-by",
+          "activity": "gesture",
+          "source_description": "A person stands and raises their hands in the air, triumphing by slightly waving them repeatedly, then lowers them while swaying side to side.",
+          "source_event_interval_s": [
+            0.1,
+            5.7
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank61625/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 27,
+      "motion_name": "walk_arc_cw_start_R_slow_001_A443",
+      "trajectory_rank": 30051,
+      "reference_frames": 467,
+      "category": "Basic Locomotion Neutral",
+      "language_goal": "start slow walk in clockwise circle",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 65,
+          "label": "standing-upright-facing-forward-then-taking-step",
+          "activity": "transition",
+          "source_description": "A person is standing upright, facing forward, and then taking a step forward with the right foot.",
+          "source_event_interval_s": [
+            0.0,
+            1.3
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": true,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        },
+        {
+          "start_step": 65,
+          "end_step": 467,
+          "label": "slowly-walking-in-rightward-arc-swaying-arms",
+          "activity": "locomotion",
+          "source_description": "A person is slowly walking in a rightward arc while swaying their arms slightly by their sides.",
+          "source_event_interval_s": [
+            1.3,
+            9.3
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": true,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": true,
+            "jumping": false,
+            "slow_locomotion": true,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank30051/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 28,
+      "motion_name": "walk_big_dog_ff_225_stop_R_001_A492",
+      "trajectory_rank": 120721,
+      "reference_frames": 302,
+      "category": "Unusual Locomotion",
+      "language_goal": "stops to walk forward diagonally to the right with a big dog",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 110,
+          "label": "walking-diagonally-to-right-holding-big-dog",
+          "activity": "combined_loco_manip",
+          "source_description": "A person walking diagonally to the right, holding a big dog.",
+          "source_event_interval_s": [
+            0.0,
+            2.2
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": true,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 110,
+          "end_step": 178,
+          "label": "holding-big-dog-stops-to-walk",
+          "activity": "transition",
+          "source_description": "A person holding a big dog stops to walk.",
+          "source_event_interval_s": [
+            2.2,
+            3.55
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": true,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        },
+        {
+          "start_step": 178,
+          "end_step": 302,
+          "label": "holding-big-dog-stands-at-point-swaying",
+          "activity": "stationary",
+          "source_description": "A person holding a big dog stands at a point while swaying.",
+          "source_event_interval_s": [
+            3.55,
+            6.0
+          ],
+          "semantics": {
+            "locomoting": false,
+            "manipulating": false,
+            "object_loaded": true,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": false,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": false,
+            "fast_locomotion": false,
+            "active_left_hand": true,
+            "active_right_hand": true,
+            "active_both_hands": true
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank120721/videos/compare_policy_reference/rl-video-step-0.mp4"
+    },
+    {
+      "rank": 29,
+      "motion_name": "walk_ff_loop_180_R_slow_001_A443",
+      "trajectory_rank": 100511,
+      "reference_frames": 400,
+      "category": "Basic Locomotion Neutral",
+      "language_goal": "slow walk forward",
+      "phases": [
+        {
+          "start_step": 0,
+          "end_step": 400,
+          "label": "slowly-walks-forward-with-short-steps-swaying",
+          "activity": "locomotion",
+          "source_description": "A person slowly walks forward with short steps, swaying their hips from side to side.",
+          "source_event_interval_s": [
+            0.0,
+            7.95
+          ],
+          "semantics": {
+            "locomoting": true,
+            "manipulating": false,
+            "object_loaded": false,
+            "torso_lowered": false,
+            "turning": false,
+            "moving_forward": true,
+            "moving_backward": false,
+            "moving_sideways": false,
+            "jumping": false,
+            "slow_locomotion": true,
+            "fast_locomotion": false,
+            "active_left_hand": false,
+            "active_right_hand": false,
+            "active_both_hands": false
+          }
+        }
+      ],
+      "video_path": "/mnt/hsstorage/fwu91/Projects/SL/IsaacLab-Imitation/logs/bones_language30_oracle_videos/rollout24_gamma097_3p5b_seed0_randomized_no_push/rank100511/videos/compare_policy_reference/rl-video-step-0.mp4"
+    }
+  ]
+}
