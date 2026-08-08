@@ -1,0 +1,107 @@
+{
+  "schema": "bones_language_selected10_v1",
+  "source_evaluation": "logs/bones_language10_candidate_screen/rollout24_gamma097_3p5b_seed0/candidate_screen_sonic_eval.json",
+  "source_ranking": "logs/bones_language10_candidate_screen/rollout24_gamma097_3p5b_seed0/candidate_ranking.json",
+  "checkpoint_sha256": "23fdd62a784fd3c57f30a466e8b5a1fb94d31176a211254c0443e126c8ea283e",
+  "selection_rule": "Require 1.0 per-motion SONIC SR over 128 randomized no-push rollouts, then select ten for language/action diversity, local/global accuracy, and frame-0 language directability.",
+  "planner_reference_start_frame": 0,
+  "aggregate": {
+    "num_motions": 10,
+    "rollouts_per_motion": 128,
+    "mean_success_rate": 1.0,
+    "mean_mpjpe_l_mm_all": 16.729529147159575,
+    "mean_mpjpe_g_m_all": 0.13051758090803173
+  },
+  "motions": [
+    {
+      "motion_name": "Neutral_stoop_down_001_A057",
+      "trajectory_rank": 110918,
+      "reference_frames": 340,
+      "language_goal": "Walk forward, pick up an object from the ground, examine it, drop it, and continue walking.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 23.21179756715586,
+      "mpjpe_g_m_all": 0.23378735477016613
+    },
+    {
+      "motion_name": "lift_crate_walk_ff_start_180_R_001_A140",
+      "trajectory_rank": 65955,
+      "reference_frames": 247,
+      "language_goal": "Lift a heavy crate with both hands and start walking forward.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 21.134306964956647,
+      "mpjpe_g_m_all": 0.14833275515878833
+    },
+    {
+      "motion_name": "drinking_standing_mug_R_001_A282",
+      "trajectory_rank": 92016,
+      "reference_frames": 551,
+      "language_goal": "While standing, lift a mug with your right hand, drink from it, and lower it.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 11.210225435705347,
+      "mpjpe_g_m_all": 0.06932578483771067
+    },
+    {
+      "motion_name": "fishing_standing_loop_R_001_A500",
+      "trajectory_rank": 15901,
+      "reference_frames": 1055,
+      "language_goal": "Stand and fish, occasionally checking the rod for a catch.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 12.364617189275812,
+      "mpjpe_g_m_all": 0.06978380791281777
+    },
+    {
+      "motion_name": "cellphone_typing_sequence_one_hand_idle_R_001_A423",
+      "trajectory_rank": 25562,
+      "reference_frames": 814,
+      "language_goal": "Take out a phone, type on it with your right hand, then put it away.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 14.146169034926837,
+      "mpjpe_g_m_all": 0.20459564985347953
+    },
+    {
+      "motion_name": "feeding_birds_start_R_001_A456",
+      "trajectory_rank": 78342,
+      "reference_frames": 792,
+      "language_goal": "Feed the birds by repeatedly scattering seeds with your right hand.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 18.25456662412954,
+      "mpjpe_g_m_all": 0.126986097086957
+    },
+    {
+      "motion_name": "walk_arc_cw_start_R_slow_001_A443",
+      "trajectory_rank": 30051,
+      "reference_frames": 467,
+      "language_goal": "Start walking slowly in a clockwise, rightward arc.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 18.26068243504274,
+      "mpjpe_g_m_all": 0.11818573366907573
+    },
+    {
+      "motion_name": "mosquito_drive_away_R_001_A500",
+      "trajectory_rank": 37518,
+      "reference_frames": 309,
+      "language_goal": "Raise your right hand and swat side to side to drive away a mosquito.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 13.666107249337358,
+      "mpjpe_g_m_all": 0.07462487398870153
+    },
+    {
+      "motion_name": "casual_greeting_R_001_A428",
+      "trajectory_rank": 8384,
+      "reference_frames": 203,
+      "language_goal": "Raise your right hand in a casual greeting.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 15.912520716188125,
+      "mpjpe_g_m_all": 0.17178425092042923
+    },
+    {
+      "motion_name": "surrender_stop_R_001_A468",
+      "trajectory_rank": 75217,
+      "reference_frames": 369,
+      "language_goal": "Lower both raised hands to your sides, ending a surrender pose.",
+      "success_rate": 1.0,
+      "mpjpe_l_mm_all": 19.13429825487749,
+      "mpjpe_g_m_all": 0.08776950088219129
+    }
+  ]
+}

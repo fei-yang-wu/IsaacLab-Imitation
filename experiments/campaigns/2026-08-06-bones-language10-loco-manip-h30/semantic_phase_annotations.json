@@ -1,0 +1,135 @@
+{
+  "schema": "semantic_phase_annotations_v1",
+  "phase_definition": "A phase is a contiguous interval with one observable task meaning. Boundaries are zero-based, end-exclusive reference control-step indices at 50 Hz.",
+  "annotation_method": "Manual review of the side-by-side reference/policy full-horizon videos, supported by reference root, wrist, arm, leg, and wrist-height kinematic traces. Boundaries are aligned to H10 publication steps where the visual transition permits; final endpoints preserve the exact reference length.",
+  "implicit_prop_note": "The comparison scene does not render crates, doors, buttons, or flyers. Object/environment semantics therefore come from the dataset action name and frozen language goal, while phase boundaries come from visible body motion and reference kinematics.",
+  "video_protocol": "H30 future exponential planner diagnostic; deterministic policy action; startup/reset randomization retained; push event disabled; all early terminations disabled.",
+  "semantic_axes": {
+    "locomoting": "The root is intentionally translating as part of the task.",
+    "manipulating": "The arms or hands are intentionally operating on an object or environmental control.",
+    "object_loaded": "The intended behavior is carrying or supporting an object, including implicit objects not simulated visually.",
+    "torso_lowered": "The task intentionally places the torso in a stooped or lowered posture.",
+    "turning": "The task intentionally changes heading rather than only following a straight translation."
+  },
+  "motions": [
+    {
+      "rank": 0,
+      "motion_name": "lift_crate_walk_ff_start_180_R_001_A140",
+      "reference_frames": 247,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank0/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 70, "label": "lift crate", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": true, "turning": false}},
+        {"start_step": 70, "end_step": 247, "label": "carry crate forward", "activity": "combined_loco_manip", "semantics": {"locomoting": true, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 1,
+      "motion_name": "walk_arc_cw_start_R_slow_001_A443",
+      "reference_frames": 467,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank1/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 467, "label": "slow clockwise arc walk", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": true}}
+      ]
+    },
+    {
+      "rank": 2,
+      "motion_name": "Neutral_stoop_down_001_A057",
+      "reference_frames": 340,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank2/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 90, "label": "approach walk", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}},
+        {"start_step": 90, "end_step": 160, "label": "stoop and retrieve", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": true, "turning": false}},
+        {"start_step": 160, "end_step": 220, "label": "rise and inspect", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 220, "end_step": 270, "label": "release and continue", "activity": "combined_loco_manip", "semantics": {"locomoting": true, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 270, "end_step": 340, "label": "finish upright", "activity": "stationary", "semantics": {"locomoting": false, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 3,
+      "motion_name": "walk_ff_loop_180_R_slow_001_A443",
+      "reference_frames": 400,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank3/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 400, "label": "slow straight walk", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 4,
+      "motion_name": "medium_big_light_one_hand_walk_ff_start_360_R_001_A504",
+      "reference_frames": 399,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank4/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 70, "label": "secure one-hand load", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 70, "end_step": 399, "label": "carry object backward", "activity": "combined_loco_manip", "semantics": {"locomoting": true, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 5,
+      "motion_name": "inside_door_handle_right_side_open_walk_turn_close_R_001_A514",
+      "reference_frames": 316,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank5/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 55, "label": "open right-side door", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": false, "torso_lowered": false, "turning": false}},
+        {"start_step": 55, "end_step": 145, "label": "traverse doorway", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}},
+        {"start_step": 145, "end_step": 195, "label": "turn toward door", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": true}},
+        {"start_step": 195, "end_step": 260, "label": "close door", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": false, "torso_lowered": false, "turning": false}},
+        {"start_step": 260, "end_step": 316, "label": "depart after closing", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 6,
+      "motion_name": "injured_torso_walk_ff_start_315_R_001_A214",
+      "reference_frames": 444,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank6/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 444, "label": "injured-torso diagonal walk", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 7,
+      "motion_name": "big_heavy_one_hand_front_high_to_front_low_R_001_A524",
+      "reference_frames": 419,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank7/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 70, "label": "grasp object high", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 70, "end_step": 190, "label": "stabilize high load", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 190, "end_step": 320, "label": "lower object", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": true, "turning": false}},
+        {"start_step": 320, "end_step": 360, "label": "release object low", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": false, "torso_lowered": true, "turning": false}},
+        {"start_step": 360, "end_step": 419, "label": "recover upright", "activity": "transition", "semantics": {"locomoting": false, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 8,
+      "motion_name": "street_waiting_at_crossroad_button_press_sequence_002_A423",
+      "reference_frames": 787,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank8/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 260, "label": "approach crossroad", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}},
+        {"start_step": 260, "end_step": 410, "label": "press crossing button", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": false, "torso_lowered": false, "turning": false}},
+        {"start_step": 410, "end_step": 600, "label": "wait at crossing", "activity": "stationary", "semantics": {"locomoting": false, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}},
+        {"start_step": 600, "end_step": 787, "label": "depart crossing", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": false, "torso_lowered": false, "turning": false}}
+      ]
+    },
+    {
+      "rank": 9,
+      "motion_name": "street_passing_out_flyers_move_R_002_A428",
+      "reference_frames": 846,
+      "video_path": "logs/bones_language10_loco_manip_v3_h30_future_seed0/full_horizon_diagnostic/h30_future_exponential/rank9/videos/compare_policy_reference/rl-video-step-0.mp4",
+      "phases": [
+        {"start_step": 0, "end_step": 70, "label": "reposition", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 70, "end_step": 130, "label": "handover flyer", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 130, "end_step": 180, "label": "reposition", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 180, "end_step": 250, "label": "handover flyer", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 250, "end_step": 310, "label": "reposition", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 310, "end_step": 365, "label": "handover flyer", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 365, "end_step": 420, "label": "reposition", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 420, "end_step": 470, "label": "handover flyer", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 470, "end_step": 550, "label": "reposition", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 550, "end_step": 660, "label": "handover flyer", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 660, "end_step": 735, "label": "reposition", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 735, "end_step": 790, "label": "handover flyer", "activity": "manipulation", "semantics": {"locomoting": false, "manipulating": true, "object_loaded": true, "torso_lowered": false, "turning": false}},
+        {"start_step": 790, "end_step": 846, "label": "reposition", "activity": "locomotion", "semantics": {"locomoting": true, "manipulating": false, "object_loaded": true, "torso_lowered": false, "turning": false}}
+      ]
+    }
+  ]
+}

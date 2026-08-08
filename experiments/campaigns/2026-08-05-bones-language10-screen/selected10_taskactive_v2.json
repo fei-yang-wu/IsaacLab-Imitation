@@ -1,0 +1,236 @@
+{
+  "schema": "bones_language_selected10_taskactive_v2",
+  "status": "selected_not_yet_planner_trained",
+  "supersedes_for_next_development_run": "selected10.json",
+  "preserve_historical_v1": true,
+  "source_candidate_screen": "logs/bones_language10_candidate_screen/rollout24_gamma097_3p5b_seed0/candidate_ranking.json",
+  "source_planner_comparison": "logs/bones_language10_latent_receding_seed0/aggregate/results.json",
+  "source_motion_npz_root": "data/bones_seed_100/npz/g1",
+  "checkpoint_sha256": "23fdd62a784fd3c57f30a466e8b5a1fb94d31176a211254c0443e126c8ea283e",
+  "planner_reference_start_frame": 0,
+  "selection_rule": "Require 1.0 low-level SONIC SR over 128 deterministic randomized-no-push rollouts; reject long-holding references; retain existing motions with robust or conditional planner evidence; fill the remaining slots with active, language-directable motions that express a concrete verb, object, direction, or locomotion style.",
+  "hold_screen": {
+    "definition": "A hold frame has root linear speed below 0.03 m/s, root angular speed below 0.10 rad/s, and joint RMS speed below 0.15 rad/s. Hold fraction counts only contiguous segments lasting at least 0.20 seconds.",
+    "reject_if": "hold_fraction > 0.20 OR longest_hold_s > 1.50",
+    "max_hold_fraction": 0.2,
+    "max_longest_hold_s": 1.5,
+    "source_fps": 50.0,
+    "note": "This is a task-selection heuristic, not a SONIC metric."
+  },
+  "planner_evidence_terms": {
+    "future_fresh": "Predict three commands in their eventual execution frames, but execute only the newest prediction.",
+    "future_raw_blend": "Predict in eventual execution frames and average the newest prediction with older overlapping predictions.",
+    "future_guarded_blend": "Predict in eventual execution frames and blend older predictions only after rejecting or limiting inconsistent ones."
+  },
+  "aggregate": {
+    "num_motions": 10,
+    "rollouts_per_motion": 128,
+    "mean_low_level_success_rate": 1.0,
+    "mean_low_level_mpjpe_l_mm_successful": 19.646284785473625,
+    "mean_low_level_mpjpe_g_m_successful": 0.22025286124010357,
+    "mean_hold_fraction": 0.026466074908697856,
+    "max_hold_fraction": 0.08709677419354839,
+    "max_longest_hold_s": 1.18,
+    "retained_from_v1": 5,
+    "active_replacements": 5
+  },
+  "removed_from_v1": [
+    {
+      "motion_name": "drinking_standing_mug_R_001_A282",
+      "best_planner_success_rate": 0.0,
+      "hold_fraction": 0.5797101449275363,
+      "longest_hold_s": 1.9,
+      "reason": "No successful planner rollout and fails both hold limits."
+    },
+    {
+      "motion_name": "fishing_standing_loop_R_001_A500",
+      "best_planner_success_rate": 1.0,
+      "hold_fraction": 0.38920454545454547,
+      "longest_hold_s": 4.44,
+      "reason": "Planner-robust but fails both hold limits; task progress is dominated by waiting."
+    },
+    {
+      "motion_name": "cellphone_typing_sequence_one_hand_idle_R_001_A423",
+      "best_planner_success_rate": 0.01,
+      "hold_fraction": 0.5852760736196319,
+      "longest_hold_s": 2.38,
+      "reason": "Planner failure and fails both hold limits."
+    },
+    {
+      "motion_name": "casual_greeting_R_001_A428",
+      "best_planner_success_rate": 0.08,
+      "hold_fraction": 0.47058823529411764,
+      "longest_hold_s": 1.2,
+      "reason": "Planner failure and fails the hold-fraction limit."
+    },
+    {
+      "motion_name": "surrender_stop_R_001_A468",
+      "best_planner_success_rate": 0.01,
+      "hold_fraction": 0.42702702702702705,
+      "longest_hold_s": 1.76,
+      "reason": "Planner failure and fails both hold limits."
+    }
+  ],
+  "motions": [
+    {
+      "motion_name": "Neutral_stoop_down_001_A057",
+      "trajectory_rank": 110918,
+      "reference_frames": 340,
+      "category": "Other",
+      "language_goal": "Walk forward, stoop to pick up an object from the ground, inspect it, put it down, and continue walking.",
+      "task_context": "ground-object retrieval during locomotion",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 23.21179756715586,
+      "low_level_mpjpe_g_m_successful": 0.23378735477016613,
+      "hold_fraction": 0.06744868035190615,
+      "longest_hold_s": 0.46,
+      "existing_planner_evidence": {
+        "best_execution": "future_raw_blend",
+        "best_success_rate": 0.4,
+        "classification": "conditional"
+      }
+    },
+    {
+      "motion_name": "lift_crate_walk_ff_start_180_R_001_A140",
+      "trajectory_rank": 65955,
+      "reference_frames": 247,
+      "category": "Object Interaction",
+      "language_goal": "Lift a heavy crate with both hands and begin walking forward while carrying it.",
+      "task_context": "two-handed lifting and loaded locomotion",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 21.134306964956647,
+      "low_level_mpjpe_g_m_successful": 0.14833275515878833,
+      "hold_fraction": 0.0,
+      "longest_hold_s": 0.0,
+      "existing_planner_evidence": {
+        "best_execution": "future_fresh_or_blended",
+        "best_success_rate": 1.0,
+        "classification": "robust"
+      }
+    },
+    {
+      "motion_name": "feeding_birds_start_R_001_A456",
+      "trajectory_rank": 78342,
+      "reference_frames": 792,
+      "category": "Environments",
+      "language_goal": "Feed the birds by repeatedly scattering seeds with your right hand.",
+      "task_context": "repeated directed placement or scattering",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 18.25456662412954,
+      "low_level_mpjpe_g_m_successful": 0.126986097086957,
+      "hold_fraction": 0.07440100882723834,
+      "longest_hold_s": 1.18,
+      "existing_planner_evidence": {
+        "best_execution": "future_fresh",
+        "best_success_rate": 0.77,
+        "classification": "conditional"
+      }
+    },
+    {
+      "motion_name": "walk_arc_cw_start_R_slow_001_A443",
+      "trajectory_rank": 30051,
+      "reference_frames": 467,
+      "category": "Basic Locomotion Neutral",
+      "language_goal": "Walk slowly in a clockwise arc toward the right.",
+      "task_context": "direction- and curvature-conditioned locomotion",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 18.26068243504274,
+      "low_level_mpjpe_g_m_successful": 0.11818573366907573,
+      "hold_fraction": 0.0,
+      "longest_hold_s": 0.0,
+      "existing_planner_evidence": {
+        "best_execution": "future_fresh_or_guarded_blend",
+        "best_success_rate": 1.0,
+        "classification": "robust"
+      }
+    },
+    {
+      "motion_name": "mosquito_drive_away_R_001_A500",
+      "trajectory_rank": 37518,
+      "reference_frames": 309,
+      "category": "Gestures",
+      "language_goal": "Raise your right hand and swat side to side to drive away a mosquito.",
+      "task_context": "directed reactive hand gesture",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 13.666107249337358,
+      "low_level_mpjpe_g_m_successful": 0.07462487398870153,
+      "hold_fraction": 0.08709677419354839,
+      "longest_hold_s": 0.3,
+      "existing_planner_evidence": {
+        "best_execution": "future_guarded_blend",
+        "best_success_rate": 0.51,
+        "classification": "conditional"
+      }
+    },
+    {
+      "motion_name": "walk_ff_loop_180_R_slow_001_A443",
+      "trajectory_rank": 100511,
+      "reference_frames": 400,
+      "category": "Basic Locomotion Neutral",
+      "language_goal": "Walk slowly forward in a straight line.",
+      "task_context": "speed- and direction-conditioned locomotion",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 18.627769374020193,
+      "low_level_mpjpe_g_m_successful": 0.21772517441741798,
+      "hold_fraction": 0.0,
+      "longest_hold_s": 0.0,
+      "existing_planner_evidence": null
+    },
+    {
+      "motion_name": "medium_big_light_one_hand_walk_ff_start_360_R_001_A504",
+      "trajectory_rank": 6615,
+      "reference_frames": 399,
+      "category": "Object Manipulation",
+      "language_goal": "Carry a medium light object in one hand while beginning to walk backward.",
+      "task_context": "one-handed carrying with commanded travel direction",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 19.349115904373814,
+      "low_level_mpjpe_g_m_successful": 0.43862540920848336,
+      "hold_fraction": 0.0,
+      "longest_hold_s": 0.0,
+      "existing_planner_evidence": null
+    },
+    {
+      "motion_name": "inside_door_handle_right_side_open_walk_turn_close_R_001_A514",
+      "trajectory_rank": 98875,
+      "reference_frames": 316,
+      "category": "Object Interaction",
+      "language_goal": "Open the door on your right, walk through it, turn, and close it behind you.",
+      "task_context": "door operation followed by navigation",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 21.292438106333453,
+      "low_level_mpjpe_g_m_successful": 0.21036173878244535,
+      "hold_fraction": 0.0,
+      "longest_hold_s": 0.04,
+      "existing_planner_evidence": null
+    },
+    {
+      "motion_name": "injured_torso_walk_ff_start_315_R_001_A214",
+      "trajectory_rank": 64762,
+      "reference_frames": 444,
+      "category": "Basic Locomotion Styles",
+      "language_goal": "Walk diagonally backward toward the right while favoring an injured torso.",
+      "task_context": "style- and direction-conditioned locomotion",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 21.183693462431968,
+      "low_level_mpjpe_g_m_successful": 0.2651163498493861,
+      "hold_fraction": 0.0,
+      "longest_hold_s": 0.0,
+      "existing_planner_evidence": null
+    },
+    {
+      "motion_name": "big_heavy_one_hand_front_high_to_front_low_R_001_A524",
+      "trajectory_rank": 34945,
+      "reference_frames": 419,
+      "category": "Object Manipulation",
+      "language_goal": "Move a heavy object with one hand from a high position in front to a lower position in front.",
+      "task_context": "directed object transfer between heights",
+      "low_level_success_rate": 1.0,
+      "low_level_mpjpe_l_mm_successful": 21.48237016695467,
+      "low_level_mpjpe_g_m_successful": 0.3687831254696141,
+      "hold_fraction": 0.03571428571428571,
+      "longest_hold_s": 0.3,
+      "existing_planner_evidence": null
+    }
+  ]
+}
