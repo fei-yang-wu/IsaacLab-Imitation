@@ -176,6 +176,93 @@ def test_compact_root_qpos_cache_clamps_windows_at_trajectory_bounds() -> None:
     assert window["_macro_anchor_quat_w"][0, 0].tolist() == [0.0, 0.0, 0.0, 1.0]
 
 
+def _compact_macro_plane(*, frame_stride: int = 1, total: int = 20):
+    """A one-trajectory compact-cache plane, long enough for a strided window."""
+    terms = [
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
+    ]
+    env = SimpleNamespace(
+        cfg=SimpleNamespace(
+            data=SimpleNamespace(
+                macro_cache_device="cpu",
+                macro_cache_chunk_size=3,
+            ),
+            expert_macro_state_terms=terms,
+            expert_macro_frame_stride=frame_stride,
+        ),
+        device="cpu",
+    )
+    joint_pos = torch.arange(total * 2, dtype=torch.float32).reshape(total, 2)
+    qpos = torch.zeros(total, 9)
+    qpos[:, 7:] = joint_pos
+    body_pos = torch.zeros(total, 2, 3)
+    body_pos[:, 0, 0] = torch.arange(total)
+    body_quat = torch.zeros(total, 2, 4)
+    body_quat[..., 0] = 1.0  # Dataset WXYZ identity.
+    source = TensorDict(
+        {"qpos": qpos, "body_pos_w": body_pos, "body_quat_w": body_quat},
+        batch_size=[total],
+    )
+    trajectory_manager = SimpleNamespace(
+        rb=SimpleNamespace(_storage=SimpleNamespace(_storage=source)),
+        start=torch.tensor([0]),
+        end=torch.tensor([total]),
+        length=torch.tensor([total]),
+        state_device=torch.device("cpu"),
+    )
+    plane = object.__new__(ExpertDataPlane)
+    plane._env = env
+    plane.trajectory_manager = trajectory_manager
+    plane._expert_anchor_body_name = "pelvis"
+    plane.reference_body_names = ["pelvis", "other"]
+    plane._root_qpos_macro_cache = None
+    return plane
+
+
+def test_macro_frame_stride_spaces_the_window_and_still_clamps() -> None:
+    """SONIC's cadence: 10 slots 5 reference frames apart, 0.9 s at 50 Hz.
+
+    The window WIDTH is identical to the consecutive one, which is exactly why
+    a mismatch cannot be caught downstream by a shape.
+    """
+    plane = _compact_macro_plane(frame_stride=5, total=20)
+
+    window = plane._sample_expert_macro_window_for_trajectory_ranks(
+        torch.tensor([0, 0]),
+        torch.tensor([0, 10]),
+        past_steps=0,
+        future_steps=3,
+    )
+
+    assert window.batch_size == torch.Size([2, 4])
+    # Row 0 starts at frame 0: slots land on 0, 5, 10, 15.
+    assert window["_macro_anchor_pos_w"][0, :, 0].tolist() == [0.0, 5.0, 10.0, 15.0]
+    # Row 1 starts at 10 and runs past the end: 10, 15, then clamped to 19.
+    assert window["_macro_anchor_pos_w"][1, :, 0].tolist() == [10.0, 15.0, 19.0, 19.0]
+
+
+def test_macro_frame_stride_one_is_the_historical_window() -> None:
+    plane = _compact_macro_plane(frame_stride=1, total=20)
+
+    window = plane._sample_expert_macro_window_for_trajectory_ranks(
+        torch.tensor([0]),
+        torch.tensor([2]),
+        past_steps=1,
+        future_steps=2,
+    )
+
+    assert window["_macro_anchor_pos_w"][0, :, 0].tolist() == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_macro_frame_stride_rejects_zero() -> None:
+    plane = _compact_macro_plane(frame_stride=0)
+
+    with pytest.raises(ValueError, match="expert_macro_frame_stride"):
+        plane._expert_macro_frame_stride()
+
+
 def test_runtime_reference_cache_keeps_only_selected_bodies() -> None:
     total = 7
     body_count = 3

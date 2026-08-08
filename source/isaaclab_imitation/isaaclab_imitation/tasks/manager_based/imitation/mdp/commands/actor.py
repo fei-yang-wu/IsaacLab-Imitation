@@ -83,14 +83,16 @@ def _check_component(cfg: Any, name: str) -> None:
         )
 
 
-def _reject_window_override(past_steps: int, future_steps: int) -> None:
+def _reject_window_override(
+    past_steps: int, future_steps: int, frame_stride: int = 1
+) -> None:
     """The actor channel's window is its own; a caller may not widen it.
 
     A consumer that wants a different window (the skill encoder's, say) reads
     the reference channel, which is what that view is: privileged reference
     data, not the actor's command.
     """
-    if int(past_steps) != 0 or int(future_steps) != 0:
+    if int(past_steps) != 0 or int(future_steps) != 0 or int(frame_stride) != 1:
         raise ValueError(
             "The actor command channel serves its configured window; ask the "
             "reference channel for a different one."
@@ -142,15 +144,21 @@ class ExplicitActorCommand(CommandTerm):
         return self._command
 
     def component(
-        self, name: str, *, past_steps: int = 0, future_steps: int = 0
+        self,
+        name: str,
+        *,
+        past_steps: int = 0,
+        future_steps: int = 0,
+        frame_stride: int = 1,
     ) -> torch.Tensor:
         """One component of the actor command, over the actor's own window."""
         _check_component(self.cfg, name)
-        _reject_window_override(past_steps, future_steps)
+        _reject_window_override(past_steps, future_steps, frame_stride)
         return _reference_term(self._imitation_env()).component(
             name,
             past_steps=int(self.cfg.past_steps),
             future_steps=int(self.cfg.future_steps),
+            frame_stride=int(self.cfg.frame_stride),
         )
 
     def _update_command(self):
@@ -187,12 +195,23 @@ class ExplicitCommandCfg(CommandTermCfg):
     components: tuple[str, ...] = FULL_BODY_COMPONENTS
     past_steps: int = 0
     future_steps: int = 0
+    frame_stride: int = 1
+    """Reference frames between consecutive window slots.
+
+    1 is the historical consecutive-frame window. 5 at 50 Hz reproduces SONIC's
+    0.1 s spacing, so ``future_steps=9`` spans 0.9 s of reference motion instead
+    of 0.18 s. The same knob exists on :class:`EncoderViewCfg`; keeping it here
+    too means an explicit actor command and a skill encoder can be trained and
+    evaluated on the same strided view.
+    """
 
     def resolve(self) -> None:
         _resolve_source(self, allowed=frozenset({"reference"}))
         self.components = normalize_command_components(self.components)
         if int(self.past_steps) < 0 or int(self.future_steps) < 0:
             raise ValueError("command window steps must be >= 0.")
+        if int(self.frame_stride) < 1:
+            raise ValueError("command window frame_stride must be >= 1.")
 
     def command_terms(self) -> tuple[str, ...]:
         return component_term_names(self.components)
@@ -236,14 +255,19 @@ class LatentActorCommand(PublishedCommandTerm):
         return self._latent
 
     def component(
-        self, name: str, *, past_steps: int = 0, future_steps: int = 0
+        self,
+        name: str,
+        *,
+        past_steps: int = 0,
+        future_steps: int = 0,
+        frame_stride: int = 1,
     ) -> torch.Tensor:
         if name != LATENT_COMMAND_TERM_NAME:
             raise KeyError(
                 f"A latent actor command serves only "
                 f"{LATENT_COMMAND_TERM_NAME!r}, not {name!r}."
             )
-        _reject_window_override(past_steps, future_steps)
+        _reject_window_override(past_steps, future_steps, frame_stride)
         return self._latent
 
     def get(self, env_ids: torch.Tensor | None = None) -> torch.Tensor:
@@ -429,11 +453,16 @@ class ChunkActorCommand(PublishedCommandTerm):
     """
 
     def component(
-        self, name: str, *, past_steps: int = 0, future_steps: int = 0
+        self,
+        name: str,
+        *,
+        past_steps: int = 0,
+        future_steps: int = 0,
+        frame_stride: int = 1,
     ) -> torch.Tensor:
         """The slot of the packet time-aligned with this control step."""
         _check_component(self.cfg, name)
-        _reject_window_override(past_steps, future_steps)
+        _reject_window_override(past_steps, future_steps, frame_stride)
         self._maybe_fill_from_source()
         window = self._packet_window(name)
         per_step_dim = window.shape[1] // self.window_steps

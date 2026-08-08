@@ -196,6 +196,7 @@ def command_component(
     component: str = "joint_qpos_qvel",
     past_steps: int = 0,
     future_steps: int = 0,
+    frame_stride: int = 1,
 ) -> torch.Tensor:
     """One command component, from one of the two command channels.
 
@@ -210,7 +211,10 @@ def command_component(
     if int(past_steps) == 0 and int(future_steps) == 0:
         return term.component(component)
     return term.component(
-        component, past_steps=int(past_steps), future_steps=int(future_steps)
+        component,
+        past_steps=int(past_steps),
+        future_steps=int(future_steps),
+        frame_stride=int(frame_stride),
     )
 
 

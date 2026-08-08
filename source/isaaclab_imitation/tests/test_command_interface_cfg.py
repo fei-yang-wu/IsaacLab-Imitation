@@ -21,6 +21,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
     LatentCommandCfg,
     ReferenceChannelCfg,
     ReferenceSelectionCfg,
+    ReferenceSelectionPreset,
     actor_command_keys,
     bind_command_interface,
     actor_input_keys,
@@ -156,6 +157,67 @@ def test_encoder_view_shares_the_group_but_never_the_actor_contract():
         {("policy", name) for name in cfg.policy_command_terms()}
     )
     assert not set(encoder_keys) & set(actor_command_keys(cfg))
+
+
+def test_encoder_view_frame_stride_reaches_windows_and_expert_batch():
+    """SONIC-style strided windows: the view's stride must flow to both the
+    live observation window and the offline expert-batch window, and stay 1
+    for the actor's own terms and the critic."""
+    cfg = _latent_interface(
+        encoder=EncoderViewCfg(
+            components=("keypoint_pos", "root_ori"),
+            past_steps=0,
+            future_steps=9,
+            frame_stride=5,
+        )
+    )
+    assert cfg.expert_batch_window() == (0, 9, 5)
+    assert cfg.policy_window_for("expert_keypoint_pos_b") == (0, 9, 5)
+    assert cfg.policy_window_for("latent_command") == (0, 0, 1)
+    assert encoder_command_keys(cfg) == [
+        ("policy", "expert_keypoint_pos_b"),
+        ("policy", "expert_anchor_ori_b"),
+    ]
+
+
+def test_explicit_actor_frame_stride_reaches_the_expert_batch_window():
+    """An explicit actor may be trained and evaluated on a strided window too.
+
+    Without an encoder the offline expert batch is shaped by the actor, so its
+    stride has to survive the trip; a stride-1 batch paired with a stride-5
+    policy would be silently off-distribution.
+    """
+    cfg = _explicit_interface(
+        components=("joint_qpos_qvel", "root_ori"),
+        past_steps=0,
+        future_steps=9,
+        frame_stride=5,
+    )
+    assert cfg.expert_batch_window() == (0, 9, 5)
+
+
+def test_explicit_actor_rejects_non_positive_frame_stride():
+    with pytest.raises(ValueError, match="frame_stride"):
+        _explicit_interface(future_steps=9, frame_stride=0)
+
+
+def test_chunk_actor_expert_batch_window_comes_from_the_packet():
+    """``ChunkCommandCfg`` carries no past/future fields, only a horizon."""
+    cfg = CommandInterfaceCfg(
+        reference=_reference(),
+        actor=ChunkCommandCfg(source="reference", horizon=10, hold_steps=10),
+        encoder=None,
+        critic_channels=("reference",),
+    )
+    cfg.resolve()
+    assert cfg.expert_batch_window() == (0, 9, 1)
+
+
+def test_encoder_view_rejects_non_positive_frame_stride():
+    with pytest.raises(ValueError, match="frame_stride"):
+        _latent_interface(
+            encoder=EncoderViewCfg(past_steps=0, future_steps=9, frame_stride=0)
+        )
 
 
 def test_explicit_actor_reads_its_components_in_canonical_order():
@@ -341,6 +403,39 @@ def test_adaptive_weight_fn_conflicts_with_full_trajectory_sampling():
     )
     with pytest.raises(ValueError, match="full_trajectory"):
         cfg.resolve()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"random_trajectory_sampling_ratio": -0.1}, "in \\[0, 1\\]"),
+        ({"random_trajectory_sampling_ratio": 1.1}, "in \\[0, 1\\]"),
+        ({"random_trajectory_start_fraction": 0.0}, "in \\(0, 1\\]"),
+        ({"random_trajectory_start_fraction": 1.1}, "in \\(0, 1\\]"),
+        (
+            {"random_trajectory_sampling_ratio": 0.8, "full_trajectory": False},
+            "requires full_trajectory=true",
+        ),
+    ],
+)
+def test_random_adaptive_mixture_selection_is_validated(kwargs, message):
+    cfg = CommandInterfaceCfg(
+        reference=_reference(selection=ReferenceSelectionCfg(**kwargs)),
+        actor=LatentCommandCfg(),
+    )
+    with pytest.raises(ValueError, match=message):
+        cfg.resolve()
+
+
+def test_random80_adaptive20_preset_is_an_exact_top_level_mixture():
+    selection = ReferenceSelectionPreset().random80_adaptive20
+    selection.resolve()
+
+    assert selection.full_trajectory
+    assert selection.random_trajectory_sampling_ratio == 0.8
+    assert selection.random_trajectory_start_fraction == 0.5
+    # No hidden uniform-bin share inside the 20% adaptive branch.
+    assert selection.adaptive_uniform_ratio == 0.0
 
 
 def test_resolve_is_idempotent():

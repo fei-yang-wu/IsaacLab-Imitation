@@ -102,11 +102,17 @@ class EncoderViewCfg:
     components: tuple[str, ...] = FULL_BODY_COMPONENTS
     past_steps: int = 0
     future_steps: int = 0
+    # Reference frames between consecutive window slots. 1 keeps the historical
+    # consecutive-frame window; 5 at 50 Hz reproduces SONIC's 0.1 s spacing, so
+    # a future10 window spans 0.9 s of reference motion instead of 0.18 s.
+    frame_stride: int = 1
 
     def resolve(self) -> None:
         self.components = normalize_command_components(self.components)
         if int(self.past_steps) < 0 or int(self.future_steps) < 0:
             raise ValueError("encoder window steps must be >= 0.")
+        if int(self.frame_stride) < 1:
+            raise ValueError("encoder window frame_stride must be >= 1.")
 
     def command_terms(self) -> tuple[str, ...]:
         return component_term_names(self.components)
@@ -169,6 +175,11 @@ class EncoderViewPreset(PresetCfg):
     causal9: EncoderViewCfg = EncoderViewCfg(past_steps=8, future_steps=0)
     future10: EncoderViewCfg = EncoderViewCfg(past_steps=0, future_steps=9)
     future26: EncoderViewCfg = EncoderViewCfg(past_steps=0, future_steps=25)
+    # SONIC's released tokenizer window: 10 frames spaced 0.1 s (frame_skips=5
+    # at 50 Hz), spanning 0.9 s of future reference motion.
+    future10_stride5: EncoderViewCfg = EncoderViewCfg(
+        past_steps=0, future_steps=9, frame_stride=5
+    )
 
 
 @configclass
@@ -179,7 +190,9 @@ class ReferenceSelectionPreset(PresetCfg):
     attributed ~5.6x episode length at 4096 environments to it rather than to
     SONIC's rewards or actuators. ``sonic`` is the release sampler it was
     measured against, and ``frame0`` is the fixed-start protocol the low-level
-    qualification gate runs.
+    qualification gate runs. ``random80_adaptive20`` is the repo experiment
+    sampler: uniform trajectory plus a uniformly random first-half frame on
+    80% of resets, and the learned SONIC failure sampler on the remaining 20%.
     """
 
     default: ReferenceSelectionCfg = ReferenceSelectionCfg(
@@ -197,6 +210,17 @@ class ReferenceSelectionPreset(PresetCfg):
         random_step_max=0,
         full_trajectory=True,
         adaptive_failure_rate_max_over_mean=200.0,
+    )
+    random80_adaptive20: ReferenceSelectionCfg = ReferenceSelectionCfg(
+        schedule="random",
+        start_mode="auto",
+        random_step_min=0,
+        random_step_max=0,
+        full_trajectory=True,
+        adaptive_uniform_ratio=0.0,
+        adaptive_failure_rate_max_over_mean=200.0,
+        random_trajectory_sampling_ratio=0.8,
+        random_trajectory_start_fraction=0.5,
     )
     frame0: ReferenceSelectionCfg = ReferenceSelectionCfg(
         schedule="random",
@@ -337,18 +361,30 @@ class CommandInterfaceCfg:
                     terms.append(term_name)
         return tuple(terms)
 
-    def expert_batch_window(self) -> tuple[int, int]:
-        """Window the OFFLINE expert-batch mapper serves policy command keys at.
+    def expert_batch_window(self) -> tuple[int, int, int]:
+        """``(past, future, frame_stride)`` the OFFLINE expert-batch mapper serves.
 
         The skill encoder's view when there is one -- an offline expert batch
         must be shaped like the live observation the encoder was trained on --
-        otherwise the actor's own window.
+        otherwise the actor's own window, at the actor's own stride.
         """
         if self.encoder is not None:
-            return (int(self.encoder.past_steps), int(self.encoder.future_steps))
-        if isinstance(self.actor, (ExplicitCommandCfg, ChunkCommandCfg)):
-            return (int(self.actor.past_steps), int(self.actor.future_steps))
-        return (0, 0)
+            return (
+                int(self.encoder.past_steps),
+                int(self.encoder.future_steps),
+                int(self.encoder.frame_stride),
+            )
+        if isinstance(self.actor, ExplicitCommandCfg):
+            return (
+                int(self.actor.past_steps),
+                int(self.actor.future_steps),
+                int(self.actor.frame_stride),
+            )
+        if isinstance(self.actor, ChunkCommandCfg):
+            # A packet is the current frame plus ``horizon - 1`` future frames;
+            # ChunkCommandCfg carries no past/future fields of its own.
+            return (0, max(int(self.actor.horizon) - 1, 0), 1)
+        return (0, 0, 1)
 
     # -- derived surfaces ----------------------------------------------------
 
@@ -374,7 +410,7 @@ class CommandInterfaceCfg:
                 "actor" if name == LATENT_COMMAND_TERM_NAME else "reference"
             ),
             # The critic reads the command it judges, single-frame.
-            window_of=lambda name: (0, 0),
+            window_of=lambda name: (0, 0, 1),
             drop_noise=True,
         )
 
@@ -389,12 +425,13 @@ class CommandInterfaceCfg:
             if term_name not in kept:
                 setattr(group, term_name, None)
                 continue
-            past_steps, future_steps = window_of(term_name)
+            past_steps, future_steps, frame_stride = window_of(term_name)
             term.params = {
                 "channel": channel_of(term_name),
                 "component": _component_of_term(term_name),
                 "past_steps": int(past_steps),
                 "future_steps": int(future_steps),
+                "frame_stride": int(frame_stride),
             }
             if drop_noise:
                 # Command-side expert noise stays disabled on explicit trackers
@@ -405,18 +442,23 @@ class CommandInterfaceCfg:
         """Which channel a surviving policy command term reads."""
         return "actor" if term_name in self.actor.command_terms() else "reference"
 
-    def policy_window_for(self, term_name: str) -> tuple[int, int]:
-        """``(past_steps, future_steps)`` a policy-group command term asks for.
+    def policy_window_for(self, term_name: str) -> tuple[int, int, int]:
+        """``(past, future, frame_stride)`` a policy-group command term asks for.
 
-        Zero for the actor's own terms: the actor channel serves its configured
-        window and rejects an override, so the observation term must not ask for
-        one. A term that exists only for the encoder view reads the reference
-        channel at the encoder's window.
+        Zero window for the actor's own terms: the actor channel serves its
+        configured window (including its ``frame_stride``) and rejects an
+        override, so the observation term must not ask for one. A term that
+        exists only for the encoder view reads the reference channel at the
+        encoder's window.
         """
         if term_name in self.actor.command_terms():
-            return (0, 0)
+            return (0, 0, 1)
         if self.encoder is not None and term_name in self.encoder.command_terms():
-            return (int(self.encoder.past_steps), int(self.encoder.future_steps))
+            return (
+                int(self.encoder.past_steps),
+                int(self.encoder.future_steps),
+                int(self.encoder.frame_stride),
+            )
         raise KeyError(
             f"{term_name!r} is not a policy-group command term of this interface."
         )

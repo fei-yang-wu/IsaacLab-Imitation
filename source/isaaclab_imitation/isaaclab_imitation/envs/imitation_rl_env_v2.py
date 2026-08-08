@@ -98,9 +98,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
         # Window the offline expert-batch mapper serves policy command keys at:
         # the skill encoder's view when there is one, else the actor's own.
-        past_steps, future_steps = command_interface.expert_batch_window()
+        past_steps, future_steps, frame_stride = command_interface.expert_batch_window()
         self._latent_patch_past_steps = int(past_steps)
         self._latent_patch_future_steps = int(future_steps)
+        self._latent_patch_frame_stride = int(frame_stride)
         self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
         if self._latent_goal_steps < 0:
             raise ValueError("latent_goal_steps must be >= 0.")
@@ -376,6 +377,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     ) -> TensorDict | None:
         return self.expert_data_plane.sample_expert_batch(batch_size, required_keys)
 
+    def expert_macro_frame_stride(self) -> int:
+        """Reference frames between consecutive DiffSR macro-window slots.
+
+        Published so a consumer that pairs a pretrained skill encoder with this
+        environment can refuse a stride the encoder was not trained on. The
+        macro state's width is identical at every stride, so this is the only
+        way that mismatch can be detected.
+        """
+        return self.expert_data_plane._expert_macro_frame_stride()
+
     def sample_expert_macro_transition_batch(
         self,
         batch_size: int,
@@ -435,6 +446,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
         reference_body_names: Sequence[str] = (),
@@ -444,6 +456,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             term_name,
             past_steps=past_steps,
             future_steps=future_steps,
+            frame_stride=frame_stride,
             joint_ids=joint_ids,
             anchor_body_name=anchor_body_name,
             reference_body_names=reference_body_names,

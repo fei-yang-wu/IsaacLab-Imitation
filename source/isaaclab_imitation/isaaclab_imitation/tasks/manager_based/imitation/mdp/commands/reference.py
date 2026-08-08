@@ -13,7 +13,7 @@ reference drives nothing and exists only to score the rollout -- and it owns:
   onto (:class:`ReferenceSelectionCfg`). Trajectory choice is the parallel
   trajectory manager's schedule (including ``custom``, where an evaluation
   driver or per-goal collector supplies the ranks); start-frame choice is the
-  ``StartFrameSampler`` / ``SonicAdaptiveResetSampler`` pair this term builds
+  ``StartFrameSampler`` / adaptive full-trajectory sampler this term builds
   from its own config.
 * **the adaptive-failure bookkeeping** those samplers consume
   (:meth:`record_visits` / :meth:`record_failures`).
@@ -58,6 +58,7 @@ from .._compiled import (
     quat_error_squared,
     quat_to_rot6d_flat,
 )
+from .reset_sampling import RandomTrajectoryAdaptiveResetSampler
 
 if TYPE_CHECKING:
     from isaaclab_imitation.envs import ImitationRLEnv
@@ -102,7 +103,8 @@ class ReferenceSelectionCfg:
     """SONIC joint rank+frame sampling from the adaptive failure distribution.
 
     When set, the adaptive sampler picks the trajectory AND the frame, so
-    ``schedule`` no longer applies.
+    ``schedule`` no longer applies. A configured explicit random-trajectory
+    branch may wrap this sampler without changing its failure bookkeeping.
     """
 
     adaptive_weight_fn: Callable | None = None
@@ -114,6 +116,12 @@ class ReferenceSelectionCfg:
     adaptive_uniform_ratio: float = 0.1
     adaptive_pre_failure_window: int = 200
     adaptive_failure_rate_max_over_mean: float = 50.0
+
+    random_trajectory_sampling_ratio: float = 0.0
+    """Explicit random-trajectory branch probability for full-trajectory sampling."""
+
+    random_trajectory_start_fraction: float = 0.5
+    """Leading trajectory fraction available to the explicit random branch."""
 
     rng_seed: int | None = None
     """Dedicated reference/reset RNG seed; ``None`` inherits the environment seed."""
@@ -162,6 +170,16 @@ class ReferenceSelectionCfg:
             raise ValueError("adaptive_pre_failure_window must be >= 0.")
         if float(self.adaptive_failure_rate_max_over_mean) <= 0.0:
             raise ValueError("adaptive_failure_rate_max_over_mean must be positive.")
+        if not 0.0 <= float(self.random_trajectory_sampling_ratio) <= 1.0:
+            raise ValueError("random_trajectory_sampling_ratio must be in [0, 1].")
+        if not 0.0 < float(self.random_trajectory_start_fraction) <= 1.0:
+            raise ValueError("random_trajectory_start_fraction must be in (0, 1].")
+        if float(self.random_trajectory_sampling_ratio) > 0.0 and not bool(
+            self.full_trajectory
+        ):
+            raise ValueError(
+                "random_trajectory_sampling_ratio requires full_trajectory=true."
+            )
 
     def resolved_start_mode(self) -> str:
         """The concrete start mode, with ``auto`` decided."""
@@ -204,6 +222,9 @@ class ReferenceCommandTerm(CommandTerm):
         # after the trajectory manager exists.
         self._start_frame_sampler: StartFrameSampler | None = None
         self._adaptive_failure_reset_sampler: SonicAdaptiveResetSampler | None = None
+        self._full_trajectory_reset_sampler: (
+            SonicAdaptiveResetSampler | RandomTrajectoryAdaptiveResetSampler | None
+        ) = None
         self._predicted_reset_ranks: torch.Tensor | None = None
         self._predicted_reset_steps: torch.Tensor | None = None
         self._predicted_reset_probabilities: torch.Tensor | None = None
@@ -279,6 +300,7 @@ class ReferenceCommandTerm(CommandTerm):
         *,
         past_steps: int = 0,
         future_steps: int = 0,
+        frame_stride: int = 1,
     ) -> torch.Tensor:
         """One command component, single-frame or windowed.
 
@@ -286,7 +308,9 @@ class ReferenceCommandTerm(CommandTerm):
         paths directly; a non-trivial window is built by the data plane's
         window path. Both express anchor-relative quantities in the robot's
         current anchor frame, so the windowed view with ``0/0`` and the
-        single-frame view are the same values.
+        single-frame view are the same values. ``frame_stride`` spaces the
+        window slots that many reference frames apart (SONIC's tokenizer uses
+        stride 5 at 50 Hz for 0.1 s spacing).
         """
         term_name = _term_name_of(name)
         if int(past_steps) == 0 and int(future_steps) == 0:
@@ -295,6 +319,7 @@ class ReferenceCommandTerm(CommandTerm):
             term_name=term_name,
             past_steps=int(past_steps),
             future_steps=int(future_steps),
+            frame_stride=int(frame_stride),
             joint_ids=self._resolve_joint_ids(),
             anchor_body_name=self.cfg.anchor_body_name,
             reference_body_names=self._body_names_for(name),
@@ -305,7 +330,7 @@ class ReferenceCommandTerm(CommandTerm):
     """
 
     def prepare_predicted_resets(self) -> None:
-        """Snapshot SONIC and stage a fixed candidate pool before physics.
+        """Snapshot the adaptive distribution and stage candidates before physics.
 
         This is active only for ``reference_prefetch_mode=next_and_reset``.
         Current-step failures are intentionally applied to the following
@@ -316,12 +341,12 @@ class ReferenceCommandTerm(CommandTerm):
             return
         if not self.cfg.selection.full_trajectory:
             raise RuntimeError(
-                "next_and_reset currently requires the SONIC full-trajectory "
+                "next_and_reset currently requires full-trajectory "
                 "selection so one snapshotted distribution owns both rank and frame."
             )
-        sampler = self._adaptive_failure_reset_sampler
+        sampler = self._full_trajectory_reset_sampler
         if sampler is None:
-            raise RuntimeError("SONIC predictive reset sampling is not initialized.")
+            raise RuntimeError("Full-trajectory reset sampling is not initialized.")
         if self._predicted_reset_ranks is not None:
             raise RuntimeError("A predictive reset pool is already pending.")
         count = int(env.cfg.data.reference_prefetch_reset_pool_size)
@@ -360,9 +385,9 @@ class ReferenceCommandTerm(CommandTerm):
             and self._predicted_reset_steps is not None
             and self._predicted_reset_probabilities is not None
         ):
-            sampler = self._adaptive_failure_reset_sampler
+            sampler = self._full_trajectory_reset_sampler
             if sampler is None:
-                raise RuntimeError("SONIC predictive reset sampler is unavailable.")
+                raise RuntimeError("Predictive reset sampler is unavailable.")
             count = int(env_ids_tm.numel())
             prefetched_count = min(count, int(self._predicted_reset_ranks.numel()))
             ranks = self._predicted_reset_ranks[:prefetched_count]
@@ -379,11 +404,10 @@ class ReferenceCommandTerm(CommandTerm):
             self.finish_predicted_reset_step()
             return prefetched_count
         if self.cfg.selection.full_trajectory:
-            if self._adaptive_failure_reset_sampler is None:
-                raise RuntimeError("Adaptive failure reset sampler is not enabled.")
-            reset_ranks, reset_steps = self._adaptive_failure_reset_sampler.sample(
-                env_ids_tm.numel()
-            )
+            sampler = self._full_trajectory_reset_sampler
+            if sampler is None:
+                raise RuntimeError("Full-trajectory reset sampler is not enabled.")
+            reset_ranks, reset_steps = sampler.sample(env_ids_tm.numel())
             tm.reset_envs(env_ids_tm, ranks=reset_ranks, steps=reset_steps)
             return 0
         if self._start_frame_sampler is None:
@@ -592,7 +616,27 @@ class ReferenceCommandTerm(CommandTerm):
             )
         if selection.full_trajectory:
             # SONIC picks ranks AND frames jointly from the bin distribution;
-            # the generic start sampler is unused.
+            # the generic start sampler is unused. A repo-owned mixture may
+            # wrap SONIC without changing its failure bookkeeping.
+            assert self._adaptive_failure_reset_sampler is not None
+            if float(selection.random_trajectory_sampling_ratio) > 0.0:
+                self._full_trajectory_reset_sampler = (
+                    RandomTrajectoryAdaptiveResetSampler(
+                        tm.length,
+                        adaptive=self._adaptive_failure_reset_sampler,
+                        random_sampling_ratio=float(
+                            selection.random_trajectory_sampling_ratio
+                        ),
+                        random_start_fraction=float(
+                            selection.random_trajectory_start_fraction
+                        ),
+                        generator=tm.reset_generator,
+                    )
+                )
+            else:
+                self._full_trajectory_reset_sampler = (
+                    self._adaptive_failure_reset_sampler
+                )
             self._start_frame_sampler = None
             return
         if start_mode == StartFrameSampler.ADAPTIVE:
