@@ -237,6 +237,16 @@ class ReferenceCommandTerm(CommandTerm):
         self.metrics["anchor_ori_err_rad"] = torch.zeros(
             self.num_envs, device=self.device
         )
+        self._anchor_pos_sum = torch.zeros(self.num_envs, device=self.device)
+        self._anchor_ori_sum = torch.zeros(self.num_envs, device=self.device)
+        self._anchor_steps = torch.zeros(self.num_envs, device=self.device)
+        # The value at the final in-episode step, kept alongside the mean.
+        self.metrics["anchor_pos_err_final_m"] = torch.zeros(
+            self.num_envs, device=self.device
+        )
+        self.metrics["anchor_ori_err_final_rad"] = torch.zeros(
+            self.num_envs, device=self.device
+        )
 
     def __str__(self) -> str:
         selection = self.cfg.selection
@@ -496,12 +506,31 @@ class ReferenceCommandTerm(CommandTerm):
         ref_anchor_pos_w, ref_anchor_quat_w = env._get_reference_body_pose_w_fast(
             (self.cfg.anchor_body_name,)
         )
-        self.metrics["anchor_pos_err_m"][:] = torch.linalg.vector_norm(
+        anchor_pos_err = torch.linalg.vector_norm(
             ref_anchor_pos_w[:, 0, :] - robot_anchor_pos_w, dim=-1
         )
-        self.metrics["anchor_ori_err_rad"][:] = torch.sqrt(
+        anchor_ori_err = torch.sqrt(
             quat_error_squared(robot_anchor_quat_w, ref_anchor_quat_w[:, 0, :])
         )
+        # Same accumulate-then-average shape as MPJPE above, and for the same
+        # reason: these used to hold the instantaneous error, so `reset` logged
+        # the value AT THE STEP THE EPISODE ENDED. Most episodes end on a
+        # tracking-error termination, so that sample was taken at the failure
+        # threshold by construction - a metric that reports roughly its own
+        # termination bound no matter how well the policy tracks. The two MPJPE
+        # metrics were converted to episode means; these two were left behind.
+        self._anchor_pos_sum += anchor_pos_err
+        self._anchor_ori_sum += anchor_ori_err
+        self._anchor_steps += 1.0
+        anchor_steps = self._anchor_steps.clamp(min=1.0)
+        self.metrics["anchor_pos_err_m"][:] = self._anchor_pos_sum / anchor_steps
+        self.metrics["anchor_ori_err_rad"][:] = self._anchor_ori_sum / anchor_steps
+        # The terminal value is still worth having - for a failure it is the
+        # error that tripped the threshold, and for a completed motion it is the
+        # accumulated drift at the end. Kept under its own name so it can never
+        # be mistaken for the episode mean.
+        self.metrics["anchor_pos_err_final_m"][:] = anchor_pos_err
+        self.metrics["anchor_ori_err_final_rad"][:] = anchor_ori_err
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         """Log the metrics, then clear this episode's MPJPE accumulators.
@@ -515,6 +544,9 @@ class ReferenceCommandTerm(CommandTerm):
         self._mpjpe_l_sum[selected] = 0.0
         self._mpjpe_g_sum[selected] = 0.0
         self._mpjpe_steps[selected] = 0.0
+        self._anchor_pos_sum[selected] = 0.0
+        self._anchor_ori_sum[selected] = 0.0
+        self._anchor_steps[selected] = 0.0
         return extras
 
     def _resample_command(self, env_ids: Sequence[int]):
