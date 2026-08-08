@@ -20,7 +20,17 @@ KIT_MODULE_PREFIXES = (
     "omni.kit",
     "omni.isaac.kit",
 )
-COMPUTE_ONLY_GPU_MARKERS = ("A100", "H100", "H200")
+#: GPU models on which headless PhysX/Kit has not been shown to start.
+#:
+#: H100 and H200 used to be listed here on the theory that Kit needs an
+#: RT-capable device. That is wrong, and the repo carries the disproof: the
+#: 2026-08-03 PhysX 5B run
+#: (``experiments/campaigns/2026-08-03-physx-backend-5b/cluster_submission.json``)
+#: logged ``PhysX GPU policy accepted: NVIDIA H100 80GB HBM3`` and sustained
+#: 33,421 fps to 300M frames on ``gpu:h100:1``. Hopper is fine headless.
+#: A100 stays only because nobody has run it, not because it is expected to
+#: fail -- pass ``--experimental-compute-only-physx`` to try.
+COMPUTE_ONLY_GPU_MARKERS = ("A100",)
 RUNTIME_ROOT_CANDIDATES = (
     Path("/opt/isaaclab-imitation-runtime"),
     Path("/opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime"),
@@ -147,7 +157,11 @@ def validate_gpu_policy(
     *,
     allow_compute_only_physx: bool = False,
 ) -> None:
-    """Reject Kit/PhysX on compute-only GPU models before AppLauncher starts."""
+    """Refuse Kit/PhysX on GPU models it has never been shown to start on.
+
+    Verified working headless and needing no flag: H100, H200, L40S, A40, and
+    RTX workstation parts. See :data:`COMPUTE_ONLY_GPU_MARKERS`.
+    """
     if backend != "physx":
         return
     unsupported = [
@@ -159,9 +173,11 @@ def validate_gpu_policy(
         return
     if unsupported:
         raise RuntimeError(
-            "PhysX/Kit requires an RT-capable GPU; compute-only GPU(s) were selected: "
+            "Headless PhysX/Kit has not been exercised on this GPU model: "
             + ", ".join(unsupported)
-            + ". Use strict Newton on A100/H100/H200."
+            + ". It is expected to work -- H100 and H200 do -- so either pass "
+            "--experimental-compute-only-physx to try it and report back, or "
+            "run Newton instead."
         )
 
 

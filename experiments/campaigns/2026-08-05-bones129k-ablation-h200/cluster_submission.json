@@ -1,0 +1,153 @@
+{
+  "campaign": "2026-08-05-bones129k-ablation-h200",
+  "launcher": "experiments/campaigns/2026-08-05-bones129k-ablation-h200/submit_bones129k_ablation_ice.sh",
+  "cluster": "ICE (login-ice.pace.gatech.edu)",
+  "submitted_utc": "2026-08-05T11:19:00Z",
+  "task": "Isaac-Imitation-G1-v2",
+  "agent_entry_point": "rlopt_ipmd_tuned_cfg_entry_point",
+  "seed": 0,
+  "dataset": {
+    "reference_arrays": "/data/bones_seed_ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1",
+    "persist_id": "bones_seed_sonic_full_129785@e714bbff",
+    "motions": 129785,
+    "transitions": 47491234,
+    "anchor_body": "pelvis",
+    "tracked_bodies": 14,
+    "hf_repo": "GeorgiaTech/g1_bones_seed_sonic_129k_50hz_refarrays",
+    "note": "Reference arrays only. The 196 GiB Zarr and the 95 GiB replay are not on ICE and are not needed."
+  },
+  "encoder": {
+    "path": "/data/pretrain_store/bones129k_v2_root_qpos_det_sr_h10_z256_seed0/checkpoints/latest.pt",
+    "sha256": "d191d8656620059a569edbad82ca182cb2d2f85839300153cb618d1e29f8c5e7",
+    "frozen": true
+  },
+  "geometry": {
+    "num_envs": 16384,
+    "rollout_steps_default": 6,
+    "frame_cap": 8000000000,
+    "save_interval": 50000000,
+    "note": "FRAME_CAP is deliberately unreachable; the 16:00:00 partition wall ends every arm. TIMEOUT is safe because log_dir is under /data (persistent scratch), so loss is bounded by save_interval."
+  },
+  "slurm": {
+    "partition": "ice-gpu",
+    "qos": "coe-ice",
+    "gres": "gpu:h200:1",
+    "time_limit": "15:59:00",
+    "cpus_per_task": 16,
+    "mem": "160G"
+  },
+  "wandb": {
+    "project": "g1-lafan1",
+    "group": "bones129k-ablation"
+  },
+  "baseline": {
+    "source": "local 10B run, W&B 4ndjy36f, scored on the fixed protocol",
+    "protocol": "frame 0, --randomization none, MODE actions, 1024 envs, 500 steps",
+    "points": [
+      {
+        "frames": 350158848,
+        "mpjpe_mm": 25.8,
+        "success": 0.606,
+        "survival": 222.6
+      },
+      {
+        "frames": 2000093184,
+        "mpjpe_mm": 23.9,
+        "success": 0.668,
+        "survival": 235.7
+      },
+      {
+        "frames": 4025155584,
+        "mpjpe_mm": 23.4,
+        "success": 0.692,
+        "survival": 241.7
+      }
+    ],
+    "note": "Still descending at 4.03B at ~0.25 mm/B. An arm must beat the control at the SAME frame count and clear that drift."
+  },
+  "jobs": [
+    {
+      "job_id": 5567112,
+      "arm": "control",
+      "delta": null,
+      "backend": "newton_mjwarp",
+      "rollout": 6,
+      "state_at_record": "RUNNING"
+    },
+    {
+      "job_id": 5567113,
+      "arm": "physx",
+      "delta": "physics=physx",
+      "backend": "physx",
+      "rollout": 6,
+      "state_at_record": "DROPPED",
+      "failure": "Dropped 2026-08-05 after two failures at ~50 s: 5567113 on gpu:h200:1 and 5567121 on gpu:h100:1, the configuration proven by the 2026-08-03 physx 5B run. Neither the GPU nor the GPU policy guard is the cause -- the H100 log shows 'PhysX GPU policy accepted: NVIDIA H100 80GB HBM3' then 'AppLauncher initialization complete', so Kit starts on Hopper. The process exits after config parsing and before env construction with status 0 and no traceback; only the missing workload success marker reports it. The /isaac-sim/kit/data write errors are non-fatal noise. Reproduce interactively at --num_envs 64 before resubmitting.",
+      "retry_job_id": 5567121
+    },
+    {
+      "job_id": 5567114,
+      "arm": "reset_window50",
+      "delta": "env.command_interface.reference.selection.adaptive_pre_failure_window=50",
+      "backend": "newton_mjwarp",
+      "rollout": 6,
+      "state_at_record": "RUNNING"
+    },
+    {
+      "job_id": 5567115,
+      "arm": "reset_cap50",
+      "delta": "env.command_interface.reference.selection.adaptive_failure_rate_max_over_mean=50.0",
+      "backend": "newton_mjwarp",
+      "rollout": 6,
+      "state_at_record": "RUNNING"
+    },
+    {
+      "job_id": 5567116,
+      "arm": "entropy0",
+      "delta": "agent.ipmd.entropy_coeff=0.0",
+      "backend": "newton_mjwarp",
+      "rollout": 6,
+      "state_at_record": "RUNNING"
+    },
+    {
+      "job_id": 5567117,
+      "arm": "encoder_finetune",
+      "delta": "agent.ipmd.hl_skill_finetune_enabled=true agent.ipmd.hl_skill_lr=3e-05",
+      "backend": "newton_mjwarp",
+      "rollout": 6,
+      "state_at_record": "RUNNING"
+    },
+    {
+      "job_id": 5567118,
+      "arm": "gamma099",
+      "delta": "agent.loss.gamma=0.99",
+      "backend": "newton_mjwarp",
+      "rollout": 6,
+      "state_at_record": "RUNNING"
+    },
+    {
+      "job_id": 5567119,
+      "arm": "rollout24",
+      "delta": "rollout 6 -> 24, minibatch scaled 4x to hold update density",
+      "backend": "newton_mjwarp",
+      "rollout": 24,
+      "state_at_record": "RUNNING"
+    }
+  ],
+  "job_name_caveat": "Slurm job names are timestamp-derived (abl129k-YYYYMMDD-HHMM) and several arms share one, so the queue cannot attribute an arm. This file and agent.logger.log_dir are the mapping.",
+  "scoring": {
+    "protocol": "imitation_experiments.lowlevel.evaluate_checkpoint, --randomization none, frame 0, 1024 envs, 500 steps",
+    "compare_at": "the largest 50M-frame multiple every arm reached; arms end on the wall, not at equal frame counts",
+    "report": [
+      "mpjpe_l_mm",
+      "mpjpe_g_mm",
+      "anchor_pos_err_m",
+      "survival",
+      "tracking_success_rate"
+    ],
+    "warning": "completed_requested_horizon_rate is not a quality metric here: the median clip is 287 frames against a 500-step horizon, so most episodes end because the reference ran out. Never score arms on training-time curves -- under the sonic adaptive sampler they hid a real 25.8 -> 23.4 mm improvement."
+  },
+  "arms_running": 7,
+  "arms_dropped": [
+    "physx"
+  ]
+}

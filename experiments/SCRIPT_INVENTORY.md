@@ -25,6 +25,9 @@ Classes:
 
 | Path | Class | Responsibility |
 | --- | --- | --- |
+| `experiments/campaigns/2026-08-07-bones129k-latent-mode-stride5/run.sh` | guarded launcher | Smokes, validates, and submits three latent bottlenecks (deterministic, SONIC-FSQ64, group-Gumbel) at SONIC's stride-5 macro window, each with a dependent 5B G1-v2 controller on ICE. |
+| `experiments/campaigns/2026-08-06-bones129k-skill-encoding/run.sh` | guarded launcher | Smokes, validates, and submits three endpoint-factorization ablations with dependent frozen-encoder G1-v2 low-level jobs on ICE. |
+| `experiments/campaigns/2026-08-06-bones129k-skill-encoding/arms.sh` | library | Defines the occupancy, semi-Markov chain, and endpoint-delta encoder objectives shared by every campaign mode. |
 | `experiments/campaigns/2026-08-04-bones129k-v2-adaptive-10b/run.sh` | guarded launcher | Validates the fresh full replay cache and accepted root+qpos encoder, then launches the local 32,768 × 6 low-level-from-scratch run with full-trajectory adaptive resets under a 10B cap. |
 | `experiments/campaigns/2026-08-04-bones129k-v2-scale/run.sh` | guarded launcher | Runs the staged full-129,785-motion v2 DiffSR pretrain and completed local 32,768-environment 1B low-level scale probe. |
 | `experiments/campaigns/2026-07-22-bones-h10-scale/submit.sh` | front door | Dated wrapper for the retained BONES h10 scale screen. |
@@ -205,7 +208,22 @@ test now enforces that every `experiments/` script is classified.
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_enc380_h30_temporal_ensemble_ice.sh` | guarded launcher | Submits the H30 temporal-ensemble diagnostic to ICE. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/resubmit_enc380_root_route_ice.sh` | guarded launcher | Resubmits the enc380 root+qpos route cells after a partial run. |
 | `experiments/campaigns/2026-07-30-det-latent-e2e/run.sh` | front door | Dated pin of the deterministic-latent end-to-end chain; wraps `imitation_experiments.pipeline.run_latent_e2e` with the campaign config. |
+| `experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/run.sh` | front door | Prepares the frozen selected-ten language data, collects complete oracle-policy trajectories, pretrains the shared planner, and evaluates 2k-update milestones. |
+| `experiments/campaigns/2026-08-06-bones-language10-latent-receding/run.sh` | front door | Materializes matched three-token latent targets, trains the two H3 planners, evaluates the fixed seven-row overlap grid, and audits/aggregates the result. |
+| `experiments/campaigns/2026-08-06-bones-latent-compositionality/run.sh` | front door | Reproduces the selected-30 collection, semantic phases, cross-motion retrieval controls, phase-level clustering and trajectory traversal, 500-family reference scale test, and median-query neighbor galleries. |
 | `source/imitation_experiments/imitation_experiments/pipeline/run_latent_e2e.py` | workflow | Config-driven conductor for the latent chain: pretrain, low-level, binding gate, collect, merge, planner training, offline and closed-loop eval. |
+| `source/imitation_experiments/imitation_experiments/data/prepare_language_motion_selection.py` | library | Builds the ordered selected-motion manifest, canonical language sidecar, and provenance record. |
+| `source/imitation_experiments/imitation_experiments/planner/materialize_latent_receding_horizon.py` | library | Reuses complete-trajectory samples to build ordered H3 latent targets in future-publication or current-publication frames. |
+| `source/imitation_experiments/imitation_experiments/planner/latent_receding_horizon.py` | library | Executes overlapping H3 predictions with fresh-only, exponential, or clipped/gated latent fusion on a per-environment renewal schedule. |
+| `source/imitation_experiments/imitation_experiments/evaluation/aggregate_language_latent_receding.py` | audit/report | Enforces and ranks the fixed selected-ten seven-row latent receding-horizon evaluation grid. |
+| `source/imitation_experiments/imitation_experiments/pipeline/run_language_planner_oracle_pretrain.py` | workflow | Runs trajectory-first selected-ten collection, oracle-only planner pretraining, milestone evaluation, and plateau aggregation. |
+| `source/imitation_experiments/imitation_experiments/evaluation/analyze_collected_latent_space.py` | audit/report | Visualizes collected latent commands and runs phase-local and leave-one-motion-out semantic probes. |
+| `source/imitation_experiments/imitation_experiments/evaluation/analyze_cross_motion_latent_structure.py` | audit/report | Aggregates randomized replicas and measures cross-motion latent-to-kinematic retrieval, semantic transfer, and clustering without using t-SNE for metrics. |
+| `source/imitation_experiments/imitation_experiments/evaluation/analyze_semantic_latent_trajectories.py` | audit/report | Tests frozen shared semantic regions, leave-one-motion-out phase classification, unsupervised phase clustering, and time-ordered leave-and-return trajectories in latent PCA space. |
+| `source/imitation_experiments/imitation_experiments/evaluation/analyze_reference_latent_scale.py` | audit/report | Encodes canonical root-qpos windows from distinct BONES action families for the large reference-only locality control. |
+| `source/imitation_experiments/imitation_experiments/evaluation/build_semantic_phase_annotations.py` | library | Joins BONES temporal descriptions with complete manually curated semantic trait rows at exact 50 Hz steps. |
+| `source/imitation_experiments/imitation_experiments/evaluation/segment_semantic_phase_videos.py` | workflow | Cuts full-horizon comparison videos into frame-accurate semantic phase clips. |
+| `source/imitation_experiments/imitation_experiments/evaluation/build_latent_neighbor_gallery.py` | audit/report | Builds median-performance, distinct-motion video and contact-sheet galleries for cross-motion latent neighbors. |
 | `source/imitation_experiments/imitation_experiments/capacity/aggregate_frame0_dr_baseonly_results.py` | audit/report | Aggregates the frame0 domain-randomization base-only evaluation results. |
 | `source/imitation_experiments/imitation_experiments/capacity/aggregate_planner_budget_curve.py` | audit/report | Aggregates planner sample-budget curves across budget points and seeds. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/run_fb670_budget_curve.sh` | supporting study | Runs the FB670 explicit-packet planner sample-budget curve. |

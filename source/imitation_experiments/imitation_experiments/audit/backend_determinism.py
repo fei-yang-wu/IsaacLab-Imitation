@@ -40,11 +40,13 @@ __all__ = [
     "pin_reference_start",
 ]
 
-RANDOMIZATION_PROFILES = ("none", "startup", "reset", "all")
+RANDOMIZATION_PROFILES = ("none", "startup", "reset", "no_push", "all")
 """Randomization kept by :func:`apply_randomization_profile`.
 
 ``none`` is the only setting under which two backends are comparable; the
 others exist to attribute a gap to a specific randomization family.
+``no_push`` keeps startup and reset randomization while removing only the
+interval push.
 """
 
 # Startup-mode domain randomization (asset properties). Every one of these
@@ -174,8 +176,8 @@ def apply_randomization_profile(env_cfg: Any, profile: str) -> dict[str, bool]:
     if events is None:
         return {"startup": False, "reset": False, "push": False}
 
-    keep_startup = profile in ("startup", "all")
-    keep_reset = profile in ("reset", "all")
+    keep_startup = profile in ("startup", "no_push", "all")
+    keep_reset = profile in ("reset", "no_push", "all")
     keep_push = profile == "all"
 
     if not keep_startup:

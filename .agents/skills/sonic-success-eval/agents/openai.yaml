@@ -1,0 +1,4 @@
+interface:
+  display_name: "SONIC Success Evaluation"
+  short_description: "Evaluate randomized checkpoints without pushes"
+  default_prompt: "Use $sonic-success-eval to evaluate a low-level checkpoint with deterministic policy actions, startup/reset randomization, no push, completion-gated SONIC SR, and success-only MPJPE-L."

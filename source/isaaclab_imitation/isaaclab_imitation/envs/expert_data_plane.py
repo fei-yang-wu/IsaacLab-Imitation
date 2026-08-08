@@ -30,10 +30,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 import isaaclab.utils.math as math_utils
@@ -49,6 +52,7 @@ from isaaclab_imitation.envs.reference_arrays import (
     RUNTIME_FIELDS,
     ReferenceArrayStore,
     copy_to_device_parallel,
+    pack_cpu_fields_parallel,
 )
 from tensordict import TensorDict
 from torchrl.data.replay_buffers import TensorDictReplayBuffer
@@ -75,6 +79,21 @@ _METRES_TO_MM = 1000.0
 
 _PERSIST_MANIFEST_NAME = "iltools_rb_manifest.json"
 _PERSIST_FORMAT_VERSION = 1
+
+
+@dataclass
+class _ReferencePrefetchSlot:
+    """One persistent pinned-host/GPU staging pair."""
+
+    host_fields: dict[str, torch.Tensor]
+    device_fields: dict[str, torch.Tensor]
+    copy_start: torch.cuda.Event
+    copy_done: torch.cuda.Event
+    packed_host: torch.Tensor | None = None
+    packed_device: torch.Tensor | None = None
+    future: Future[None] | None = None
+    local_steps: torch.Tensor | None = None
+    gather_ms: float = 0.0
 
 
 def _get_mdp_compiled_module() -> Any:
@@ -233,12 +252,25 @@ class ExpertDataPlane:
         device = torch.device(cfg.sim.device)
         num_envs = int(cfg.scene.num_envs)
         self._reference_array_store: ReferenceArrayStore | None = None
+        self._reference_prefetch_mode = "off"
+        self._reference_prefetch_source: TensorDict | None = None
+        self._reference_prefetch_packed_source: torch.Tensor | None = None
+        self._reference_prefetch_executor: ThreadPoolExecutor | None = None
+        self._reference_prefetch_stream: torch.cuda.Stream | None = None
+        self._reference_prefetch_slots: list[_ReferencePrefetchSlot] = []
+        self._reference_prefetch_slot_index = 0
+        self._reference_prefetch_pending: _ReferencePrefetchSlot | None = None
+        self._reference_reset_prefetch_slot: _ReferencePrefetchSlot | None = None
+        self._reference_reset_prefetch_pending = False
+        self._reference_reset_prefetch_metrics: dict[str, float] = {}
+        self._reference_prefetch_metrics: dict[str, float] = {}
 
         # The dataset layout is derived by `MotionDataCfg.resolve`, which the
         # environment config runs before the env reaches here. Nothing about
         # what data to load is decided in this file: it consumes the resolved
         # answer, so the configuration and the load cannot disagree.
         data_cfg = cfg.data
+        self._reference_prefetch_mode = data_cfg.resolved_reference_prefetch_mode()
         resolved = cfg.resolved_data
         if resolved is None:
             raise ValueError(
@@ -257,6 +289,15 @@ class ExpertDataPlane:
         # reference-array directory's identity.
         reference_channel = cfg.command_interface.reference
         selection = reference_channel.selection
+        if self._reference_prefetch_mode == "next_and_reset" and not bool(
+            selection.full_trajectory
+        ):
+            raise ValueError(
+                "env.data.reference_prefetch_mode=next_and_reset requires "
+                "env.command_interface.reference.selection.full_trajectory=true. "
+                "Predictive reset staging snapshots one SONIC distribution that "
+                "owns both trajectory rank and start frame."
+            )
         reset_schedule = str(selection.schedule)
         custom_reset_fn = selection.custom_fn
         if reset_schedule == ResetSchedule.CUSTOM and custom_reset_fn is None:
@@ -265,6 +306,19 @@ class ExpertDataPlane:
                 "custom_fn(env_ids, num_trajectories) selector."
             )
         wrap_steps = bool(data_cfg.wrap_steps)
+        configured_reference_seed = getattr(selection, "rng_seed", None)
+        reference_seed_value = (
+            cfg.seed if configured_reference_seed is None else configured_reference_seed
+        )
+        if reference_seed_value is None:
+            raise ValueError(
+                "Reference/reset sampling needs a deterministic seed. Set cfg.seed "
+                "or env.command_interface.reference.selection.rng_seed."
+            )
+        reference_seed = int(reference_seed_value)
+        reset_generator = torch.Generator(device=device)
+        reset_generator.manual_seed(reference_seed)
+        self.reference_rng_seed = reference_seed
         # The env parses the reset-start frame once (`_reference_start_frame`);
         # the trajectory manager's initial cursor uses the same value.
         reference_start_frame = env._reference_start_frame
@@ -334,9 +388,11 @@ class ExpertDataPlane:
             reset_start_step=reference_start_frame,
             wrap_steps=wrap_steps,
             device=device,
+            reset_generator=reset_generator,
             reference_joint_names=reference_joint_names,
             target_joint_names=target_joint_names,
         )
+        logger.info("Reference/reset RNG seed: %d", reference_seed)
 
         # Get initial reference data (this also initializes env assignments)
         self.current_expert_frame: TensorDict = _convert_reference_quats_to_xyzw(
@@ -495,10 +551,18 @@ class ExpertDataPlane:
             )
 
         warm_workers = int(getattr(data_cfg, "reference_arrays_warm_workers", 8) or 0)
-        if cache_device.type == "cpu":
+        resident = bool(getattr(data_cfg, "reference_arrays_resident", False))
+        self._reference_prefetch_packed_source = None
+        if cache_device.type == "cpu" and not resident:
             # The mapping IS the cache: no private allocation, so resident bytes
             # are reclaimable page cache rather than anonymous memory, which
-            # matters beside a 32,768-environment scene.
+            # matters beside a 32,768-environment scene on a 125 GiB host.
+            #
+            # This is the wrong default on a shared cluster filesystem. Mapping
+            # defers reads to per-step page faults, and on Lustre those are
+            # random small reads -- its worst case. Measured 2026-08-05 on ICE:
+            # ~48 fps with three jobs cold-starting on one node against ~100,000
+            # fps locally. Set env.data.reference_arrays_resident=true there.
             fields = {name: store.array(name) for name in RUNTIME_FIELDS}
             if warm_workers > 0:
                 store.warm(RUNTIME_FIELDS, workers=warm_workers)
@@ -508,6 +572,44 @@ class ExpertDataPlane:
                 store.total_bytes / 1024**3,
                 store.directory,
             )
+        elif cache_device.type == "cpu":
+            self._require_host_memory_for(store.total_bytes, "reference arrays")
+            chunk_rows = int(getattr(data_cfg, "runtime_cache_chunk_size", 262_144))
+            source_fields = {name: store.array(name) for name in RUNTIME_FIELDS}
+            if self._reference_prefetch_mode == "off":
+                # Keep independently contiguous fields for the ordinary
+                # TensorDict sampling path. The row-packed layout is optimized
+                # for the fused async gather below and would make six fallback
+                # field gathers strided.
+                fields = {
+                    name: copy_to_device_parallel(
+                        source_fields[name],
+                        device=cache_device,
+                        workers=max(warm_workers, 1),
+                        chunk_rows=chunk_rows,
+                    )
+                    for name in RUNTIME_FIELDS
+                }
+                logger.warning(
+                    "Read %.1f GiB of reference arrays into resident host memory "
+                    "from %s; the filesystem is out of the loop from here.",
+                    store.total_bytes / 1024**3,
+                    store.directory,
+                )
+            else:
+                packed, fields = pack_cpu_fields_parallel(
+                    source_fields,
+                    names=RUNTIME_FIELDS,
+                    workers=max(warm_workers, 1),
+                    chunk_rows=chunk_rows,
+                )
+                self._reference_prefetch_packed_source = packed
+                logger.warning(
+                    "Read %.1f GiB of reference arrays into row-packed resident host "
+                    "memory from %s; live sampling uses one fused CPU gather.",
+                    packed.numel() * packed.element_size() / 1024**3,
+                    store.directory,
+                )
         else:
             fields = {
                 name: copy_to_device_parallel(
@@ -521,8 +623,10 @@ class ExpertDataPlane:
                 for name in RUNTIME_FIELDS
             }
             logger.warning(
-                "Materialized the runtime reference cache on %s from %s.",
-                cache_device,
+                "Read %.1f GiB of reference arrays into %s memory from %s; the "
+                "filesystem is out of the loop from here.",
+                store.total_bytes / 1024**3,
+                str(cache_device),
                 store.directory,
             )
 
@@ -537,6 +641,23 @@ class ExpertDataPlane:
             [],
             list(store.joint_names),
         )
+
+    def _require_host_memory_for(self, needed_bytes: int, what: str) -> None:
+        """Refuse a resident allocation the host cannot hold.
+
+        A 49.4 GB read that ends in the OOM killer wastes the Isaac startup and
+        reports as a bare exit code, so check first and name the number.
+        """
+        available = self._available_host_memory_bytes()
+        reserve = 16 * 1024**3
+        if available is not None and needed_bytes + reserve > available:
+            raise RuntimeError(
+                f"Insufficient host memory for resident {what}: need "
+                f"{needed_bytes / 1024**3:.1f} GiB plus a 16 GiB reserve, have "
+                f"{available / 1024**3:.1f} GiB available. Either drop "
+                "env.data.reference_arrays_resident (mapping instead of reading, "
+                "which is fine on local NVMe) or ask the scheduler for more memory."
+            )
 
     def _resolve_runtime_body_names(self, *, data_cfg: Any, cfg: Any) -> list[str]:
         """Ordered bodies the runtime reference cache must carry."""
@@ -584,6 +705,7 @@ class ExpertDataPlane:
         self._finalize_reference_body_names()
         self._initialize_mdp_fast_paths()
         self._initialize_mpjpe_metric()
+        self._initialize_reference_prefetch()
 
     # ------------------------------------------------------------------
     # Reference metadata / joint alignment.
@@ -1587,6 +1709,451 @@ class ExpertDataPlane:
     # Frame refresh.
     # ------------------------------------------------------------------
 
+    def _initialize_reference_prefetch(self) -> None:
+        """Allocate the persistent host/GPU slots for live next-frame staging."""
+        if self._reference_prefetch_mode == "off":
+            return
+        device = torch.device(self._env.device)
+        if device.type != "cuda":
+            logger.warning(
+                "reference_prefetch_mode=%s requested on %s; using the exact "
+                "single-fetch path because there is no host-to-CUDA transfer to overlap.",
+                self._reference_prefetch_mode,
+                device,
+            )
+            self._reference_prefetch_mode = "off"
+            return
+
+        storage = getattr(self.trajectory_manager.rb, "_storage", None)
+        source = getattr(storage, "_storage", None)
+        if not isinstance(source, TensorDict):
+            raise RuntimeError(
+                "reference prefetch requires tensor-backed replay storage. "
+                "Configure env.data.runtime_cache_device=cpu or use the "
+                "prebuilt reference arrays."
+            )
+        source_fields: dict[str, torch.Tensor] = {}
+        for key in source.keys():
+            value = source.get(key)
+            if not isinstance(key, str) or not isinstance(value, torch.Tensor):
+                raise RuntimeError(
+                    "reference prefetch currently requires flat tensor fields; "
+                    f"field {key!r} has type {type(value).__name__}. Materialize "
+                    "the compact runtime cache before enabling prefetch."
+                )
+            if value.device.type != "cpu":
+                logger.warning(
+                    "Reference storage is already on %s; disabling host-to-CUDA "
+                    "prefetch and retaining the exact single-fetch path.",
+                    value.device,
+                )
+                self._reference_prefetch_mode = "off"
+                return
+            source_fields[key] = value
+        if not source_fields:
+            raise RuntimeError("reference prefetch found no tensor fields to stage.")
+
+        packed_source = self._reference_prefetch_packed_source
+        packed_shapes: dict[str, tuple[int, ...]] | None = None
+        if packed_source is not None:
+            if packed_source.device.type != "cpu" or packed_source.ndim != 2:
+                raise RuntimeError(
+                    "The resident reference backing must be a 2D CPU tensor."
+                )
+            if set(source_fields) != set(RUNTIME_FIELDS):
+                raise RuntimeError(
+                    "The packed resident reference layout does not match the runtime fields."
+                )
+            packed_shapes = {
+                name: tuple(source_fields[name].shape[1:]) for name in RUNTIME_FIELDS
+            }
+
+        def _packed_views(buffer: torch.Tensor) -> dict[str, torch.Tensor]:
+            assert packed_shapes is not None
+            views: dict[str, torch.Tensor] = {}
+            offset = 0
+            for name in RUNTIME_FIELDS:
+                shape = packed_shapes[name]
+                width = math.prod(shape)
+                views[name] = buffer[:, offset : offset + width].view(
+                    buffer.shape[0], *shape
+                )
+                offset += width
+            if offset != buffer.shape[1]:
+                raise RuntimeError(
+                    "The packed reference width does not match its fields."
+                )
+            return views
+
+        num_envs = int(self._env.num_envs)
+        slots: list[_ReferencePrefetchSlot] = []
+        bytes_per_slot = 0
+        for _ in range(2):
+            packed_host: torch.Tensor | None = None
+            packed_device: torch.Tensor | None = None
+            if packed_source is not None:
+                packed_host = torch.empty(
+                    (num_envs, packed_source.shape[1]),
+                    dtype=packed_source.dtype,
+                    device="cpu",
+                    pin_memory=True,
+                )
+                packed_device = torch.empty_like(packed_host, device=device)
+                host_fields = _packed_views(packed_host)
+                device_fields = _packed_views(packed_device)
+                bytes_per_slot += packed_host.numel() * packed_host.element_size()
+            else:
+                host_fields = {}
+                device_fields = {}
+                for key, value in source_fields.items():
+                    shape = (num_envs, *tuple(value.shape[1:]))
+                    host = torch.empty(
+                        shape,
+                        dtype=value.dtype,
+                        device="cpu",
+                        pin_memory=True,
+                    )
+                    host_fields[key] = host
+                    device_fields[key] = torch.empty(
+                        shape, dtype=value.dtype, device=device
+                    )
+                    bytes_per_slot += host.numel() * host.element_size()
+            slots.append(
+                _ReferencePrefetchSlot(
+                    host_fields=host_fields,
+                    device_fields=device_fields,
+                    copy_start=torch.cuda.Event(enable_timing=True),
+                    copy_done=torch.cuda.Event(enable_timing=True),
+                    packed_host=packed_host,
+                    packed_device=packed_device,
+                )
+            )
+        # The loop counts both slots; halve for the per-slot log value.
+        bytes_per_slot //= 2
+        reset_bytes = 0
+        if self._reference_prefetch_mode == "next_and_reset":
+            reset_pool_size = int(self._env.cfg.data.reference_prefetch_reset_pool_size)
+            reset_packed_host: torch.Tensor | None = None
+            reset_packed_device: torch.Tensor | None = None
+            if packed_source is not None:
+                reset_packed_host = torch.empty(
+                    (reset_pool_size, packed_source.shape[1]),
+                    dtype=packed_source.dtype,
+                    device="cpu",
+                    pin_memory=True,
+                )
+                reset_packed_device = torch.empty_like(reset_packed_host, device=device)
+                reset_host_fields = _packed_views(reset_packed_host)
+                reset_device_fields = _packed_views(reset_packed_device)
+                reset_bytes = (
+                    reset_packed_host.numel() * reset_packed_host.element_size()
+                )
+            else:
+                reset_host_fields = {}
+                reset_device_fields = {}
+                for key, value in source_fields.items():
+                    shape = (reset_pool_size, *tuple(value.shape[1:]))
+                    host = torch.empty(
+                        shape,
+                        dtype=value.dtype,
+                        device="cpu",
+                        pin_memory=True,
+                    )
+                    reset_host_fields[key] = host
+                    reset_device_fields[key] = torch.empty(
+                        shape, dtype=value.dtype, device=device
+                    )
+                    reset_bytes += host.numel() * host.element_size()
+            self._reference_reset_prefetch_slot = _ReferencePrefetchSlot(
+                host_fields=reset_host_fields,
+                device_fields=reset_device_fields,
+                copy_start=torch.cuda.Event(enable_timing=True),
+                copy_done=torch.cuda.Event(enable_timing=True),
+                packed_host=reset_packed_host,
+                packed_device=reset_packed_device,
+            )
+        self._reference_prefetch_source = source
+        self._reference_prefetch_slots = slots
+        self._reference_prefetch_stream = torch.cuda.Stream(device=device)
+        self._reference_prefetch_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="reference-prefetch"
+        )
+        logger.warning(
+            "Reference prefetch enabled (%s): two %.1f MiB pinned-host/GPU slots%s.",
+            self._reference_prefetch_mode,
+            bytes_per_slot / 1024**2,
+            (
+                f" plus a {reset_bytes / 1024**2:.1f} MiB reset pool"
+                if reset_bytes > 0
+                else ""
+            ),
+        )
+
+    def _fill_reference_prefetch_slot(
+        self, slot: _ReferencePrefetchSlot, indices_cpu: torch.Tensor
+    ) -> None:
+        """Worker body: gather into pinned memory and enqueue one async H2D copy."""
+        source = self._reference_prefetch_source
+        stream = self._reference_prefetch_stream
+        if source is None or stream is None:
+            raise RuntimeError("reference prefetch was not initialized.")
+        gather_start = perf_counter()
+        packed_source = self._reference_prefetch_packed_source
+        if packed_source is not None:
+            if slot.packed_host is None:
+                raise RuntimeError("Packed reference prefetch has no host target.")
+            torch.index_select(packed_source, 0, indices_cpu, out=slot.packed_host)
+        else:
+            for key, target in slot.host_fields.items():
+                torch.index_select(source[key], 0, indices_cpu, out=target)
+        slot.gather_ms = (perf_counter() - gather_start) * 1000.0
+
+        device = torch.device(self._env.device)
+        with torch.cuda.device(device), torch.cuda.stream(stream):
+            slot.copy_start.record(stream)
+            if packed_source is not None:
+                if slot.packed_host is None or slot.packed_device is None:
+                    raise RuntimeError(
+                        "Packed reference prefetch has incomplete buffers."
+                    )
+                slot.packed_device.copy_(slot.packed_host, non_blocking=True)
+            else:
+                for key, target in slot.device_fields.items():
+                    target.copy_(slot.host_fields[key], non_blocking=True)
+            slot.copy_done.record(stream)
+
+    def begin_next_reference(self) -> None:
+        """Advance logical cursors and start staging their rows, without rereading T."""
+        if self._reference_prefetch_pending is not None:
+            raise RuntimeError("A reference prefetch is already pending.")
+        local_steps, global_indices = self.trajectory_manager.advance_cursors()
+        if self._reference_prefetch_mode == "off":
+            return
+
+        executor = self._reference_prefetch_executor
+        if executor is None or not self._reference_prefetch_slots:
+            raise RuntimeError("reference prefetch mode is enabled but has no worker.")
+        slot = self._reference_prefetch_slots[self._reference_prefetch_slot_index]
+        self._reference_prefetch_slot_index = (
+            self._reference_prefetch_slot_index + 1
+        ) % len(self._reference_prefetch_slots)
+        if slot.future is not None:
+            raise RuntimeError("Attempted to reuse a busy reference prefetch slot.")
+        slot.local_steps = local_steps.to(
+            device=self._env.device, dtype=torch.long, non_blocking=False
+        )
+        indices_cpu = global_indices.to(device="cpu", dtype=torch.long).contiguous()
+        slot.future = executor.submit(
+            self._fill_reference_prefetch_slot, slot, indices_cpu
+        )
+        self._reference_prefetch_pending = slot
+
+    @property
+    def reference_prefetch_mode(self) -> str:
+        """Resolved live-reference staging mode."""
+        return self._reference_prefetch_mode
+
+    def begin_predicted_reset_reference(
+        self, ranks: torch.Tensor, steps: torch.Tensor
+    ) -> None:
+        """Stage the fixed pre-physics reset-candidate pool."""
+        if self._reference_prefetch_mode != "next_and_reset":
+            return
+        slot = self._reference_reset_prefetch_slot
+        executor = self._reference_prefetch_executor
+        if slot is None or executor is None:
+            raise RuntimeError("predictive reset prefetch was not initialized.")
+        if self._reference_reset_prefetch_pending or slot.future is not None:
+            raise RuntimeError("A predictive reset prefetch is already pending.")
+        ranks = ranks.to(
+            device=self.trajectory_manager.state_device, dtype=torch.long
+        ).reshape(-1)
+        steps = steps.to(
+            device=self.trajectory_manager.state_device, dtype=torch.long
+        ).reshape(-1)
+        capacity = next(iter(slot.host_fields.values())).shape[0]
+        if ranks.shape != (capacity,) or steps.shape != (capacity,):
+            raise ValueError(
+                "predictive reset candidates must fill the configured pool; "
+                f"expected {(capacity,)}, got {tuple(ranks.shape)} and "
+                f"{tuple(steps.shape)}."
+            )
+        global_indices = self.trajectory_manager.global_indices_for(ranks, steps)
+        slot.local_steps = steps.to(device=self._env.device).clone()
+        indices_cpu = global_indices.to(device="cpu", dtype=torch.long).contiguous()
+        slot.future = executor.submit(
+            self._fill_reference_prefetch_slot, slot, indices_cpu
+        )
+        self._reference_reset_prefetch_pending = True
+
+    def _complete_reset_prefetch(self) -> tuple[_ReferencePrefetchSlot, float, float]:
+        slot = self._reference_reset_prefetch_slot
+        if (
+            slot is None
+            or not self._reference_reset_prefetch_pending
+            or slot.future is None
+        ):
+            raise RuntimeError("No predictive reset prefetch is pending.")
+        wait_start = perf_counter()
+        slot.future.result()
+        slot.copy_done.synchronize()
+        wait_ms = (perf_counter() - wait_start) * 1000.0
+        h2d_ms = float(slot.copy_start.elapsed_time(slot.copy_done))
+        return slot, wait_ms, h2d_ms
+
+    def consume_predicted_reset_reference(
+        self, env_ids: torch.Tensor, *, prefetched_count: int
+    ) -> None:
+        """Install predicted reset rows and synchronously fill only overflow rows."""
+        if self._reference_prefetch_mode != "next_and_reset":
+            self._refresh_current_expert_frame(env_ids, advance=False)
+            return
+        env_ids = env_ids.to(device=self._env.device, dtype=torch.long)
+        count = min(int(prefetched_count), int(env_ids.numel()))
+        slot, wait_ms, h2d_ms = self._complete_reset_prefetch()
+        if count > 0:
+            raw = TensorDict(
+                dict(slot.device_fields),
+                batch_size=[next(iter(slot.device_fields.values())).shape[0]],
+                device=self._env.device,
+            )
+            predicted = _convert_reference_quats_to_xyzw(
+                self.trajectory_manager.attach_reference_fields(raw, use_buffers=False)
+            )
+            predicted_env_ids = env_ids[:count]
+            self._index_copy_reference_rows_(
+                self.current_expert_frame,
+                predicted[:count],
+                predicted_env_ids,
+            )
+            current_steps = self.trajectory_manager.env_step.index_select(
+                0,
+                predicted_env_ids.to(
+                    device=self.trajectory_manager.state_device, dtype=torch.long
+                ),
+            )
+            self._current_reference_local_step.index_copy_(
+                0,
+                predicted_env_ids,
+                current_steps.to(device=self._env.device, dtype=torch.long),
+            )
+
+        overflow_ids = env_ids[count:]
+        if overflow_ids.numel() > 0:
+            self._refresh_current_expert_frame(overflow_ids, advance=False)
+        elif count > 0:
+            self._invalidate_mdp_cache()
+        self._reference_reset_prefetch_metrics = {
+            "ReferencePrefetch/reset_gather_ms": float(slot.gather_ms),
+            "ReferencePrefetch/reset_h2d_ms": h2d_ms,
+            "ReferencePrefetch/reset_wait_ms": wait_ms,
+            "ReferencePrefetch/reset_pool_hits": float(count),
+            "ReferencePrefetch/reset_pool_overflow": float(overflow_ids.numel()),
+        }
+        slot.future = None
+        slot.local_steps = None
+        self._reference_reset_prefetch_pending = False
+
+    def _discard_unused_reset_prefetch(self) -> None:
+        """Drain a reset pool on a step with no consumer so its slot is reusable."""
+        if not self._reference_reset_prefetch_pending:
+            return
+        slot, wait_ms, h2d_ms = self._complete_reset_prefetch()
+        self._reference_reset_prefetch_metrics = {
+            "ReferencePrefetch/reset_gather_ms": float(slot.gather_ms),
+            "ReferencePrefetch/reset_h2d_ms": h2d_ms,
+            "ReferencePrefetch/reset_wait_ms": wait_ms,
+            "ReferencePrefetch/reset_pool_hits": 0.0,
+            "ReferencePrefetch/reset_pool_overflow": 0.0,
+        }
+        slot.future = None
+        slot.local_steps = None
+        self._reference_reset_prefetch_pending = False
+
+    def finish_next_reference(self, override_env_ids: torch.Tensor) -> None:
+        """Install the staged next frame, preserving synchronously changed rows."""
+        if self._reference_prefetch_mode == "off":
+            self._refresh_current_expert_frame(advance=False)
+            return
+
+        self._discard_unused_reset_prefetch()
+
+        slot = self._reference_prefetch_pending
+        if slot is None or slot.future is None or slot.local_steps is None:
+            raise RuntimeError("No reference prefetch is pending.")
+        wait_start = perf_counter()
+        slot.future.result()
+        slot.copy_done.synchronize()
+        wait_ms = (perf_counter() - wait_start) * 1000.0
+        h2d_ms = float(slot.copy_start.elapsed_time(slot.copy_done))
+
+        raw = TensorDict(
+            dict(slot.device_fields),
+            batch_size=[self._env.num_envs],
+            device=self._env.device,
+        )
+        reference = _convert_reference_quats_to_xyzw(
+            self.trajectory_manager.attach_reference_fields(raw, use_buffers=False)
+        )
+        local_steps = slot.local_steps
+        override_env_ids = override_env_ids.to(
+            device=self._env.device, dtype=torch.long
+        )
+        if override_env_ids.numel() > 0:
+            # `_reset_idx` has already sampled and installed the new reset rows
+            # because reset events require them immediately. The full prefetch
+            # was planned before physics and therefore still carries the stale
+            # sequential rows at these ids; replace only those rows.
+            self._index_copy_reference_rows_(
+                reference,
+                self.current_expert_frame[override_env_ids],
+                override_env_ids,
+            )
+            local_steps.index_copy_(
+                0,
+                override_env_ids,
+                self._current_reference_local_step.index_select(0, override_env_ids),
+            )
+
+        self.current_expert_frame = reference
+        self._current_reference_local_step.copy_(local_steps)
+        self._invalidate_mdp_cache()
+        self._reference_prefetch_metrics = {
+            "ReferencePrefetch/gather_ms": float(slot.gather_ms),
+            "ReferencePrefetch/h2d_ms": h2d_ms,
+            "ReferencePrefetch/wait_ms": wait_ms,
+            "ReferencePrefetch/override_rows": float(override_env_ids.numel()),
+        }
+        self._reference_prefetch_metrics.update(self._reference_reset_prefetch_metrics)
+        self._reference_reset_prefetch_metrics = {}
+        slot.future = None
+        slot.local_steps = None
+        self._reference_prefetch_pending = None
+
+    def reference_prefetch_metrics(self) -> dict[str, float]:
+        """Return the most recent staging timings for the normal logging path."""
+        return dict(self._reference_prefetch_metrics)
+
+    def close(self) -> None:
+        """Drain and stop the persistent reference worker, if one was created."""
+        slot = self._reference_prefetch_pending
+        if slot is not None and slot.future is not None:
+            slot.future.result()
+            slot.copy_done.synchronize()
+        reset_slot = self._reference_reset_prefetch_slot
+        if (
+            reset_slot is not None
+            and self._reference_reset_prefetch_pending
+            and reset_slot.future is not None
+        ):
+            reset_slot.future.result()
+            reset_slot.copy_done.synchronize()
+        executor = self._reference_prefetch_executor
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=False)
+        self._reference_prefetch_executor = None
+        self._reference_prefetch_pending = None
+
     def _refresh_current_expert_frame(
         self, env_ids: torch.Tensor | None = None, *, advance: bool = False
     ) -> None:
@@ -1940,10 +2507,13 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict:
         """Sample an expert window from explicit trajectory ranks."""
         if past_steps < 0 or future_steps < 0:
             raise ValueError("Expert window steps must be >= 0.")
+        if int(frame_stride) < 1:
+            raise ValueError("Expert window frame_stride must be >= 1.")
         tm = self.trajectory_manager
         traj_ranks_tm = traj_ranks.to(device=tm.state_device, dtype=torch.long)
         local_steps_tm = local_steps.to(device=tm.state_device, dtype=torch.long)
@@ -1957,7 +2527,7 @@ class ExpertDataPlane:
             future_steps + 1,
             device=tm.state_device,
             dtype=torch.long,
-        )
+        ) * int(frame_stride)
         lengths = tm.length.index_select(0, traj_ranks_tm).clamp(min=1)
         max_step = lengths - 1
         window_steps = local_steps_tm.unsqueeze(1) + window_offsets.unsqueeze(0)
@@ -2215,10 +2785,13 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict | None:
         cache = self._ensure_root_qpos_macro_cache()
         if cache is None:
             return None
+        if int(frame_stride) < 1:
+            raise ValueError("Expert macro window frame_stride must be >= 1.")
         tm = self.trajectory_manager
         cache_device = cache["joint_pos"].device
         traj_ranks_t = traj_ranks.to(device=tm.state_device, dtype=torch.long)
@@ -2228,7 +2801,7 @@ class ExpertDataPlane:
             future_steps + 1,
             device=tm.state_device,
             dtype=torch.long,
-        )
+        ) * int(frame_stride)
         lengths = tm.length.index_select(0, traj_ranks_t).clamp(min=1)
         steps = local_steps_t.unsqueeze(1) + offsets.unsqueeze(0)
         steps = torch.minimum(steps.clamp(min=0), (lengths - 1).unsqueeze(1))
@@ -2252,11 +2825,16 @@ class ExpertDataPlane:
         past_steps: int,
         future_steps: int,
     ) -> TensorDict:
+        # One place decides the macro cadence, so every macro consumer -- DiffSR
+        # pretraining, the live low-level encoder input, and planner sample
+        # collection -- reads the same window. A caller cannot forget it.
+        frame_stride = self._expert_macro_frame_stride()
         compact = self._sample_root_qpos_macro_window_for_trajectory_ranks(
             traj_ranks,
             local_steps,
             past_steps=past_steps,
             future_steps=future_steps,
+            frame_stride=frame_stride,
         )
         if compact is not None:
             return compact
@@ -2265,6 +2843,7 @@ class ExpertDataPlane:
             local_steps,
             past_steps=past_steps,
             future_steps=future_steps,
+            frame_stride=frame_stride,
         )
 
     def _build_reward_input_cache(self, *, device: torch.device) -> None:
@@ -2363,10 +2942,13 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict:
         """Sample an oldest-to-newest expert window around each requested step."""
         if past_steps < 0 or future_steps < 0:
             raise ValueError("Expert window steps must be >= 0.")
+        if int(frame_stride) < 1:
+            raise ValueError("Expert window frame_stride must be >= 1.")
         tm = self.trajectory_manager
         env_ids_tm = env_ids.to(device=tm.state_device, dtype=torch.long)
         local_steps_tm = local_steps.to(device=tm.state_device, dtype=torch.long)
@@ -2375,7 +2957,7 @@ class ExpertDataPlane:
             future_steps + 1,
             device=tm.state_device,
             dtype=torch.long,
-        )
+        ) * int(frame_stride)
         window_steps = local_steps_tm.unsqueeze(1) + window_offsets.unsqueeze(0)
         window_steps = window_steps.clamp(min=0)
         expert_window = tm.sample_slice(
@@ -2754,6 +3336,22 @@ class ExpertDataPlane:
             "expert_anchor_ori_b",
         )
 
+    def _expert_macro_frame_stride(self) -> int:
+        """Reference frames between consecutive DiffSR macro-window slots.
+
+        1 is the historical consecutive-frame window (10 slots = 0.18 s at
+        50 Hz). 5 is SONIC's released tokenizer cadence, which spaces the same
+        10 slots 0.1 s apart for a 0.9 s span. The macro state's WIDTH is
+        unchanged either way, so nothing downstream can detect a mismatch from
+        a shape: the skill checkpoint records this value and the low level
+        refuses an encoder pretrained at a different stride.
+        """
+        configured = getattr(self._env.cfg, "expert_macro_frame_stride", 1)
+        stride = int(configured)
+        if stride < 1:
+            raise ValueError("expert_macro_frame_stride must be >= 1.")
+        return stride
+
     def _expert_macro_state_sequence_from_terms(
         self,
         terms: dict[str, torch.Tensor],
@@ -2861,6 +3459,7 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
         reference_body_names: Sequence[str] = (),
@@ -2871,6 +3470,7 @@ class ExpertDataPlane:
         cache_key = (
             int(past_steps),
             int(future_steps),
+            int(frame_stride),
             str(anchor_body_name),
             self._joint_ids_cache_key(joint_ids_t),
             reference_body_names_t,
@@ -2888,6 +3488,7 @@ class ExpertDataPlane:
             local_steps,
             past_steps=int(past_steps),
             future_steps=int(future_steps),
+            frame_stride=int(frame_stride),
         )
         cached_terms = self._build_expert_window_terms(
             expert_window,
@@ -2907,6 +3508,7 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
         reference_body_names: Sequence[str] = (),
@@ -2915,6 +3517,7 @@ class ExpertDataPlane:
         value = self._get_current_expert_window_terms(
             past_steps=int(past_steps),
             future_steps=int(future_steps),
+            frame_stride=int(frame_stride),
             joint_ids=joint_ids,
             anchor_body_name=anchor_body_name,
             reference_body_names=reference_body_names,
@@ -2994,6 +3597,7 @@ class ExpertDataPlane:
         global_indices: torch.Tensor | None = None,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> dict[Any, torch.Tensor] | None:
         mapped_values: dict[Any, torch.Tensor] = {}
         unknown_terms: list[str] = []
@@ -3038,6 +3642,7 @@ class ExpertDataPlane:
                 cache_key = (
                     int(past_steps),
                     int(future_steps),
+                    int(frame_stride),
                     self._expert_anchor_body_name,
                     ("all",),
                     reference_body_names,
@@ -3048,6 +3653,7 @@ class ExpertDataPlane:
                         local_steps,
                         past_steps=int(past_steps),
                         future_steps=int(future_steps),
+                        frame_stride=int(frame_stride),
                     )
                     window_terms_cache[cache_key] = self._build_expert_window_terms(
                         expert_window,
@@ -3128,6 +3734,7 @@ class ExpertDataPlane:
                     cache_key = (
                         int(past_steps),
                         int(future_steps),
+                        int(frame_stride),
                         self._expert_anchor_body_name,
                         ("all",),
                         reference_body_names,
@@ -3138,6 +3745,7 @@ class ExpertDataPlane:
                             local_steps,
                             past_steps=int(past_steps),
                             future_steps=int(future_steps),
+                            frame_stride=int(frame_stride),
                         )
                         window_terms_cache[cache_key] = self._build_expert_window_terms(
                             expert_window,
@@ -3193,6 +3801,7 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict | None:
         if batch_size <= 0:
             return None
@@ -3257,6 +3866,7 @@ class ExpertDataPlane:
                 global_indices=current_global_indices,
                 past_steps=int(past_steps),
                 future_steps=int(future_steps),
+                frame_stride=int(frame_stride),
             )
             if mapped_current is None:
                 return None
@@ -3285,6 +3895,7 @@ class ExpertDataPlane:
                 global_indices=next_global_indices,
                 past_steps=int(past_steps),
                 future_steps=int(future_steps),
+                frame_stride=int(frame_stride),
             )
             if mapped_next is None:
                 return None
@@ -3326,6 +3937,7 @@ class ExpertDataPlane:
             required_keys,
             past_steps=int(self._env._latent_patch_past_steps),
             future_steps=int(self._env._latent_patch_future_steps),
+            frame_stride=int(getattr(self._env, "_latent_patch_frame_stride", 1)),
         )
 
     def sample_expert_macro_transition_batch(
@@ -3560,6 +4172,9 @@ class ExpertDataPlane:
         traj_rank = tm.env_traj_rank.index_select(
             0, env_ids_t.to(device=tm.state_device, dtype=torch.long)
         ).to(device=self._env.device, dtype=torch.long)
+        trajectory_length = tm._length.index_select(
+            0, traj_rank.to(device=tm.state_device, dtype=torch.long)
+        ).to(device=self._env.device, dtype=torch.long)
         expert_window = self._sample_expert_macro_window_for_trajectory_ranks(
             traj_rank.to(device=tm.state_device, dtype=torch.long),
             local_steps.to(device=tm.state_device, dtype=torch.long),
@@ -3621,6 +4236,7 @@ class ExpertDataPlane:
             "target": target,
             "traj_rank": traj_rank,
             "local_step": local_steps,
+            "trajectory_length": trajectory_length,
         }
         if state_history is not None:
             expected_history = (batch_size, state_history_steps + 1, state_dim)

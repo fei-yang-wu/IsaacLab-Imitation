@@ -165,6 +165,27 @@ def test_profile_startup_keeps_asset_randomization_but_drops_pushes():
     assert cfg.events.reset_reference_state.params["joint_position_range"] == (0.0, 0.0)
 
 
+def test_profile_no_push_keeps_startup_and_reset_randomization():
+    cfg = _V2Cfg()
+    kept = apply_randomization_profile(cfg, "no_push")
+    assert kept == {"startup": True, "reset": True, "push": False}
+    events = cfg.events
+    assert events.physics_material is not None
+    assert events.add_joint_default_pos is not None
+    assert events.base_com is not None
+    assert events.randomize_rigid_body_mass is not None
+    assert events.push_robot is None
+    assert events.reset_reference_state.params["pose_range"] == {
+        "x": (-0.05, 0.05),
+        "yaw": (-0.2, 0.2),
+    }
+    assert events.reset_reference_state.params["velocity_range"] == {"x": (-0.5, 0.5)}
+    assert events.reset_reference_state.params["joint_position_range"] == (
+        -0.1,
+        0.1,
+    )
+
+
 def test_profile_all_changes_nothing():
     cfg = _V2Cfg()
     kept = apply_randomization_profile(cfg, "all")

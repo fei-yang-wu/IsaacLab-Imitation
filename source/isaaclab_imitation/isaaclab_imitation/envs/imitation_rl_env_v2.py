@@ -98,9 +98,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         )
         # Window the offline expert-batch mapper serves policy command keys at:
         # the skill encoder's view when there is one, else the actor's own.
-        past_steps, future_steps = command_interface.expert_batch_window()
+        past_steps, future_steps, frame_stride = command_interface.expert_batch_window()
         self._latent_patch_past_steps = int(past_steps)
         self._latent_patch_future_steps = int(future_steps)
+        self._latent_patch_frame_stride = int(frame_stride)
         self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
         if self._latent_goal_steps < 0:
             raise ValueError("latent_goal_steps must be >= 0.")
@@ -376,6 +377,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     ) -> TensorDict | None:
         return self.expert_data_plane.sample_expert_batch(batch_size, required_keys)
 
+    def expert_macro_frame_stride(self) -> int:
+        """Reference frames between consecutive DiffSR macro-window slots.
+
+        Published so a consumer that pairs a pretrained skill encoder with this
+        environment can refuse a stride the encoder was not trained on. The
+        macro state's width is identical at every stride, so this is the only
+        way that mismatch can be detected.
+        """
+        return self.expert_data_plane._expert_macro_frame_stride()
+
     def sample_expert_macro_transition_batch(
         self,
         batch_size: int,
@@ -435,6 +446,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
         reference_body_names: Sequence[str] = (),
@@ -444,6 +456,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             term_name,
             past_steps=past_steps,
             future_steps=future_steps,
+            frame_stride=frame_stride,
             joint_ids=joint_ids,
             anchor_body_name=anchor_body_name,
             reference_body_names=reference_body_names,
@@ -878,11 +891,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # reset (zeroing a stale published command) happens inside
         # `command_manager.reset`, which `super()._reset_idx` triggers.
         self._reference_term.record_failures(env_ids)
-        self._reference_term.resample_reference(env_ids)
+        prefetched_reset_count = self._reference_term.resample_reference(env_ids)
 
         # Refresh only the resetting rows before reset events consume
         # current_expert_frame.
-        self._refresh_current_expert_frame(env_ids, advance=False)
+        if prefetched_reset_count > 0:
+            self.expert_data_plane.consume_predicted_reset_reference(
+                env_ids, prefetched_count=prefetched_reset_count
+            )
+        else:
+            self._refresh_current_expert_frame(env_ids, advance=False)
 
         # Trigger the reset events (curriculum, sensors, managers, etc.) using
         # tensor indices.
@@ -922,22 +940,45 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if self.replay_only:
             return self._step_replay_only(action)
 
-        # Get next reference data point (advance=True to move to next step)
-        self._refresh_current_expert_frame(advance=True)
+        # The returned frame from the preceding step is already the reward
+        # frame for this one. Advance the logical cursors without rereading it,
+        # and (when configured) stage the next rows while physics runs.
+        self.expert_data_plane.begin_next_reference()
         # Record the pre-step cursor as a visit in the SONIC failure sampler
         # (the reference channel owns the sampler; the timing-critical call
         # site stays here, before the physics step).
         self._reference_term.record_visits()
+        self._reference_term.prepare_predicted_resets()
         self._step_core(action)
         rollout_state_log = self._compute_rollout_reference_state_log()
         if rollout_state_log:
             self.extras.setdefault("log", {}).update(rollout_state_log)
         self._apply_reference_replay_targets()
-        # Match IsaacLab command timing: reward/logging use the pre-step
-        # reference frame, while returned observations expose the next frame.
-        # The pre-step sample already advanced the trajectory cursor, so this
-        # refresh must not advance again.
-        self._refresh_current_expert_frame(advance=False)
+        # Match IsaacLab command timing: reward/logging used the pre-step frame,
+        # while returned observations expose the next frame. Reset rows were
+        # refreshed synchronously inside `_reset_idx`; the data plane patches
+        # those over any stale sequential rows in the prefetched full batch.
+        reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        override_env_ids = reset_env_ids
+        if (
+            self._reference_replay_targets_enabled
+            and self._reference_replay_target_env_ids is not None
+        ):
+            override_env_ids = torch.unique(
+                torch.cat(
+                    (
+                        reset_env_ids,
+                        self._reference_replay_target_env_ids.to(
+                            device=self.device, dtype=torch.long
+                        ),
+                    )
+                )
+            )
+        self.expert_data_plane.finish_next_reference(override_env_ids)
+        self._reference_term.finish_predicted_reset_step()
+        prefetch_log = self.expert_data_plane.reference_prefetch_metrics()
+        if prefetch_log:
+            self.extras.setdefault("log", {}).update(prefetch_log)
         self._append_causal_planner_history()
         # The single observation compute of the step, at the returned frame.
         self.obs_buf = self.observation_manager.compute(update_history=True)
@@ -1067,12 +1108,11 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         self.action_manager.process_action(action.to(self.device))
         self.recorder_manager.record_pre_step()
 
-        # Sample the current reference frame and advance the internal step by
-        # exactly one. `sample(advance=True)` returns frame t and then
-        # increments to t+1. This avoids double-advance while keeping reward
-        # computation aligned with frame t.
-        self._refresh_current_expert_frame(advance=True)
+        # The current frame is already resident from the preceding returned
+        # observation. Advance without rereading it and stage t+1.
+        self.expert_data_plane.begin_next_reference()
         self._reference_term.record_visits()
+        self._reference_term.prepare_predicted_resets()
         self._replay_reference()
         self.scene.update(dt=0.0)
 
@@ -1141,9 +1181,12 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if "interval" in self.event_manager.available_modes:
             self.event_manager.apply(mode="interval", dt=self.step_dt)
         # Expose post-step reference (frame t+1) for observations/outputs,
-        # matching ManagerBasedRLEnv command timing after
-        # command_manager.compute().
-        self._refresh_current_expert_frame(advance=False)
+        # matching ManagerBasedRLEnv command timing after command computation.
+        self.expert_data_plane.finish_next_reference(reset_env_ids)
+        self._reference_term.finish_predicted_reset_step()
+        prefetch_log = self.expert_data_plane.reference_prefetch_metrics()
+        if prefetch_log:
+            self.extras.setdefault("log", {}).update(prefetch_log)
         self._append_causal_planner_history()
         # -- compute observations
         # note: done after reset to get the correct observations for reset envs
@@ -1156,6 +1199,13 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self.reset_time_outs,
             self.extras,
         )
+
+    def close(self) -> None:
+        """Drain the reference worker before releasing the simulator."""
+        try:
+            self.expert_data_plane.close()
+        finally:
+            super().close()
 
 
 # Back-compat alias: the pre-flip (2026-08-01) `-G1-v2` registration and any

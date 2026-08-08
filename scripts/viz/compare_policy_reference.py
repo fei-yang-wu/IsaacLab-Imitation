@@ -117,6 +117,16 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--disable_push_event",
+    action="store_true",
+    default=False,
+    help=(
+        "Disable only the interval push event. Pair with "
+        "--keep_domain_randomization to retain startup/reset randomization "
+        "while removing pushes."
+    ),
+)
+parser.add_argument(
     "--policy_trajectory_rank",
     type=int,
     default=None,
@@ -184,6 +194,36 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--latent_temporal_ensemble",
+    choices=("first", "exponential", "clipped_gated"),
+    default="first",
+    help="Reduce an ordered three-token H30 latent planner to the current H10 command.",
+)
+parser.add_argument(
+    "--latent_temporal_ensemble_decay",
+    type=float,
+    default=0.5,
+    help="Exponential age decay for aligned H30 latent forecasts.",
+)
+parser.add_argument(
+    "--latent_temporal_clip_std",
+    type=float,
+    default=1.0,
+    help="Per-feature residual clip in clipped_gated mode, in training std units.",
+)
+parser.add_argument(
+    "--latent_temporal_gate_distance",
+    type=float,
+    default=2.0,
+    help="Normalized RMS rejection threshold for stale H30 forecasts.",
+)
+parser.add_argument(
+    "--latent_temporal_gate_cosine",
+    type=float,
+    default=0.5,
+    help="Cosine-agreement rejection threshold for stale H30 forecasts.",
+)
+parser.add_argument(
     "--fall_height",
     type=float,
     default=0.4,
@@ -237,6 +277,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import IPMD, PPO, SAC
+from rlopt.agent.skill_commander import FrozenSkillCommanderSampler
 from tensordict.nn import InteractionType
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
@@ -249,6 +290,9 @@ import isaaclab_imitation.tasks  # noqa: F401
 # lane (see --keep_domain_randomization).
 from imitation_experiments.provenance.paper_protocol_metadata import (
     disable_domain_randomization,
+)
+from imitation_experiments.planner.latent_receding_horizon import (
+    install_latent_receding_horizon,
 )
 
 ALGORITHM_CLASS_MAP = {
@@ -516,6 +560,17 @@ def _disable_reward_terms(env_cfg) -> None:
             "[INFO] Disabled comparison reward terms: "
             + ", ".join(sorted(disabled_terms))
         )
+
+
+def _disable_push_event(env_cfg) -> bool:
+    """Remove only the interval push while preserving other randomization."""
+    events_cfg = getattr(env_cfg, "events", None)
+    was_enabled = bool(
+        events_cfg is not None and getattr(events_cfg, "push_robot", None) is not None
+    )
+    if events_cfg is not None and hasattr(events_cfg, "push_robot"):
+        events_cfg.push_robot = None
+    return was_enabled
 
 
 def _ordered_trajectories(base_env: ImitationEnv) -> list[tuple[str, str, str]]:
@@ -946,10 +1001,17 @@ def main(
     else:
         _disable_reward_terms(env_cfg)
     if args_cli.keep_domain_randomization:
-        print(
-            "[INFO] Keeping domain randomization / interval pushes enabled "
-            "(rollout will be stochastic and env-count dependent)."
-        )
+        if args_cli.disable_push_event:
+            push_was_enabled = _disable_push_event(env_cfg)
+            print(
+                "[INFO] Keeping startup/reset domain randomization but disabling "
+                f"the interval push event (enabled before override={push_was_enabled})."
+            )
+        else:
+            print(
+                "[INFO] Keeping domain randomization / interval pushes enabled "
+                "(rollout will be stochastic and env-count dependent)."
+            )
     else:
         _dr_record = disable_domain_randomization(env_cfg)
         print(
@@ -1100,7 +1162,93 @@ def main(
     role_markers = _create_role_markers()
 
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
-    agent = agent_class(env=env, config=agent_cfg)
+    ipmd_cfg = getattr(agent_cfg, "ipmd", None)
+    command_source = str(getattr(ipmd_cfg, "command_source", ""))
+    h30_planner = False
+    if command_source == "skill_commander":
+        planner_path = Path(
+            str(getattr(ipmd_cfg, "skill_commander_checkpoint_path", ""))
+        ).expanduser()
+        planner_payload = torch.load(
+            planner_path, map_location="cpu", weights_only=False
+        )
+        target_spec = planner_payload.get("target_spec", {})
+        term_widths = tuple(int(width) for width in target_spec.get("term_widths", ()))
+        h30_planner = (
+            len(term_widths) == 3
+            and len(set(term_widths)) == 1
+            and int(target_spec.get("target_dim", 0)) == sum(term_widths)
+        )
+        if term_widths and int(target_spec.get("target_dim", 0)) not in {
+            int(term_widths[0]),
+            3 * int(term_widths[0]),
+        }:
+            raise ValueError(
+                "SkillCommander checkpoint must contain one latent token or an "
+                f"ordered H30 triplet, got target_spec={target_spec}."
+            )
+
+    if h30_planner:
+        # TorchRL probes collector_policy inside the agent constructor. Bootstrap
+        # that unscored probe with the valid H10 oracle sampler; the H30
+        # SkillCommander plus reducer is installed immediately afterward and
+        # before the first evaluated reset or simulator step.
+        ipmd_cfg.command_source = "hl_skill"
+    try:
+        agent = agent_class(env=env, config=agent_cfg)
+    finally:
+        if h30_planner:
+            ipmd_cfg.command_source = command_source
+    if h30_planner:
+        commander_overrides: dict[str, object] = {}
+        if int(ipmd_cfg.skill_commander_flow_num_inference_steps) > 0:
+            commander_overrides["flow_num_inference_steps"] = int(
+                ipmd_cfg.skill_commander_flow_num_inference_steps
+            )
+        if float(ipmd_cfg.skill_commander_flow_inference_noise_std) >= 0.0:
+            commander_overrides["flow_inference_noise_std"] = float(
+                ipmd_cfg.skill_commander_flow_inference_noise_std
+            )
+        if int(ipmd_cfg.skill_commander_diffusion_num_inference_steps) > 0:
+            commander_overrides["diffusion_num_inference_steps"] = int(
+                ipmd_cfg.skill_commander_diffusion_num_inference_steps
+            )
+        if str(ipmd_cfg.skill_commander_diffusion_inference_scheduler):
+            commander_overrides["diffusion_inference_scheduler"] = str(
+                ipmd_cfg.skill_commander_diffusion_inference_scheduler
+            )
+        if float(ipmd_cfg.skill_commander_diffusion_ddim_eta) >= 0.0:
+            commander_overrides["diffusion_ddim_eta"] = float(
+                ipmd_cfg.skill_commander_diffusion_ddim_eta
+            )
+        if float(ipmd_cfg.skill_commander_diffusion_inference_noise_std) >= 0.0:
+            commander_overrides["diffusion_inference_noise_std"] = float(
+                ipmd_cfg.skill_commander_diffusion_inference_noise_std
+            )
+        agent._hl_skill_command_sampler = FrozenSkillCommanderSampler(
+            env=agent.env,
+            checkpoint_path=str(ipmd_cfg.skill_commander_checkpoint_path),
+            language_embeddings_path=str(ipmd_cfg.skill_commander_embeddings_path),
+            latent_dim=int(ipmd_cfg.latent_dim),
+            latent_steps_min=int(ipmd_cfg.latent_steps_min),
+            latent_steps_max=int(ipmd_cfg.latent_steps_max),
+            generator_config_overrides=commander_overrides,
+            horizon_steps=(
+                int(ipmd_cfg.hl_skill_horizon_steps)
+                if int(ipmd_cfg.hl_skill_horizon_steps) > 0
+                else None
+            ),
+            command_phase_mode=str(ipmd_cfg.latent_learning.command_phase_mode),
+            code_latent_dim=int(ipmd_cfg.latent_learning.code_latent_dim),
+            phase_period=int(ipmd_cfg.latent_learning.code_period),
+            command_mode=str(ipmd_cfg.hl_skill_command_mode),
+            use_achieved_state=bool(ipmd_cfg.skill_commander_use_achieved_state),
+            goal_name=str(ipmd_cfg.skill_commander_goal_name),
+            goal_rank=int(ipmd_cfg.skill_commander_goal_rank),
+            discover_env_method=agent._discover_env_method,
+            device=agent._get_device(agent.config.device),
+        )
+        agent._command_source = command_source
 
     print(f"[INFO] Loading checkpoint: {checkpoint_path}")
     # This comparison is inference-only, so optimizer state is irrelevant. Some
@@ -1136,6 +1284,55 @@ def main(
         os.unlink(_tmp.name)
     else:
         agent.load_model(checkpoint_path)
+
+    command_sampler = getattr(agent, "_hl_skill_command_sampler", None)
+    # ``hl_skill`` also installs an encoder-backed command sampler, but only a
+    # SkillCommander sampler owns a planner generator/output width.  Restrict
+    # H30 validation to the planner path so ordinary oracle-command playback
+    # does not try to inspect nonexistent planner fields.
+    if command_source == "skill_commander" and command_sampler is not None:
+        generator = getattr(command_sampler, "generator", None)
+        target_std = getattr(generator, "target_std", None)
+        latent_width = int(getattr(command_sampler, "skill_z_dim", 0))
+        planner_target_dim = int(getattr(generator, "target_dim", 0)) or (
+            int(target_std.numel()) if isinstance(target_std, torch.Tensor) else 0
+        )
+        if latent_width <= 0 or planner_target_dim <= 0:
+            raise ValueError(
+                "Could not infer the SkillCommander latent and planner output widths."
+            )
+        if planner_target_dim == 3 * latent_width:
+            install_latent_receding_horizon(
+                command_sampler,
+                env=base_env,
+                token_count=3,
+                token_width=latent_width,
+                mode=str(args_cli.latent_temporal_ensemble),
+                decay=float(args_cli.latent_temporal_ensemble_decay),
+                clip_std=float(args_cli.latent_temporal_clip_std),
+                gate_distance=float(args_cli.latent_temporal_gate_distance),
+                gate_cosine=float(args_cli.latent_temporal_gate_cosine),
+            )
+            print(
+                "[INFO] H30 latent command fusion: "
+                f"mode={args_cli.latent_temporal_ensemble}, "
+                f"decay={args_cli.latent_temporal_ensemble_decay}."
+            )
+        elif planner_target_dim != latent_width:
+            raise ValueError(
+                "SkillCommander planner output must be one latent token or an "
+                f"ordered H30 triplet; got {planner_target_dim} values for "
+                f"latent width {latent_width}."
+            )
+        elif str(args_cli.latent_temporal_ensemble) != "first":
+            raise ValueError(
+                "Latent temporal ensembling requires an ordered H30 planner; "
+                f"this planner predicts {planner_target_dim} values."
+            )
+    elif str(args_cli.latent_temporal_ensemble) != "first":
+        raise ValueError(
+            "Latent temporal ensembling requires command_source=skill_commander."
+        )
 
     collector_policy = agent.collector_policy
     collector_policy.eval()

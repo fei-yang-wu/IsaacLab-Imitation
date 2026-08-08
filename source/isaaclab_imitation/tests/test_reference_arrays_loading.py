@@ -18,7 +18,7 @@ import torch
 
 from imitation_experiments.data.build_reference_arrays import build_reference_arrays
 from isaaclab_imitation.envs.expert_data_plane import ExpertDataPlane
-from isaaclab_imitation.envs.reference_arrays import ReferenceArrayStore
+from isaaclab_imitation.envs.reference_arrays import RUNTIME_FIELDS, ReferenceArrayStore
 from isaaclab_imitation.tasks.manager_based.imitation.motion_data import MotionDataCfg
 
 
@@ -73,9 +73,16 @@ def built(tmp_path: Path) -> tuple[Path, Path]:
     return manifest, output_dir
 
 
-def _plane(output_dir: Path, *, warm_workers: int = 2) -> ExpertDataPlane:
+def _plane(
+    output_dir: Path,
+    *,
+    warm_workers: int = 2,
+    resident: bool = False,
+    prefetch_mode: str = "off",
+) -> ExpertDataPlane:
     plane = ExpertDataPlane.__new__(ExpertDataPlane)
     plane._expert_anchor_body_name = ANCHOR
+    plane._reference_prefetch_mode = prefetch_mode
     data_cfg = SimpleNamespace(
         runtime_cache_body_names=list(TRACKED),
         runtime_cache_device="cpu",
@@ -83,6 +90,7 @@ def _plane(output_dir: Path, *, warm_workers: int = 2) -> ExpertDataPlane:
         storage_device="cpu",
         persist_id=PERSIST_ID,
         reference_arrays_warm_workers=warm_workers,
+        reference_arrays_resident=resident,
         macro_cache_chunk_size=4,
         macro_cache_device="cpu",
     )
@@ -194,6 +202,55 @@ def test_worker_count_does_not_change_what_is_loaded(built) -> None:
         assert torch.equal(serial[key], parallel[key]), key
 
 
+def test_resident_mode_reads_the_same_values_but_owns_its_memory(built) -> None:
+    """Resident and mapped must agree exactly; only the storage differs.
+
+    Mapping defers reads to per-step page faults, which on a network filesystem
+    is random small I/O and collapses throughput. Resident mode reads once,
+    sequentially, and then never touches the filesystem -- but it is only worth
+    having if the values are identical.
+    """
+    _manifest, output_dir = built
+    mapped = _load(_plane(output_dir), output_dir)[0]._storage._storage
+    resident_plane = _plane(output_dir, resident=True, prefetch_mode="next")
+    resident = _load(resident_plane, output_dir)[0]._storage._storage
+
+    for key in mapped.keys():
+        assert torch.equal(mapped[key], resident[key]), key
+
+    # The mapped tensors share file-backed storage; the resident ones do not.
+    assert resident["qpos"].untyped_storage().data_ptr() != (
+        mapped["qpos"].untyped_storage().data_ptr()
+    )
+    packed = resident_plane._reference_prefetch_packed_source
+    assert packed is not None
+    assert packed.is_contiguous()
+    for key in RUNTIME_FIELDS:
+        assert resident[key].untyped_storage().data_ptr() == (
+            packed.untyped_storage().data_ptr()
+        )
+
+
+def test_resident_mode_without_async_prefetch_keeps_contiguous_fields(built) -> None:
+    _manifest, output_dir = built
+    plane = _plane(output_dir, resident=True)
+    resident = _load(plane, output_dir)[0]._storage._storage
+
+    assert plane._reference_prefetch_packed_source is None
+    assert all(resident[key].is_contiguous() for key in RUNTIME_FIELDS)
+
+
+def test_resident_mode_refuses_what_the_host_cannot_hold(built, monkeypatch) -> None:
+    """An OOM kill mid-load reports as a bare exit code; refuse first."""
+    _manifest, output_dir = built
+    plane = _plane(output_dir, resident=True)
+    monkeypatch.setattr(
+        type(plane), "_available_host_memory_bytes", staticmethod(lambda: 1024)
+    )
+    with pytest.raises(RuntimeError, match="Insufficient host memory for resident"):
+        _load(plane, output_dir)
+
+
 def test_a_different_anchor_inside_the_body_set_is_derived_not_refused(
     built,
 ) -> None:
@@ -298,6 +355,17 @@ def test_reference_arrays_win_over_a_cache_dir_but_never_over_a_manifest(
 
     # And with nothing declared at all, resolution still says "no data".
     assert _resolve() is None
+
+
+def test_reference_prefetch_mode_is_validated_without_mutating_config() -> None:
+    cfg = MotionDataCfg(reference_prefetch_mode="next-and-reset")
+    assert cfg.resolved_reference_prefetch_mode() == "next_and_reset"
+    assert cfg.reference_prefetch_mode == "next-and-reset"
+    assert _resolve(reference_prefetch_mode="next") is None
+    with pytest.raises(ValueError, match="reference_prefetch_mode"):
+        _resolve(reference_prefetch_mode="many_frames")
+    with pytest.raises(ValueError, match="reset_pool_size"):
+        _resolve(reference_prefetch_reset_pool_size=0)
 
 
 def test_a_truncated_array_is_caught_before_training(built) -> None:

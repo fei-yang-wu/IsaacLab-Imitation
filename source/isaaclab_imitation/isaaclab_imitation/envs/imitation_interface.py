@@ -70,6 +70,9 @@ class ImitationEnvInterface:
             batch_size=batch_size, required_keys=required_keys
         )
 
+    def expert_macro_frame_stride(self) -> int:
+        return self._env.expert_macro_frame_stride()
+
     def sample_expert_macro_transition_batch(
         self,
         batch_size: int,
