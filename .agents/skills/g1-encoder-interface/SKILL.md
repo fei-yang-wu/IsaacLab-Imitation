@@ -1,6 +1,6 @@
 ---
 name: g1-encoder-interface
-description: Select the G1 skill-encoder input interface (full_body qpos+qvel+root vs root_qpos qpos+root) for training, pretraining and evaluation. Use when a run must change what the DiffSR encoder compresses, when pairing a policy with an encoder, or when a job fails with "hl/state shape mismatch".
+description: Select the G1 skill-encoder input interface (full_body qpos+qvel+root vs root_qpos qpos+root) and its macro-window cadence (expert_macro_frame_stride) for training, pretraining and evaluation. Use when a run must change what the DiffSR encoder compresses or how far apart its window frames sit, when pairing a policy with an encoder, or when a job fails with "hl/state shape mismatch" or a macro-window stride mismatch.
 ---
 
 # G1 skill-encoder input interface
@@ -40,6 +40,36 @@ Resolution lives in `ImitationRLEnv._effective_expert_macro_state_terms()`
 `_expert_macro_feature_term_order()` (`envs/expert_data_plane.py`). `None` means
 `full_body`. The field also accepts the raw Hydra string form `"[a,b,c]"` and
 parses it, so the CLI form above works as written.
+
+## The second knob: window cadence
+
+The interface says *what* goes into a frame. `env.expert_macro_frame_stride`
+says *how far apart* the frames are:
+
+```bash
+# consecutive frames -- the default; omit the flag entirely
+# SONIC's released tokenizer cadence (dt_future_ref_frames=0.1 at 50 Hz):
+env.expert_macro_frame_stride=5
+```
+
+The window keeps its 10 slots either way. At stride 1 it spans 0.18 s and the
+endpoint objective targets `s[t+10]`; at stride 5 it spans 0.9 s and targets
+`s[t+50]` -- the window is `history + horizon + 1` slots, the encoder reads
+slots 0..9, and `intermediate` mode hides slot 10, one stride past the window.
+Resolution lives in
+`ExpertDataPlane._expert_macro_frame_stride()` and applies to every macro
+consumer at once — DiffSR pretraining, the live low-level encoder input, and
+planner sample collection.
+
+**This one cannot be caught by a width check**, because 380 is 380 at every
+stride. So unlike the interface, it is validated: the pretrain entrypoint copies
+the environment's value into the skill checkpoint's `macro_frame_stride`, and
+`FrozenHighLevelSkillCommandSampler` / `SkillCommander` refuse an encoder whose
+recorded stride differs from the live environment's. A checkpoint written before
+the field existed reads back as 1, which is what it was.
+
+Repeat the override on training, pretraining, **and evaluation**, exactly like
+`expert_macro_state_terms`. The legacy environment refuses any stride but 1.
 
 Do **not** try to select the interface through
 `env.command_interface.encoder`. That preset chooses the *window*

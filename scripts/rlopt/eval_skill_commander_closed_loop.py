@@ -132,6 +132,12 @@ parser.add_argument(
     help="RLOpt low-level algorithm.",
 )
 parser.add_argument(
+    "--agent_entry_point",
+    type=str,
+    default=None,
+    help="Override the task's RLOpt agent config entry point.",
+)
+parser.add_argument(
     "--checkpoint",
     type=str,
     required=True,
@@ -187,6 +193,17 @@ parser.add_argument(
     nargs="+",
     default=None,
     help="Restrict env.motions to the listed motions before env creation.",
+)
+parser.add_argument(
+    "--trajectory_ranks",
+    nargs="+",
+    type=int,
+    default=None,
+    help=(
+        "Pin equal environment blocks to these exact trajectory ranks. This is "
+        "the scalable selection path for prebuilt reference arrays, where a "
+        "small manifest or env.data.clips must not be paired with the full store."
+    ),
 )
 parser.add_argument(
     "--require_goal_motion_match",
@@ -309,6 +326,40 @@ parser.add_argument(
     help="Non-negative exponential age decay for overlapping packet predictions.",
 )
 parser.add_argument(
+    "--latent_temporal_ensemble",
+    choices=("first", "exponential", "clipped_gated"),
+    default="first",
+    help=(
+        "Execution rule for an ordered H3 latent planner. 'first' discards the "
+        "two forecasts; the other modes align overlapping forecasts of the "
+        "current H10 z across publications."
+    ),
+)
+parser.add_argument(
+    "--latent_temporal_ensemble_decay",
+    type=float,
+    default=0.5,
+    help="Exponential age decay for overlapping H3 latent forecasts.",
+)
+parser.add_argument(
+    "--latent_temporal_clip_std",
+    type=float,
+    default=1.0,
+    help="Per-dimension training-std clip for stale candidates in clipped_gated mode.",
+)
+parser.add_argument(
+    "--latent_temporal_gate_distance",
+    type=float,
+    default=2.0,
+    help="Reject an old forecast above this normalized RMS distance from fresh z.",
+)
+parser.add_argument(
+    "--latent_temporal_gate_cosine",
+    type=float,
+    default=0.5,
+    help="Reject an old forecast below this cosine agreement with fresh z.",
+)
+parser.add_argument(
     "--allow_random_reset",
     action="store_true",
     default=False,
@@ -403,6 +454,25 @@ parser.add_argument(
     help="Buffer this many planner rows per sample file.",
 )
 parser.add_argument(
+    "--sample_future_window_frames",
+    type=int,
+    default=10,
+    help=(
+        "Number of current-plus-future root_qpos frames retained with every "
+        "planner publication. Thirty supports later temporal-ensemble and "
+        "direct-root_qpos interface studies without recollecting rollouts."
+    ),
+)
+parser.add_argument(
+    "--require_root_qpos_samples",
+    action="store_true",
+    default=False,
+    help=(
+        "Require the active expert macro interface to be 38-D root_qpos and "
+        "write achieved/current/future root_qpos tensors into every sample."
+    ),
+)
+parser.add_argument(
     "--flow_num_inference_steps",
     type=int,
     default=None,
@@ -454,6 +524,22 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--sonic_success_terminations",
+    action="store_true",
+    default=False,
+    help=(
+        "Collect/evaluate with the official SONIC completion criterion: "
+        "0.25-m pelvis/EE Z, 1-rad pelvis orientation, foot XYZ disabled, "
+        "and base-too-low disabled."
+    ),
+)
+parser.add_argument(
+    "--disable_push_event",
+    action="store_true",
+    default=False,
+    help="Disable only the interval push event while keeping other randomization.",
+)
+parser.add_argument(
     "--assert-kitless",
     action="store_true",
     help="Require Newton and fail if Isaac Sim or Omniverse Kit is imported.",
@@ -481,6 +567,7 @@ from isaaclab.envs import (
 )
 from isaaclab.utils import math as math_utils
 from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
+from isaaclab_imitation.envs.imitation_rl_env_v2 import ImitationRLEnv
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
@@ -488,6 +575,9 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env
     G1_EE_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
     G1TerminationsCfg,
+)
+from isaaclab_imitation.tasks.manager_based.imitation.motion_data import (
+    apply_motion_data,
 )
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
     LATENT_POLICY_INPUT_KEYS,
@@ -511,14 +601,23 @@ from rlopt.agent import (
     SkillCommanderConfig,
     SkillCommanderTrainer,
 )
-from tensordict import TensorDictBase
+from rlopt.agent.skill_commander import FrozenSkillCommanderSampler
+from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import InteractionType
 from torch import Tensor
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
 from torchrl.envs.utils import set_exploration_type, step_mdp
 
 from imitation_experiments.data.balanced_motion_rows import BalancedMotionRowSelector
-from imitation_experiments.planner.interface_planner_common import load_planner_checkpoint
+from imitation_experiments.lowlevel.motion_candidate_screen import (
+    build_env_rank_assignment,
+)
+from imitation_experiments.planner.interface_planner_common import (
+    load_planner_checkpoint,
+)
+from imitation_experiments.planner.latent_receding_horizon import (
+    install_latent_receding_horizon,
+)
 
 from imitation_experiments.capacity.packet_to_latent_command import (
     build_noise_reference,
@@ -526,11 +625,14 @@ from imitation_experiments.capacity.packet_to_latent_command import (
     install_packet_encoder_command_source,
     PacketLayout,
 )
-from imitation_experiments.lowlevel.low_level_tracker import load_frozen_low_level_tracker
+from imitation_experiments.lowlevel.low_level_tracker import (
+    load_frozen_low_level_tracker,
+)
 from imitation_experiments.provenance.paper_protocol_metadata import (
     disable_domain_randomization,
     interval_event_metadata,
 )
+from imitation_experiments.audit.backend_determinism import pin_reference_start
 
 # Prefix applied to every metric produced by a --deterministic_tracking run, so
 # an unperturbed number can never be pooled with a perturbed one: the paper
@@ -1135,6 +1237,118 @@ def _disable_non_reference_terminations(terminations: Any) -> None:
             setattr(terminations, name, None)
 
 
+def _configure_sonic_success_terminations(terminations: Any) -> dict[str, Any]:
+    """Apply the paper-compatible SONIC completion boundary in place."""
+    if terminations is None:
+        raise ValueError(
+            "--sonic_success_terminations requires an environment termination config."
+        )
+    required = ("anchor_pos", "anchor_ori", "ee_body_pos")
+    missing = [name for name in required if getattr(terminations, name, None) is None]
+    if missing:
+        raise ValueError(f"SONIC termination profile is missing terms: {missing}.")
+    for name in ("anchor_pos", "ee_body_pos"):
+        params = getattr(terminations, name).params
+        params["threshold"] = 0.25
+        if "down_threshold" in params:
+            params["down_threshold"] = 0.25
+    getattr(terminations, "anchor_ori").params["threshold"] = 1.0
+    if hasattr(terminations, "foot_pos_xyz"):
+        terminations.foot_pos_xyz = None
+    if hasattr(terminations, "base_too_low"):
+        terminations.base_too_low = None
+    return {
+        "name": "sonic_success_foot_xyz_disabled",
+        "anchor_pos_threshold_m": 0.25,
+        "anchor_ori_threshold_rad": 1.0,
+        "ee_body_pos_threshold_m": 0.25,
+        "foot_pos_xyz_enabled": False,
+        "base_too_low_enabled": False,
+    }
+
+
+def _disable_push_event(env_cfg: Any) -> dict[str, Any]:
+    events = getattr(env_cfg, "events", None)
+    previously_enabled = bool(
+        events is not None and getattr(events, "push_robot", None) is not None
+    )
+    if events is not None and hasattr(events, "push_robot"):
+        events.push_robot = None
+    return {
+        "enabled_before_override": previously_enabled,
+        "enabled": False,
+        "other_randomization_kept": True,
+    }
+
+
+def _reference_selection_cfg(env_cfg: Any) -> Any | None:
+    """Return the concrete v2 reference-selection config, if present."""
+    selection = getattr(
+        getattr(getattr(env_cfg, "command_interface", None), "reference", None),
+        "selection",
+        None,
+    )
+    seen = 0
+    while selection is not None and not hasattr(selection, "start_mode"):
+        selection = getattr(selection, "default", None)
+        seen += 1
+        if seen > 8:
+            return None
+    return selection
+
+
+def _install_skill_commander_preflight_sampler(environment: Any) -> None:
+    """Provide constructor-only widths without fabricating offline robot data.
+
+    V2 intentionally has no offline causal-robot sampler: causal planner inputs
+    exist only during a policy rollout. ``SkillCommanderTrainer`` nevertheless
+    asks for one batch at construction solely to discover widths. Expert macro
+    frames are valid for the frozen encoder; zero planner histories provide the
+    declared shape only and are never trained on or saved. Every collected row
+    below still comes from ``current_causal_planner_observation``.
+    """
+
+    def _preflight_batch(
+        *,
+        batch_size: int,
+        horizon_steps: int,
+        split: str | None,
+        eval_fraction: float,
+        split_seed: int,
+        history_steps: int,
+    ) -> TensorDictBase:
+        batch = environment.sample_expert_macro_transition_batch(
+            batch_size=int(batch_size),
+            horizon_steps=int(horizon_steps),
+            split=split,
+            eval_fraction=float(eval_fraction),
+            split_seed=int(split_seed),
+        )
+        spec = environment.causal_planner_observation_spec(
+            history_steps=int(history_steps)
+        )
+        history = torch.zeros(
+            (
+                int(batch_size),
+                int(spec["history_frames"]),
+                int(spec["frame_dim"]),
+            ),
+            device=environment.device,
+            dtype=torch.float32,
+        )
+        batch.set(
+            "planner",
+            TensorDict(
+                {"state": history[:, -1], "state_history": history},
+                batch_size=[int(batch_size)],
+                device=environment.device,
+            ),
+        )
+        return batch
+
+    environment.sample_causal_planner_training_batch = _preflight_batch
+
+
 def _configure_base_only_termination(
     terminations: Any, *, minimum_height: float
 ) -> list[str]:
@@ -1196,9 +1410,7 @@ def _diff_stats(prefix: str, lhs: Tensor, rhs: Tensor) -> dict[str, float]:
     }
 
 
-def _macro_packet_layout(
-    wrapped_env: IsaacLabWrapper, *, horizon_steps: int
-) -> PacketLayout:
+def _macro_packet_layout(wrapped_env: Any, *, horizon_steps: int) -> PacketLayout:
     """Derive a term-major packet layout from the active encoder macro terms."""
     raw_slices = wrapped_env.expert_macro_feature_slices(
         horizon_steps=int(horizon_steps)
@@ -1224,7 +1436,7 @@ def _macro_packet_layout(
 def _measure_commander(
     *,
     trainer: SkillCommanderTrainer,
-    wrapped_env: IsaacLabWrapper,
+    wrapped_env: Any,
     env_ids: Tensor,
     sample_path: Path | None = None,
     sample_writer: PlannerSampleWriter | None = None,
@@ -1233,20 +1445,22 @@ def _measure_commander(
     episode_ids: Tensor | None = None,
     sample_motion_names: list[str] | None = None,
     sample_target_interface: str = "latent_skill",
+    sample_future_window_frames: int = 10,
+    require_root_qpos_samples: bool = False,
     compute_metrics: bool = True,
 ) -> dict[str, float]:
     if sample_path is not None and sample_writer is not None:
         raise ValueError("Provide sample_path or sample_writer, not both.")
     horizon_steps = int(trainer.horizon_steps)
     state_history_steps = int(trainer.config.state_history_steps)
+    retained_frames = int(sample_future_window_frames)
+    if retained_frames <= 0:
+        raise ValueError("sample_future_window_frames must be positive.")
+    query_horizon = max(horizon_steps, retained_frames - 1)
     expert_batch = wrapped_env.current_expert_macro_transition_batch(
-        horizon_steps=horizon_steps,
+        horizon_steps=query_horizon,
         env_ids=env_ids,
         state_history_steps=state_history_steps,
-    )
-    expert_planner_batch = wrapped_env.current_offline_demo_planner_observation(
-        env_ids=env_ids,
-        history_steps=state_history_steps,
     )
     causal_planner_batch = wrapped_env.current_causal_planner_observation(
         env_ids=env_ids,
@@ -1264,14 +1478,12 @@ def _measure_commander(
         .reshape(-1)
         .to(device=trainer.device, dtype=torch.long)
     )
-    expert_planner_state = _planner_state(expert_planner_batch, state_history_steps).to(
-        device=trainer.device, dtype=torch.float32
-    )
     achieved_planner_state = _planner_state(
         causal_planner_batch, state_history_steps
     ).to(device=trainer.device, dtype=torch.float32)
 
-    z_target = trainer._target_z(expert_state, future_window)
+    skill_future_window = future_window[:, :horizon_steps]
+    z_target = trainer._target_z(expert_state, skill_future_window)
     packet_layout = _macro_packet_layout(wrapped_env, horizon_steps=horizon_steps)
     required_future = packet_layout.packet_frames - 1
     if int(future_window.shape[1]) < required_future:
@@ -1300,9 +1512,15 @@ def _measure_commander(
         if sample_path is not None:
             sample_path.parent.mkdir(parents=True, exist_ok=True)
         local_step = expert_batch.get(("hl", "local_step")).detach().cpu().reshape(-1)
+        trajectory_length = (
+            expert_batch.get(("hl", "trajectory_length")).detach().cpu().reshape(-1)
+        )
         sample = build_planner_sample(
             causal_state_history=achieved_planner_state,
-            demonstration_state_history=expert_planner_state,
+            # Oracle-policy collection observes the real robot, not a synthetic
+            # expert-state rollout. Keep the paired compatibility key identical
+            # and mark the true semantics explicitly below.
+            demonstration_state_history=achieved_planner_state,
             causal_target=sample_target,
             demonstration_target=sample_target,
             trajectory_rank=traj_rank,
@@ -1324,6 +1542,54 @@ def _measure_commander(
         )
         # Keep the old latent target alias during migration of analysis tools.
         sample["z_target"] = sample["latent_skill_target"]
+        sample["oracle_rollout_state_history"] = (
+            achieved_planner_state.detach().cpu().float().contiguous()
+        )
+        sample["reference_local_step"] = local_step.to(dtype=torch.long)
+        sample["reference_trajectory_length"] = trajectory_length.to(dtype=torch.long)
+        if require_root_qpos_samples:
+            if int(expert_state.shape[-1]) != 38:
+                raise ValueError(
+                    "--require_root_qpos_samples needs a 38-D root_qpos macro "
+                    f"state, got {int(expert_state.shape[-1])}."
+                )
+            achieved_batch = wrapped_env.current_achieved_macro_transition_batch(
+                horizon_steps=horizon_steps,
+                env_ids=env_ids,
+                state_history_steps=state_history_steps,
+            )
+            achieved_root_qpos = achieved_batch.get(("hl", "state")).to(
+                device=trainer.device, dtype=torch.float32
+            )
+            if tuple(achieved_root_qpos.shape) != tuple(expert_state.shape):
+                raise ValueError(
+                    "Achieved root_qpos shape does not match expert root_qpos: "
+                    f"{tuple(achieved_root_qpos.shape)} != {tuple(expert_state.shape)}."
+                )
+            future_needed = retained_frames - 1
+            root_qpos_window = torch.cat(
+                [expert_state.unsqueeze(1), future_window[:, :future_needed]], dim=1
+            )
+            offsets = torch.arange(
+                retained_frames, device=trainer.device, dtype=torch.long
+            ).unsqueeze(0)
+            valid = expert_batch.get(("hl", "local_step")).to(
+                device=trainer.device, dtype=torch.long
+            ).reshape(-1, 1) + offsets < expert_batch.get(
+                ("hl", "trajectory_length")
+            ).to(device=trainer.device, dtype=torch.long).reshape(-1, 1)
+            sample["expert_root_qpos"] = (
+                expert_state.detach().cpu().float().contiguous()
+            )
+            sample["achieved_root_qpos"] = (
+                achieved_root_qpos.detach().cpu().float().contiguous()
+            )
+            sample["expert_root_qpos_future"] = (
+                root_qpos_window.detach().cpu().float().contiguous()
+            )
+            sample["expert_root_qpos_future_valid"] = (
+                valid.detach().cpu().bool().contiguous()
+            )
         sample["step"] = None if sample_step is None else int(sample_step)
         if sample_writer is not None:
             sample_writer.add(sample)
@@ -1345,12 +1611,6 @@ def _measure_commander(
     if bool(getattr(trainer, "_uses_shared_interface_planner", False)):
         flow_steps = int(getattr(trainer, "shared_flow_num_inference_steps", 16))
         flow_noise = float(getattr(trainer, "shared_flow_inference_noise_std", 0.0))
-        z_m1 = trainer.generator(
-            expert_planner_state,
-            num_inference_steps=flow_steps,
-            inference_noise_std=flow_noise,
-            language=lang,
-        )
         z_m3 = trainer.generator(
             achieved_planner_state,
             num_inference_steps=flow_steps,
@@ -1358,16 +1618,21 @@ def _measure_commander(
             language=lang,
         )
     else:
-        z_m1 = trainer.generator(expert_planner_state, lang)
         z_m3 = trainer.generator(achieved_planner_state, lang)
+    if int(z_m3.shape[-1]) != int(z_target.shape[-1]):
+        if int(z_m3.shape[-1]) % int(z_target.shape[-1]) != 0:
+            raise ValueError(
+                "Planner metric prediction cannot be split into H10 latent tokens: "
+                f"{tuple(z_m3.shape)} vs {tuple(z_target.shape)}."
+            )
+        # Metric-side forward calls do not mutate the deployed overlap history.
+        # Score the fresh token here; the actually fused command is measured by
+        # published_z_vs_target below.
+        z_m3 = z_m3[:, : int(z_target.shape[-1])]
 
     metrics = {
-        "m1/z_cosine": _cosine_mean(z_m1, z_target),
-        "m1/z_mse": _mse_mean(z_m1, z_target),
         "m3/z_cosine": _cosine_mean(z_m3, z_target),
         "m3/z_mse": _mse_mean(z_m3, z_target),
-        "m3_vs_m1/z_cosine": _cosine_mean(z_m3, z_m1),
-        "m3_vs_m1/z_mse": _mse_mean(z_m3, z_m1),
     }
     metrics.update(
         _diff_stats("state/achieved_vs_expert", achieved_state, expert_state)
@@ -1383,9 +1648,19 @@ def _measure_commander(
             )
         )
 
-    published = wrapped_env.get_agent_latent_command(env_ids=env_ids).to(
-        device=trainer.device, dtype=torch.float32
-    )
+    published_provider = getattr(wrapped_env, "get_agent_latent_command", None)
+    if callable(published_provider):
+        published = published_provider(env_ids=env_ids)
+    else:
+        actor_command = getattr(
+            getattr(wrapped_env, "actor_command", None), "command", None
+        )
+        if not isinstance(actor_command, Tensor):
+            raise RuntimeError("The active latent actor command is unavailable.")
+        published = actor_command.index_select(
+            0, env_ids.to(device=actor_command.device, dtype=torch.long)
+        )
+    published = published.to(device=trainer.device, dtype=torch.float32)
     z_dim = int(trainer.z_dim)
     if published.ndim == 2 and int(published.shape[-1]) >= z_dim:
         published_z = published[:, :z_dim]
@@ -1396,7 +1671,9 @@ def _measure_commander(
     return metrics
 
 
-agent_entry_point = resolve_agent_cfg_entry_point(args_cli.task, args_cli.algorithm)
+agent_entry_point = args_cli.agent_entry_point or resolve_agent_cfg_entry_point(
+    args_cli.task, args_cli.algorithm
+)
 
 
 def main(
@@ -1444,11 +1721,31 @@ def main(
         )
     if int(args_cli.sample_rows_per_file) <= 0:
         raise ValueError("--sample_rows_per_file must be positive.")
-    if args_cli.base_only_termination and args_cli.disable_tracking_terminations:
-        raise ValueError(
-            "--base_only_termination and --disable_tracking_terminations are "
-            "mutually exclusive."
+    if int(args_cli.sample_future_window_frames) <= 0:
+        raise ValueError("--sample_future_window_frames must be positive.")
+    termination_profiles = sum(
+        bool(value)
+        for value in (
+            args_cli.base_only_termination,
+            args_cli.disable_tracking_terminations,
+            args_cli.sonic_success_terminations,
         )
+    )
+    if termination_profiles > 1:
+        raise ValueError(
+            "--base_only_termination, --disable_tracking_terminations, and "
+            "--sonic_success_terminations are mutually exclusive."
+        )
+    trajectory_ranks = (
+        [int(rank) for rank in args_cli.trajectory_ranks]
+        if args_cli.trajectory_ranks is not None
+        else None
+    )
+    if trajectory_ranks is not None:
+        if any(rank < 0 for rank in trajectory_ranks):
+            raise ValueError("--trajectory_ranks must be non-negative.")
+        if len(set(trajectory_ranks)) != len(trajectory_ranks):
+            raise ValueError("--trajectory_ranks must be unique.")
     if args_cli.balanced_motion_names and not (
         int(args_cli.balanced_rows_per_motion) > 0
         or int(args_cli.balanced_trajectories_per_motion) > 0
@@ -1478,37 +1775,46 @@ def main(
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(agent_cfg.seed)
 
-    if selected_motion_name:
-        if not hasattr(env_cfg, "motions"):
-            raise TypeError(f"Task {args_cli.task} does not support --motion_name.")
-        env_cfg.motions = [selected_motion_name]
-    elif selected_motion_names is not None:
-        if not hasattr(env_cfg, "motions"):
-            raise TypeError(f"Task {args_cli.task} does not support --motion_names.")
-        env_cfg.motions = selected_motion_names
-    resolve_manifest_config = getattr(env_cfg, "_resolve_manifest_config", None)
-    if (
-        callable(resolve_manifest_config)
-        and getattr(env_cfg, "lafan1_manifest_path", None) is not None
-    ):
-        # Resolve after applying the requested motion subset so a late Hydra
-        # manifest override cannot expand it back to the whole manifest.
-        resolve_manifest_config(
-            dataset_path_explicit=True,
-            motions_explicit=bool(selected_motion_name or selected_motion_names),
-        )
+    selected_clips = (
+        [selected_motion_name] if selected_motion_name else selected_motion_names
+    )
+    if selected_clips is not None:
+        apply_motion_data(env_cfg, clips=selected_clips)
     if args_cli.trajectory_name is not None:
         if not hasattr(env_cfg, "trajectories"):
             raise TypeError(f"Task {args_cli.task} does not support --trajectory_name.")
         env_cfg.trajectories = [str(args_cli.trajectory_name)]
+    reference_selection_surface = "unmodified"
     if not args_cli.allow_random_reset:
-        for name, value in (
-            ("random_reset_step_min", 0),
-            ("random_reset_step_max", 0),
-            ("random_reset_full_trajectory", False),
-        ):
-            if hasattr(env_cfg, name):
-                setattr(env_cfg, name, value)
+        reference_selection_surface = pin_reference_start(env_cfg, start_frame=0)
+    if trajectory_ranks is not None:
+        env_rank_assignment = build_env_rank_assignment(
+            trajectory_ranks, int(env_cfg.scene.num_envs)
+        )
+
+        def _fixed_trajectory_ranks(
+            env_ids: torch.Tensor, num_trajectories: int
+        ) -> torch.Tensor:
+            if max(env_rank_assignment) >= int(num_trajectories):
+                raise ValueError(
+                    "--trajectory_ranks contains a rank outside the loaded "
+                    f"dataset with {num_trajectories} trajectories."
+                )
+            rank_table = torch.as_tensor(
+                env_rank_assignment, dtype=torch.long, device=env_ids.device
+            )
+            return rank_table[env_ids.long()]
+
+        reference_selection = _reference_selection_cfg(env_cfg)
+        if reference_selection is not None:
+            reference_selection.schedule = "custom"
+            reference_selection.custom_fn = _fixed_trajectory_ranks
+            env_cfg.command_interface.reference.selection = reference_selection
+        elif hasattr(env_cfg, "reset_schedule"):
+            env_cfg.reset_schedule = "custom"
+            env_cfg.custom_reset_fn = _fixed_trajectory_ranks
+        else:
+            raise RuntimeError("The environment has no trajectory selection surface.")
     terminations = getattr(env_cfg, "terminations", None)
     if not args_cli.keep_time_out:
         if terminations is not None and hasattr(terminations, "time_out"):
@@ -1516,8 +1822,19 @@ def main(
     deterministic_tracking_record: dict[str, Any] = {"enabled": False}
     if args_cli.deterministic_tracking:
         deterministic_tracking_record = disable_domain_randomization(env_cfg)
+    push_event_record = interval_event_metadata(env_cfg, "push_robot")
+    if args_cli.disable_push_event:
+        push_event_record = _disable_push_event(env_cfg)
     disabled_tracking_termination_terms: list[str] = []
-    if args_cli.base_only_termination:
+    sonic_termination_record: dict[str, Any] | None = None
+    if args_cli.sonic_success_terminations:
+        sonic_termination_record = _configure_sonic_success_terminations(terminations)
+        print(
+            "[INFO] SONIC success evaluation: anchor/EE=0.25 m, "
+            "anchor orientation=1 rad, foot XYZ and base-too-low disabled.",
+            flush=True,
+        )
+    elif args_cli.base_only_termination:
         if terminations is None:
             raise ValueError(
                 "--base_only_termination requires an environment termination "
@@ -1635,6 +1952,8 @@ def main(
         "language_embeddings_override": args_cli.language_embeddings,
         "motion_name": selected_motion_name or None,
         "motion_names": selected_motion_names,
+        "trajectory_ranks": trajectory_ranks,
+        "reference_selection_surface": reference_selection_surface,
         "goal_motion_match_required": bool(args_cli.require_goal_motion_match),
         "balanced_rows_per_motion": int(args_cli.balanced_rows_per_motion),
         "balanced_trajectories_per_motion": int(
@@ -1650,16 +1969,26 @@ def main(
             args_cli.extend_episode_length_for_max_steps
         ),
         "keep_early_terminations": bool(args_cli.keep_early_terminations),
+        "sonic_success_terminations": bool(args_cli.sonic_success_terminations),
+        "sonic_termination_profile": sonic_termination_record,
+        "disable_push_event": bool(args_cli.disable_push_event),
+        "push_perturbation": push_event_record,
         "base_only_termination": bool(args_cli.base_only_termination),
         "fall_height_m": float(args_cli.fall_height_m),
         "tracking_terminations_enabled": not bool(
             args_cli.disable_tracking_terminations or args_cli.base_only_termination
         ),
         "disabled_tracking_termination_terms": disabled_tracking_termination_terms,
-        "survival_definition": "no_base_too_low_termination",
+        "survival_definition": (
+            "reference_finished_without_sonic_tracking_failure"
+            if args_cli.sonic_success_terminations
+            else "no_base_too_low_termination"
+        ),
         "reward_clipping_enabled": not bool(args_cli.disable_reward_clipping),
         "continue_after_reset": bool(args_cli.continue_after_reset),
         "save_rollout_training_samples": bool(args_cli.save_rollout_training_samples),
+        "sample_future_window_frames": int(args_cli.sample_future_window_frames),
+        "require_root_qpos_samples": bool(args_cli.require_root_qpos_samples),
         "tracking_success_root_height_threshold": float(
             args_cli.tracking_success_root_height_threshold
         ),
@@ -1709,8 +2038,11 @@ def main(
     if not args_cli.disable_reward_clipping:
         transforms.append(RewardClipping(-10.0, 5.0))
     env = TransformedEnv(base_env=wrapped_env, transform=Compose(*transforms))
-    if not isinstance(raw_isaac_env, ImitationRLEnvLegacy):
-        raise TypeError("Expected the unwrapped gym env to be an ImitationRLEnvLegacy.")
+    if not isinstance(raw_isaac_env, (ImitationRLEnv, ImitationRLEnvLegacy)):
+        raise TypeError(
+            "Expected the unwrapped gym env to be an imitation environment, got "
+            f"{type(raw_isaac_env).__name__}."
+        )
     base_env = raw_isaac_env
     loaded_motion_names = [
         str(name) for name in base_env.expert_trajectory_motion_names()
@@ -1765,6 +2097,7 @@ def main(
         list(getattr(env_cfg, "command_ee_body_names", G1_EE_BODY_NAMES)),
     )
 
+    shared_target_spec = None
     if planner_checkpoint_path is None:
         planner_checkpoint: dict[str, Any] = {}
         language_path = str(args_cli.language_embeddings or "").strip()
@@ -1789,7 +2122,8 @@ def main(
         trainer_config = _trainer_config_from_checkpoint(
             planner_checkpoint, device=str(env_cfg.sim.device)
         )
-    trainer = SkillCommanderTrainer(config=trainer_config, env=wrapped_env)
+    _install_skill_commander_preflight_sampler(raw_isaac_env)
+    trainer = SkillCommanderTrainer(config=trainer_config, env=raw_isaac_env)
     if "planner_config" in planner_checkpoint:
         assert planner_checkpoint_path is not None
         shared_generator, shared_target_spec, _ = load_planner_checkpoint(
@@ -1826,8 +2160,83 @@ def main(
     )
     trainer.generator.eval()
 
+    h3_latent_planner = False
+    if command_source == "skill_commander" and shared_target_spec is not None:
+        planner_target_dim = int(shared_target_spec.target_dim)
+        if planner_target_dim != int(trainer.z_dim):
+            expected_widths = (int(trainer.z_dim),) * 3
+            if tuple(shared_target_spec.term_widths) != expected_widths:
+                raise ValueError(
+                    "A long-horizon latent planner must expose three ordered H10 "
+                    f"tokens {expected_widths}, got {shared_target_spec.term_widths}."
+                )
+            h3_latent_planner = True
+
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
-    agent = agent_class(env=env, config=agent_cfg)
+    if h3_latent_planner:
+        # TorchRL probes the collector policy during agent construction.  An H3
+        # commander emits 3*z_dim and therefore cannot be installed until its
+        # receding-horizon reducer is present.  Bootstrap that unscored probe
+        # with the frozen oracle sampler, then replace it below before reset or
+        # any evaluated simulator step.
+        agent_cfg.ipmd.command_source = "hl_skill"
+    try:
+        agent = agent_class(env=env, config=agent_cfg)
+    finally:
+        agent_cfg.ipmd.command_source = command_source
+    if h3_latent_planner:
+        commander_overrides: dict[str, object] = {}
+        if agent_cfg.ipmd.skill_commander_flow_num_inference_steps > 0:
+            commander_overrides["flow_num_inference_steps"] = int(
+                agent_cfg.ipmd.skill_commander_flow_num_inference_steps
+            )
+        if agent_cfg.ipmd.skill_commander_flow_inference_noise_std >= 0.0:
+            commander_overrides["flow_inference_noise_std"] = float(
+                agent_cfg.ipmd.skill_commander_flow_inference_noise_std
+            )
+        if agent_cfg.ipmd.skill_commander_diffusion_num_inference_steps > 0:
+            commander_overrides["diffusion_num_inference_steps"] = int(
+                agent_cfg.ipmd.skill_commander_diffusion_num_inference_steps
+            )
+        if agent_cfg.ipmd.skill_commander_diffusion_inference_scheduler:
+            commander_overrides["diffusion_inference_scheduler"] = str(
+                agent_cfg.ipmd.skill_commander_diffusion_inference_scheduler
+            )
+        if agent_cfg.ipmd.skill_commander_diffusion_ddim_eta >= 0.0:
+            commander_overrides["diffusion_ddim_eta"] = float(
+                agent_cfg.ipmd.skill_commander_diffusion_ddim_eta
+            )
+        if agent_cfg.ipmd.skill_commander_diffusion_inference_noise_std >= 0.0:
+            commander_overrides["diffusion_inference_noise_std"] = float(
+                agent_cfg.ipmd.skill_commander_diffusion_inference_noise_std
+            )
+        assert planner_checkpoint_path is not None
+        agent._hl_skill_command_sampler = FrozenSkillCommanderSampler(
+            env=agent.env,
+            checkpoint_path=planner_checkpoint_path,
+            language_embeddings_path=str(
+                agent_cfg.ipmd.skill_commander_embeddings_path
+            ),
+            latent_dim=int(agent_cfg.ipmd.latent_dim),
+            latent_steps_min=int(agent_cfg.ipmd.latent_steps_min),
+            latent_steps_max=int(agent_cfg.ipmd.latent_steps_max),
+            generator_config_overrides=commander_overrides,
+            horizon_steps=(
+                int(agent_cfg.ipmd.hl_skill_horizon_steps)
+                if int(agent_cfg.ipmd.hl_skill_horizon_steps) > 0
+                else None
+            ),
+            command_phase_mode=str(agent_cfg.ipmd.latent_learning.command_phase_mode),
+            code_latent_dim=int(agent_cfg.ipmd.latent_learning.code_latent_dim),
+            phase_period=int(agent_cfg.ipmd.latent_learning.code_period),
+            command_mode=str(agent_cfg.ipmd.hl_skill_command_mode),
+            use_achieved_state=bool(agent_cfg.ipmd.skill_commander_use_achieved_state),
+            goal_name=str(agent_cfg.ipmd.skill_commander_goal_name),
+            goal_rank=int(agent_cfg.ipmd.skill_commander_goal_rank),
+            discover_env_method=agent._discover_env_method,
+            device=agent._get_device(agent.config.device),
+        )
+        agent._command_source = command_source
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
     resolved_policy_input_keys = tuple(agent_cfg.policy.get_input_keys())
     supported_latent_policy_input_keys = {
@@ -1846,8 +2255,64 @@ def main(
         expected_input_keys=resolved_policy_input_keys,
         map_location=env_cfg.sim.device,
     )
-    collector_policy = frozen_tracker.policy
+    # Keep the strictly restored frozen policy module, but execute it through
+    # the agent-owned collector wrapper so hl_skill / skill_commander commands
+    # are published before the policy reads the latent observation.
+    collector_policy = agent.collector_policy
+    collector_policy.eval()
     tracker_provenance = frozen_tracker.provenance
+    latent_receding_stats: Any = None
+    latent_receding_provenance: dict[str, Any] | None = None
+    if command_source == "skill_commander" and shared_target_spec is not None:
+        planner_target_dim = int(shared_target_spec.target_dim)
+        if planner_target_dim != int(trainer.z_dim):
+            command_sampler = getattr(agent, "_hl_skill_command_sampler", None)
+            if command_sampler is None:
+                raise RuntimeError("The deployed H3 SkillCommander sampler is missing.")
+            latent_receding_stats = install_latent_receding_horizon(
+                command_sampler,
+                env=raw_isaac_env,
+                token_count=3,
+                token_width=int(trainer.z_dim),
+                mode=str(args_cli.latent_temporal_ensemble),
+                decay=float(args_cli.latent_temporal_ensemble_decay),
+                clip_std=float(args_cli.latent_temporal_clip_std),
+                gate_distance=float(args_cli.latent_temporal_gate_distance),
+                gate_cosine=float(args_cli.latent_temporal_gate_cosine),
+            )
+            checkpoint_metadata = planner_checkpoint.get("metadata", {})
+            sample_metadata = (
+                checkpoint_metadata.get("sample_metadata", {})
+                if isinstance(checkpoint_metadata, dict)
+                else {}
+            )
+            horizon_metadata = (
+                sample_metadata.get("latent_receding_horizon", {})
+                if isinstance(sample_metadata, dict)
+                else {}
+            )
+            latent_receding_provenance = {
+                "prediction_tokens": 3,
+                "token_width": int(trainer.z_dim),
+                "prediction_horizon_steps": 30,
+                "execution_horizon_steps": int(trainer.horizon_steps),
+                "target_frame": horizon_metadata.get("target_frame"),
+                "skill_checkpoint_sha256": horizon_metadata.get(
+                    "skill_checkpoint_sha256"
+                ),
+                "execution_mode": str(args_cli.latent_temporal_ensemble),
+            }
+            print(
+                "[INFO] H3 latent receding horizon: "
+                f"target_frame={latent_receding_provenance['target_frame']} "
+                f"mode={args_cli.latent_temporal_ensemble}.",
+                flush=True,
+            )
+        elif str(args_cli.latent_temporal_ensemble) != "first":
+            raise ValueError(
+                "Latent temporal ensembling requires an ordered H3 checkpoint; "
+                f"this planner predicts only {planner_target_dim} values."
+            )
     # BB1 shared-tracker comparison: drive THIS latent tracker from an explicit
     # packet planner routed through the frozen skill encoder, so the only thing
     # that differs from the latent row is the planner's output space. Requires
@@ -1904,7 +2369,7 @@ def main(
 
         def _packet_causal_state(env_ids: Tensor) -> Tensor:
             return _planner_state(
-                wrapped_env.current_causal_planner_observation(
+                raw_isaac_env.current_causal_planner_observation(
                     env_ids=env_ids,
                     history_steps=int(args_cli.state_history_steps),
                 ),
@@ -2040,7 +2505,7 @@ def main(
         sample_command_future_steps = int(trainer.horizon_steps)
     else:
         sample_packet_layout = _macro_packet_layout(
-            wrapped_env, horizon_steps=int(trainer.horizon_steps)
+            raw_isaac_env, horizon_steps=int(trainer.horizon_steps)
         )
         sample_target_spec = {
             "interface": sample_target_interface,
@@ -2060,7 +2525,7 @@ def main(
     }
     if sample_target_interface == "latent_skill":
         sample_packet_layout = _macro_packet_layout(
-            wrapped_env, horizon_steps=int(trainer.horizon_steps)
+            raw_isaac_env, horizon_steps=int(trainer.horizon_steps)
         )
         packet_target_spec = {
             "interface": "encoder_input_packet",
@@ -2091,6 +2556,7 @@ def main(
             "dataset_path": str(getattr(env_cfg, "dataset_path", "")),
             "motion_name": selected_motion_name or None,
             "motion_names": selected_motion_names,
+            "trajectory_ranks": trajectory_ranks,
             "goal_motion_match_required": bool(args_cli.require_goal_motion_match),
             "balanced_collection": (
                 {
@@ -2100,6 +2566,32 @@ def main(
                 if balanced_selector is not None
                 else None
             ),
+            "balanced_trajectory_collection": (
+                {
+                    "motion_names": list(balanced_trajectory_motion_names),
+                    "trajectories_per_motion": int(
+                        args_cli.balanced_trajectories_per_motion
+                    ),
+                }
+                if balanced_trajectory_motion_names is not None
+                else None
+            ),
+            "collection_unit": (
+                "completed_trajectory"
+                if balanced_trajectory_motion_names is not None
+                else "planner_publication_row"
+            ),
+            "planner_state_source": "causal_robot_history_during_oracle_policy_rollout",
+            "auxiliary_targets": {
+                "root_qpos": {
+                    "enabled": bool(args_cli.require_root_qpos_samples),
+                    "frame_dim": 38 if args_cli.require_root_qpos_samples else None,
+                    "window_frames": int(args_cli.sample_future_window_frames),
+                    "window_key": "expert_root_qpos_future",
+                    "validity_key": "expert_root_qpos_future_valid",
+                    "achieved_key": "achieved_root_qpos",
+                }
+            },
             "planner_observation_spec": dict(planner_observation_spec),
             "reset_schedule": str(getattr(env_cfg, "reset_schedule", "unknown")),
             "random_reset_step_min": int(getattr(env_cfg, "random_reset_step_min", -1)),
@@ -2112,28 +2604,35 @@ def main(
                     False,
                 )
             ),
+            "policy_action_selection": "deterministic",
             "early_terminations_enabled": bool(
                 args_cli.keep_early_terminations
                 or args_cli.disable_tracking_terminations
                 or args_cli.base_only_termination
+                or args_cli.sonic_success_terminations
             ),
             "tracking_terminations_enabled": not bool(
-                args_cli.disable_tracking_terminations
-                or args_cli.base_only_termination
+                args_cli.disable_tracking_terminations or args_cli.base_only_termination
             ),
             "base_only_termination": bool(args_cli.base_only_termination),
+            "sonic_success_terminations": bool(args_cli.sonic_success_terminations),
+            "sonic_termination_profile": sonic_termination_record,
             "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
-            "survival_definition": "no_base_too_low_termination",
+            "survival_definition": (
+                "reference_finished_without_sonic_tracking_failure"
+                if args_cli.sonic_success_terminations
+                else "no_base_too_low_termination"
+            ),
             "time_out_enabled": bool(args_cli.keep_time_out),
             "episode_length_extension_enabled": bool(
                 args_cli.extend_episode_length_for_max_steps
             ),
             "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
             "reward_clipping_enabled": not bool(args_cli.disable_reward_clipping),
-            "push_perturbation": interval_event_metadata(env_cfg, "push_robot"),
+            "push_perturbation": push_event_record,
             "deterministic_tracking": deterministic_tracking_record,
             "language_conditioning": language_metadata,
             "provenance": {
@@ -2200,6 +2699,8 @@ def main(
     terminated_events = torch.zeros(num_envs, dtype=torch.float32)
     truncated_events = torch.zeros(num_envs, dtype=torch.float32)
     rollout_metric_stats: dict[str, list[Tensor]] = {}
+    per_env_metric_sums: dict[str, Tensor] = {}
+    per_env_metric_counts: dict[str, Tensor] = {}
     strict_tracking_failure_events = torch.zeros(num_envs, dtype=torch.float32)
     termination_term_names = list(raw_isaac_env.termination_manager.active_terms)
     termination_hits = {
@@ -2207,7 +2708,11 @@ def main(
         for term_name in termination_term_names
     }
     strict_failure_term_names: list[str] = []
-    if args_cli.keep_early_terminations or args_cli.disable_tracking_terminations:
+    if (
+        args_cli.keep_early_terminations
+        or args_cli.disable_tracking_terminations
+        or args_cli.sonic_success_terminations
+    ):
         for term_name in raw_isaac_env.termination_manager.active_terms:
             term_cfg = raw_isaac_env.termination_manager.get_term_cfg(term_name)
             if not term_cfg.time_out and term_name != "reference_finished":
@@ -2339,7 +2844,7 @@ def main(
                 metric_row.update(
                     _measure_commander(
                         trainer=trainer,
-                        wrapped_env=wrapped_env,
+                        wrapped_env=raw_isaac_env,
                         env_ids=env_ids,
                     )
                 )
@@ -2347,7 +2852,7 @@ def main(
                 sample_env_ids_cpu = sample_env_ids.detach().cpu()
                 _measure_commander(
                     trainer=trainer,
-                    wrapped_env=wrapped_env,
+                    wrapped_env=raw_isaac_env,
                     env_ids=sample_env_ids,
                     sample_writer=sample_writer,
                     sample_step=timestep,
@@ -2355,6 +2860,10 @@ def main(
                     episode_ids=episode_ids.index_select(0, sample_env_ids_cpu),
                     sample_motion_names=sample_motion_names,
                     sample_target_interface=sample_target_interface,
+                    sample_future_window_frames=int(
+                        args_cli.sample_future_window_frames
+                    ),
+                    require_root_qpos_samples=bool(args_cli.require_root_qpos_samples),
                     compute_metrics=False,
                 )
             if should_measure:
@@ -2404,13 +2913,26 @@ def main(
             for term_name in strict_failure_term_names:
                 strict_failure |= current_termination_terms[term_name]
             strict_tracking_failure_events += (strict_failure & step_active).float()
-            if trajectory_sample_writer is not None and bool(done_any.any()):
-                done_env_ids = done_any.nonzero(as_tuple=True)[0]
+            completed_now = done_any & step_active
+            if trajectory_sample_writer is not None and bool(completed_now.any()):
+                done_env_ids = completed_now.nonzero(as_tuple=True)[0]
                 trajectory_sample_writer.complete(
                     env_ids=done_env_ids.tolist(),
                     episode_ids=episode_ids.index_select(0, done_env_ids).tolist(),
                     motion_names=[
                         current_motion_names[int(env_id)]
+                        for env_id in done_env_ids.tolist()
+                    ],
+                    termination_reasons=[
+                        [
+                            term_name
+                            for term_name, values in current_termination_terms.items()
+                            if bool(values[int(env_id)].item())
+                        ]
+                        for env_id in done_env_ids.tolist()
+                    ],
+                    tracking_success=[
+                        not bool(strict_failure[int(env_id)].item())
                         for env_id in done_env_ids.tolist()
                     ],
                 )
@@ -2440,9 +2962,16 @@ def main(
             )
             tracking_failure_events += (tracking_failure.cpu() & step_active).float()
             for metric_name, values in tracking_metrics.items():
+                values_cpu = values.detach().cpu().float()
                 _accumulate_metric(
-                    rollout_metric_stats, metric_name, values.cpu(), metric_mask
+                    rollout_metric_stats, metric_name, values_cpu, metric_mask
                 )
+                per_env_metric_sums.setdefault(
+                    metric_name, torch.zeros(num_envs, dtype=torch.float32)
+                ).add_(values_cpu * metric_mask.float())
+                per_env_metric_counts.setdefault(
+                    metric_name, torch.zeros(num_envs, dtype=torch.long)
+                ).add_(metric_mask.to(dtype=torch.long))
             if body_lin_vel is not None:
                 if previous_body_lin_vel is not None and dt is not None:
                     actual_lin_vel, ref_lin_vel = body_lin_vel
@@ -2502,6 +3031,12 @@ def main(
         FALL_TERMINATION_NAME, torch.zeros(num_envs, dtype=torch.bool)
     )
     fall_free = ~fall_events
+    reference_finished_events = termination_hits.get(
+        "reference_finished", torch.zeros(num_envs, dtype=torch.bool)
+    )
+    completed_tracking_success = reference_finished_events & (
+        strict_tracking_failure_events == 0
+    )
     aggregate = {
         "return_sum_mean": return_mean,
         "return_sum_std": return_std,
@@ -2537,6 +3072,21 @@ def main(
         )
         if bool(active_mask.any())
         else 0,
+        "reference_finished_rate": float(
+            reference_finished_events[active_mask].float().mean().item()
+        )
+        if bool(active_mask.any())
+        else float("nan"),
+        "completed_tracking_success_rate": float(
+            completed_tracking_success[active_mask].float().mean().item()
+        )
+        if bool(active_mask.any())
+        else float("nan"),
+        "completed_tracking_success_count": int(
+            completed_tracking_success[active_mask].sum().item()
+        )
+        if bool(active_mask.any())
+        else 0,
         "threshold_tracking_success_rate": float(
             (tracking_failure_events[active_mask] == 0).float().mean().item()
         )
@@ -2556,6 +3106,20 @@ def main(
     }
     metric_means = _mean_dict(rows)
     rollout_metrics = _finalize_metric_stats(rollout_metric_stats)
+    successful_trajectory_metrics: dict[str, dict[str, float | int]] = {}
+    for metric_name in sorted(per_env_metric_sums):
+        success_counts = per_env_metric_counts[metric_name][completed_tracking_success]
+        total_count = int(success_counts.sum().item())
+        if total_count <= 0:
+            continue
+        total = float(
+            per_env_metric_sums[metric_name][completed_tracking_success].sum().item()
+        )
+        successful_trajectory_metrics[metric_name] = {
+            "mean": total / total_count,
+            "count": total_count,
+            "trajectory_count": int(completed_tracking_success.sum().item()),
+        }
     if "m3/z_mse" in metric_means:
         rollout_metrics["planner_target_rmse"] = {
             "mean": float(max(metric_means["m3/z_mse"], 0.0) ** 0.5),
@@ -2598,6 +3162,14 @@ def main(
                     **(packet_encoder_stats() if packet_encoder_stats else {}),
                 }
             ),
+            "latent_receding_horizon": (
+                None
+                if latent_receding_provenance is None
+                else {
+                    **latent_receding_provenance,
+                    **(latent_receding_stats() if latent_receding_stats else {}),
+                }
+            ),
             "planner_checkpoint": (
                 str(packet_planner_path)
                 if packet_planner_path is not None
@@ -2615,7 +3187,11 @@ def main(
             "planner_target_dim": (
                 int(packet_planner_target_dim)
                 if packet_planner_target_dim is not None
-                else int(trainer.z_dim)
+                else (
+                    int(shared_target_spec.target_dim)
+                    if shared_target_spec is not None
+                    else int(trainer.z_dim)
+                )
             ),
             "planner_metadata": planner_metadata,
             "num_envs": int(num_envs),
@@ -2637,33 +3213,41 @@ def main(
                     False,
                 )
             ),
+            "policy_action_selection": "deterministic",
             "early_terminations_enabled": bool(
                 args_cli.keep_early_terminations
                 or args_cli.disable_tracking_terminations
                 or args_cli.base_only_termination
+                or args_cli.sonic_success_terminations
             ),
             "tracking_terminations_enabled": not bool(
-                args_cli.disable_tracking_terminations
-                or args_cli.base_only_termination
+                args_cli.disable_tracking_terminations or args_cli.base_only_termination
             ),
             "base_only_termination": bool(args_cli.base_only_termination),
+            "sonic_success_terminations": bool(args_cli.sonic_success_terminations),
+            "sonic_termination_profile": sonic_termination_record,
             "fall_height_m": float(args_cli.fall_height_m),
             "disabled_tracking_termination_terms": (
                 disabled_tracking_termination_terms
             ),
-            "survival_definition": "no_base_too_low_termination",
+            "survival_definition": (
+                "reference_finished_without_sonic_tracking_failure"
+                if args_cli.sonic_success_terminations
+                else "no_base_too_low_termination"
+            ),
             "time_out_enabled": bool(args_cli.keep_time_out),
             "episode_length_extension_enabled": bool(
                 args_cli.extend_episode_length_for_max_steps
             ),
             "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
             "reward_clipping_enabled": not bool(args_cli.disable_reward_clipping),
-            "push_perturbation": interval_event_metadata(env_cfg, "push_robot"),
+            "push_perturbation": push_event_record,
             "deterministic_tracking": deterministic_tracking_record,
             "language_conditioning": language_metadata,
         },
         "aggregate": aggregate,
         "metrics": rollout_metrics,
+        "successful_trajectory_metrics": successful_trajectory_metrics,
         "planner_inference_latency_ms": (
             planner_latency_timer.summary(warmup_calls=1)
             if planner_latency_timer is not None
@@ -2673,7 +3257,15 @@ def main(
         "video_dir": str(log_dir / "videos" / "play") if args_cli.video else None,
         "planner_config": trainer_config.to_dict(),
         "planner_update": int(trainer.update),
-        "planner_target_dim": int(trainer.z_dim),
+        "planner_target_dim": (
+            int(packet_planner_target_dim)
+            if packet_planner_target_dim is not None
+            else (
+                int(shared_target_spec.target_dim)
+                if shared_target_spec is not None
+                else int(trainer.z_dim)
+            )
+        ),
         "auto_reference_steps": int(auto_steps),
         "max_steps": int(max_steps),
         "steps_run": int(timestep),
@@ -2733,6 +3325,23 @@ def main(
                 "tracking_success": bool(
                     strict_tracking_failure_events[env_id].item() == 0
                 ),
+                "reference_finished": bool(reference_finished_events[env_id].item()),
+                "completed_tracking_success": bool(
+                    completed_tracking_success[env_id].item()
+                ),
+                "tracking_metrics": {
+                    metric_name: (
+                        float(per_env_metric_sums[metric_name][env_id].item())
+                        / int(per_env_metric_counts[metric_name][env_id].item())
+                    )
+                    for metric_name in sorted(per_env_metric_sums)
+                    if int(per_env_metric_counts[metric_name][env_id].item()) > 0
+                },
+                "tracking_metric_counts": {
+                    metric_name: int(per_env_metric_counts[metric_name][env_id].item())
+                    for metric_name in sorted(per_env_metric_counts)
+                    if int(per_env_metric_counts[metric_name][env_id].item()) > 0
+                },
                 "termination_terms": [
                     term_name
                     for term_name in termination_term_names

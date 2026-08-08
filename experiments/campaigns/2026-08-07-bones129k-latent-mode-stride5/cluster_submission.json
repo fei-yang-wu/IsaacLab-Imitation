@@ -1,0 +1,84 @@
+{
+  "campaign": "2026-08-07-bones129k-latent-mode-stride5",
+  "submitted_utc": "2026-08-07T22:23:31Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "58ec1874dd9d0ca5adaa31cf4a31bd35dbff039cd9766fe3796492288dba1a98",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "latent-mode-stride5"
+  },
+  "arms": [
+    {
+      "arm": "det64",
+      "latent": "deterministic_continuous_z64",
+      "pretrain_job_id": 5571878,
+      "lowlevel_job_id": 5571879,
+      "dependency": "afterok:5571878"
+    },
+    {
+      "arm": "fsq64",
+      "latent": "sonic_fsq64_levels32",
+      "pretrain_job_id": 5571880,
+      "lowlevel_job_id": 5571881,
+      "dependency": "afterok:5571880"
+    },
+    {
+      "arm": "gumbel64",
+      "latent": "gumbel_multicat_g8_c32",
+      "pretrain_job_id": 5571882,
+      "lowlevel_job_id": 5571883,
+      "dependency": "afterok:5571882"
+    }
+  ],
+  "shared_pretrain": {
+    "macro_interface": "root_qpos",
+    "encoder_input_dim": 380,
+    "macro_frame_stride": 5,
+    "horizon_steps": 10,
+    "macro_window_seconds": 0.9,
+    "encoder_window_mode": "intermediate",
+    "transition_objective": "endpoint",
+    "encoder_hidden_dims": [
+      2048,
+      1024,
+      512,
+      512
+    ],
+    "encoder_activation": "silu",
+    "encoder_layer_norm": false,
+    "diffsr_feature_dim": 256,
+    "diffsr_embed_dim": 1024,
+    "diffsr_g_hidden_dims": [
+      1024,
+      1024,
+      512
+    ],
+    "diffsr_mu_hidden_dims": [
+      1024,
+      1024,
+      512
+    ],
+    "updates": 50000,
+    "batch_size": 8192
+  },
+  "common": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "z_dim": 64,
+    "command_dim": 66,
+    "hold_steps": 10,
+    "tracker_num_cells": [
+      2048,
+      2048,
+      1024,
+      1024,
+      512,
+      512
+    ],
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "gamma": 0.97,
+    "frame_cap": 5000000000,
+    "checkpoint_interval_frames": 250000000
+  }
+}

@@ -56,18 +56,28 @@ def test_kit_import_guard_and_loaded_module_assertion(monkeypatch):
         assert_kit_not_loaded()
 
 
-def test_gpu_policy_rejects_compute_only_physx():
-    with pytest.raises(RuntimeError, match="RT-capable"):
-        validate_gpu_policy("physx", ("NVIDIA H100 80GB HBM3",))
+def test_gpu_policy_admits_hopper_for_physx():
+    """H100/H200 need no flag: the 2026-08-03 PhysX 5B run proved it headless.
+
+    The old guard rejected them on the theory that Kit needs an RT-capable
+    device, which sent PhysX work to L40S/A40 for no reason.
+    """
+    validate_gpu_policy("physx", ("NVIDIA H100 80GB HBM3",))
+    validate_gpu_policy("physx", ("NVIDIA H200",))
     validate_gpu_policy("newton", ("NVIDIA H100 80GB HBM3",))
     validate_gpu_policy("physx", ("NVIDIA L40S",))
     validate_gpu_policy("physx", ("NVIDIA A40",))
 
 
+def test_gpu_policy_still_gates_untried_models():
+    with pytest.raises(RuntimeError, match="not been exercised"):
+        validate_gpu_policy("physx", ("NVIDIA A100-SXM4-80GB",))
+
+
 def test_gpu_policy_allows_explicit_compute_only_physx_experiment():
     validate_gpu_policy(
         "physx",
-        ("NVIDIA H100 80GB HBM3",),
+        ("NVIDIA A100-SXM4-80GB",),
         allow_compute_only_physx=True,
     )
 

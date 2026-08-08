@@ -51,6 +51,7 @@ from .motion_manifest import (
 )
 
 _TIMING_TOLERANCE_HZ = 1.0e-6
+_REFERENCE_PREFETCH_MODES = frozenset({"off", "next", "next_and_reset"})
 
 
 @configclass
@@ -201,11 +202,58 @@ class MotionDataCfg:
     """Threads used to fault in the mapped arrays before the first step.
 
     Zero skips the warm pass and lets the first training iterations take the
-    page faults inline.
+    page faults inline. Also the parallelism of a resident read.
     """
+
+    reference_arrays_resident: bool = False
+    """Read the arrays into host RAM instead of memory-mapping them.
+
+    Mapping is right on local NVMe: resident bytes stay reclaimable page cache
+    rather than a private allocation, which matters beside a large scene on a
+    125 GiB workstation.
+
+    It is wrong on a shared cluster filesystem. Mapping defers reads to per-step
+    page faults, and on Lustre those are random small reads -- the access
+    pattern it is worst at. Measured on ICE 2026-08-05: ~48 fps with three jobs
+    cold-starting on one node, against ~100,000 fps locally. Reading the arrays
+    up front is one sequential pass, which is what Lustre is good at, and
+    afterwards no filesystem is involved at all. Set this on any cluster whose
+    reference data lives on a network mount, and size the job's memory request
+    to hold it -- the load refuses rather than inviting the OOM killer.
+
+    With ``reference_prefetch_mode="next"``, resident fields are row-packed so
+    the asynchronous loader gathers all six runtime fields with one CPU
+    ``index_select`` and one host-to-device copy. The on-disk arrays and their
+    identity are unchanged.
+    """
+
+    reference_prefetch_mode: str = "off"
+    """Live-reference staging: ``off``, ``next``, or ``next_and_reset``.
+
+    ``next`` preserves the reference/reset protocol exactly: it advances the
+    logical cursors without rereading the current frame, stages the next full
+    batch while physics runs, and patches the small reset subset afterward.
+    ``next_and_reset`` additionally predicts reset candidates from the
+    pre-physics SONIC distribution and therefore intentionally applies current
+    failures to the following step's reset distribution. It is an opt-in
+    diagnostic protocol, not a silent replacement for exact SONIC sampling.
+    """
+
+    reference_prefetch_reset_pool_size: int = 4096
+    """GPU-staged reset candidates for ``next_and_reset`` before overflow."""
 
     wrap_steps: bool = False
     """Wrap the reference cursor at the end of a clip instead of terminating."""
+
+    def resolved_reference_prefetch_mode(self) -> str:
+        """Normalize and validate the requested live-reference staging mode."""
+        mode = str(self.reference_prefetch_mode).strip().lower().replace("-", "_")
+        if mode not in _REFERENCE_PREFETCH_MODES:
+            raise ValueError(
+                f"Unsupported reference_prefetch_mode {self.reference_prefetch_mode!r}; "
+                f"expected one of {sorted(_REFERENCE_PREFETCH_MODES)}."
+            )
+        return mode
 
     def resolve(
         self,
@@ -232,6 +280,9 @@ class MotionDataCfg:
         task's control rate are configuration errors, not conditions to paper
         over with a fallback.
         """
+        self.resolved_reference_prefetch_mode()
+        if int(self.reference_prefetch_reset_pool_size) <= 0:
+            raise ValueError("reference_prefetch_reset_pool_size must be positive.")
         control_rate = _control_rate(sim_dt=sim_dt, decimation=decimation)
         if self.reference_arrays_dir is not None:
             # Checked before the manifest, and loudly: a task whose default

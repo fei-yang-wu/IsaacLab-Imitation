@@ -1,0 +1,51 @@
+{
+  "campaign": "2026-08-06-bones129k-critic-no-latent",
+  "baseline": {
+    "wandb_run_id": "r09s1pc7",
+    "ice_job_id": 5567801,
+    "workspace_archive_sha256": "e20e93be390a9985df0472893f20ce2b68050dd12a89366743a9dfc66f951d05",
+    "critic_channels": ["actor", "reference"]
+  },
+  "change": {
+    "hydra_override": "env.command_interface.critic_channels=[reference]",
+    "critic_channels": ["reference"],
+    "actor_command_unchanged": true
+  },
+  "attempts": [
+    {
+      "job_id": 5571182,
+      "state": "FAILED",
+      "elapsed": "00:00:01",
+      "failure": "manual immutable-archive submission omitted CLUSTER_USE_SHARED_SIF; no output directory or W&B run was created"
+    },
+    {
+      "job_id": 5571183,
+      "submitted_utc": "2026-08-07T01:25:33Z",
+      "state_at_record": "RUNNING",
+      "partition": "coe-gpu",
+      "qos": "coe-ice",
+      "gpu_gres": "gpu:h200:1",
+      "node": "atl1-1-03-013-19-0",
+      "wandb_run_id": "mp85ex1f",
+      "wandb_url": "https://wandb.ai/feiyangwu-georgia-institute-of-technology/g1-bones-seed/runs/mp85ex1f",
+      "startup_verified_utc": "2026-08-07T01:39:29Z",
+      "startup_verified_frames": 20054016,
+      "startup_verified_fps": 44425.6391
+    }
+  ],
+  "training": {
+    "task": "Isaac-Imitation-G1-v2",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "batch_frames": 393216,
+    "max_iterations": 12716,
+    "target_frames": 5000134656,
+    "gamma": 0.97,
+    "seed": 0,
+    "checkpoint_interval_frames": 50000000,
+    "actor_input_dim": 351,
+    "critic_input_dim": 286,
+    "wandb_project": "g1-bones-seed",
+    "wandb_group": "bones129k-ablation"
+  }
+}

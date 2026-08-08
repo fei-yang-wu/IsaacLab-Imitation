@@ -1,0 +1,738 @@
+{
+  "schema": "semantic_phase_traits_v1",
+  "activity_definition": {
+    "locomotion": "Root locomotion without object interaction.",
+    "manipulation": "Object or environment interaction without purposeful root locomotion.",
+    "combined_loco_manip": "Purposeful locomotion while manipulating, carrying, or supporting an object.",
+    "gesture": "Expressive or bodily action without object/environment manipulation.",
+    "stationary": "Task phase is predominantly stationary.",
+    "transition": "Short recovery, start, or stop interval between task activities."
+  },
+  "semantic_axes": {
+    "locomoting": "The root intentionally translates or performs cyclic locomotion such as walking, running, or jumping.",
+    "manipulating": "The arms or hands intentionally operate on, support, or carry an object or environmental control.",
+    "object_loaded": "The intended behavior is holding, carrying, or supporting an object, including implicit props.",
+    "torso_lowered": "The task intentionally places the torso in a stooped, crouched, or substantially forward-lowered posture.",
+    "turning": "The task intentionally changes root heading or follows a curved path.",
+    "moving_forward": "The root intentionally translates primarily forward in the actor's current heading frame.",
+    "moving_backward": "The root intentionally translates primarily backward in the actor's current heading frame.",
+    "moving_sideways": "The root intentionally translates primarily sideways or diagonally rather than straight forward/backward.",
+    "jumping": "The body intentionally performs repeated or isolated jumps.",
+    "slow_locomotion": "The described locomotion is explicitly slow or uses small deliberate steps.",
+    "fast_locomotion": "The described locomotion is explicitly a run, panic escape, or otherwise fast.",
+    "active_left_hand": "The left arm or hand is deliberately active in the task phase.",
+    "active_right_hand": "The right arm or hand is deliberately active in the task phase.",
+    "active_both_hands": "Both arms or hands are deliberately active in the task phase."
+  },
+  "motions": {
+    "Neutral_stoop_down_001_A057": [
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "moving_forward"
+        ]
+      },
+      {
+        "activity": "combined_loco_manip",
+        "true_axes": [
+          "locomoting",
+          "manipulating",
+          "object_loaded",
+          "torso_lowered",
+          "moving_forward",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "moving_forward"
+        ]
+      }
+    ],
+    "big_heavy_one_hand_front_high_to_front_low_R_001_A524": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "torso_lowered",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": []
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "big_heavy_one_hand_front_low_to_front_high_R_001_A524": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "torso_lowered",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "big_light_two_hands_put_down_right_side_high_R_001_A520": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "turning",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "turning"
+        ]
+      }
+    ],
+    "casual_greeting_R_001_A428": [
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "cellphone_typing_sequence_one_hand_idle_R_001_A423": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": [
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "cough_tuberculosis_R_001_A500": [
+      {
+        "activity": "stationary",
+        "true_axes": []
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "torso_lowered"
+        ]
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "torso_lowered"
+        ]
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "torso_lowered"
+        ]
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "torso_lowered",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": []
+      }
+    ],
+    "crossed_arms_idle_R_001_A456": [
+      {
+        "activity": "stationary",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "drinking_standing_mug_R_001_A282": [
+      {
+        "activity": "stationary",
+        "true_axes": []
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "exercise_3_A029": [
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "jumping",
+          "fast_locomotion"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "feeding_birds_start_R_001_A456": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "active_right_hand"
+        ]
+      }
+    ],
+    "fishing_standing_loop_R_001_A500": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "hurry_idle_001_A277": [
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "inside_door_handle_right_side_open_walk_turn_close_R_001_A514": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "combined_loco_manip",
+        "true_axes": [
+          "locomoting",
+          "manipulating",
+          "turning",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_right_hand"
+        ]
+      }
+    ],
+    "injured_R_leg_turn_walk_360_001_A069": [
+      {
+        "activity": "stationary",
+        "true_axes": []
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "turning",
+          "slow_locomotion"
+        ]
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "moving_forward",
+          "slow_locomotion"
+        ]
+      }
+    ],
+    "injured_torso_walk_ff_start_315_R_001_A214": [
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "moving_backward",
+          "moving_sideways",
+          "slow_locomotion",
+          "active_right_hand"
+        ]
+      }
+    ],
+    "jump_around_001_A492": [
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "jumping",
+          "fast_locomotion",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "lift_crate_walk_ff_start_180_R_001_A140": [
+      {
+        "activity": "combined_loco_manip",
+        "true_axes": [
+          "locomoting",
+          "manipulating",
+          "object_loaded",
+          "turning",
+          "moving_forward",
+          "slow_locomotion",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "looking_in_the_mirror_amateur_001_A001": [
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "medium_big_light_one_hand_walk_ff_start_360_R_001_A504": [
+      {
+        "activity": "combined_loco_manip",
+        "true_axes": [
+          "locomoting",
+          "manipulating",
+          "object_loaded",
+          "moving_backward",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "combined_loco_manip",
+        "true_axes": [
+          "locomoting",
+          "manipulating",
+          "object_loaded",
+          "moving_backward",
+          "active_right_hand"
+        ]
+      }
+    ],
+    "mosquito_drive_away_R_001_A500": [
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": []
+      }
+    ],
+    "painting_R_001_A097": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "panic_run_away_180_R_001_A423": [
+      {
+        "activity": "transition",
+        "true_axes": [
+          "torso_lowered",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "torso_lowered",
+          "moving_forward",
+          "fast_locomotion",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "locomoting",
+          "moving_forward"
+        ]
+      }
+    ],
+    "rock_out_002_A484": [
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "object_loaded",
+          "active_right_hand"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "manipulation",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "torso_lowered",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "surrender_stop_R_001_A468": [
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "talking_with_adult_turn_walk_360_R_walk_ff_loop_270_R_004_A476": [
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "turning"
+        ]
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "moving_forward"
+        ]
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "moving_sideways"
+        ]
+      }
+    ],
+    "triumph_001_A033": [
+      {
+        "activity": "gesture",
+        "true_axes": [
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "walk_arc_cw_start_R_slow_001_A443": [
+      {
+        "activity": "transition",
+        "true_axes": [
+          "locomoting",
+          "moving_forward",
+          "slow_locomotion"
+        ]
+      },
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "turning",
+          "moving_forward",
+          "moving_sideways",
+          "slow_locomotion"
+        ]
+      }
+    ],
+    "walk_big_dog_ff_225_stop_R_001_A492": [
+      {
+        "activity": "combined_loco_manip",
+        "true_axes": [
+          "locomoting",
+          "manipulating",
+          "object_loaded",
+          "moving_forward",
+          "moving_sideways",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "transition",
+        "true_axes": [
+          "manipulating",
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      },
+      {
+        "activity": "stationary",
+        "true_axes": [
+          "object_loaded",
+          "active_left_hand",
+          "active_right_hand",
+          "active_both_hands"
+        ]
+      }
+    ],
+    "walk_ff_loop_180_R_slow_001_A443": [
+      {
+        "activity": "locomotion",
+        "true_axes": [
+          "locomoting",
+          "moving_forward",
+          "slow_locomotion"
+        ]
+      }
+    ]
+  }
+}

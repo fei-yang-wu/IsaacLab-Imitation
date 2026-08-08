@@ -1,0 +1,51 @@
+{
+  "campaign": "2026-08-06-bones129k-skill-encoding",
+  "submitted_utc": "2026-08-06T18:10:00Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "f8db5faa403aa4f7ca40b1749a630fa769cb727cb4c0d955e2df7645edc77644",
+  "workspace_archive_sha256": "c8452d8261cc8f47a07ed33daf70a5810198830aff451c2bda0856aaec0b41cc",
+  "task": "Isaac-Imitation-G1-v2",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "skill-encoding-ablation"
+  },
+  "common": {
+    "motions": 129785,
+    "macro_interface": "root_qpos",
+    "encoder_input_width": 380,
+    "horizon_steps": 10,
+    "z_dim": 256,
+    "actor_command_dim": 258,
+    "hold_steps": 10,
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "gamma": 0.97,
+    "frame_cap": 5000000000,
+    "checkpoint_interval_frames": 250000000,
+    "gpu": "h200:1"
+  },
+  "jobs": [
+    {
+      "arm": "state_occupancy",
+      "pretrain_job_id": 5570344,
+      "lowlevel_job_id": 5570359,
+      "dependency": "afterok:5570344"
+    },
+    {
+      "arm": "semimarkov_chain",
+      "pretrain_job_id": 5570351,
+      "lowlevel_job_id": 5570368,
+      "dependency": "afterok:5570351"
+    },
+    {
+      "arm": "endpoint_delta",
+      "pretrain_job_id": 5570358,
+      "lowlevel_job_id": 5570370,
+      "dependency": "afterok:5570358"
+    }
+  ],
+  "submission_recovery": {
+    "reason": "Local submit process reached its 120-second command timeout after the first dependent job.",
+    "action": "Scheduler state was audited, then only the two missing dependent jobs were submitted from the launcher's printed commands."
+  }
+}

@@ -32,6 +32,12 @@ parser.add_argument(
 )
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
+    "--agent",
+    type=str,
+    default="rlopt_cfg_entry_point",
+    help="RLOpt agent configuration entry point.",
+)
+parser.add_argument(
     "--algo",
     "--algorithm",
     dest="algorithm",
@@ -113,8 +119,14 @@ ENTRY_POINT_ALGORITHM_MAP = {
 }
 
 
-def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
+def resolve_agent_cfg_entry_point(
+    task_name: str | None,
+    algorithm: str,
+    agent_entry_point: str = "rlopt_cfg_entry_point",
+) -> str:
     """Resolve the agent config entry point based on algorithm and task registry."""
+    if agent_entry_point != "rlopt_cfg_entry_point":
+        return agent_entry_point
     if task_name is None:
         return f"rlopt_{algorithm.lower()}_cfg_entry_point"
     task_id = task_name.split(":")[-1]
@@ -142,7 +154,9 @@ def resolve_agent_cfg_entry_point(task_name: str | None, algorithm: str) -> str:
     raise ValueError(msg)
 
 
-agent_entry_point = resolve_agent_cfg_entry_point(args_cli.task, args_cli.algorithm)
+agent_entry_point = resolve_agent_cfg_entry_point(
+    args_cli.task, args_cli.algorithm, args_cli.agent
+)
 
 
 @hydra_task_config(args_cli.task, agent_entry_point)
@@ -194,6 +208,12 @@ def main(
         log_dir = os.path.abspath(args_cli.output_dir)
         os.makedirs(log_dir, exist_ok=True)
     env_cfg.log_dir = log_dir
+    # Playback is an inference surface, not a training run.  Keep it local so
+    # loading a checkpoint cannot create an unrelated W&B run from the agent
+    # config's training defaults.
+    agent_cfg.logger.backend = "csv"
+    agent_cfg.logger.log_dir = log_dir
+    agent_cfg.logger.video = False
 
     # create isaac environment
     env = gym.make(

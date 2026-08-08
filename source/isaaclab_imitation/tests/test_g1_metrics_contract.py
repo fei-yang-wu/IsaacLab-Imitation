@@ -371,3 +371,51 @@ def test_v2_default_rewards_are_the_tuned_weights() -> None:
         assert frozen.motion_body_pos.params["std"] == 0.3
         assert frozen.motion_global_anchor_pos.weight == 0.5
         assert frozen.motion_global_anchor_ori.weight == 0.5
+
+
+def test_anchor_error_metrics_are_episode_means_not_terminal_samples() -> None:
+    """The anchor errors must accumulate, like MPJPE, not hold one instant.
+
+    ``CommandTerm.reset`` logs whatever sits in the metric buffer at the step
+    the episode ends and then zeroes it. A buffer holding the *instantaneous*
+    error therefore reports the error at the moment of termination -- and since
+    most training episodes end on a tracking-error termination, that sample is
+    taken at the failure threshold by construction. Such a metric reports
+    roughly its own termination bound however well the policy tracks, and it
+    cannot be compared against the episode-mean MPJPE logged beside it.
+
+    The two MPJPE metrics were converted to accumulate-then-average; these two
+    were left on the old shape. This pins the fix so they cannot drift back.
+    """
+    import inspect
+
+    from isaaclab_imitation.tasks.manager_based.imitation.mdp.commands.reference import (  # noqa: E501
+        ReferenceCommandTerm,
+    )
+
+    update = inspect.getsource(ReferenceCommandTerm._update_metrics)
+    for metric, accumulator in (
+        ("anchor_pos_err_m", "_anchor_pos_sum"),
+        ("anchor_ori_err_rad", "_anchor_ori_sum"),
+    ):
+        assert f'self.metrics["{metric}"][:] = self.{accumulator} / ' in update, (
+            f"{metric} must be logged as an episode mean "
+            f"({accumulator} / step count), not the terminal sample"
+        )
+    assert "self._anchor_steps += 1.0" in update
+
+    # The terminal value stays available, under a name that cannot be mistaken
+    # for the mean.
+    for metric in ("anchor_pos_err_final_m", "anchor_ori_err_final_rad"):
+        assert f'self.metrics["{metric}"][:]' in update, (
+            f"{metric} must still be logged for failure diagnosis"
+        )
+
+    # An accumulator that is never cleared would carry the previous episode's
+    # error into the next one.
+    reset = inspect.getsource(ReferenceCommandTerm.reset)
+    for accumulator in ("_anchor_pos_sum", "_anchor_ori_sum", "_anchor_steps"):
+        assert f"self.{accumulator}[selected] = 0.0" in reset, (
+            f"{accumulator} must be cleared on reset or the next episode's "
+            "mean is contaminated by the previous one"
+        )

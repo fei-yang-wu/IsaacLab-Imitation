@@ -39,8 +39,13 @@ same selections are available directly:
 --task Isaac-Imitation-G1-v2 \
     env.command_interface.actor=latent|explicit|chunk \
     env.command_interface.encoder=single|causal9|future10|future26 \
-    env.command_interface.reference.selection=default|sonic|frame0
+    env.command_interface.reference.selection=default|sonic|random80_adaptive20|frame0
 ```
+
+`random80_adaptive20` chooses a trajectory uniformly and a start frame
+uniformly within its first 50% on 80% of resets. The other 20% use the learned
+SONIC failure distribution. Unlike SONIC's internal uniform-bin mixture, the
+random branch gives every trajectory equal probability.
 
 Register a new id when a protocol needs to be cited later; until then, override.
 
@@ -288,6 +293,31 @@ against MPJPE-G, and the measurement traps that have cost real time — Newton i
 not run-to-run deterministic at a fixed seed, and every per-minute rate is
 gameable by anything that lengthens an episode.
 
+### SONIC-compatible success-rate evaluation
+
+Use the dedicated [SONIC success evaluation
+protocol](wiki/sonic-success-evaluation.md) when reporting a checkpoint with
+SONIC's published success-rate definition. It is a third pass, separate from
+both task-strict qualification and the required non-terminating diagnostic.
+
+A motion succeeds only when it reaches the end of its reference without any of
+these failures: pelvis height error above 0.25 m, ankle/wrist height error above
+0.25 m, or full pelvis orientation error above 1 rad. The launch must disable
+`foot_pos_xyz` **and the interval push**, while retaining startup and reset
+randomization. Evaluate mode actions deterministically, run every assigned clip
+to completion, and preserve the exact task, agent entry point, encoder, command
+interface, data, and physics contract used by the checkpoint.
+
+Read the result as:
+
+- SR: `aggregate.completed_tracking_success_rate`
+- MPJPE-L: `successful_metrics.tracking_mpjpe_mm.mean`
+
+Do not use `tracking_success_rate` from a capped rollout: an unfinished survivor
+has not succeeded. MPJPE-L is micro-averaged over successful motions only, as in
+SONIC's evaluator. The repo-local `sonic-success-eval` skill contains the
+launch and validation checklist.
+
 Train a G1 imitation policy with RLOpt IPMD:
 
 ```bash
@@ -328,8 +358,9 @@ Play an IPMD-L2T checkpoint with the deployable student policy:
 
 ```bash
 python scripts/rlopt/play.py \
-    --task Isaac-Imitation-G1-Explicit-v2 \
+    --task Isaac-Imitation-G1-v2 \
     --algo IPMD_L2T \
+    --agent rlopt_ipmd_l2t_tuned_cfg_entry_point \
     --checkpoint /absolute/path/to/checkpoint.pt \
     env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
 ```
@@ -408,6 +439,47 @@ The stable public entrypoint is staged under
 the documented Phase 4 and Phase 5 release gates pass. The authoritative
 protocol is
 [`wiki/causal-interface-paper-plan.md`](wiki/causal-interface-paper-plan.md).
+
+The current ten-goal BONES-SEED language-planner baseline is trajectory-first.
+It collects 100 complete frame-0 oracle-policy trajectories per motion in one
+1,000-environment Newton process, with domain randomization retained, pushes
+disabled, deterministic policy actions, and official SONIC terminations with
+foot XYZ disabled. Samples include causal robot history, the oracle latent
+target, current expert/achieved `root_qpos`, and a masked 30-frame expert
+`root_qpos` lookahead. The first medium planner is trained only on this oracle
+data for 10,000 updates and evaluated every 2,000 updates before any DAgger
+stage. The canonical MiniLM language descriptions and launcher are documented
+in
+[`experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/`](experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/README.md).
+
+```bash
+MODE=smoke experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/run.sh
+MODE=run experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/run.sh
+```
+
+The matched receding-horizon follow-up predicts three ordered H10 latent
+commands at each 5 Hz publication and compares fresh-only, exponential overlap,
+and clipped/gated overlap execution. It includes both future-publication
+(transport-aware) targets and a deliberately stale current-publication-frame
+diagnostic, plus the original H1 baseline. All seven rows use the same frozen
+root-qpos encoder, tracker, language goals, deterministic action selection,
+randomization-without-push protocol, 10k planner budget, and 10-by-100 SONIC
+evaluation:
+
+```bash
+STAGES=materialize,train experiments/campaigns/2026-08-06-bones-language10-latent-receding/run.sh
+STAGES=eval,aggregate experiments/campaigns/2026-08-06-bones-language10-latent-receding/run.sh
+```
+
+The completed 10-by-100 grid selects future-publication H3 fresh-only by the
+predeclared SR-first rule: 0.401 SONIC SR versus 0.329 for H1. Future
+clipped/gated is the quality Pareto point at 0.396 SR and 39.72 mm successful
+MPJPE-L, versus 49.82 mm for fresh-only. Current-publication-frame overlap is
+rejected. See the campaign README for the full seven-row and per-motion result.
+
+The current H10 tracker is not used for an execute-5/10 Hz row: changing its
+publication cadence would violate the tracker training contract. Qualify a
+matched execute-5 tracker before adding that cadence comparison.
 
 For the two-stage high-level skill workflow, use the pipeline entrypoint. It
 first runs offline DiffSR skill-encoder pretraining, checks

@@ -103,6 +103,14 @@ Two passes, both required by `AGENTS.md`. Strict is the protocol number;
 full-horizon is the honest tracking number, because the strict pass scores MPJPE
 only over frames a surviving episode reached.
 
+There is also a separate, optional **SONIC-compatible reporting pass**. It uses
+SONIC's released evaluation thresholds, disables `foot_pos_xyz` and the
+interval push while retaining startup and reset randomization, evaluates mode
+actions deterministically, requires each motion to reach its reference
+endpoint, and reports MPJPE-L only over successful motions. It does not replace
+either pass below. See
+[SONIC-Compatible Success Evaluation](sonic-success-evaluation.md).
+
 ```bash
 # strict: every termination active -- this is the qualification pass
 pixi run -e isaaclab python -m imitation_experiments.lowlevel.evaluate_checkpoint \

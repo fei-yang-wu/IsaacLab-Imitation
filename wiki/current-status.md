@@ -2,13 +2,10 @@
 
 Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
 
-Last verified: 2026-07-29. The current working tree repoints
-`Isaac-Imitation-G1-Latent-v0` to the Stable/SONIC recipe with legacy
-LAFAN1 resets; the former strict surface remains available as
-`Isaac-Imitation-G1-Latent-Strict-v0`. ICE job `5542378` already trained the
-new Stable surface through the requested 500M comparison point and onward to
-about 1B frames, so no duplicate 500M job was submitted. The exact 500M
-Stable-versus-Strict inference diagnostic is recorded below.
+Last verified: 2026-08-06. New latent/interface work uses
+`Isaac-Imitation-G1-v2`; frozen v0/v1 aliases remain only for reproducing the
+historical runs recorded below. The newest active decisions are the 129k H200
+recipe and the selected-ten trajectory-first language planner protocol.
 
 This is the living memory for the active research project. Read it first when
 returning to the project or starting a new agent session. It answers **where we
@@ -28,6 +25,216 @@ cluster submission, job failure, or paper result. Verify changing external
 state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
+
+## Default BONES-129k H200 training recipe (2026-08-05)
+
+The default single-H200 BONES-SEED 129k controller geometry is now **16,384
+environments x 24 rollout steps**, with minibatch **294,912**, gamma **0.97**,
+Newton/MJWarp, seed 0, and checkpoints every 50M frames. New long runs use a
+10B-frame cap. ICE still limits one allocation to 16 hours, so slower online
+latent learners may require a continuation from the newest intact checkpoint
+under persistent `/data`; a TIMEOUT is not evidence that the 10B cap was
+reached.
+
+The common environment/data contract is `Isaac-Imitation-G1-v2`, the resident
+129,785-motion reference arrays at
+`/data/bones_seed_ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1`, the
+root-qpos macro interface, tuned rewards/curriculum, and the
+`random80_adaptive20` reset sampler. That sampler chooses a trajectory
+uniformly and a frame uniformly within its first half on 80% of resets; the
+remaining 20% use the learned SONIC failure distribution.
+
+Log these runs to W&B project **`g1-bones-seed`**, with concise functional
+groups such as **`bones129k-ablation`**. Tags must identify the common
+`bones-seed`, `129785`, `v2`, `newton`, `rollout24`, `gamma097`, and
+`reset80-adaptive20` features plus the arm-specific command scheme (for
+example `sonic_fsq32`, `vqvae_k32`, `autoencoder`, `root_qpos_explicit`, or
+`reset80_diffsr`). The guarded launcher and exact five-arm contracts live in
+`experiments/campaigns/2026-08-05-bones129k-latent-sampler/`.
+
+The first production submission uses ICE jobs `5567801` (frozen DiffSR reset
+baseline), `5567802` (SONIC-style FSQ), `5567803` (EMA VQ-VAE), `5567804`
+(continuous autoencoder), and `5567809` (explicit root-qpos). The common
+submitted workspace archive SHA-256 is
+`e20e93be390a9985df0472893f20ce2b68050dd12a89366743a9dfc66f951d05`;
+the complete arm-to-tag mapping and smoke provenance are retained in the
+campaign's `cluster_submission.json`.
+
+A 2026-08-07 fidelity audit against the SONIC paper (arXiv 2511.07820) and
+the released `gear_sonic` BONES-SEED config found that `5567802` matches
+SONIC's latent-learning objective exactly — hold-1 per-step re-encoding,
+policy gradient into the encoder, reconstruction MSE at the released
+coefficient 0.01, FSQ 64 coordinates x 32 levels, encoder MLP
+[2048, 1024, 512, 512] SiLU, no phase — but not its encoder input: SONIC
+reads 10 future frames spaced 0.1 s (a 0.9 s span) of 14-body keypoint
+positions plus a 6D root-orientation difference, where `5567802` reads 10
+consecutive 0.02 s frames of joint qpos/qvel plus anchor pose. The corrected
+`sonic_fsq32_v2` arm (new `future10_stride5` encoder view with
+`frame_stride` support, components `[keypoint_pos, root_ori]`, SONIC's own
+14-body list; 480-value encoder input) was submitted as ICE job `5571455`.
+The audit details and the deliberately retained deltas (our common controller
+recipe; recon on a dedicated Adam(2e-5) instead of SONIC's single summed
+loss) are recorded in the campaign README.
+
+## Skill-transition factorization ablation (2026-08-06)
+
+Three fixed-duration skill objectives are running as a matched 5B-frame H200
+ablation in W&B project `g1-bones-seed`, group
+`skill-encoding-ablation`. This user-selected 5B cap is an explicit exception
+to the default 10B recipe above. All arms retain the 380-wide root-qpos encoder
+input, 256-D code plus phase, ten-step hold, and common 16,384 x 24 controller
+geometry.
+
+The encoder pretrains are `5570344` (`state_occupancy`), `5570351`
+(`semimarkov_chain`), and `5570358` (`endpoint_delta`). Their dependent
+controllers are respectively `5570359`, `5570368`, and `5570370`; every
+controller uses an arm-specific `afterok` dependency, so no controller can
+start without its matching 50,000-update encoder. At 14:10 EDT, all three
+pretrains were running on H200 GPUs and all three controllers were pending on
+their dependencies. Source contract SHA-256 is
+`f8db5faa403aa4f7ca40b1749a630fa769cb727cb4c0d955e2df7645edc77644`;
+workspace archive SHA-256 is
+`c8452d8261cc8f47a07ed33daf70a5810198830aff451c2bda0856aaec0b41cc`.
+The guarded launcher and full submission record live in
+`experiments/campaigns/2026-08-06-bones129k-skill-encoding/`.
+
+## BONES language-motion screen and selected ten (2026-08-05)
+
+The earlier language demonstrations used two historical sets. `demo8` was
+`Neutral_stoop_down`, two one-hand heavy-object transfers, a two-hand light
+pickup, standing mug drinking, two door-opening sequences, and seated book
+reading. The later `local10` used `Neutral_stoop_down`, `avoid_bump`, axe
+cutting, a two-hand heavy transfer, a short light-object pickup, body check,
+`burning_loop`, casual greeting, cellphone typing, and coughing. The later set
+contained known poor planner cases (`burning_loop`, `avoid_bump`). The old
+random-start evaluation could also produce near-end rollouts for short clips;
+the new campaign does not inherit that protocol.
+
+A replacement pool of 30 diverse motions was evaluated in one local process
+against the full 129,785-motion reference arrays. Each motion received 128
+stable environments (3,840 total), deterministic actions, startup/reset
+randomization, no push, frame-0 starts, and SONIC terminations. The rollout-24,
+gamma-0.97 3.5B checkpoint completed all environments in 69 seconds with
+aggregate SR 0.9047. Twenty-four candidates reached 1.0 per-motion SR.
+
+The selected ten are `Neutral_stoop_down`, lift-crate-and-walk, standing mug
+drinking, fishing, cellphone typing, feeding birds, slow clockwise arc walking,
+driving away a mosquito, casual greeting, and surrender/raised hands. All ten
+scored 1.0 SR over 128 rollouts; their mean MPJPE-L is 16.73 mm and mean
+MPJPE-G is 0.131 m. Exact names, full-store ranks, language goals, metrics, and
+the reusable one-process launcher live in
+`experiments/campaigns/2026-08-05-bones-language10-screen/`.
+
+That original set is now the frozen v1 baseline rather than the next-run
+selection. After its planner evaluation, the task-active v2 selection retained
+`Neutral_stoop_down`, lift-crate, feeding-birds, slow arc walking, and
+mosquito-drive-away. It replaced drinking, fishing, phone typing, greeting,
+and surrender with slow straight walking, one-hand object carrying while
+walking backward, opening/traversing/closing a door, injured-torso diagonal
+walking, and a one-hand heavy-object high-to-low transfer. Every v2 motion had
+1.0 low-level SONIC SR in the 128-rollout candidate screen.
+
+The v2 anti-holding screen defines a hold frame as root speed below 0.03 m/s,
+root angular speed below 0.10 rad/s, and joint RMS speed below 0.15 rad/s; only
+segments of at least 0.20 seconds count. It rejects hold fraction above 20% or
+any uninterrupted hold above 1.50 seconds. The selected set averages 2.65%
+hold frames, peaks at 8.71%, and has no hold longer than 1.18 seconds. Fishing
+is intentionally removed despite robust planner SR because it is 38.9% held
+and contains a 4.44-second hold. Exact metrics and canonical task descriptions
+are frozen in `selected10_taskactive_v2.json`. The five replacements are not
+yet planner-qualified; they require a fresh data and training run.
+
+The selected-ten development protocol is now trajectory-first. Collection,
+oracle-pretrained planner evaluation, and any later planner-driven stage start
+at frame 0; the older random 0--200 Phase-5 start does not apply. One local
+process assigns 100 environments to each of the ten motions (1,000 total) and
+runs one complete oracle-policy trajectory per environment until an official
+SONIC tracking failure or `reference_finished`. Foot-position XYZ and
+base-height terminations are disabled, pushes are disabled, the remaining
+startup/reset domain randomization stays enabled, and policy actions are
+deterministic.
+
+The saved planner dataset is trajectory-keyed rather than row-budgeted. It
+retains the ten-frame causal robot history, 256-D oracle latent target,
+trajectory/rank/episode/control-step identity, termination causes and tracking
+success, current expert and achieved 38-D `root_qpos`, and a valid-masked
+30-frame expert root-qpos lookahead. The lookahead and root-qpos fields make
+future direct-root-qpos and temporal-ensemble planner ablations possible
+without recollecting simulation. Motion rank is metadata only: deployment
+must supply the language goal explicitly and the evaluator fails on any
+goal/reference mismatch.
+
+The current first planner stage uses only those oracle-policy trajectories—no
+DAgger or planner-driven rows. One medium flow Transformer trains for 10,000
+updates with a trajectory-wise 80/20 split. Checkpoints at 2k, 4k, 6k, 8k, and
+10k are each evaluated on all ten explicit goals, reporting official SONIC SR
+and success-only MPJPE-L. Plateau is provisionally flagged only after two
+consecutive 2k intervals move SR by less than one percentage point and
+success-only MPJPE-L by less than 1 mm.
+
+The generalized v2 collector and pipeline passed a real end-to-end smoke on
+2026-08-05. Oracle collection completed all ten motions at SR 1.0 with 5,137
+valid control transitions and 519 planner publications; the stored tensor
+contract includes `[N,30,38]` expert root-qpos lookahead plus its validity mask.
+A medium planner trained for 20 smoke updates and deterministic explicit-goal
+evaluation completed all 20 rollout jobs. The 10- and 20-update smoke SRs were
+both 0.4; that is only a wiring result. The canonical launcher is
+`experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/run.sh`.
+This selected-ten workflow supersedes row budgets for the local experiment;
+the older 100-goal paper Phase-5 protocol below remains frozen historical
+scope until explicitly revised.
+
+The full seed-0 collection then completed exactly 1,000/1,000 assigned
+trajectories at SONIC SR 1.0, with 100 per motion, no incomplete trajectories,
+and 513,700 valid control transitions. It wrote seven sample shards. The
+medium 10,000-update planner and all 50 milestone evaluations completed under
+`logs/bones_language10_oracle_pretrain_seed0`. The 2k/4k/6k/8k/10k SONIC SR
+curve is 0.295/0.293/0.307/0.306/0.339; success-only MPJPE-L is
+47.79/53.39/52.60/49.08/46.68 mm. No checkpoint meets the plateau rule. The
+10k result is best, and its 8k-to-10k gain is still 3.3 SR points and 2.40 mm.
+Success remains concentrated in fishing (1.00), lift-crate (0.99), and slow
+arc walking (0.96), while most other goals are near zero despite offline target
+cosine 0.983. Treat this as a closed-loop precision/covariate gap; stop before
+planner-driven DAgger until the next experiment is chosen explicitly.
+
+The 10k full-horizon diagnostic rendered every goal with all early
+terminations disabled, deterministic policy inference, the normal startup/reset
+randomization retained, and only interval pushes removed. All ten remained
+upright through 5,137 combined steps. Step-weighted full-horizon MPJPE-L is
+58.28 mm, EE XYZ error is 0.322 m, and MPJPE-G is 300.10 mm. Visual inspection
+confirms pose/root-command drift rather than falling: fishing stays close,
+while surrender misses the raised-hands pose. Videos and per-motion metrics are
+in `logs/bones_language10_oracle_pretrain_seed0/nonterminating_video/`
+`update_0010000_randomized_no_push`; reproduce them with campaign
+`MODE=video`.
+
+The 10k H1 planner completed an optimizer-preserving continuation to 20k; the
+extended `--num_updates` value is a total target, and milestone numbers continue
+from 12k rather than restarting at one. The pre-resume latest checkpoint is
+retained as `latest_pre_resume_0010000.pt`. The earlier checkpoint did not record
+RNG state, so this is optimizer-preserving but not a bit-exact stochastic
+continuation. The full 2k-through-20k SR curve is
+0.295/0.293/0.307/0.306/0.339/0.305/0.307/0.312/0.322/0.344; success-only
+MPJPE-L is 47.79/53.39/52.60/49.08/46.68/44.09/48.98/41.96/45.22/45.48 mm.
+The curve does not satisfy the formal plateau heuristic because it oscillates,
+but 20k gains only 0.5 SR points over 10k despite a clear held-out latent-fit
+improvement. Do not extend again merely on offline loss.
+
+The controlled H3 receding-horizon campaign completed at
+`experiments/campaigns/2026-08-06-bones-language10-latent-receding/`. Both
+future-publication and current-publication target materializations completed
+with 49,000 matched rows and 2,900 expected tail exclusions. The runtime H3
+bootstrap and exponential overlap passed a real kit-less Newton rollout; both
+10k planners, all 70 deterministic randomized-no-push rollouts, and the strict
+aggregate passed. SR-first ranking is future/fresh-only 0.401,
+future/clipped-gated 0.396, future/exponential 0.394, current/fresh-only 0.359,
+H1 0.329, current/clipped-gated 0.317, and current/exponential 0.283.
+Future/clipped-gated gives the best successful MPJPE-L among the leading rows
+(39.72 mm versus 49.82 mm for future/fresh-only), but redistributes success
+strongly by motion. Use future-publication targets; retain fresh-only as the
+SR winner and clipped/gated as the quality Pareto alternative. Reject stale-
+frame overlap. The grid stays at 5 Hz/H10. Execute-5/10 Hz remains deferred
+because the frozen tracker was trained with a ten-step held code and phase.
 
 ## Stable LAFAN1 5B convergence run submitted (2026-07-29)
 

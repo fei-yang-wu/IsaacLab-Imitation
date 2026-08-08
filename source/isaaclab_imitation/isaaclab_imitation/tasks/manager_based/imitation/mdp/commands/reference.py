@@ -13,7 +13,7 @@ reference drives nothing and exists only to score the rollout -- and it owns:
   onto (:class:`ReferenceSelectionCfg`). Trajectory choice is the parallel
   trajectory manager's schedule (including ``custom``, where an evaluation
   driver or per-goal collector supplies the ranks); start-frame choice is the
-  ``StartFrameSampler`` / ``SonicAdaptiveResetSampler`` pair this term builds
+  ``StartFrameSampler`` / adaptive full-trajectory sampler this term builds
   from its own config.
 * **the adaptive-failure bookkeeping** those samplers consume
   (:meth:`record_visits` / :meth:`record_failures`).
@@ -58,6 +58,7 @@ from .._compiled import (
     quat_error_squared,
     quat_to_rot6d_flat,
 )
+from .reset_sampling import RandomTrajectoryAdaptiveResetSampler
 
 if TYPE_CHECKING:
     from isaaclab_imitation.envs import ImitationRLEnv
@@ -102,7 +103,8 @@ class ReferenceSelectionCfg:
     """SONIC joint rank+frame sampling from the adaptive failure distribution.
 
     When set, the adaptive sampler picks the trajectory AND the frame, so
-    ``schedule`` no longer applies.
+    ``schedule`` no longer applies. A configured explicit random-trajectory
+    branch may wrap this sampler without changing its failure bookkeeping.
     """
 
     adaptive_weight_fn: Callable | None = None
@@ -114,6 +116,15 @@ class ReferenceSelectionCfg:
     adaptive_uniform_ratio: float = 0.1
     adaptive_pre_failure_window: int = 200
     adaptive_failure_rate_max_over_mean: float = 50.0
+
+    random_trajectory_sampling_ratio: float = 0.0
+    """Explicit random-trajectory branch probability for full-trajectory sampling."""
+
+    random_trajectory_start_fraction: float = 0.5
+    """Leading trajectory fraction available to the explicit random branch."""
+
+    rng_seed: int | None = None
+    """Dedicated reference/reset RNG seed; ``None`` inherits the environment seed."""
 
     def resolve(self) -> None:
         """Normalize and validate in place. Idempotent."""
@@ -159,6 +170,16 @@ class ReferenceSelectionCfg:
             raise ValueError("adaptive_pre_failure_window must be >= 0.")
         if float(self.adaptive_failure_rate_max_over_mean) <= 0.0:
             raise ValueError("adaptive_failure_rate_max_over_mean must be positive.")
+        if not 0.0 <= float(self.random_trajectory_sampling_ratio) <= 1.0:
+            raise ValueError("random_trajectory_sampling_ratio must be in [0, 1].")
+        if not 0.0 < float(self.random_trajectory_start_fraction) <= 1.0:
+            raise ValueError("random_trajectory_start_fraction must be in (0, 1].")
+        if float(self.random_trajectory_sampling_ratio) > 0.0 and not bool(
+            self.full_trajectory
+        ):
+            raise ValueError(
+                "random_trajectory_sampling_ratio requires full_trajectory=true."
+            )
 
     def resolved_start_mode(self) -> str:
         """The concrete start mode, with ``auto`` decided."""
@@ -201,6 +222,12 @@ class ReferenceCommandTerm(CommandTerm):
         # after the trajectory manager exists.
         self._start_frame_sampler: StartFrameSampler | None = None
         self._adaptive_failure_reset_sampler: SonicAdaptiveResetSampler | None = None
+        self._full_trajectory_reset_sampler: (
+            SonicAdaptiveResetSampler | RandomTrajectoryAdaptiveResetSampler | None
+        ) = None
+        self._predicted_reset_ranks: torch.Tensor | None = None
+        self._predicted_reset_steps: torch.Tensor | None = None
+        self._predicted_reset_probabilities: torch.Tensor | None = None
         self._build_reset_samplers()
         # Per-env metric buffers; CommandTerm.reset() averages these over the
         # resetting envs into `Metrics/reference/<name>` and zeroes them.
@@ -229,6 +256,16 @@ class ReferenceCommandTerm(CommandTerm):
             self.num_envs, device=self.device
         )
         self.metrics["anchor_ori_err_rad"] = torch.zeros(
+            self.num_envs, device=self.device
+        )
+        self._anchor_pos_sum = torch.zeros(self.num_envs, device=self.device)
+        self._anchor_ori_sum = torch.zeros(self.num_envs, device=self.device)
+        self._anchor_steps = torch.zeros(self.num_envs, device=self.device)
+        # The value at the final in-episode step, kept alongside the mean.
+        self.metrics["anchor_pos_err_final_m"] = torch.zeros(
+            self.num_envs, device=self.device
+        )
+        self.metrics["anchor_ori_err_final_rad"] = torch.zeros(
             self.num_envs, device=self.device
         )
 
@@ -263,6 +300,7 @@ class ReferenceCommandTerm(CommandTerm):
         *,
         past_steps: int = 0,
         future_steps: int = 0,
+        frame_stride: int = 1,
     ) -> torch.Tensor:
         """One command component, single-frame or windowed.
 
@@ -270,7 +308,9 @@ class ReferenceCommandTerm(CommandTerm):
         paths directly; a non-trivial window is built by the data plane's
         window path. Both express anchor-relative quantities in the robot's
         current anchor frame, so the windowed view with ``0/0`` and the
-        single-frame view are the same values.
+        single-frame view are the same values. ``frame_stride`` spaces the
+        window slots that many reference frames apart (SONIC's tokenizer uses
+        stride 5 at 50 Hz for 0.1 s spacing).
         """
         term_name = _term_name_of(name)
         if int(past_steps) == 0 and int(future_steps) == 0:
@@ -279,6 +319,7 @@ class ReferenceCommandTerm(CommandTerm):
             term_name=term_name,
             past_steps=int(past_steps),
             future_steps=int(future_steps),
+            frame_stride=int(frame_stride),
             joint_ids=self._resolve_joint_ids(),
             anchor_body_name=self.cfg.anchor_body_name,
             reference_body_names=self._body_names_for(name),
@@ -288,7 +329,41 @@ class ReferenceCommandTerm(CommandTerm):
     Selection (applied by the environment's reset path).
     """
 
-    def resample_reference(self, env_ids: torch.Tensor) -> None:
+    def prepare_predicted_resets(self) -> None:
+        """Snapshot the adaptive distribution and stage candidates before physics.
+
+        This is active only for ``reference_prefetch_mode=next_and_reset``.
+        Current-step failures are intentionally applied to the following
+        snapshot, making the one-step adaptation lag explicit and causal.
+        """
+        env = self._imitation_env()
+        if env.expert_data_plane.reference_prefetch_mode != "next_and_reset":
+            return
+        if not self.cfg.selection.full_trajectory:
+            raise RuntimeError(
+                "next_and_reset currently requires full-trajectory "
+                "selection so one snapshotted distribution owns both rank and frame."
+            )
+        sampler = self._full_trajectory_reset_sampler
+        if sampler is None:
+            raise RuntimeError("Full-trajectory reset sampling is not initialized.")
+        if self._predicted_reset_ranks is not None:
+            raise RuntimeError("A predictive reset pool is already pending.")
+        count = int(env.cfg.data.reference_prefetch_reset_pool_size)
+        probabilities = sampler.sampling_probabilities().clone()
+        ranks, steps = sampler.sample(count, probabilities=probabilities)
+        self._predicted_reset_probabilities = probabilities
+        self._predicted_reset_ranks = ranks
+        self._predicted_reset_steps = steps
+        env.expert_data_plane.begin_predicted_reset_reference(ranks, steps)
+
+    def finish_predicted_reset_step(self) -> None:
+        """Discard unused candidate metadata after the staged pool is drained."""
+        self._predicted_reset_probabilities = None
+        self._predicted_reset_ranks = None
+        self._predicted_reset_steps = None
+
+    def resample_reference(self, env_ids: torch.Tensor) -> int:
         """Resample the reference cursor for the given environments.
 
         Called by ``ImitationRLEnv._reset_idx`` before ``super()._reset_idx``,
@@ -297,23 +372,50 @@ class ReferenceCommandTerm(CommandTerm):
         picks trajectory ranks and frames jointly; otherwise the trajectory
         manager's schedule picks the trajectory (including the ``custom``
         selector) and the start-frame sampler picks the local start.
+        Returns the number of rows already present in the predictive GPU pool;
+        callers synchronously fetch only any overflow. The ordinary exact path
+        returns zero.
         """
         env = self._imitation_env()
         tm = env.trajectory_manager
         env_ids_tm = env_ids.to(device=tm.state_device, dtype=torch.long)
+        if (
+            env.expert_data_plane.reference_prefetch_mode == "next_and_reset"
+            and self._predicted_reset_ranks is not None
+            and self._predicted_reset_steps is not None
+            and self._predicted_reset_probabilities is not None
+        ):
+            sampler = self._full_trajectory_reset_sampler
+            if sampler is None:
+                raise RuntimeError("Predictive reset sampler is unavailable.")
+            count = int(env_ids_tm.numel())
+            prefetched_count = min(count, int(self._predicted_reset_ranks.numel()))
+            ranks = self._predicted_reset_ranks[:prefetched_count]
+            steps = self._predicted_reset_steps[:prefetched_count]
+            overflow = count - prefetched_count
+            if overflow > 0:
+                overflow_ranks, overflow_steps = sampler.sample(
+                    overflow,
+                    probabilities=self._predicted_reset_probabilities,
+                )
+                ranks = torch.cat((ranks, overflow_ranks))
+                steps = torch.cat((steps, overflow_steps))
+            tm.reset_envs(env_ids_tm, ranks=ranks, steps=steps)
+            self.finish_predicted_reset_step()
+            return prefetched_count
         if self.cfg.selection.full_trajectory:
-            if self._adaptive_failure_reset_sampler is None:
-                raise RuntimeError("Adaptive failure reset sampler is not enabled.")
-            reset_ranks, reset_steps = self._adaptive_failure_reset_sampler.sample(
-                env_ids_tm.numel()
-            )
+            sampler = self._full_trajectory_reset_sampler
+            if sampler is None:
+                raise RuntimeError("Full-trajectory reset sampler is not enabled.")
+            reset_ranks, reset_steps = sampler.sample(env_ids_tm.numel())
             tm.reset_envs(env_ids_tm, ranks=reset_ranks, steps=reset_steps)
-            return
+            return 0
         if self._start_frame_sampler is None:
             raise RuntimeError("Reference start-frame sampler was not built.")
         ranks = tm.env_traj_rank.index_select(0, env_ids_tm)
         reset_steps = self._start_frame_sampler.sample_steps(ranks)
         tm.reset_envs(env_ids_tm, steps=reset_steps)
+        return 0
 
     def record_visits(self) -> None:
         """Record the current cursor as a visit in the SONIC failure sampler.
@@ -385,6 +487,7 @@ class ReferenceCommandTerm(CommandTerm):
             mode="adaptive",
             weight_fn=weight_fn,
             device=tm.state_device,
+            generator=tm.reset_generator,
         )
 
     """
@@ -427,12 +530,31 @@ class ReferenceCommandTerm(CommandTerm):
         ref_anchor_pos_w, ref_anchor_quat_w = env._get_reference_body_pose_w_fast(
             (self.cfg.anchor_body_name,)
         )
-        self.metrics["anchor_pos_err_m"][:] = torch.linalg.vector_norm(
+        anchor_pos_err = torch.linalg.vector_norm(
             ref_anchor_pos_w[:, 0, :] - robot_anchor_pos_w, dim=-1
         )
-        self.metrics["anchor_ori_err_rad"][:] = torch.sqrt(
+        anchor_ori_err = torch.sqrt(
             quat_error_squared(robot_anchor_quat_w, ref_anchor_quat_w[:, 0, :])
         )
+        # Same accumulate-then-average shape as MPJPE above, and for the same
+        # reason: these used to hold the instantaneous error, so `reset` logged
+        # the value AT THE STEP THE EPISODE ENDED. Most episodes end on a
+        # tracking-error termination, so that sample was taken at the failure
+        # threshold by construction - a metric that reports roughly its own
+        # termination bound no matter how well the policy tracks. The two MPJPE
+        # metrics were converted to episode means; these two were left behind.
+        self._anchor_pos_sum += anchor_pos_err
+        self._anchor_ori_sum += anchor_ori_err
+        self._anchor_steps += 1.0
+        anchor_steps = self._anchor_steps.clamp(min=1.0)
+        self.metrics["anchor_pos_err_m"][:] = self._anchor_pos_sum / anchor_steps
+        self.metrics["anchor_ori_err_rad"][:] = self._anchor_ori_sum / anchor_steps
+        # The terminal value is still worth having - for a failure it is the
+        # error that tripped the threshold, and for a completed motion it is the
+        # accumulated drift at the end. Kept under its own name so it can never
+        # be mistaken for the episode mean.
+        self.metrics["anchor_pos_err_final_m"][:] = anchor_pos_err
+        self.metrics["anchor_ori_err_final_rad"][:] = anchor_ori_err
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         """Log the metrics, then clear this episode's MPJPE accumulators.
@@ -446,6 +568,9 @@ class ReferenceCommandTerm(CommandTerm):
         self._mpjpe_l_sum[selected] = 0.0
         self._mpjpe_g_sum[selected] = 0.0
         self._mpjpe_steps[selected] = 0.0
+        self._anchor_pos_sum[selected] = 0.0
+        self._anchor_ori_sum[selected] = 0.0
+        self._anchor_steps[selected] = 0.0
         return extras
 
     def _resample_command(self, env_ids: Sequence[int]):
@@ -464,6 +589,15 @@ class ReferenceCommandTerm(CommandTerm):
         """Construct the start-frame samplers from this term's own config."""
         selection = self.cfg.selection
         tm = self._imitation_env().trajectory_manager
+        if (
+            self._imitation_env().expert_data_plane.reference_prefetch_mode
+            == "next_and_reset"
+            and not selection.full_trajectory
+        ):
+            raise ValueError(
+                "reference_prefetch_mode=next_and_reset requires "
+                "selection.full_trajectory=true (the SONIC joint rank/frame sampler)."
+            )
         start_mode = selection.resolved_start_mode()
         if selection.full_trajectory or start_mode == StartFrameSampler.ADAPTIVE:
             self._adaptive_failure_reset_sampler = SonicAdaptiveResetSampler(
@@ -478,10 +612,31 @@ class ReferenceCommandTerm(CommandTerm):
                 failure_rate_max_over_mean=float(
                     selection.adaptive_failure_rate_max_over_mean
                 ),
+                generator=tm.reset_generator,
             )
         if selection.full_trajectory:
             # SONIC picks ranks AND frames jointly from the bin distribution;
-            # the generic start sampler is unused.
+            # the generic start sampler is unused. A repo-owned mixture may
+            # wrap SONIC without changing its failure bookkeeping.
+            assert self._adaptive_failure_reset_sampler is not None
+            if float(selection.random_trajectory_sampling_ratio) > 0.0:
+                self._full_trajectory_reset_sampler = (
+                    RandomTrajectoryAdaptiveResetSampler(
+                        tm.length,
+                        adaptive=self._adaptive_failure_reset_sampler,
+                        random_sampling_ratio=float(
+                            selection.random_trajectory_sampling_ratio
+                        ),
+                        random_start_fraction=float(
+                            selection.random_trajectory_start_fraction
+                        ),
+                        generator=tm.reset_generator,
+                    )
+                )
+            else:
+                self._full_trajectory_reset_sampler = (
+                    self._adaptive_failure_reset_sampler
+                )
             self._start_frame_sampler = None
             return
         if start_mode == StartFrameSampler.ADAPTIVE:
@@ -498,6 +653,7 @@ class ReferenceCommandTerm(CommandTerm):
                 mode="adaptive",
                 weight_fn=weight_fn,
                 device=tm.state_device,
+                generator=tm.reset_generator,
             )
             return
         self._start_frame_sampler = StartFrameSampler(
@@ -507,6 +663,7 @@ class ReferenceCommandTerm(CommandTerm):
             random_step_min=int(selection.random_step_min),
             random_step_max=int(selection.random_step_max),
             device=tm.state_device,
+            generator=tm.reset_generator,
         )
 
     def _reset_tracking_failure_mask(self) -> torch.Tensor:
