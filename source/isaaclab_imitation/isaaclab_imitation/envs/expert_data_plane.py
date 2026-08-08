@@ -2507,10 +2507,13 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict:
         """Sample an expert window from explicit trajectory ranks."""
         if past_steps < 0 or future_steps < 0:
             raise ValueError("Expert window steps must be >= 0.")
+        if int(frame_stride) < 1:
+            raise ValueError("Expert window frame_stride must be >= 1.")
         tm = self.trajectory_manager
         traj_ranks_tm = traj_ranks.to(device=tm.state_device, dtype=torch.long)
         local_steps_tm = local_steps.to(device=tm.state_device, dtype=torch.long)
@@ -2524,7 +2527,7 @@ class ExpertDataPlane:
             future_steps + 1,
             device=tm.state_device,
             dtype=torch.long,
-        )
+        ) * int(frame_stride)
         lengths = tm.length.index_select(0, traj_ranks_tm).clamp(min=1)
         max_step = lengths - 1
         window_steps = local_steps_tm.unsqueeze(1) + window_offsets.unsqueeze(0)
@@ -2782,10 +2785,13 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict | None:
         cache = self._ensure_root_qpos_macro_cache()
         if cache is None:
             return None
+        if int(frame_stride) < 1:
+            raise ValueError("Expert macro window frame_stride must be >= 1.")
         tm = self.trajectory_manager
         cache_device = cache["joint_pos"].device
         traj_ranks_t = traj_ranks.to(device=tm.state_device, dtype=torch.long)
@@ -2795,7 +2801,7 @@ class ExpertDataPlane:
             future_steps + 1,
             device=tm.state_device,
             dtype=torch.long,
-        )
+        ) * int(frame_stride)
         lengths = tm.length.index_select(0, traj_ranks_t).clamp(min=1)
         steps = local_steps_t.unsqueeze(1) + offsets.unsqueeze(0)
         steps = torch.minimum(steps.clamp(min=0), (lengths - 1).unsqueeze(1))
@@ -2819,11 +2825,16 @@ class ExpertDataPlane:
         past_steps: int,
         future_steps: int,
     ) -> TensorDict:
+        # One place decides the macro cadence, so every macro consumer -- DiffSR
+        # pretraining, the live low-level encoder input, and planner sample
+        # collection -- reads the same window. A caller cannot forget it.
+        frame_stride = self._expert_macro_frame_stride()
         compact = self._sample_root_qpos_macro_window_for_trajectory_ranks(
             traj_ranks,
             local_steps,
             past_steps=past_steps,
             future_steps=future_steps,
+            frame_stride=frame_stride,
         )
         if compact is not None:
             return compact
@@ -2832,6 +2843,7 @@ class ExpertDataPlane:
             local_steps,
             past_steps=past_steps,
             future_steps=future_steps,
+            frame_stride=frame_stride,
         )
 
     def _build_reward_input_cache(self, *, device: torch.device) -> None:
@@ -2930,10 +2942,13 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict:
         """Sample an oldest-to-newest expert window around each requested step."""
         if past_steps < 0 or future_steps < 0:
             raise ValueError("Expert window steps must be >= 0.")
+        if int(frame_stride) < 1:
+            raise ValueError("Expert window frame_stride must be >= 1.")
         tm = self.trajectory_manager
         env_ids_tm = env_ids.to(device=tm.state_device, dtype=torch.long)
         local_steps_tm = local_steps.to(device=tm.state_device, dtype=torch.long)
@@ -2942,7 +2957,7 @@ class ExpertDataPlane:
             future_steps + 1,
             device=tm.state_device,
             dtype=torch.long,
-        )
+        ) * int(frame_stride)
         window_steps = local_steps_tm.unsqueeze(1) + window_offsets.unsqueeze(0)
         window_steps = window_steps.clamp(min=0)
         expert_window = tm.sample_slice(
@@ -3321,6 +3336,22 @@ class ExpertDataPlane:
             "expert_anchor_ori_b",
         )
 
+    def _expert_macro_frame_stride(self) -> int:
+        """Reference frames between consecutive DiffSR macro-window slots.
+
+        1 is the historical consecutive-frame window (10 slots = 0.18 s at
+        50 Hz). 5 is SONIC's released tokenizer cadence, which spaces the same
+        10 slots 0.1 s apart for a 0.9 s span. The macro state's WIDTH is
+        unchanged either way, so nothing downstream can detect a mismatch from
+        a shape: the skill checkpoint records this value and the low level
+        refuses an encoder pretrained at a different stride.
+        """
+        configured = getattr(self._env.cfg, "expert_macro_frame_stride", 1)
+        stride = int(configured)
+        if stride < 1:
+            raise ValueError("expert_macro_frame_stride must be >= 1.")
+        return stride
+
     def _expert_macro_state_sequence_from_terms(
         self,
         terms: dict[str, torch.Tensor],
@@ -3428,6 +3459,7 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
         reference_body_names: Sequence[str] = (),
@@ -3438,6 +3470,7 @@ class ExpertDataPlane:
         cache_key = (
             int(past_steps),
             int(future_steps),
+            int(frame_stride),
             str(anchor_body_name),
             self._joint_ids_cache_key(joint_ids_t),
             reference_body_names_t,
@@ -3455,6 +3488,7 @@ class ExpertDataPlane:
             local_steps,
             past_steps=int(past_steps),
             future_steps=int(future_steps),
+            frame_stride=int(frame_stride),
         )
         cached_terms = self._build_expert_window_terms(
             expert_window,
@@ -3474,6 +3508,7 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
         reference_body_names: Sequence[str] = (),
@@ -3482,6 +3517,7 @@ class ExpertDataPlane:
         value = self._get_current_expert_window_terms(
             past_steps=int(past_steps),
             future_steps=int(future_steps),
+            frame_stride=int(frame_stride),
             joint_ids=joint_ids,
             anchor_body_name=anchor_body_name,
             reference_body_names=reference_body_names,
@@ -3561,6 +3597,7 @@ class ExpertDataPlane:
         global_indices: torch.Tensor | None = None,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> dict[Any, torch.Tensor] | None:
         mapped_values: dict[Any, torch.Tensor] = {}
         unknown_terms: list[str] = []
@@ -3605,6 +3642,7 @@ class ExpertDataPlane:
                 cache_key = (
                     int(past_steps),
                     int(future_steps),
+                    int(frame_stride),
                     self._expert_anchor_body_name,
                     ("all",),
                     reference_body_names,
@@ -3615,6 +3653,7 @@ class ExpertDataPlane:
                         local_steps,
                         past_steps=int(past_steps),
                         future_steps=int(future_steps),
+                        frame_stride=int(frame_stride),
                     )
                     window_terms_cache[cache_key] = self._build_expert_window_terms(
                         expert_window,
@@ -3695,6 +3734,7 @@ class ExpertDataPlane:
                     cache_key = (
                         int(past_steps),
                         int(future_steps),
+                        int(frame_stride),
                         self._expert_anchor_body_name,
                         ("all",),
                         reference_body_names,
@@ -3705,6 +3745,7 @@ class ExpertDataPlane:
                             local_steps,
                             past_steps=int(past_steps),
                             future_steps=int(future_steps),
+                            frame_stride=int(frame_stride),
                         )
                         window_terms_cache[cache_key] = self._build_expert_window_terms(
                             expert_window,
@@ -3760,6 +3801,7 @@ class ExpertDataPlane:
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
     ) -> TensorDict | None:
         if batch_size <= 0:
             return None
@@ -3824,6 +3866,7 @@ class ExpertDataPlane:
                 global_indices=current_global_indices,
                 past_steps=int(past_steps),
                 future_steps=int(future_steps),
+                frame_stride=int(frame_stride),
             )
             if mapped_current is None:
                 return None
@@ -3852,6 +3895,7 @@ class ExpertDataPlane:
                 global_indices=next_global_indices,
                 past_steps=int(past_steps),
                 future_steps=int(future_steps),
+                frame_stride=int(frame_stride),
             )
             if mapped_next is None:
                 return None
@@ -3893,6 +3937,7 @@ class ExpertDataPlane:
             required_keys,
             past_steps=int(self._env._latent_patch_past_steps),
             future_steps=int(self._env._latent_patch_future_steps),
+            frame_stride=int(getattr(self._env, "_latent_patch_frame_stride", 1)),
         )
 
     def sample_expert_macro_transition_batch(
@@ -4127,6 +4172,9 @@ class ExpertDataPlane:
         traj_rank = tm.env_traj_rank.index_select(
             0, env_ids_t.to(device=tm.state_device, dtype=torch.long)
         ).to(device=self._env.device, dtype=torch.long)
+        trajectory_length = tm._length.index_select(
+            0, traj_rank.to(device=tm.state_device, dtype=torch.long)
+        ).to(device=self._env.device, dtype=torch.long)
         expert_window = self._sample_expert_macro_window_for_trajectory_ranks(
             traj_rank.to(device=tm.state_device, dtype=torch.long),
             local_steps.to(device=tm.state_device, dtype=torch.long),
@@ -4188,6 +4236,7 @@ class ExpertDataPlane:
             "target": target,
             "traj_rank": traj_rank,
             "local_step": local_steps,
+            "trajectory_length": trajectory_length,
         }
         if state_history is not None:
             expected_history = (batch_size, state_history_steps + 1, state_dim)

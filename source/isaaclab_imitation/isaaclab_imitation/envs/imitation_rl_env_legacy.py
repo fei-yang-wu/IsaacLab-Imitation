@@ -456,6 +456,14 @@ class ImitationRLEnvLegacy(ManagerBasedRLEnv):
             raise ValueError("expert_anchor_body_name must be non-empty.")
         if self._latent_patch_past_steps < 0 or self._latent_patch_future_steps < 0:
             raise ValueError("latent patch window steps must be >= 0.")
+        # The legacy macro window is consecutive-frame only. Refuse a strided
+        # request here rather than silently serving the wrong cadence to a
+        # skill encoder pretrained at that stride; the v2 surface owns it.
+        if int(getattr(cfg, "expert_macro_frame_stride", 1)) != 1:
+            raise ValueError(
+                "expert_macro_frame_stride is a v2 surface feature; the legacy "
+                "environment serves consecutive macro frames only."
+            )
         self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
         if self._latent_goal_steps < 0:
             raise ValueError("latent_goal_steps must be >= 0.")
@@ -4075,11 +4083,17 @@ class ImitationRLEnvLegacy(ManagerBasedRLEnv):
         *,
         past_steps: int,
         future_steps: int,
+        frame_stride: int = 1,
         joint_ids: torch.Tensor | Sequence[int] | slice = slice(None),
         anchor_body_name: str = "torso_link",
         reference_body_names: Sequence[str] = (),
         env_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if int(frame_stride) != 1:
+            raise NotImplementedError(
+                "frame_stride > 1 requires the v2 environment; the legacy "
+                "expert-window path samples consecutive frames only."
+            )
         value = self._get_current_expert_window_terms(
             past_steps=int(past_steps),
             future_steps=int(future_steps),
@@ -4650,6 +4664,9 @@ class ImitationRLEnvLegacy(ManagerBasedRLEnv):
         traj_rank = tm.env_traj_rank.index_select(
             0, env_ids_t.to(device=tm._state_device, dtype=torch.long)
         ).to(device=self.device, dtype=torch.long)
+        trajectory_length = tm._length.index_select(
+            0, traj_rank.to(device=tm._state_device, dtype=torch.long)
+        ).to(device=self.device, dtype=torch.long)
         expert_window = self._sample_expert_window_slice(
             env_ids_t,
             local_steps,
@@ -4710,6 +4727,7 @@ class ImitationRLEnvLegacy(ManagerBasedRLEnv):
             "target": target,
             "traj_rank": traj_rank,
             "local_step": local_steps,
+            "trajectory_length": trajectory_length,
         }
         if state_history is not None:
             expected_history = (batch_size, state_history_steps + 1, state_dim)

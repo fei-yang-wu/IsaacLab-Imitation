@@ -347,6 +347,17 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # byte-identical to the root_qpos packet. The skill encoder's input width
     # follows from this, so changing it invalidates any existing encoder.
     expert_macro_state_terms: list[str] | None = None
+    # Reference frames between consecutive DiffSR macro-window slots. 1 (the
+    # default) keeps the historical consecutive-frame window: 10 slots span
+    # 0.18 s at 50 Hz. 5 reproduces SONIC's released tokenizer cadence
+    # (`dt_future_ref_frames=0.1`), so the same 10 slots span 0.9 s of
+    # reference motion and the DiffSR endpoint target moves from s[t+10] to
+    # s[t+50]: the encoder reads slots 0..9 and the objective hides slot 10, one
+    # stride beyond the window. The encoder input WIDTH does not change, so a
+    # stride mismatch
+    # between pretrain and low level cannot be caught by a shape check: the
+    # value is recorded in the skill checkpoint and compared on load.
+    expert_macro_frame_stride: int = 1
     # Optional whitelist of expert_window group terms to keep. The observation
     # manager computes every window term each step whether or not anything
     # reads it, and each distinct body set forces its own expert-window build.
@@ -920,6 +931,13 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
                 part for part in terms.strip().strip("[]").split(",") if part.strip()
             ]
         return tuple(str(name) for name in terms)
+
+    def _effective_expert_macro_frame_stride(self) -> int:
+        """Reference frames between consecutive DiffSR macro-window slots."""
+        stride = int(self.expert_macro_frame_stride)
+        if stride < 1:
+            raise ValueError("expert_macro_frame_stride must be >= 1.")
+        return stride
 
     def _prune_expert_window_observation_terms(self) -> None:
         """Apply the ``expert_window_observation_terms`` whitelist.

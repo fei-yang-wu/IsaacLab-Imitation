@@ -269,6 +269,7 @@ def test_reference_term_uses_the_prephysics_sonic_snapshot() -> None:
     term = ReferenceCommandTerm.__new__(ReferenceCommandTerm)
     term.cfg = SimpleNamespace(selection=SimpleNamespace(full_trajectory=True))
     term._adaptive_failure_reset_sampler = sampler
+    term._full_trajectory_reset_sampler = sampler
     term._predicted_reset_ranks = None
     term._predicted_reset_steps = None
     term._predicted_reset_probabilities = None
