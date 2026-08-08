@@ -1,5 +1,10 @@
 # 2026-07-23 BONES-SEED Phase-5 language planner, local ten-goal run
 
+> Superseded for current selected-ten local work by
+> `experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/`, which
+> collects complete trajectories and evaluates a 10k oracle-only pretrain
+> curve. Keep this page only for the frozen row-budgeted Phase-5 chronology.
+
 This campaign produces the two basic Phase-5 planner baselines **on the local
 workstation**, without any Slurm queueing:
 

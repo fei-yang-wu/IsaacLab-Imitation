@@ -19,6 +19,7 @@ Use these surfaces for different kinds of context:
 
 | Surface | Purpose | Update cadence |
 | --- | --- | --- |
+| `CONTEXT.md` files | Ubiquitous language and invariants per bounded context. | When a term or invariant changes |
 | `AGENTS.md` | Durable operating rules for coding agents in this repo. | Rarely |
 | `CLAUDE.md` | Claude Code specific command shortcuts and architecture notes. | Occasionally |
 | `wiki/` | Longer repo context, status, strategy, and workflow explanations. | Often |
@@ -31,6 +32,25 @@ Use these surfaces for different kinds of context:
 Keep `AGENTS.md` short. It should route an agent to the right files and
 validation commands. Put current status, historical reasoning, and experiment
 strategy in `wiki/` instead.
+
+## CONTEXT.md Files
+
+Each bounded context defines its ubiquitous language in a `CONTEXT.md` file.
+Agents must read the root file plus the file for the directory they edit, and
+use those terms with those exact meanings:
+
+- `CONTEXT.md` (repo root): project-wide domain and infrastructure terms.
+- `source/isaaclab_imitation/CONTEXT.md`: environment, command interface,
+  data plane, and task versioning terms.
+- `source/imitation_experiments/CONTEXT.md`: planner, evaluation, audit, and
+  provenance terms.
+- `scripts/CONTEXT.md`: entrypoint layout and CLI rules.
+- `experiments/CONTEXT.md`: campaign, release-surface, and gate terms.
+- `docker/CONTEXT.md`: container and cluster-submission terms.
+
+Rules: keep each file short; one meaning per term; update the definition in
+the same change that changes the meaning; put history and rationale in
+`wiki/`, not in `CONTEXT.md`.
 
 ## Ownership Boundaries
 

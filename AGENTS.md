@@ -2,6 +2,8 @@
 
 This file defines how coding agents should work in the `IsaacLab-Imitation` workspace.
 
+Always talk in ASD-STE100 Simplified Technical English. Always read CONTEXT.md files, and use their ubiquitous language
+
 ## Scope
 
 - This guidance is for the top-level `IsaacLab-Imitation` repo only.
@@ -159,6 +161,13 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   submodule pointers, or deciding which repository owns an edit.
 - Keep changes aligned with the existing terminal-first workflow.
 - Prefer minimal, targeted edits over broad refactors.
+- Before using a newly coined project term, abbreviation, variant label,
+  metric shorthand, or overloaded word, define it in plain language first and
+  say exactly what changes relative to the baseline. Do not make the user infer
+  a term's meaning from code, configuration, or a results table.
+- When a coined term matters again in a later turn or conversation, briefly
+  restate its meaning before relying on the shorthand. Keep doing so until the
+  user has clearly adopted the term or explicitly asks to omit the reminder.
 - Preserve Isaac Lab / Hydra CLI patterns already used in `scripts/`.
 - Do not assume IDE-only workflows; command-line verification is the default here.
 - Avoid committing generated artifacts, caches, checkpoints, or log directories.
@@ -364,6 +373,19 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   require the binding record in later planner submission gates. Prefer the
   exact skill checkpoint path recorded by low-level training even when another
   checkpoint happens to contain identical runtime encoder weights.
+- The 2026-08-05 selected-ten BONES-SEED language development workflow uses
+  `experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/run.sh`.
+  Its collection unit is one complete oracle-policy trajectory, not a row
+  budget: ten motions x 100 environments in one 1,000-env process, frame-0
+  starts, deterministic policy actions, SONIC tracking termination with foot
+  XYZ and base-height disabled, no push event, and all other domain
+  randomization retained. Store termination causes/success, keyed causal
+  planner state and oracle latent targets, current expert/achieved 38-D
+  `root_qpos`, and a valid-masked 30-frame expert `root_qpos` lookahead. Train
+  the medium planner on oracle trajectories only for 10,000 updates and
+  evaluate explicit matching goals at 2k intervals before considering
+  planner-driven collection. This selected-ten rule does not retroactively
+  alter the frozen 100-goal paper Phase-5 protocol below.
 - Phase 5 uses the same optional language token in the shared planner for both
   main rows. Train one planner per interface across motions, but pass the goal
   name explicitly at deployment and evaluate it against a matching explicit

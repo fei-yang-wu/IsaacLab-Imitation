@@ -1,5 +1,9 @@
 # 2026-07-23 BONES-SEED Phase-5 language planner pilot
 
+> Historical row-budget pilot. The current selected-ten local collection and
+> oracle-pretrain front door is
+> `experiments/campaigns/2026-08-05-bones-language10-oracle-pretrain/`.
+
 This campaign is an explicitly **preliminary, latent-only** test of the Phase-5
 hypothesis: after planner training, an explicit language goal and causal robot
 history should be sufficient to select and execute different motions from the
