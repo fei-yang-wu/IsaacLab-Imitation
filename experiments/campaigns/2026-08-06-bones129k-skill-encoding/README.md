@@ -79,3 +79,58 @@ ICE scratch was at 90.3% before this campaign. Low-level checkpoints therefore
 save every 250M frames under persistent `/data`, bounding timeout loss while
 avoiding the 50M cadence that made the preceding five-arm campaign consume
 33 GB. Do not delete old checkpoints without explicit approval.
+
+## Result (2026-08-07): no factorization beat plain endpoint prediction
+
+All three controllers reached 5.00B frames and COMPLETED (`5570359`, `5570368`,
+`5570370`, ~11 h each). Scored on the workstation with
+[`eval_mpjpe.sh`](eval_mpjpe.sh) at 512 environments x 1000 steps, seed 0,
+frame-0 starts, termination curriculum off, both mandated passes. Raw summaries
+in `logs/skill_encoding_mpjpe_eval/`.
+
+Strict pass (the four SONIC window terminations active):
+
+| arm | success | survival | MPJPE mm | MPJPE succ mm | joint RMSE | EE local m |
+|---|---|---|---|---|---|---|
+| endpoint (control) | 0.697 | 276.3 | 21.29 | 20.13 | 0.1478 | 0.0347 |
+| `state_occupancy` | 0.650 | 264.0 | 21.83 | 20.48 | 0.1453 | 0.0358 |
+| `semimarkov_chain` | 0.688 | 275.0 | 22.23 | 21.06 | 0.1483 | 0.0367 |
+| `endpoint_delta` | 0.619 | 258.2 | 30.17 | 28.93 | 0.1862 | 0.0502 |
+
+Full-horizon diagnostic (every early termination off):
+
+| arm | MPJPE mm | MPJPE succ mm | joint RMSE | EE local m |
+|---|---|---|---|---|
+| endpoint (control) | 27.92 | 28.86 | 0.1599 | 0.0444 |
+| `state_occupancy` | 30.83 | 31.64 | 0.1630 | 0.0499 |
+| `semimarkov_chain` | 33.04 | 34.30 | 0.1665 | 0.0536 |
+| `endpoint_delta` | 41.03 | 42.04 | 0.2085 | 0.0676 |
+
+The ordering is monotone and identical across both passes and every metric:
+control < `state_occupancy` < `semimarkov_chain` < `endpoint_delta`, i.e. MPJPE
+degrades monotonically with how much intra-chunk structure the objective forces
+`z` to carry. Full-horizon MPJPE-G is +10.4% / +18.3% / +47.0% over the control.
+
+**Pretrain quality did not predict controller quality, and reward did not
+predict MPJPE.** `endpoint_delta` has the best reconstruction (0.0087) and a
+214x real-vs-shuffled separation, and the worst controller.
+`semimarkov_chain` has 13x better reconstruction than `state_occupancy` and a
+nominally higher training `r_step` than the control (0.2131 vs 0.2117), yet is
+18% worse on full-horizon MPJPE. Score this axis on the evaluation metric, not
+on pretrain diagnostics or training reward.
+
+Two limits on the strength of this result. The control's only surviving
+checkpoint is 7.55B against the arms' 5.00B (its 5B save was removed in the
+2026-08-07 ICE quota prune), so its margin is an upper bound; the three arms are
+frame-matched to each other and their ordering is unaffected. Each arm is one
+seed, on a stack with ~12% evaluation spread, so the 10.4% control-vs-occupancy
+gap is inside noise while the 18.3% and 47.0% gaps are not.
+
+Full-horizon survival is identical across arms (347.7 steps, 0.973) because with
+terminations disabled an episode ends only on `reference_finished` or
+`time_out`, which the reference clip lengths decide rather than the policy. That
+is a protocol match check, not a tie between arms.
+
+Still untested: every arm here conditions the transition on the single frame
+`s[t]`. Conditioning on a past chunk is a separate axis this campaign does not
+touch.
