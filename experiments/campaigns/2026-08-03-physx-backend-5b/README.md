@@ -61,15 +61,19 @@ a single-variable comparison.
 
 ## The GPU, and the throughput it turned out to have
 
-`runtime_bootstrap.validate_gpu_policy` rejects PhysX/Kit on compute-only parts
-(A100/H100/H200); ICE's PhysX-qualified GPUs are L40S, A40 and RTX6000. The
-launcher defaults to H100 plus the documented headless escape hatch
-`--experimental-compute-only-physx`, which had never been run on this cluster.
+**Headless PhysX/Kit runs on Hopper.** Job 5560022 logged `PhysX GPU policy
+accepted: NVIDIA H100 80GB HBM3`, started Kit in ~5 min, built the 12288-env
+PhysX scene and trained to 300M frames at 33,421 fps.
 
-**It works.** Job 5560022 logged `PhysX GPU policy accepted: NVIDIA H100 80GB
-HBM3` and `Experimental headless compute-only PhysX override enabled`, started
-Kit in ~5 min, built the 12288-env PhysX scene and trained. The qualified
-fallback is still one knob if a later node refuses:
+That settled a wrong belief this campaign was designed around: that
+`validate_gpu_policy` had to reject PhysX on compute-only parts
+(A100/H100/H200) because Kit needs an RT-capable device, leaving L40S / A40 /
+RTX6000 as ICE's only PhysX-qualified GPUs. It does not. As of 2026-08-05 the
+guard admits H100 and H200 with no flag, and `--experimental-compute-only-physx`
+is no longer needed for them; only A100 stays gated, and only because nobody has
+run it. **Pick the GPU on throughput and queue depth, not on the backend.**
+
+The L40S path below remains valid, just no longer necessary:
 
 ```bash
 GPU_GRES=gpu:l40s:1 DRY_RUN=0 ./submit_tuned_5b_physx_ice.sh

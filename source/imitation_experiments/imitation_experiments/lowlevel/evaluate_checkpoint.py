@@ -14,6 +14,14 @@ import sys
 from typing import Any
 
 from isaaclab.app import AppLauncher
+from imitation_experiments.audit.backend_determinism import (
+    RANDOMIZATION_PROFILES,
+    apply_randomization_profile,
+    pin_reference_start,
+)
+from imitation_experiments.lowlevel.motion_candidate_screen import (
+    build_env_rank_assignment,
+)
 
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -113,6 +121,17 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--trajectory_ranks",
+    type=int,
+    nargs="+",
+    default=None,
+    help=(
+        "Exact trajectory ranks to evaluate in one process. num_envs must be a "
+        "multiple of the rank count; each rank receives an equal, stable block "
+        "of environments across asynchronous resets."
+    ),
+)
+parser.add_argument(
     "--dataset_path",
     type=Path,
     default=None,
@@ -175,15 +194,31 @@ parser.add_argument(
     "--randomization",
     type=str,
     default="none",
-    choices=("none", "startup", "reset", "all"),
+    choices=RANDOMIZATION_PROFILES,
     help=(
         "Which domain-randomization families stay live. Default 'none' is the "
         "TRACKING-FIDELITY protocol: MPJPE should measure how well the policy "
         "tracks, not how hard it was pushed, and reset randomization alone "
-        "contributes ~39 mm at frame 0 on the G1's 14-body set. Use 'all' for "
-        "the ROBUSTNESS protocol, which keeps the interval push -- that is what "
-        "the paper comparison requires, since both interfaces must eat the same "
-        "perturbation. Whichever is chosen is recorded in the output."
+        "contributes ~39 mm at frame 0 on the G1's 14-body set. 'no_push' keeps "
+        "startup and reset randomization but removes only the interval push. "
+        "Use 'all' for the ROBUSTNESS protocol, which keeps the interval push -- "
+        "that is what the paper comparison requires, since both interfaces must "
+        "eat the same perturbation. Whichever is chosen is recorded in the output."
+    ),
+)
+parser.add_argument(
+    "--action_sampling",
+    type=str,
+    default="mode",
+    choices=("mode", "stochastic"),
+    help=(
+        "How actions are drawn during the rollout. Default 'mode' is the "
+        "protocol: a checkpoint is judged on the policy it would deploy. "
+        "'stochastic' samples from the action distribution the way TRAINING "
+        "does, and exists only to explain the train/eval metric gap -- it is "
+        "NOT a protocol option and must not be used to report a score. The "
+        "equivalence certificate stays deterministic either way, since its "
+        "whole purpose is a bit-comparison. Recorded in the output."
     ),
 )
 parser.add_argument(
@@ -218,10 +253,6 @@ from isaaclab.utils import math as math_utils
 from isaaclab_imitation.envs import ImitationRLEnv
 from isaaclab_imitation.envs.imitation_rl_env_legacy import ImitationRLEnvLegacy
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
-from imitation_experiments.audit.backend_determinism import (
-    apply_randomization_profile,
-    pin_reference_start,
-)
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env_cfg import (
     G1_EE_BODY_NAMES,
     G1_TRACKED_BODY_NAMES,
@@ -1340,6 +1371,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     elif hasattr(env_cfg, "reset_schedule"):
         # Frozen v0/v1 surfaces retain the legacy flat field.
         env_cfg.reset_schedule = str(args_cli.reset_schedule)
+    if args_cli.trajectory_rank is not None and args_cli.trajectory_ranks is not None:
+        raise ValueError(
+            "--trajectory_rank and --trajectory_ranks are mutually exclusive."
+        )
     if args_cli.trajectory_rank is not None:
         if args_cli.motion_name is not None:
             raise ValueError(
@@ -1370,6 +1405,36 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         elif hasattr(env_cfg, "reset_schedule"):
             env_cfg.reset_schedule = "custom"
             env_cfg.custom_reset_fn = _fixed_trajectory_rank
+        else:
+            raise RuntimeError("The environment has no trajectory selection surface.")
+    elif args_cli.trajectory_ranks is not None:
+        if args_cli.motion_name is not None:
+            raise ValueError(
+                "--trajectory_ranks and --motion_name are mutually exclusive."
+            )
+        env_rank_assignment = build_env_rank_assignment(
+            args_cli.trajectory_ranks, int(args_cli.num_envs)
+        )
+
+        def _fixed_trajectory_ranks(
+            env_ids: torch.Tensor, num_trajectories: int
+        ) -> torch.Tensor:
+            if max(env_rank_assignment) >= int(num_trajectories):
+                raise ValueError(
+                    "--trajectory_ranks contains a rank outside the loaded dataset "
+                    f"with {num_trajectories} trajectories."
+                )
+            rank_table = torch.as_tensor(
+                env_rank_assignment, dtype=torch.long, device=env_ids.device
+            )
+            return rank_table[env_ids.long()]
+
+        if reference_selection is not None:
+            reference_selection.schedule = "custom"
+            reference_selection.custom_fn = _fixed_trajectory_ranks
+        elif hasattr(env_cfg, "reset_schedule"):
+            env_cfg.reset_schedule = "custom"
+            env_cfg.custom_reset_fn = _fixed_trajectory_ranks
         else:
             raise RuntimeError("The environment has no trajectory selection surface.")
     if not args_cli.enable_observation_corruption:
@@ -1564,6 +1629,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if not term_cfg.time_out and term_name != "reference_finished":
             tracking_failure_term_names.append(term_name)
     metric_stats: dict[str, dict[str, float]] = {}
+    per_env_tracking_metric_sums: dict[str, torch.Tensor] = {}
+    per_env_tracking_metric_counts: dict[str, torch.Tensor] = {}
     previous_action: torch.Tensor | None = None
     previous_body_lin_vel: tuple[torch.Tensor, torch.Tensor] | None = None
     previous_velocity_valid = torch.zeros(num_envs, dtype=torch.bool)
@@ -1584,8 +1651,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             else f"trajectory_rank_{int(rank)}"
             for rank in trajectory_ranks.tolist()
         ]
+    # DETERMINISTIC is the protocol. RANDOM exists only to reproduce the way
+    # training draws actions, so the train/eval metric gap can be attributed
+    # rather than argued about; see --action_sampling.
+    action_sampling = str(args_cli.action_sampling)
+    rollout_exploration_type = (
+        InteractionType.RANDOM
+        if action_sampling == "stochastic"
+        else InteractionType.DETERMINISTIC
+    )
     print(
-        "[INFO] Starting deterministic evaluation: "
+        f"[INFO] Starting {action_sampling} evaluation: "
         f"num_envs={num_envs}, steps={args_cli.steps}, command_space={command_space}"
     )
     for step_idx in range(int(args_cli.steps)):
@@ -1621,7 +1697,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         with (
             torch.inference_mode(),
-            set_exploration_type(InteractionType.DETERMINISTIC),
+            set_exploration_type(rollout_exploration_type),
         ):
             td = collector_policy(td)
 
@@ -1694,9 +1770,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             ee_body_names=ee_body_names,
         )
         for metric_name, metric_values in tracking.items():
+            metric_values_cpu = metric_values.cpu()
             _accumulate_metric(
-                metric_stats, metric_name, metric_values.cpu(), metric_mask
+                metric_stats, metric_name, metric_values_cpu, metric_mask
             )
+            values = metric_values_cpu.reshape(num_envs, -1).mean(dim=-1).double()
+            valid = metric_mask & torch.isfinite(values)
+            if metric_name not in per_env_tracking_metric_sums:
+                per_env_tracking_metric_sums[metric_name] = torch.zeros(
+                    num_envs, dtype=torch.float64
+                )
+                per_env_tracking_metric_counts[metric_name] = torch.zeros(
+                    num_envs, dtype=torch.int64
+                )
+            per_env_tracking_metric_sums[metric_name] += torch.where(
+                valid, values, torch.zeros_like(values)
+            )
+            per_env_tracking_metric_counts[metric_name] += valid.to(torch.int64)
         if body_lin_vel is not None and dt > 0.0:
             if previous_body_lin_vel is not None:
                 actual_lin_vel, ref_lin_vel = body_lin_vel
@@ -1732,6 +1822,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     for term_name in tracking_failure_term_names:
         tracking_failure |= termination_hits[term_name]
     tracking_success = active_mask & ~tracking_failure
+    reference_finished = termination_hits.get(
+        "reference_finished", torch.zeros(num_envs, dtype=torch.bool)
+    )
+    completed_tracking_success = tracking_success & reference_finished
+    successful_metrics: dict[str, dict[str, float | int]] = {}
+    for metric_name, per_env_sums in per_env_tracking_metric_sums.items():
+        per_env_counts = per_env_tracking_metric_counts[metric_name]
+        selected = completed_tracking_success & (per_env_counts > 0)
+        selected_count = int(per_env_counts[selected].sum().item())
+        successful_metrics[metric_name] = {
+            "mean": (
+                float(per_env_sums[selected].sum().item() / selected_count)
+                if selected_count > 0
+                else float("nan")
+            ),
+            "count": selected_count,
+            "num_successful_envs": int(selected.sum().item()),
+        }
 
     def _term_rate(term_name: str) -> float:
         if num_evaluated_envs == 0 or term_name not in termination_hits:
@@ -1769,6 +1877,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         )
         if num_evaluated_envs > 0
         else float("nan"),
+        "completed_tracking_success_rate": float(
+            completed_tracking_success[active_mask].float().mean().item()
+        )
+        if num_evaluated_envs > 0
+        else float("nan"),
         "completed_requested_horizon_rate": float(
             (done_events[active_mask] == 0).float().mean().item()
         )
@@ -1799,6 +1912,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             else None,
             "motion_name": args_cli.motion_name,
             "trajectory_rank": args_cli.trajectory_rank,
+            "trajectory_ranks": args_cli.trajectory_ranks,
             "dataset_path": str(getattr(env_cfg, "dataset_path", "")),
             "command_space": command_space,
             "low_level_command_mode": low_level_command_mode,
@@ -1818,7 +1932,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "num_envs": int(num_envs),
             "steps_requested": int(args_cli.steps),
             "seed": agent_cfg.seed,
-            "reset_schedule": str(args_cli.reset_schedule),
+            "reset_schedule": str(
+                getattr(
+                    reference_selection,
+                    "schedule",
+                    getattr(env_cfg, "reset_schedule", args_cli.reset_schedule),
+                )
+            ),
             "reference_start_frame": int(args_cli.reference_start_frame),
             "keep_after_done": bool(args_cli.keep_after_done),
             "observation_corruption_enabled": bool(
@@ -1839,6 +1959,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "reference_selection_surface": reference_selection_surface,
             "randomization_profile": args_cli.randomization,
             "randomization_kept": randomization_kept,
+            "action_sampling": action_sampling,
             "qualification_eligible": not bool(args_cli.disable_early_terminations),
             "time_out_enabled": True,
             "episode_length_extension_enabled": not bool(
@@ -1855,6 +1976,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         },
         "aggregate": aggregate,
         "metrics": _finalize_metric_stats(metric_stats),
+        "successful_metrics": successful_metrics,
         "max_steps": int(args_cli.steps),
         "steps_run": int(steps_executed),
         "stop_reason": (
@@ -1873,11 +1995,33 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 "terminated": bool(terminated_events[env_id].item() > 0),
                 "truncated": bool(truncated_events[env_id].item() > 0),
                 "tracking_success": bool(tracking_success[env_id].item()),
+                "completed_tracking_success": bool(
+                    completed_tracking_success[env_id].item()
+                ),
                 "termination_terms": [
                     term_name
                     for term_name in termination_term_names
                     if bool(termination_hits[term_name][env_id].item())
                 ],
+                "tracking_metrics": {
+                    metric_name: (
+                        float(per_env_tracking_metric_sums[metric_name][env_id].item())
+                        / int(
+                            per_env_tracking_metric_counts[metric_name][env_id].item()
+                        )
+                    )
+                    for metric_name in per_env_tracking_metric_sums
+                    if int(per_env_tracking_metric_counts[metric_name][env_id].item())
+                    > 0
+                },
+                "tracking_metric_counts": {
+                    metric_name: int(
+                        per_env_tracking_metric_counts[metric_name][env_id].item()
+                    )
+                    for metric_name in per_env_tracking_metric_counts
+                    if int(per_env_tracking_metric_counts[metric_name][env_id].item())
+                    > 0
+                },
             }
             for env_id in range(num_envs)
             if bool(active_mask[env_id].item())
@@ -1898,13 +2042,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         _write_csv(summary, args_cli.output_csv, append=args_cli.append_csv)
 
     metrics = summary["metrics"]
+    successful_mpjpe_l_mm = (
+        summary["successful_metrics"]
+        .get("tracking_mpjpe_mm", {})
+        .get("mean", float("nan"))
+    )
     print(
         "[RESULT] "
         f"command_space={command_space} "
         f"return_sum_mean={aggregate['return_sum_mean']:.4f} "
         f"survival_steps_mean={aggregate['survival_steps_mean']:.1f} "
         f"done_rate={aggregate['done_rate']:.3f} "
-        f"tracking_success_rate={aggregate['tracking_success_rate']:.3f} "
+        f"completed_tracking_success_rate="
+        f"{aggregate['completed_tracking_success_rate']:.3f} "
+        f"successful_mpjpe_l_mm={successful_mpjpe_l_mm:.3f} "
         f"joint_pos_rmse_rad={metrics.get('joint_pos_rmse_rad', {}).get('mean', float('nan')):.4f} "
         f"ee_pos_error_m={metrics.get('ee_pos_error_m', {}).get('mean', float('nan')):.4f}"
     )

@@ -235,12 +235,33 @@ class CompletedTrajectorySampleWriter:
         env_ids: Sequence[int],
         episode_ids: Sequence[int],
         motion_names: Sequence[str],
+        termination_reasons: Sequence[Sequence[str]] | None = None,
+        tracking_success: Sequence[bool] | None = None,
     ) -> None:
         """Close segments and commit only those still inside the exact budget."""
         if not (len(env_ids) == len(episode_ids) == len(motion_names)):
             raise ValueError("Completed trajectory fields must have equal lengths.")
-        for raw_env, raw_episode, raw_motion in zip(
-            env_ids, episode_ids, motion_names, strict=True
+        reasons = (
+            [()] * len(env_ids)
+            if termination_reasons is None
+            else [tuple(str(item) for item in values) for values in termination_reasons]
+        )
+        successes = (
+            [True] * len(env_ids)
+            if tracking_success is None
+            else [bool(value) for value in tracking_success]
+        )
+        if len(reasons) != len(env_ids) or len(successes) != len(env_ids):
+            raise ValueError(
+                "Completed trajectory terminal metadata must be row-aligned."
+            )
+        for raw_env, raw_episode, raw_motion, terminal_reasons, succeeded in zip(
+            env_ids,
+            episode_ids,
+            motion_names,
+            reasons,
+            successes,
+            strict=True,
         ):
             key = (int(raw_env), int(raw_episode))
             motion = str(raw_motion)
@@ -268,6 +289,8 @@ class CompletedTrajectorySampleWriter:
                     "episode_id": key[1],
                     "motion_name": motion,
                     "rows": len(rows),
+                    "termination_reasons": list(terminal_reasons),
+                    "tracking_success": bool(succeeded),
                 }
             )
 
