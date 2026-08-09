@@ -46,6 +46,17 @@ parser.add_argument(
     required=True,
     help="Released SONIC PPO snapshot (sonic_release/last.pt).",
 )
+parser.add_argument(
+    "--sonic_version",
+    choices=("release", "v1_1", "auto"),
+    default="release",
+    help=(
+        "Checkpoint observation contract. 'release' uses full anchor "
+        "orientation; 'v1_1' derives SONIC v1.1 heading-only anchor "
+        "orientation from the same reference window. 'auto' infers this from "
+        "the decoder shape."
+    ),
+)
 parser.add_argument("--num_envs", type=int, default=64)
 parser.add_argument("--steps", type=int, default=500)
 parser.add_argument("--seed", type=int, default=0)
@@ -176,6 +187,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 
 from imitation_experiments.lowlevel.sonic_release_actor import (
     ENCODER_FRAMES,
+    heading_relative_rot6d_from_full_relative,
     load_sonic_release_actor,
     pack_encoder_window,
 )
@@ -434,6 +446,7 @@ def _configure_sonic_contract(env_cfg: Any) -> dict[str, Any]:
         "encoder_components": list(interface.encoder.components),
         "encoder_future_steps": int(interface.encoder.future_steps),
         "encoder_frame_stride": int(interface.encoder.frame_stride),
+        "encoder_orientation_source": "expert_anchor_ori_b",
         "expert_macro_state_terms": list(env_cfg.expert_macro_state_terms),
         "observation_corruption_enabled": False,
         "robot_cfg": "UNITREE_G1_29DOF_SONIC_CFG",
@@ -555,7 +568,12 @@ def _policy_terms(observations: Any) -> dict[str, torch.Tensor]:
     return policy
 
 
-def _encoder_window(policy: dict[str, torch.Tensor]) -> torch.Tensor:  # noqa: D401
+def _encoder_window(
+    policy: dict[str, torch.Tensor],
+    *,
+    sonic_version: str,
+    robot_anchor_quat_w: torch.Tensor | None = None,
+) -> torch.Tensor:  # noqa: D401
     """Assemble the released encoder's 640-wide input from the strided view.
 
     ``expert_motion`` is **not** permuted here. The reference channel indexes the
@@ -568,10 +586,19 @@ def _encoder_window(policy: dict[str, torch.Tensor]) -> torch.Tensor:  # noqa: D
     checks this against the live reset state instead of trusting the reasoning.
     """
     motion = policy["expert_motion"]
-    anchor_ori = policy["expert_anchor_ori_b"]
     num_envs = motion.shape[0]
     motion = motion.reshape(num_envs, ENCODER_FRAMES, JOINT_QPOS_QVEL_WIDTH)
-    anchor_ori = anchor_ori.reshape(num_envs, ENCODER_FRAMES, ANCHOR_ORI_WIDTH)
+    anchor_ori = policy["expert_anchor_ori_b"].reshape(
+        num_envs, ENCODER_FRAMES, ANCHOR_ORI_WIDTH
+    )
+    if sonic_version == "v1_1":
+        if robot_anchor_quat_w is None:
+            raise ValueError("v1_1 encoder window needs robot_anchor_quat_w.")
+        anchor_ori = heading_relative_rot6d_from_full_relative(
+            anchor_ori, robot_anchor_quat_w
+        )
+    elif sonic_version != "release":
+        raise ValueError(f"Unsupported SONIC version: {sonic_version!r}.")
     return pack_encoder_window(
         motion[..., :29].contiguous(),
         motion[..., 29:].contiguous(),
@@ -805,8 +832,17 @@ def main(env_cfg, agent_cfg):
     base_env = env.unwrapped
     device = base_env.device
 
-    actor = load_sonic_release_actor(checkpoint).to(device)
+    actor = load_sonic_release_actor(checkpoint, version=args_cli.sonic_version).to(
+        device
+    )
     actor.eval()
+    sonic_version = actor.spec.version
+    contract["sonic_version"] = sonic_version
+    contract["checkpoint_orientation_contract"] = actor.spec.orientation_contract
+    if sonic_version == "v1_1":
+        contract["encoder_orientation_source"] = (
+            "expert_anchor_ori_b plus current robot root heading"
+        )
 
     orders = JointOrders(base_env)
     layout = _proprioception_layout(args_cli.proprioception_order)
@@ -880,7 +916,16 @@ def main(env_cfg, agent_cfg):
     with torch.no_grad():
         for _ in range(int(args_cli.steps)):
             policy = _policy_terms(observations)
-            window = _encoder_window(policy)
+            robot_anchor_quat_w = base_env.robot.data.root_quat_w
+            if not torch.is_tensor(robot_anchor_quat_w):
+                robot_anchor_quat_w = torch.as_tensor(
+                    robot_anchor_quat_w, device=device
+                )
+            window = _encoder_window(
+                policy,
+                sonic_version=sonic_version,
+                robot_anchor_quat_w=robot_anchor_quat_w,
+            )
             proprioception = _proprioception(
                 policy,
                 orders,
@@ -1046,6 +1091,8 @@ def main(env_cfg, agent_cfg):
         "label": str(args_cli.label),
         "task": str(args_cli.task),
         "checkpoint": str(checkpoint),
+        "sonic_version": sonic_version,
+        "sonic_version_requested": str(args_cli.sonic_version),
         "num_envs": int(base_env.num_envs),
         "steps_requested": int(args_cli.steps),
         "steps_run": int(steps_run),
@@ -1056,6 +1103,8 @@ def main(env_cfg, agent_cfg):
             "label": str(args_cli.label),
             "task": str(args_cli.task),
             "checkpoint": str(checkpoint),
+            "sonic_version": sonic_version,
+            "sonic_version_requested": str(args_cli.sonic_version),
             "num_envs": int(base_env.num_envs),
             "seed": int(args_cli.seed),
             "action_sampling": "mode",
