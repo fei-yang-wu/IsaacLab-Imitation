@@ -55,3 +55,15 @@ def test_release_evaluator_defaults_to_checkpoint_schedule() -> None:
     source = _source()
     assert '"--reset_schedule"' in source
     assert 'default="sequential"' in source
+
+
+def test_release_evaluator_has_v1_1_contract_gate() -> None:
+    source = _source()
+    assert '"--sonic_version"' in source
+    assert 'choices=("release", "v1_1", "auto")' in source
+    assert "load_sonic_release_actor(" in source
+    assert "version=args_cli.sonic_version" in source
+    assert "checkpoint_orientation_contract" in source
+    assert 'sonic_version == "v1_1"' in source
+    assert "heading_relative_rot6d_from_full_relative" in source
+    assert "robot_anchor_quat_w" in source

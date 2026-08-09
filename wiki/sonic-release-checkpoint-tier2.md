@@ -58,6 +58,29 @@ than Newton/MJWarp here, with disjoint three-seed ranges (25.15-25.70 versus
 23.23-23.65). Whatever separates a run from the paper number, it is not the
 choice of Isaac Sim's PhysX over MJWarp.
 
+### SONIC v1.1 checkpoint, same selected-ten protocol
+
+The public `sonic_v1_1/last.pt` checkpoint uses a larger decoder and a different
+encoder orientation contract: `motion_anchor_ori_heading_mf_nonflat` instead of
+`motion_anchor_ori_b_mf_nonflat`. It cannot use the original release adapter as
+is, even though the input width is still 640. The v1.1 adapter reconstructs the
+heading-relative root orientation from our full `expert_anchor_ori_b` plus the
+live robot root heading.
+
+The table below uses the same selected-ten references, assignment, backend,
+randomization profile, deterministic actions, and SONIC-compatible success
+criterion for both public checkpoints. v1.1 keeps perfect completion and lowers
+root-relative tracking error on this subset.
+
+| checkpoint | SONIC SR | success-only MPJPE-L | success-only MPJPE-G | anchor position |
+| --- | ---: | ---: | ---: | ---: |
+| `sonic_release/last.pt`, matched selected-ten | 1.000 (100/100) | 23.53 mm | 99.94 mm | 0.0968 m |
+| `sonic_v1_1/last.pt`, seed-0 selected-ten | **1.000** (100/100) | **21.17 mm** | 100.99 mm | 0.0988 m |
+
+This does not change the 4096-motion ranking below. It only updates the
+selected-ten release reproduction with the v1.1 public checkpoint under the
+same local adapter and SONIC-compatible success criterion.
+
 ### Our own tracker beats it on the same ten motions
 
 Matched comparison, 2026-08-07: identical references, protocol, thresholds,

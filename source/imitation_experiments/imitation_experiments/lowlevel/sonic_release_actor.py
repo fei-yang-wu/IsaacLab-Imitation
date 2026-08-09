@@ -31,7 +31,7 @@ from dataclasses import dataclass
 import pickle
 from pathlib import Path
 import types
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import torch
 from torch import Tensor, nn
@@ -50,6 +50,9 @@ ENCODER_FRAMES = 10
 ENCODER_FRAME_WIDTH = 64
 PROPRIOCEPTION_DIM = 930
 ACTION_DIM = 29
+SonicVersion = Literal["release", "v1_1", "auto"]
+RELEASE_DECODER_HIDDEN_DIMS = (2048, 2048, 1024, 1024, 512, 512)
+V1_1_DECODER_HIDDEN_DIMS = (4096, 4096, 2048, 2048, 1024, 1024, 512, 512)
 
 
 class _Stub:
@@ -217,6 +220,86 @@ def pack_encoder_window(
     return torch.cat(blocks, dim=-1)
 
 
+def rot6d_to_matrix(rot6d: Tensor) -> Tensor:
+    """Project this repo's stored first-two-column rot6d form onto SO(3)."""
+    columns = rot6d.reshape(*rot6d.shape[:-1], 3, 2)
+    first = torch.nn.functional.normalize(columns[..., :, 0], dim=-1)
+    second = columns[..., :, 1]
+    second = second - first * (first * second).sum(dim=-1, keepdim=True)
+    second = torch.nn.functional.normalize(second, dim=-1)
+    third = torch.linalg.cross(first, second, dim=-1)
+    return torch.stack((first, second, third), dim=-1)
+
+
+def matrix_to_rot6d(matrix: Tensor) -> Tensor:
+    """Pack the first two matrix columns as this repo's rot6d convention."""
+    return matrix[..., :, :2].reshape(*matrix.shape[:-2], 6)
+
+
+def quat_xyzw_to_matrix(quat: Tensor) -> Tensor:
+    """Convert Isaac Lab XYZW quaternions to rotation matrices."""
+    x, y, z, w = torch.unbind(quat, dim=-1)
+    two = 2.0
+    return torch.stack(
+        (
+            1 - two * (y * y + z * z),
+            two * (x * y - z * w),
+            two * (x * z + y * w),
+            two * (x * y + z * w),
+            1 - two * (x * x + z * z),
+            two * (y * z - x * w),
+            two * (x * z - y * w),
+            two * (y * z + x * w),
+            1 - two * (x * x + y * y),
+        ),
+        dim=-1,
+    ).reshape(*quat.shape[:-1], 3, 3)
+
+
+def heading_matrix_from_quat_xyzw(quat: Tensor) -> Tensor:
+    """Return SONIC's Z-heading twist matrix from an Isaac Lab XYZW quaternion."""
+    heading = torch.zeros_like(quat)
+    heading[..., 2] = quat[..., 2]
+    heading[..., 3] = quat[..., 3]
+    heading = heading / torch.linalg.vector_norm(heading, dim=-1, keepdim=True).clamp(
+        min=1.0e-9
+    )
+    return quat_xyzw_to_matrix(heading)
+
+
+def heading_relative_rot6d_from_full_relative(
+    relative_rot6d: Tensor, robot_anchor_quat_w: Tensor
+) -> Tensor:
+    """Convert full-anchor relative rot6d to SONIC v1.1 heading-relative rot6d.
+
+    The env's ``expert_anchor_ori_b`` is ``inv(robot_full) * ref``. SONIC v1.1's
+    heading observation is ``inv(robot_heading) * ref``. Reusing only the yaw of
+    ``expert_anchor_ori_b`` loses reference roll/pitch and silently creates root
+    drift, so reconstruct the reference orientation through the live robot pose.
+    """
+    if relative_rot6d.dim() < 2 or relative_rot6d.shape[-1] != 6:
+        raise ValueError(
+            f"relative_rot6d must end in 6 values, got {tuple(relative_rot6d.shape)}."
+        )
+    if robot_anchor_quat_w.dim() != 2 or robot_anchor_quat_w.shape[-1] != 4:
+        raise ValueError(
+            "robot_anchor_quat_w must be [B, 4], got "
+            f"{tuple(robot_anchor_quat_w.shape)}."
+        )
+    if int(robot_anchor_quat_w.shape[0]) != int(relative_rot6d.shape[0]):
+        raise ValueError(
+            "robot_anchor_quat_w batch must match relative_rot6d batch, got "
+            f"{robot_anchor_quat_w.shape[0]} and {relative_rot6d.shape[0]}."
+        )
+    relative = rot6d_to_matrix(relative_rot6d)
+    robot = quat_xyzw_to_matrix(robot_anchor_quat_w)
+    robot_heading = heading_matrix_from_quat_xyzw(robot_anchor_quat_w)
+    view_shape = (robot.shape[0],) + (1,) * (relative.dim() - 3) + (3, 3)
+    ref_world = robot.reshape(view_shape) @ relative
+    heading_relative = robot_heading.reshape(view_shape).transpose(-1, -2) @ ref_world
+    return matrix_to_rot6d(heading_relative)
+
+
 PROPRIOCEPTION_FRAMES = 10
 # Term-major order and per-term width of SONIC's 930 policy observation, read
 # from the released PolicyCfg declaration. Isaac Lab concatenates by class
@@ -283,6 +366,8 @@ def assemble_proprioception(
 class SonicReleaseSpec:
     """Shapes read out of the checkpoint, for provenance records."""
 
+    version: str
+    orientation_contract: str
     encoder_input_dim: int
     token_dim: int
     decoder_input_dim: int
@@ -290,9 +375,12 @@ class SonicReleaseSpec:
     proprioception_dim: int
     encoder_frames: int
     encoder_frame_width: int
+    decoder_hidden_dims: tuple[int, ...]
 
-    def to_dict(self) -> dict[str, int]:
+    def to_dict(self) -> dict[str, Any]:
         return {
+            "version": self.version,
+            "orientation_contract": self.orientation_contract,
             "encoder_input_dim": self.encoder_input_dim,
             "token_dim": self.token_dim,
             "decoder_input_dim": self.decoder_input_dim,
@@ -300,6 +388,7 @@ class SonicReleaseSpec:
             "proprioception_dim": self.proprioception_dim,
             "encoder_frames": self.encoder_frames,
             "encoder_frame_width": self.encoder_frame_width,
+            "decoder_hidden_dims": list(self.decoder_hidden_dims),
         }
 
 
@@ -310,7 +399,9 @@ class SonicReleaseActor(nn.Module):
     exploration scale used during PPO, and evaluation uses the mean action.
     """
 
-    def __init__(self, state: Mapping[str, Tensor]) -> None:
+    def __init__(
+        self, state: Mapping[str, Tensor], *, version: SonicVersion = "release"
+    ) -> None:
         super().__init__()
         self.encoder = _mlp_from_state_dict(state, ENCODER_PREFIX)
         self.decoder = _mlp_from_state_dict(state, DECODER_PREFIX)
@@ -336,7 +427,21 @@ class SonicReleaseActor(nn.Module):
             raise ValueError(
                 f"Encoder input {encoder_input_dim} is not {ENCODER_FRAMES} frames."
             )
+        decoder_hidden_dims = tuple(
+            int(layer.out_features)
+            for layer in self.decoder
+            if isinstance(layer, nn.Linear)
+        )[:-1]
+        inferred_version = _infer_sonic_version(decoder_hidden_dims)
+        if version != "auto" and inferred_version != version:
+            raise ValueError(
+                f"Checkpoint looks like SONIC {inferred_version!r}, but "
+                f"version={version!r} was requested."
+            )
+        resolved_version = inferred_version if version == "auto" else version
         self.spec = SonicReleaseSpec(
+            version=resolved_version,
+            orientation_contract=_orientation_contract(resolved_version),
             encoder_input_dim=encoder_input_dim,
             token_dim=token_dim,
             decoder_input_dim=decoder_input_dim,
@@ -344,6 +449,7 @@ class SonicReleaseActor(nn.Module):
             proprioception_dim=decoder_input_dim - token_dim,
             encoder_frames=ENCODER_FRAMES,
             encoder_frame_width=encoder_input_dim // ENCODER_FRAMES,
+            decoder_hidden_dims=decoder_hidden_dims,
         )
         action_std = state.get("std")
         if torch.is_tensor(action_std):
@@ -382,6 +488,30 @@ class SonicReleaseActor(nn.Module):
         return self.decode(self.encode(window), proprioception)
 
 
-def load_sonic_release_actor(checkpoint: str | Path) -> SonicReleaseActor:
+def load_sonic_release_actor(
+    checkpoint: str | Path, *, version: SonicVersion = "release"
+) -> SonicReleaseActor:
     """Build the deterministic released tracker from ``last.pt``."""
-    return SonicReleaseActor(load_sonic_release_state_dict(checkpoint))
+    return SonicReleaseActor(load_sonic_release_state_dict(checkpoint), version=version)
+
+
+def _infer_sonic_version(
+    decoder_hidden_dims: tuple[int, ...],
+) -> Literal["release", "v1_1"]:
+    if decoder_hidden_dims == RELEASE_DECODER_HIDDEN_DIMS:
+        return "release"
+    if decoder_hidden_dims == V1_1_DECODER_HIDDEN_DIMS:
+        return "v1_1"
+    raise ValueError(
+        "Unsupported SONIC g1_dyn decoder shape. Expected release hidden dims "
+        f"{RELEASE_DECODER_HIDDEN_DIMS} or v1.1 hidden dims "
+        f"{V1_1_DECODER_HIDDEN_DIMS}, got {decoder_hidden_dims}."
+    )
+
+
+def _orientation_contract(version: str) -> str:
+    if version == "release":
+        return "motion_anchor_ori_b_mf_nonflat"
+    if version == "v1_1":
+        return "motion_anchor_ori_heading_mf_nonflat"
+    raise ValueError(f"Unsupported SONIC version: {version!r}.")
