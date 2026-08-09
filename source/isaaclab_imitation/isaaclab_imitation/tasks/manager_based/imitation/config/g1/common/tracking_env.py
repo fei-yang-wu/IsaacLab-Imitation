@@ -358,6 +358,21 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # between pretrain and low level cannot be caught by a shape check: the
     # value is recorded in the skill checkpoint and compared on load.
     expert_macro_frame_stride: int = 1
+    # Frame the DiffSR macro window is expressed in. "robot" (the default)
+    # keeps the historical split convention: pretraining anchors every slot at
+    # the expert's own full pose at the window's first slot, while the live
+    # encoder input anchors at the robot's full live anchor pose -- so the two
+    # distributions differ by exactly the live tracking error, which a frozen
+    # encoder never saw during pretraining. "expert_heading" uses one
+    # convention for both: the expert's slot-0 heading (yaw-only) frame with an
+    # xy-only origin. Pretrain and rollout inputs are then identical by
+    # construction, the latent is a pure function of (trajectory, cursor), and
+    # the window keeps absolute height and roll/pitch relative to gravity --
+    # the exact invariance group of the re-rooted tracking reward. The macro
+    # width is identical in both modes, so a mismatch cannot be caught by a
+    # shape check: the value is recorded in the skill checkpoint and compared
+    # on load, like the frame stride above.
+    expert_macro_anchor_mode: str = "robot"
     # Optional whitelist of expert_window group terms to keep. The observation
     # manager computes every window term each step whether or not anything
     # reads it, and each distinct body set forces its own expert-window build.
@@ -938,6 +953,16 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
         if stride < 1:
             raise ValueError("expert_macro_frame_stride must be >= 1.")
         return stride
+
+    def _effective_expert_macro_anchor_mode(self) -> str:
+        """Frame convention of the DiffSR macro window."""
+        mode = self.expert_macro_anchor_mode.strip()
+        if mode not in ("robot", "expert_heading"):
+            raise ValueError(
+                "expert_macro_anchor_mode must be 'robot' or 'expert_heading', "
+                f"got {mode!r}."
+            )
+        return mode
 
     def _prune_expert_window_observation_terms(self) -> None:
         """Apply the ``expert_window_observation_terms`` whitelist.

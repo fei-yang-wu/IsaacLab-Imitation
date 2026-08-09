@@ -275,6 +275,9 @@ from imitation_experiments.provenance.paper_protocol_metadata import (
     interval_event_metadata,
 )
 from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids
+from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+    bind_command_interface,
+)
 from isaaclab_imitation.tasks.manager_based.imitation.motion_data import (
     apply_motion_data,
 )
@@ -1297,9 +1300,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "single_frame_full_body actor contract."
         )
     agent_cfg.command_space = low_level_command_space
-    sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
-    if callable(sync_input_keys):
-        sync_input_keys()
+    # The environment's declared command interface is the authority on the
+    # actor and critic input keys, exactly as in the training entry point.
+    # Without this binding an env-side `command_interface.critic_channels`
+    # override (for example the critic-no-latent ablation) leaves the agent
+    # asking for a critic observation the environment no longer publishes.
+    if bind_command_interface(agent_cfg, env_cfg) is None:
+        sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
+        if callable(sync_input_keys):
+            sync_input_keys()
 
     if args_cli.command_past_steps is not None:
         env_cfg.latent_patch_past_steps = int(args_cli.command_past_steps)

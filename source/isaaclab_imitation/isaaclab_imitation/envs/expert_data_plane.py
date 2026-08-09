@@ -75,6 +75,22 @@ _REFERENCE_QUAT_KEYS = (
 )
 _WXYZ_TO_XYZW = [1, 2, 3, 0]
 
+#: The two macro-state selections the compact macro cache can serve. They share
+#: an anchor pose and differ only in the joint block, so one cache shape covers
+#: both: ``root_qpos`` is joint positions (38/frame), ``full_body`` adds joint
+#: velocities (67/frame). Any other selection falls back to the general
+#: replay-window sampler.
+_ROOT_QPOS_MACRO_TERMS = (
+    "expert_motion_qpos",
+    "expert_anchor_pos_b",
+    "expert_anchor_ori_b",
+)
+_FULL_BODY_MACRO_TERMS = (
+    "expert_motion",
+    "expert_anchor_pos_b",
+    "expert_anchor_ori_b",
+)
+
 _METRES_TO_MM = 1000.0
 
 _PERSIST_MANIFEST_NAME = "iltools_rb_manifest.json"
@@ -239,7 +255,7 @@ class ExpertDataPlane:
     _reference_array_store: ReferenceArrayStore | None = None
 
     #: Built on the first macro sample, from whichever source is in use.
-    _root_qpos_macro_cache: dict[str, torch.Tensor] | None = None
+    _compact_macro_cache: dict[str, torch.Tensor] | None = None
 
     def __init__(self, cfg: Any, env: ImitationRLEnv) -> None:
         """Phase 1: load the dataset and build the trajectory manager.
@@ -418,7 +434,7 @@ class ExpertDataPlane:
         self._expert_macro_split_rank_cache: dict[
             tuple[str, float, int], torch.Tensor
         ] = {}
-        self._root_qpos_macro_cache: dict[str, torch.Tensor] | None = None
+        self._compact_macro_cache: dict[str, torch.Tensor] | None = None
 
     # ------------------------------------------------------------------
     # Reference loading: two interchangeable sources.
@@ -2542,24 +2558,37 @@ class ExpertDataPlane:
         expert_window = tm.attach_reference_fields(expert_window, use_buffers=False)
         return _convert_reference_quats_to_xyzw(expert_window.to(self._env.device))
 
-    def _root_qpos_macro_cache_device(self) -> torch.device | None:
+    def _compact_macro_cache_device(self) -> torch.device | None:
         configured = getattr(self._env.cfg.data, "macro_cache_device", None)
         if configured is None or not str(configured).strip():
             return None
-        terms = self._expert_macro_feature_term_order()
-        expected = (
-            "expert_motion_qpos",
-            "expert_anchor_pos_b",
-            "expert_anchor_ori_b",
-        )
-        if terms != expected:
+        if self._compact_macro_cache_needs_joint_vel() is None:
+            supported = (_ROOT_QPOS_MACRO_TERMS, _FULL_BODY_MACRO_TERMS)
             raise ValueError(
-                "env.data.macro_cache_device currently requires the root_qpos "
-                f"macro-state terms {expected}, got {terms}."
+                "env.data.macro_cache_device supports the root_qpos or "
+                f"full_body macro-state terms {supported}, got "
+                f"{self._expert_macro_feature_term_order()}."
             )
         return torch.device(str(configured))
 
-    def _root_qpos_macro_cache_from_arrays(
+    def _compact_macro_cache_needs_joint_vel(self) -> bool | None:
+        """Whether the compact cache must also carry reference joint velocity.
+
+        ``None`` means the configured macro terms have no compact path at all.
+        The two supported selections differ only in their joint block:
+        ``expert_motion_qpos`` is joint positions, ``expert_motion`` is joint
+        positions and velocities, and both carry the same anchor pose. So one
+        cache shape covers both, with the velocity column present only when
+        the wider selection asks for it.
+        """
+        terms = self._expert_macro_feature_term_order()
+        if terms == _ROOT_QPOS_MACRO_TERMS:
+            return False
+        if terms == _FULL_BODY_MACRO_TERMS:
+            return True
+        return None
+
+    def _compact_macro_cache_from_arrays(
         self, store: ReferenceArrayStore, cache_device: torch.device
     ) -> dict[str, torch.Tensor]:
         """Read the macro fields straight out of the prebuilt arrays.
@@ -2567,7 +2596,9 @@ class ExpertDataPlane:
         The derived path gathers ``body_pos_w`` and ``body_quat_w`` in full --
         about 40 GB on the 129k set -- to keep 1.3 GB of anchor pose. Here the
         anchor arrays already exist, and ``joint_pos`` is ``qpos[:, 7:]``, a
-        1.24x read amplification rather than 30x.
+        1.24x read amplification rather than 30x. ``joint_vel`` is the matching
+        ``qvel[:, 6:]`` and is read only when the configured macro terms ask
+        for it -- it is another 5.5 GB on the 129k set.
         """
         anchor_column = store.anchor_source(self._expert_anchor_body_name)
         if anchor_column is None:
@@ -2643,41 +2674,59 @@ class ExpertDataPlane:
                 transform=anchor_quat_transform,
             ),
         }
-        logger.warning("Root_qpos macro cache is ready on %s.", cache_device)
+        if self._compact_macro_cache_needs_joint_vel():
+            cache["joint_vel"] = copy_to_device_parallel(
+                store.array("qvel")[:total, 6:],
+                device=cache_device,
+                workers=workers,
+                chunk_rows=chunk_rows,
+            )
+        logger.warning(
+            "Compact macro cache is ready on %s (%s).",
+            cache_device,
+            "qpos+qvel" if "joint_vel" in cache else "qpos",
+        )
         return cache
 
-    def _ensure_root_qpos_macro_cache(self) -> dict[str, torch.Tensor] | None:
-        """Materialize the compact root+qpos source fields on the cache device."""
-        cache_device = self._root_qpos_macro_cache_device()
+    def _ensure_compact_macro_cache(self) -> dict[str, torch.Tensor] | None:
+        """Materialize the compact macro source fields on the cache device."""
+        cache_device = self._compact_macro_cache_device()
         if cache_device is None:
             return None
-        if self._root_qpos_macro_cache is not None:
-            return self._root_qpos_macro_cache
+        if self._compact_macro_cache is not None:
+            return self._compact_macro_cache
+        needs_joint_vel = bool(self._compact_macro_cache_needs_joint_vel())
         if self._reference_array_store is not None:
-            self._root_qpos_macro_cache = self._root_qpos_macro_cache_from_arrays(
+            self._compact_macro_cache = self._compact_macro_cache_from_arrays(
                 self._reference_array_store, cache_device
             )
-            return self._root_qpos_macro_cache
+            return self._compact_macro_cache
 
         tm = self.trajectory_manager
         storage = getattr(tm.rb, "_storage", None)
         source = getattr(storage, "_storage", None)
         if source is None:
             raise RuntimeError(
-                "The root_qpos macro cache requires tensor-backed replay storage."
+                "The compact macro cache requires tensor-backed replay storage."
             )
         required = ("body_pos_w", "body_quat_w")
         missing = [key for key in required if source.get(key, None) is None]
         if source.get("joint_pos", None) is None and source.get("qpos", None) is None:
             missing.append("joint_pos or qpos")
+        if (
+            needs_joint_vel
+            and source.get("joint_vel", None) is None
+            and source.get("qvel", None) is None
+        ):
+            missing.append("joint_vel or qvel")
         if missing:
             raise KeyError(
-                "The root_qpos macro cache is missing replay fields "
+                "The compact macro cache is missing replay fields "
                 f"{missing}; available keys are {list(source.keys())}."
             )
         if self._expert_anchor_body_name not in self.reference_body_names:
             raise ValueError(
-                "The root_qpos macro cache cannot resolve anchor body "
+                "The compact macro cache cannot resolve anchor body "
                 f"{self._expert_anchor_body_name!r} in dataset body names."
             )
 
@@ -2686,6 +2735,11 @@ class ExpertDataPlane:
         joint_source = source.get("joint_pos", None)
         if joint_source is None:
             joint_source = source["qpos"][..., 7:]
+        joint_vel_source = None
+        if needs_joint_vel:
+            joint_vel_source = source.get("joint_vel", None)
+            if joint_vel_source is None:
+                joint_vel_source = source["qvel"][..., 6:]
         body_pos_source = source["body_pos_w"]
         body_quat_source = source["body_quat_w"]
         if int(joint_source.shape[0]) < total:
@@ -2700,21 +2754,26 @@ class ExpertDataPlane:
             + 3 * body_pos_source.element_size()
             + 4 * body_quat_source.element_size()
         )
+        if joint_vel_source is not None:
+            cache_bytes += total * (
+                int(joint_vel_source.shape[-1]) * joint_vel_source.element_size()
+            )
         if cache_device.type == "cuda":
             free_bytes, _ = torch.cuda.mem_get_info(cache_device)
             reserve_bytes = 4 * 1024**3
             if cache_bytes + reserve_bytes > free_bytes:
                 raise RuntimeError(
-                    "Insufficient CUDA memory for the compact root_qpos macro "
+                    "Insufficient CUDA memory for the compact macro "
                     f"cache: need {cache_bytes / 1024**3:.1f} GiB plus a "
                     f"4 GiB reserve, have {free_bytes / 1024**3:.1f} GiB free."
                 )
 
         logger.warning(
-            "Materializing %.1f GiB root_qpos macro cache (%s rows) on %s; "
+            "Materializing %.1f GiB compact macro cache (%s rows, %s) on %s; "
             "this is a one-time sequential read for this process.",
             cache_bytes / 1024**3,
             total,
+            "qpos+qvel" if joint_vel_source is not None else "qpos",
             cache_device,
         )
         cache = {
@@ -2732,11 +2791,18 @@ class ExpertDataPlane:
         if chunk_size <= 0:
             raise ValueError("env.data.macro_cache_chunk_size must be positive.")
 
-        sources = (
+        sources = [
             ("joint_pos", joint_source),
             ("anchor_pos_w", body_pos_source),
             ("anchor_quat_w", body_quat_source),
-        )
+        ]
+        if joint_vel_source is not None:
+            cache["joint_vel"] = torch.empty(
+                (total, int(joint_vel_source.shape[-1])),
+                dtype=joint_vel_source.dtype,
+                device=cache_device,
+            )
+            sources.append(("joint_vel", joint_vel_source))
         workers = max(
             int(getattr(self._env.cfg.data, "reference_arrays_warm_workers", 8) or 1),
             1,
@@ -2751,7 +2817,7 @@ class ExpertDataPlane:
                 target: torch.Tensor = target,
             ) -> None:
                 start, end = bound
-                if target_name == "joint_pos":
+                if target_name in ("joint_pos", "joint_vel"):
                     chunk = source_tensor[start:end]
                 else:
                     chunk = source_tensor[start:end, anchor_id]
@@ -2770,15 +2836,15 @@ class ExpertDataPlane:
                 for bound in bounds:
                     _fill(bound)
             logger.info(
-                "Materialized root_qpos macro cache field %s (%s rows).",
+                "Materialized compact macro cache field %s (%s rows).",
                 target_name,
                 total,
             )
-        self._root_qpos_macro_cache = cache
-        logger.warning("Root_qpos macro cache is ready on %s.", cache_device)
+        self._compact_macro_cache = cache
+        logger.warning("Compact macro cache is ready on %s.", cache_device)
         return cache
 
-    def _sample_root_qpos_macro_window_for_trajectory_ranks(
+    def _sample_compact_macro_window_for_trajectory_ranks(
         self,
         traj_ranks: torch.Tensor,
         local_steps: torch.Tensor,
@@ -2787,7 +2853,7 @@ class ExpertDataPlane:
         future_steps: int,
         frame_stride: int = 1,
     ) -> TensorDict | None:
-        cache = self._ensure_root_qpos_macro_cache()
+        cache = self._ensure_compact_macro_cache()
         if cache is None:
             return None
         if int(frame_stride) < 1:
@@ -2807,12 +2873,15 @@ class ExpertDataPlane:
         steps = torch.minimum(steps.clamp(min=0), (lengths - 1).unsqueeze(1))
         indices = tm.start.index_select(0, traj_ranks_t).unsqueeze(1) + steps
         indices = indices.to(device=cache_device)
+        window = {
+            "joint_pos": cache["joint_pos"][indices],
+            "_macro_anchor_pos_w": cache["anchor_pos_w"][indices],
+            "_macro_anchor_quat_w": cache["anchor_quat_w"][indices],
+        }
+        if "joint_vel" in cache:
+            window["joint_vel"] = cache["joint_vel"][indices]
         return TensorDict(
-            {
-                "joint_pos": cache["joint_pos"][indices],
-                "_macro_anchor_pos_w": cache["anchor_pos_w"][indices],
-                "_macro_anchor_quat_w": cache["anchor_quat_w"][indices],
-            },
+            window,
             batch_size=list(indices.shape),
             device=cache_device,
         ).to(self._env.device)
@@ -2829,7 +2898,7 @@ class ExpertDataPlane:
         # pretraining, the live low-level encoder input, and planner sample
         # collection -- reads the same window. A caller cannot forget it.
         frame_stride = self._expert_macro_frame_stride()
-        compact = self._sample_root_qpos_macro_window_for_trajectory_ranks(
+        compact = self._sample_compact_macro_window_for_trajectory_ranks(
             traj_ranks,
             local_steps,
             past_steps=past_steps,
@@ -3212,6 +3281,30 @@ class ExpertDataPlane:
                     body_pos.reshape(batch_size, -1, 3),
                     body_quat.reshape(batch_size, -1, 4),
                 )
+        elif context == "expert_heading":
+            # The expert's own slot-0 heading (yaw-only) frame with an xy-only
+            # origin. No world transform and no robot state: the same reference
+            # cursor yields byte-identical terms in pretraining and at rollout,
+            # while absolute height and roll/pitch relative to gravity pass
+            # through -- the invariance group of the re-rooted tracking reward.
+            center_index = int(past_steps)
+            center_anchor_pos, center_anchor_quat = compiled.heading_anchor_frame(
+                anchor_pos[:, center_index, :],
+                anchor_quat[:, center_index, :],
+            )
+            anchor_pos_b, anchor_ori_b = compiled.body_pose_in_anchor_frame(
+                center_anchor_pos,
+                center_anchor_quat,
+                anchor_pos,
+                anchor_quat,
+            )
+            if body_terms_enabled:
+                body_pos_b, body_ori_b = compiled.body_pose_in_anchor_frame(
+                    center_anchor_pos,
+                    center_anchor_quat,
+                    body_pos.reshape(batch_size, -1, 3),
+                    body_quat.reshape(batch_size, -1, 4),
+                )
         elif context == "rollout":
             window_size = int(anchor_pos.shape[1])
             flat_env_ids = env_ids[:, None].expand(-1, window_size).reshape(-1)
@@ -3352,6 +3445,28 @@ class ExpertDataPlane:
             raise ValueError("expert_macro_frame_stride must be >= 1.")
         return stride
 
+    def _expert_macro_anchor_mode(self) -> str:
+        """Frame convention of the DiffSR macro window.
+
+        "robot" is the historical split convention: expert-context windows
+        anchor at the expert's full slot-0 pose, rollout windows at the
+        robot's full live anchor pose -- so a frozen encoder's rollout input
+        differs from its pretraining input by exactly the live tracking
+        error. "expert_heading" anchors both contexts at the expert's slot-0
+        heading (yaw-only) frame with an xy-only origin, making pretrain and
+        rollout inputs identical by construction. The width is unchanged
+        either way, so the mode is recorded in the skill checkpoint and the
+        low level refuses an encoder pretrained under a different mode.
+        """
+        configured = getattr(self._env.cfg, "expert_macro_anchor_mode", "robot")
+        mode = str(configured).strip()
+        if mode not in ("robot", "expert_heading"):
+            raise ValueError(
+                "expert_macro_anchor_mode must be 'robot' or 'expert_heading', "
+                f"got {mode!r}."
+            )
+        return mode
+
     def _expert_macro_state_sequence_from_terms(
         self,
         terms: dict[str, torch.Tensor],
@@ -3418,6 +3533,14 @@ class ExpertDataPlane:
         anchor_body_name: str = "torso_link",
     ) -> dict[str, torch.Tensor]:
         """Build independently selectable joint, EE, and keypoint macro terms."""
+        if self._expert_macro_anchor_mode() == "expert_heading":
+            # One frame convention for both callers: the pretrain path
+            # (context="expert") and the live encoder path (context="rollout")
+            # collapse onto the expert slot-0 heading frame, so the frozen
+            # encoder's rollout input matches its pretraining distribution by
+            # construction. Only the macro state changes; the expert_window
+            # observation terms keep their per-context semantics.
+            context = "expert_heading"
         selected = set(self._expert_macro_feature_term_order())
         terms = self._build_expert_window_terms(
             expert_window,

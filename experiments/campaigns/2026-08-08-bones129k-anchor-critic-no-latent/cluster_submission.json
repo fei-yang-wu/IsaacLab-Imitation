@@ -1,0 +1,61 @@
+{
+  "campaign": "2026-08-08-bones129k-anchor-critic-no-latent",
+  "submitted_utc": "2026-08-08T23:30:40Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "7b68f5c0478a740f8775d26e9f17e7d4743eddd462d385ddb20b4b1df00da8e3",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "latent-anchor-frame"
+  },
+  "axis": {
+    "field": "env.command_interface.critic_channels",
+    "arm_value": [
+      "reference"
+    ],
+    "control_value": [
+      "actor",
+      "reference"
+    ]
+  },
+  "control": {
+    "job_id": 5573234,
+    "wandb_run": "9lraqu2e",
+    "arm": "expert_heading",
+    "note": "not resubmitted; this campaign adds one arm against it"
+  },
+  "arm": {
+    "arm": "expert_heading_critic_no_latent",
+    "lowlevel_job_id": 5573413,
+    "pretrain_job_id": null
+  },
+  "shared_encoder": {
+    "path": "/data/bones129k_anchor_frame/expert_heading_encoder/checkpoints/latest.pt",
+    "sha256": "be6d533f1d1ca4aa6b1e819af1d3ef63eb033125018c8309c7448384b6a9583e",
+    "note": "identical file the control arm loads; no pretrain job for this arm",
+    "macro_anchor_mode": "expert_heading",
+    "macro_frame_stride": 1,
+    "horizon_steps": 10,
+    "z_dim": 256,
+    "encoder_input_dim": 380
+  },
+  "lowlevel": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "command_dim": 258,
+    "hold_steps": 10,
+    "actor_input_dim": 351,
+    "critic_input_dim": 286,
+    "tracker_num_cells": "tuned entry point default (not overridden)",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 10000000000,
+    "max_iterations": 25432,
+    "checkpoint_interval_frames": 50000000,
+    "reset_sampler": "random80_adaptive20",
+    "walltime": "15:59:00",
+    "expected_termination": "TIMEOUT before the 10B cap; ICE allocations end at 16 h. Checkpoints persist under /data, so a TIMEOUT loses no training."
+  }
+}

@@ -76,6 +76,84 @@ The audit details and the deliberately retained deltas (our common controller
 recipe; recon on a dedicated Adam(2e-5) instead of SONIC's single summed
 loss) are recorded in the campaign README.
 
+## What the 4,096-motion scoreboard says we are losing to (2026-08-09)
+
+`experiments/campaigns/2026-08-08-bones129k-4096-scoreboard/` scores every
+finished BONES-129k arm under ONE protocol: 4,096 environments, ranks
+12288-16383 pinned, frame-0 starts, seed 0, mode actions, `no_push`,
+released-SONIC thresholds, `foot_pos_xyz` and `base_too_low` disabled.
+
+**The explicit root_qpos baseline beats every latent arm on both metrics.**
+Scored 2026-08-09: SR 0.9358, success-only MPJPE-L 19.21 mm at 7.6B frames,
+against the best latent arm's 0.9062 / 24.39 mm at 5B. The frame counts are not
+matched and the gap favors explicit, but 21% lower MPJPE is not a 52%-more-
+training artifact to wave away. Treat "latent beats explicit" as unproven.
+
+| arm | frames | SR | succ MPJPE-L | `ee_body_pos` | `anchor_ori` | `anchor_pos` |
+|---|---:|---:|---:|---:|---:|---:|
+| `root_qpos_explicit` | 7.60B | 0.9358 | 19.21 mm | 212 | 50 | 13 |
+| `critic_no_latent` | 5.00B | 0.9062 | 24.39 mm | 318 | 57 | 17 |
+| `old_z256` | 5.00B | 0.9058 | 24.52 mm | - | - | - |
+| `skill_state_occupancy` | 5.00B | 0.9050 | 25.11 mm | 322 | 53 | 21 |
+| `fsq64_sonic` | 5.00B | 0.8943 | 25.74 mm | - | - | - |
+| `stride5_det64` | 5.00B | 0.7063 | 35.93 mm | 1079 | 110 | 28 |
+| `stride5_fsq64` | 5.00B | 0.6785 | 37.59 mm | - | - | - |
+| `stride5_gumbel64` | 4.75B | 0.5020 | 49.96 mm | - | - | - |
+| released SONIC | - | 0.9937 | 28.65 mm | 26 | - | 4 |
+
+Two readings beyond the headline. First, against the released SONIC checkpoint
+we win on precision and lose on falls. Second, **stride 5 is bad under every
+latent mode tested** — deterministic, FSQ, and Gumbel all collapse relative to
+their stride-1 counterparts, so the 0.9 s SONIC cadence is not transferable to
+our recipe as-is.
+
+The falls are almost one termination in every row, explicit included:
+
+`ee_body_pos` is a Z-only height error over `G1_EE_BODY_NAMES` — both ankles
+and both wrists. Narrowing it to one pair at a time on the best arm
+(`logs/bones129k_ee_attribution/`) gives wrists-only 231 (SR 0.9197) and
+ankles-only 208 (SR 0.9182); 231 + 208 > 318, so many environments fail on
+both. This is end-effector height in general, not a wrist-only defect.
+
+Consequence for planning work: reward-kernel tuning that buys precision does
+not touch this, exactly as the 2026-08-04 v2 tuned-reward screen already
+recorded. Attack falls.
+
+## Four arms against the explicit root_qpos baseline (2026-08-09)
+
+Four single-variable arms, each against a stated control, all on ICE:
+
+| campaign | axis | job(s) | control |
+|---|---|---:|---|
+| `2026-08-09-bones129k-ee-reward` | `env.rewards.motion_ee_pos.weight=2.0` (was inert) | `5573515` | `5573413` |
+| `2026-08-09-bones129k-encoder-finetune` | `agent.ipmd.hl_skill_finetune_enabled=true` | `5573516` | `5573413` |
+| `2026-08-09-bones129k-fullbody-encoder` | encoder input `root_qpos` 380 -> `full_body` 670 (adds reference joint velocity) | pretrain + dependent tracker | `5573413` |
+| `2026-08-08-bones129k-fsq-anchor-critic` | combined: `sonic_fsq` 64x32, scaled nets, expert-heading frame, critic `[reference]` | `5573502` -> `5573503` | not single-variable; see its README |
+
+The comparison target itself — the explicit 38-D `root_qpos` command
+(`5567809`) — had no scoreboard row until 2026-08-09. It now scores SR 0.9358
+and 19.21 mm, ahead of every latent arm on both metrics. Its only surviving
+checkpoint on ICE is at 7,600,078,848 frames, 52% more training than the 5B
+latent rows, so the comparison favors it; the scoreboard prints each row's
+frame count and the explicit row is not frame-matched. A frame-matched rerun
+needs a 5B explicit checkpoint, which no longer exists on ICE — the honest fix
+is to retrain the explicit arm and checkpoint at 5B, not to reinterpret this
+row. The scoreboard supports explicit arms as of this change (an encoder field
+of `-` selects the explicit command-interface overrides).
+
+Two corrections worth keeping:
+
+- The **released** SONIC checkpoint's tokenizer reads reference
+  `joint_pos(29) + joint_vel(29) + anchor_ori 6D` per window frame, not the
+  480-value 14-body keypoint spec. That keypoint spec is the paper's
+  `sonic_bones_seed.yaml` experiment config. Joint velocity, not keypoints, is
+  the encoder-input difference between the released model and our v2 default —
+  which is what the `fullbody-encoder` arm tests.
+- `env.data.macro_cache_device` served only the `root_qpos` macro terms and
+  refused anything else. It now also serves `full_body` by carrying
+  `qvel[:, 6:]` alongside `qpos[:, 7:]` (about 5.5 GB more on the 129k set),
+  so the encoder-input arm is not confounded by losing the fast macro path.
+
 ## Skill-transition factorization ablation (2026-08-06)
 
 Three fixed-duration skill objectives are running as a matched 5B-frame H200

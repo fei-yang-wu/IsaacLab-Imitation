@@ -477,9 +477,15 @@ def _build_trainer_config(
     # a low-level run cannot pair with the wrong one. There is deliberately no
     # CLI flag: two sources for one value is how they drift apart.
     macro_frame_stride = int(getattr(env_cfg, "expert_macro_frame_stride", 1) or 1)
+    # Same contract for the macro-window frame convention: recorded from the
+    # environment, no CLI flag.
+    macro_anchor_mode = str(
+        getattr(env_cfg, "expert_macro_anchor_mode", "robot") or "robot"
+    )
     config = HighLevelSkillDiffSRConfig(
         horizon_steps=args_cli.horizon_steps,
         macro_frame_stride=macro_frame_stride,
+        macro_anchor_mode=macro_anchor_mode,
         encoder_window_mode=args_cli.encoder_window_mode,
         transition_objective=args_cli.transition_objective,
         transition_offsets=tuple(args_cli.transition_offsets or ()),
