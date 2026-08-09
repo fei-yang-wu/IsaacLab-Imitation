@@ -17,7 +17,9 @@ from imitation_experiments.lowlevel.sonic_release_actor import (
     ACTION_DIM,
     ENCODER_FRAMES,
     FSQ,
+    PROPRIOCEPTION_TERMS,
     PROPRIOCEPTION_DIM,
+    assemble_proprioception,
     load_sonic_release_actor,
     pack_encoder_window,
 )
@@ -76,6 +78,30 @@ def test_encoder_window_rejects_a_wrong_shape() -> None:
         pack_encoder_window(
             torch.zeros(1, 10, 29), torch.zeros(1, 10, 58), torch.zeros(1, 10, 6)
         )
+
+
+def test_proprioception_uses_sonic_policy_field_order() -> None:
+    assert [name for name, _ in PROPRIOCEPTION_TERMS] == [
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action",
+        "gravity_dir",
+    ]
+
+    gravity = torch.full((1, 10, 3), 1.0)
+    ang_vel = torch.full((1, 10, 3), 2.0)
+    joint_pos = torch.full((1, 10, 29), 3.0)
+    joint_vel = torch.full((1, 10, 29), 4.0)
+    action = torch.full((1, 10, 29), 5.0)
+
+    proprioception = assemble_proprioception(
+        gravity, ang_vel, joint_pos, joint_vel, action
+    )
+
+    assert proprioception.shape == (1, PROPRIOCEPTION_DIM)
+    assert torch.equal(proprioception[:, :30], ang_vel.reshape(1, -1))
+    assert torch.equal(proprioception[:, -30:], gravity.reshape(1, -1))
 
 
 @pytest.mark.skipif(_checkpoint() is None, reason="released SONIC checkpoint absent")
