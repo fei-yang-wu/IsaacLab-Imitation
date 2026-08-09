@@ -1,0 +1,91 @@
+{
+  "campaign": "2026-08-09-bones129k-ee-reward",
+  "submitted_utc": "2026-08-09T04:35:46Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "220f147a74c98dc03a4a6d4f5e602618d7bcdf8a5b10f0777028d4a4ec4cd650",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "ee-reward"
+  },
+  "axis": {
+    "field": "env.rewards.motion_ee_pos.weight",
+    "arm_value": 2.0,
+    "control_value": 0.0,
+    "term": {
+      "func": "reference_relative_body_position_error_exp",
+      "bodies": [
+        "left_wrist_yaw_link",
+        "right_wrist_yaw_link"
+      ],
+      "anchor_body_name": "pelvis",
+      "std": 0.1
+    }
+  },
+  "motivation": {
+    "scoreboard": "2026-08-08-bones129k-4096-scoreboard, ranks 12288-16383",
+    "control_failures": {
+      "ee_body_pos": 318,
+      "anchor_ori": 57,
+      "anchor_pos": 17,
+      "total_envs": 4096
+    },
+    "body_attribution": {
+      "wrists_only": {
+        "ee_body_pos": 231,
+        "success_rate": 0.9197
+      },
+      "ankles_only": {
+        "ee_body_pos": 208,
+        "success_rate": 0.9182
+      },
+      "note": "231 + 208 > 318, so many environments fail on both pairs; the wrists are targeted because they have no dedicated reward, not because they are the only failing bodies"
+    },
+    "released_sonic_same_ranks": {
+      "ee_body_pos": 26,
+      "success_rate": 0.9937
+    },
+    "counter_evidence": "the earlier s13 screen found a local wrist term improved root-relative EE while root drift rose and MPJPE-G worsened 28%, measured before the v2 tuned rewards raised both anchor terms from 0.5 to 2.0"
+  },
+  "control": {
+    "job_id": 5573413,
+    "arm": "expert_heading_critic_no_latent",
+    "wandb_group": "latent-anchor-frame",
+    "note": "not resubmitted; this campaign adds one arm against it"
+  },
+  "arm": {
+    "arm": "expert_heading_critic_no_latent_ee_reward",
+    "lowlevel_job_id": 5573515,
+    "pretrain_job_id": null
+  },
+  "shared_encoder": {
+    "path": "/data/bones129k_anchor_frame/expert_heading_encoder/checkpoints/latest.pt",
+    "sha256": "be6d533f1d1ca4aa6b1e819af1d3ef63eb033125018c8309c7448384b6a9583e",
+    "macro_anchor_mode": "expert_heading",
+    "macro_frame_stride": 1,
+    "horizon_steps": 10,
+    "z_dim": 256,
+    "encoder_input_dim": 380
+  },
+  "lowlevel": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "command_dim": 258,
+    "hold_steps": 10,
+    "actor_input_dim": 351,
+    "critic_input_dim": 286,
+    "critic_channels": [
+      "reference"
+    ],
+    "tracker_num_cells": "tuned entry point default (not overridden)",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 10000000000,
+    "max_iterations": 25432,
+    "checkpoint_interval_frames": 50000000,
+    "reset_sampler": "random80_adaptive20",
+    "walltime": "15:59:00"
+  }
+}

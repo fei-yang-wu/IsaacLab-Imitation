@@ -1,0 +1,101 @@
+{
+  "campaign": "2026-08-09-bones129k-z256-scale",
+  "submitted_utc": "2026-08-09T04:34:45Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "ef7a880594d21e1fd14aba535da65fb6dc0957ef0938e299bf5bd428088fdbf0",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "latent-capacity-scale"
+  },
+  "axis": {
+    "field": "network capacity (encoder trunk, DiffSR heads, actor, critic)",
+    "arm_value": "scaled",
+    "control_value": "tuned"
+  },
+  "control": {
+    "job_id": 5567801,
+    "arm": "reset80_diffsr",
+    "scoreboard_row": "old_z256",
+    "wandb_group": "bones129k-ablation",
+    "encoder_sha256": "d191d8656620059a569edbad82ca182cb2d2f85839300153cb618d1e29f8c5e7",
+    "scoreboard_sonic_sr": 0.9058,
+    "scoreboard_successful_mpjpe_l_mm": 24.52,
+    "note": "not resubmitted; this campaign adds one arm against it"
+  },
+  "arm": {
+    "arm": "z256_scaled",
+    "pretrain_job_id": 5573513,
+    "lowlevel_job_id": 5573514,
+    "dependency": "afterok:5573513"
+  },
+  "pretrain": {
+    "macro_interface": "root_qpos",
+    "encoder_input_dim": 380,
+    "macro_frame_stride": 1,
+    "macro_anchor_mode": "robot",
+    "horizon_steps": 10,
+    "z_dim": 256,
+    "latent_mode": "deterministic",
+    "encoder_window_mode": "intermediate",
+    "transition_objective": "endpoint",
+    "encoder_hidden_dims": [
+      2048,
+      1024,
+      512,
+      512
+    ],
+    "encoder_activation": "silu",
+    "encoder_layer_norm": false,
+    "diffsr_feature_dim": 256,
+    "diffsr_embed_dim": 1024,
+    "diffsr_g_hidden_dims": [
+      1024,
+      1024,
+      512
+    ],
+    "diffsr_mu_hidden_dims": [
+      1024,
+      1024,
+      512
+    ],
+    "updates": 50000,
+    "batch_size": 8192,
+    "control_geometry": {
+      "encoder_hidden_dims": [
+        1024,
+        512,
+        512
+      ],
+      "encoder_activation": "mish",
+      "encoder_layer_norm": true,
+      "diffsr_feature_dim": 128,
+      "diffsr_embed_dim": 512,
+      "diffsr_g_hidden_dims": [
+        512
+      ],
+      "diffsr_mu_hidden_dims": [
+        512
+      ]
+    }
+  },
+  "lowlevel": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "command_dim": 258,
+    "hold_steps": 10,
+    "tracker_num_cells": "[2048,2048,1024,1024,512,512]",
+    "tracker_activation": "silu",
+    "control_tracker_num_cells": "[1024,1024,512] (tuned entry point default)",
+    "critic_channels": "[actor, reference] (unchanged from control)",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 10000000000,
+    "checkpoint_interval_frames": 50000000,
+    "reset_sampler": "random80_adaptive20"
+  },
+  "capacity_note": "The scaled widths are copied from 2026-08-06-bones129k-sonic-fsq-scale, which measured them under an FSQ bottleneck. Nothing else differs from the control, so a difference here is attributable to capacity.",
+  "throughput_note": "The scaled tracker is slower per frame. The matched-budget comparison is the 5,000,134,656-frame checkpoint, which the control also has; a 15:59:00 allocation may TIMEOUT before the 10B cap."
+}

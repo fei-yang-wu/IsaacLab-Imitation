@@ -69,6 +69,23 @@ def quat_to_rot6d_flat(quat: torch.Tensor) -> torch.Tensor:
 
 
 @_maybe_compile
+def heading_anchor_frame(
+    anchor_pos_w: torch.Tensor,
+    anchor_quat_w: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Yaw-only anchor frame: heading twist plus an xy-only origin.
+
+    Cancels exactly the transformations the tracking reward's re-rooting is
+    invariant under (global yaw and xy translation) and nothing more: poses
+    expressed in this frame keep absolute height and roll/pitch relative to
+    gravity, which a full anchor-pose cancellation destroys.
+    """
+    anchor_pos_xy = anchor_pos_w.clone()
+    anchor_pos_xy[..., 2] = 0.0
+    return anchor_pos_xy, heading_quat(anchor_quat_w)
+
+
+@_maybe_compile
 def body_pose_in_anchor_frame(
     anchor_pos_w: torch.Tensor,
     anchor_quat_w: torch.Tensor,

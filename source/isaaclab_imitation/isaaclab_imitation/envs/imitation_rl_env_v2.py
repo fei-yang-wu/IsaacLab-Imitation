@@ -387,6 +387,16 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         """
         return self.expert_data_plane._expert_macro_frame_stride()
 
+    def expert_macro_anchor_mode(self) -> str:
+        """Frame convention of the DiffSR macro window.
+
+        Published so a consumer that pairs a pretrained skill encoder with this
+        environment can refuse a frame convention the encoder was not trained
+        on. The macro state's width is identical in every mode, so this is the
+        only way that mismatch can be detected.
+        """
+        return self.expert_data_plane._expert_macro_anchor_mode()
+
     def sample_expert_macro_transition_batch(
         self,
         batch_size: int,

@@ -1,0 +1,89 @@
+{
+  "campaign": "2026-08-09-bones129k-fullbody-encoder",
+  "submitted_utc": "2026-08-09T04:44:04Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "0f3079bd8afaf963ef90f6be7b289dc7227f7afab542ddc18051503573c0974e",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "encoder-input"
+  },
+  "axis": {
+    "field": "env.expert_macro_state_terms",
+    "arm_value": [
+      "expert_motion",
+      "expert_anchor_pos_b",
+      "expert_anchor_ori_b"
+    ],
+    "control_value": [
+      "expert_motion_qpos",
+      "expert_anchor_pos_b",
+      "expert_anchor_ori_b"
+    ],
+    "delta": "reference joint velocity added to the encoder input",
+    "encoder_input_dim": {
+      "arm": 670,
+      "control": 380
+    }
+  },
+  "control": {
+    "job_id": 5573413,
+    "arm": "expert_heading_critic_no_latent",
+    "wandb_group": "latent-anchor-frame",
+    "note": "not resubmitted; this campaign adds one arm against it"
+  },
+  "arm": {
+    "arm": "expert_heading_fullbody_encoder",
+    "pretrain_job_id": 5573519,
+    "lowlevel_job_id": 5573520,
+    "dependency": "afterok:5573519"
+  },
+  "pretrain": {
+    "macro_interface": "full_body",
+    "encoder_input_dim": 670,
+    "macro_frame_stride": 1,
+    "macro_anchor_mode": "expert_heading",
+    "horizon_steps": 10,
+    "z_dim": 256,
+    "latent_mode": "deterministic",
+    "encoder_window_mode": "intermediate",
+    "transition_objective": "endpoint",
+    "encoder_hidden_dims": [
+      1024,
+      512,
+      512
+    ],
+    "encoder_activation": "mish",
+    "diffsr_feature_dim": 128,
+    "diffsr_embed_dim": 512,
+    "diffsr_g_hidden_dims": [
+      512
+    ],
+    "diffsr_mu_hidden_dims": [
+      512
+    ],
+    "updates": 50000,
+    "batch_size": 8192
+  },
+  "lowlevel": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "command_dim": 258,
+    "hold_steps": 10,
+    "actor_input_dim": 351,
+    "critic_input_dim": 286,
+    "critic_channels": [
+      "reference"
+    ],
+    "tracker_num_cells": "tuned entry point default (not overridden)",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 10000000000,
+    "max_iterations": 25432,
+    "checkpoint_interval_frames": 50000000,
+    "reset_sampler": "random80_adaptive20",
+    "walltime": "15:59:00"
+  }
+}

@@ -73,6 +73,9 @@ class ImitationEnvInterface:
     def expert_macro_frame_stride(self) -> int:
         return self._env.expert_macro_frame_stride()
 
+    def expert_macro_anchor_mode(self) -> str:
+        return self._env.expert_macro_anchor_mode()
+
     def sample_expert_macro_transition_batch(
         self,
         batch_size: int,

@@ -1,0 +1,72 @@
+{
+  "campaign": "2026-08-08-bones129k-anchor-frame",
+  "submitted_utc": "2026-08-08T19:08:32Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "7ff03c839ec801ad3111266826b6939fb04ade9ad164f81d5ed99922807a6a99",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "latent-anchor-frame"
+  },
+  "axis": {
+    "field": "env.expert_macro_anchor_mode",
+    "arm_value": "expert_heading",
+    "control_value": "robot"
+  },
+  "control": {
+    "job_id": 5567801,
+    "arm": "reset80_diffsr",
+    "wandb_group": "bones129k-ablation",
+    "encoder_sha256": "d191d8656620059a569edbad82ca182cb2d2f85839300153cb618d1e29f8c5e7",
+    "note": "not resubmitted; this campaign adds one arm against it"
+  },
+  "arm": {
+    "arm": "expert_heading",
+    "pretrain_job_id": 5573233,
+    "lowlevel_job_id": 5573234,
+    "dependency": "afterok:5573233"
+  },
+  "pretrain": {
+    "macro_interface": "root_qpos",
+    "encoder_input_dim": 380,
+    "macro_frame_stride": 1,
+    "macro_anchor_mode": "expert_heading",
+    "horizon_steps": 10,
+    "z_dim": 256,
+    "latent_mode": "deterministic",
+    "encoder_window_mode": "intermediate",
+    "transition_objective": "endpoint",
+    "encoder_hidden_dims": [
+      1024,
+      512,
+      512
+    ],
+    "encoder_activation": "mish",
+    "encoder_layer_norm": true,
+    "diffsr_feature_dim": 128,
+    "diffsr_embed_dim": 512,
+    "diffsr_g_hidden_dims": [
+      512
+    ],
+    "diffsr_mu_hidden_dims": [
+      512
+    ],
+    "updates": 50000,
+    "batch_size": 8192
+  },
+  "lowlevel": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "command_dim": 258,
+    "hold_steps": 10,
+    "tracker_num_cells": "tuned entry point default (not overridden)",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 10000000000,
+    "checkpoint_interval_frames": 50000000,
+    "reset_sampler": "random80_adaptive20"
+  },
+  "actor_contract_note": "Actor input keys unchanged from the control: no anchor-delta observation replaces the drift signal the robot-anchored latent carried implicitly. Deliberate, so the arm stays single-variable."
+}

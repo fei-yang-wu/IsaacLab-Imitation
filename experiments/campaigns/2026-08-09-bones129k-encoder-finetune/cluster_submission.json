@@ -1,0 +1,69 @@
+{
+  "campaign": "2026-08-09-bones129k-encoder-finetune",
+  "submitted_utc": "2026-08-09T04:38:10Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "039ef9994b273846f3be9ba30c4a31e04d7192aa883bcd861a77946a1b937cfa",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "encoder-finetune"
+  },
+  "axis": {
+    "field": "agent.ipmd.hl_skill_finetune_enabled",
+    "arm_value": true,
+    "control_value": false
+  },
+  "control": {
+    "job_id": 5573413,
+    "arm": "expert_heading_critic_no_latent",
+    "wandb_group": "latent-anchor-frame",
+    "note": "not resubmitted; this campaign adds one arm against it"
+  },
+  "arm": {
+    "arm": "expert_heading_critic_no_latent_finetune",
+    "lowlevel_job_id": 5573516,
+    "pretrain_job_id": null
+  },
+  "starting_encoder": {
+    "path": "/data/bones129k_anchor_frame/expert_heading_encoder/checkpoints/latest.pt",
+    "sha256": "be6d533f1d1ca4aa6b1e819af1d3ef63eb033125018c8309c7448384b6a9583e",
+    "note": "identical file the control loads and keeps frozen; this arm starts from it and lets it move",
+    "macro_anchor_mode": "expert_heading",
+    "macro_frame_stride": 1,
+    "horizon_steps": 10,
+    "z_dim": 256,
+    "encoder_input_dim": 380
+  },
+  "finetune": {
+    "lr": 3e-05,
+    "pg_coeff": 0.05,
+    "offline_diffsr_coeff": 1.0,
+    "anchor_coeff": 0.01,
+    "grad_clip_norm": 1.0,
+    "offline_batch_size": 8192,
+    "update_interval": 1,
+    "train_diffsr": false,
+    "note": "offline DiffSR loss plus the anchor term act as a trust region around the pretrained encoder; the DiffSR transition model itself stays frozen"
+  },
+  "lowlevel": {
+    "task": "Isaac-Imitation-G1-v2",
+    "motions": 129785,
+    "command_dim": 258,
+    "hold_steps": 10,
+    "actor_input_dim": 351,
+    "critic_input_dim": 286,
+    "critic_channels": [
+      "reference"
+    ],
+    "tracker_num_cells": "tuned entry point default (not overridden)",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 10000000000,
+    "max_iterations": 25432,
+    "checkpoint_interval_frames": 50000000,
+    "reset_sampler": "random80_adaptive20",
+    "walltime": "15:59:00"
+  }
+}

@@ -464,6 +464,13 @@ class ImitationRLEnvLegacy(ManagerBasedRLEnv):
                 "expert_macro_frame_stride is a v2 surface feature; the legacy "
                 "environment serves consecutive macro frames only."
             )
+        # Same boundary for the macro-window frame convention: the legacy
+        # window builder only implements the historical "robot" split.
+        if str(getattr(cfg, "expert_macro_anchor_mode", "robot")) != "robot":
+            raise ValueError(
+                "expert_macro_anchor_mode is a v2 surface feature; the legacy "
+                "environment serves the 'robot' anchor convention only."
+            )
         self._latent_goal_steps = int(getattr(cfg, "latent_goal_steps", 0))
         if self._latent_goal_steps < 0:
             raise ValueError("latent_goal_steps must be >= 0.")
