@@ -219,14 +219,14 @@ def pack_encoder_window(
 
 PROPRIOCEPTION_FRAMES = 10
 # Term-major order and per-term width of SONIC's 930 policy observation, read
-# from the released ``observation_config.yaml`` / config policy group:
-# gravity_dir, base_ang_vel, joint_pos_rel, joint_vel_rel, last_action.
+# from the released PolicyCfg declaration. Isaac Lab concatenates by class
+# field order, not by the YAML key order.
 PROPRIOCEPTION_TERMS: tuple[tuple[str, int], ...] = (
-    ("gravity_dir", 3),
     ("base_ang_vel", 3),
     ("joint_pos_rel", 29),
     ("joint_vel_rel", 29),
     ("last_action", 29),
+    ("gravity_dir", 3),
 )
 
 
@@ -246,7 +246,7 @@ def assemble_proprioception(
     The layout is **term-major**: each term's full 10-frame history is
     contiguous, and the five terms concatenate in the order above::
 
-        [gravity(30) | base_ang_vel(30) | joint_pos(290) | joint_vel(290) | last_action(290)]
+        [base_ang_vel(30) | joint_pos(290) | joint_vel(290) | last_action(290) | gravity(30)]
 
     This is *not* the ``planner_state`` ``10 x 93`` frame-major layout. Both are
     930 wide; feeding one where the other is expected is a silent, plausible

@@ -69,11 +69,21 @@ parser.add_argument(
 parser.add_argument(
     "--reset_schedule",
     type=str,
-    default=None,
+    default="sequential",
     help=(
-        "Override the reference schedule after the start frame is pinned. Pass "
-        "'sequential' to match evaluate_checkpoint's ordered motion assignment "
-        "so the two runs score the same motions."
+        "Reference schedule after the start frame is pinned. The default matches "
+        "evaluate_checkpoint's ordered motion assignment so the two tools score "
+        "the same motion block unless --trajectory_ranks pins an exact set."
+    ),
+)
+parser.add_argument(
+    "--termination_contract",
+    choices=("sonic", "task"),
+    default="sonic",
+    help=(
+        "Termination contract for reportable release scores. 'sonic' applies "
+        "SONIC's released thresholds and disables foot_pos_xyz/base_too_low. "
+        "'task' keeps the task config and is for diagnostics only."
     ),
 )
 parser.add_argument(
@@ -81,6 +91,21 @@ parser.add_argument(
     action="store_true",
     default=False,
     help="Full-horizon diagnostic pass: no termination truncates the rollout.",
+)
+parser.add_argument(
+    "--preserve_episode_length",
+    action="store_true",
+    default=False,
+    help="Do not extend env.episode_length_s to cover --steps.",
+)
+parser.add_argument(
+    "--allow_incomplete_release",
+    action="store_true",
+    default=False,
+    help=(
+        "Allow writing a reportable release JSON even when not all environments "
+        "reach reference_finished before the step cap. Intended for debugging."
+    ),
 )
 parser.add_argument(
     "--proprioception_order",
@@ -223,6 +248,117 @@ def _proprioception_layout(name: str) -> tuple[tuple[str, int], ...]:
 
 JOINT_QPOS_QVEL_WIDTH = 58
 ANCHOR_ORI_WIDTH = 6
+SONIC_SUCCESS_TERMINATION_THRESHOLDS: dict[str, dict[str, float]] = {
+    "anchor_pos": {"threshold": 0.25, "down_threshold": 0.25},
+    "anchor_ori": {"threshold": 1.0},
+    "ee_body_pos": {"threshold": 0.25, "down_threshold": 0.25},
+}
+SONIC_SUCCESS_DISABLED_TERMINATIONS = ("foot_pos_xyz", "base_too_low")
+
+
+def _configured_step_dt(env_cfg: object) -> float | None:
+    sim_cfg = getattr(env_cfg, "sim", None)
+    sim_dt = float(getattr(sim_cfg, "dt", 0.0) or 0.0)
+    decimation = int(getattr(env_cfg, "decimation", 1) or 1)
+    if sim_dt > 0.0 and decimation > 0:
+        return sim_dt * decimation
+    return None
+
+
+def _extend_episode_length_for_steps(env_cfg: Any, steps: int) -> dict[str, Any]:
+    """Make the env timeout longer than the requested evaluation cap."""
+    step_dt = _configured_step_dt(env_cfg)
+    if step_dt is None or not hasattr(env_cfg, "episode_length_s"):
+        return {
+            "extended": False,
+            "reason": "step_dt_or_episode_length_unavailable",
+        }
+    current = float(getattr(env_cfg, "episode_length_s"))
+    required = float(int(steps) + 2) * step_dt
+    if current >= required:
+        return {
+            "extended": False,
+            "before_s": current,
+            "after_s": current,
+            "required_s": required,
+        }
+    env_cfg.episode_length_s = required
+    print(
+        "[INFO] Extended env.episode_length_s for release evaluation: "
+        f"{current:.3f} -> {required:.3f}",
+        flush=True,
+    )
+    return {
+        "extended": True,
+        "before_s": current,
+        "after_s": required,
+        "required_s": required,
+    }
+
+
+def _apply_sonic_success_terminations(env_cfg: Any) -> dict[str, Any]:
+    """Bake SONIC's released success criterion into the env config."""
+    terminations = getattr(env_cfg, "terminations", None)
+    if terminations is None:
+        raise RuntimeError("env_cfg has no terminations group.")
+    applied: dict[str, Any] = {"mode": "sonic", "thresholds": {}, "disabled": []}
+    for term_name, params in SONIC_SUCCESS_TERMINATION_THRESHOLDS.items():
+        term = getattr(terminations, term_name, None)
+        if term is None:
+            raise RuntimeError(
+                f"SONIC release evaluation requires termination {term_name!r}."
+            )
+        term_params = getattr(term, "params", None)
+        if term_params is None:
+            raise RuntimeError(f"Termination {term_name!r} has no params.")
+        for key, value in params.items():
+            term_params[key] = float(value)
+        applied["thresholds"][term_name] = dict(params)
+    for term_name in SONIC_SUCCESS_DISABLED_TERMINATIONS:
+        if hasattr(terminations, term_name):
+            setattr(terminations, term_name, None)
+        applied["disabled"].append(term_name)
+    return applied
+
+
+def _describe_task_termination_contract(env_cfg: Any) -> dict[str, Any]:
+    terminations = getattr(env_cfg, "terminations", None)
+    active_terms = []
+    if terminations is not None:
+        active_terms = [
+            name
+            for name, value in vars(terminations).items()
+            if not name.startswith("_") and value is not None
+        ]
+    return {"mode": "task", "active_terms": sorted(active_terms)}
+
+
+def _with_tracking_mpjpe_alias(
+    metrics: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    if "tracking_mpjpe_mm" not in metrics and "mpjpe_l_mm" in metrics:
+        metrics = dict(metrics)
+        metrics["tracking_mpjpe_mm"] = metrics["mpjpe_l_mm"]
+    return metrics
+
+
+def _require_reportable_release(summary: dict[str, Any]) -> None:
+    aggregate = summary.get("aggregate", {})
+    problems = []
+    if summary.get("stop_reason") != "all_envs_done":
+        problems.append(f"stop_reason={summary.get('stop_reason')!r}")
+    if float(aggregate.get("done_rate", 0.0)) != 1.0:
+        problems.append(f"done_rate={aggregate.get('done_rate')!r}")
+    if float(aggregate.get("time_out_rate", 1.0)) != 0.0:
+        problems.append(f"time_out_rate={aggregate.get('time_out_rate')!r}")
+    if problems:
+        raise RuntimeError(
+            "Refusing to write a reportable SONIC release score from an "
+            "incomplete run: "
+            + ", ".join(problems)
+            + ". Increase --steps or pass --allow_incomplete_release for a "
+            "debug artifact."
+        )
 
 
 def _configure_sonic_contract(env_cfg: Any) -> dict[str, Any]:
@@ -563,10 +699,12 @@ def _episode_metrics(base_env: Any) -> dict[str, torch.Tensor]:
     from it could never be written to afterwards.
     """
     metrics = base_env.reference_command.metrics
-    return {
-        name: torch.from_numpy(value.detach().float().cpu().numpy().copy())
-        for name, value in metrics.items()
-    }
+    return _with_tracking_mpjpe_alias(
+        {
+            name: torch.from_numpy(value.detach().float().cpu().numpy().copy())
+            for name, value in metrics.items()
+        }
+    )
 
 
 @hydra_task_config(args_cli.task, "rlopt_ipmd_tuned_cfg_entry_point")
@@ -581,6 +719,26 @@ def main(env_cfg, agent_cfg):
     env_cfg.scene.num_envs = int(args_cli.num_envs)
     env_cfg.seed = int(args_cli.seed)
     contract = _configure_sonic_contract(env_cfg)
+    if args_cli.disable_early_terminations:
+        termination_contract = {"mode": "disabled"}
+    elif args_cli.termination_contract == "sonic":
+        termination_contract = _apply_sonic_success_terminations(env_cfg)
+    else:
+        termination_contract = _describe_task_termination_contract(env_cfg)
+        print(
+            "[WARNING] --termination_contract task is diagnostic only; do not "
+            "report its JSON as a SONIC success score.",
+            flush=True,
+        )
+    episode_length_contract = (
+        {
+            "extended": False,
+            "reason": "preserve_episode_length",
+            "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
+        }
+        if args_cli.preserve_episode_length
+        else _extend_episode_length_for_steps(env_cfg, int(args_cli.steps))
+    )
     randomization_kept = apply_randomization_profile(env_cfg, args_cli.randomization)
     reference_surface = pin_reference_start(
         env_cfg, start_frame=int(args_cli.reference_start_frame)
@@ -708,10 +866,12 @@ def main(env_cfg, agent_cfg):
         name: torch.zeros_like(value)
         for name, value in _episode_metrics(base_env).items()
     }
+    final_metrics = _with_tracking_mpjpe_alias(final_metrics)
     # The last reading taken while an environment was still running its episode.
     carried_metrics: dict[str, torch.Tensor] = {
         name: value.clone() for name, value in _episode_metrics(base_env).items()
     }
+    carried_metrics = _with_tracking_mpjpe_alias(carried_metrics)
     steps_run = 0
     _previous_slot0: torch.Tensor | None = None
 
@@ -907,6 +1067,9 @@ def main(env_cfg, agent_cfg):
             "reference_start_frame": int(args_cli.reference_start_frame),
             "reset_schedule": args_cli.reset_schedule,
             "early_terminations_enabled": not bool(args_cli.disable_early_terminations),
+            "termination_contract": termination_contract,
+            "episode_length_contract": episode_length_contract,
+            "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
         },
         "reference_selection_surface": reference_surface,
         "reference_start_frame": int(args_cli.reference_start_frame),
@@ -922,6 +1085,9 @@ def main(env_cfg, agent_cfg):
         else None,
         "trajectory_ranks": trajectory_ranks,
         "early_terminations_enabled": not bool(args_cli.disable_early_terminations),
+        "termination_contract": termination_contract,
+        "episode_length_contract": episode_length_contract,
+        "episode_length_s": float(getattr(env_cfg, "episode_length_s", -1.0)),
         "action_clip_value": float(args_cli.action_clip),
         "action_source": str(args_cli.action_source),
         "actor_spec": actor.spec.to_dict(),
@@ -962,13 +1128,19 @@ def main(env_cfg, agent_cfg):
             for name, value in sorted(final_metrics.items())
         },
         "deviations_from_sonic_env": [
-            "Our reward, termination, and reset protocol, not SONIC's.",
+            "Our reward and reset protocol, not SONIC's.",
             "Our BONES-SEED reference arrays and retargeting pipeline.",
             "Newton/MJWarp physics backend rather than SONIC's PhysX setup.",
         ],
     }
 
     env.close()
+    if (
+        not args_cli.allow_incomplete_release
+        and not args_cli.disable_early_terminations
+        and args_cli.termination_contract == "sonic"
+    ):
+        _require_reportable_release(summary)
 
     print(json.dumps(summary, indent=2))
     if args_cli.output_json is not None:
