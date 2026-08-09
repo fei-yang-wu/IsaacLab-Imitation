@@ -220,6 +220,7 @@ def _proprioception_layout(name: str) -> tuple[tuple[str, int], ...]:
         else SONIC_PROPRIOCEPTION_ORDER_YAML
     )
 
+
 JOINT_QPOS_QVEL_WIDTH = 58
 ANCHOR_ORI_WIDTH = 6
 
@@ -470,7 +471,10 @@ def _assert_reference_joint_order(
             .item()
         ),
     }
-    if errors["reference_already_sonic_ordered"] > errors["reference_needs_permutation"]:
+    if (
+        errors["reference_already_sonic_ordered"]
+        > errors["reference_needs_permutation"]
+    ):
         raise RuntimeError(
             "expert_motion matches the live pose better after permutation "
             f"({errors}); the reference channel is not publishing SONIC's joint "
@@ -625,9 +629,13 @@ def main(env_cfg, agent_cfg):
     )
     if args_cli.video:
         video_dir = (
-            args_cli.video_dir
-            or Path("logs/sonic_release_eval/videos") / str(args_cli.label)
-        ).expanduser().resolve()
+            (
+                args_cli.video_dir
+                or Path("logs/sonic_release_eval/videos") / str(args_cli.label)
+            )
+            .expanduser()
+            .resolve()
+        )
         env = gym.wrappers.RecordVideo(
             env,
             video_folder=str(video_dir),
@@ -741,9 +749,7 @@ def main(env_cfg, agent_cfg):
                     (motion_window[:, 1] - motion_window[:, 0]).abs().mean().item()
                 )
                 step_gap = (
-                    float(
-                        (motion_window[:, 0] - _previous_slot0).abs().mean().item()
-                    )
+                    float((motion_window[:, 0] - _previous_slot0).abs().mean().item())
                     if _previous_slot0 is not None
                     else float("nan")
                 )
@@ -852,6 +858,13 @@ def main(env_cfg, agent_cfg):
     completed_frames = float((frames * completed.float()).sum().item())
     successful_metrics = {
         name: {
+            "mean": (
+                float((value * frames * completed.float()).sum().item())
+                / completed_frames
+            )
+            if completed_frames > 0.0
+            else None,
+            "count": int(completed_frames),
             "micro_mean": (
                 float((value * frames * completed.float()).sum().item())
                 / completed_frames
@@ -865,6 +878,8 @@ def main(env_cfg, agent_cfg):
         }
         for name, value in sorted(final_metrics.items())
     }
+    time_out_count = int(termination_causes.get("time_out", 0))
+    stop_reason = "all_envs_done" if bool(done_once.all()) else "max_steps"
 
     summary: dict[str, Any] = {
         "schema": "sonic_release_native_evaluation_v1",
@@ -877,6 +892,22 @@ def main(env_cfg, agent_cfg):
         "seed": int(args_cli.seed),
         "randomization_profile": str(args_cli.randomization),
         "randomization_kept": randomization_kept,
+        "metadata": {
+            "label": str(args_cli.label),
+            "task": str(args_cli.task),
+            "checkpoint": str(checkpoint),
+            "num_envs": int(base_env.num_envs),
+            "seed": int(args_cli.seed),
+            "action_sampling": "mode",
+            "randomization_profile": str(args_cli.randomization),
+            "randomization_kept": randomization_kept,
+            "push_perturbation": {
+                "enabled": bool(randomization_kept.get("push", True))
+            },
+            "reference_start_frame": int(args_cli.reference_start_frame),
+            "reset_schedule": args_cli.reset_schedule,
+            "early_terminations_enabled": not bool(args_cli.disable_early_terminations),
+        },
         "reference_selection_surface": reference_surface,
         "reference_start_frame": int(args_cli.reference_start_frame),
         "reset_schedule": args_cli.reset_schedule,
@@ -914,10 +945,13 @@ def main(env_cfg, agent_cfg):
             "failed_env_count": failures,
             "num_evaluated_envs": int(base_env.num_envs),
             "done_rate": float(done_once.float().mean().item()),
+            "time_out_rate": time_out_count / float(base_env.num_envs),
             "termination_cause_env_counts": termination_causes,
             "survival_steps_mean": float(survived.float().mean().item()),
         },
         "successful_metrics": successful_metrics,
+        "max_steps": int(args_cli.steps),
+        "stop_reason": stop_reason,
         "per_environment": per_environment,
         "metrics": {
             name: {
