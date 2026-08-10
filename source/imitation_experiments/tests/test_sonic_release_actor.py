@@ -17,7 +17,15 @@ from imitation_experiments.lowlevel.sonic_release_actor import (
     ACTION_DIM,
     ENCODER_FRAMES,
     FSQ,
+    PROPRIOCEPTION_TERMS,
     PROPRIOCEPTION_DIM,
+    RELEASE_DECODER_HIDDEN_DIMS,
+    V1_1_DECODER_HIDDEN_DIMS,
+    _infer_sonic_version,
+    assemble_proprioception,
+    heading_relative_rot6d_from_full_relative,
+    matrix_to_rot6d,
+    quat_xyzw_to_matrix,
     load_sonic_release_actor,
     pack_encoder_window,
 )
@@ -78,6 +86,56 @@ def test_encoder_window_rejects_a_wrong_shape() -> None:
         )
 
 
+def test_checkpoint_shape_infers_sonic_version() -> None:
+    assert _infer_sonic_version(RELEASE_DECODER_HIDDEN_DIMS) == "release"
+    assert _infer_sonic_version(V1_1_DECODER_HIDDEN_DIMS) == "v1_1"
+    with pytest.raises(ValueError, match="Unsupported SONIC g1_dyn decoder shape"):
+        _infer_sonic_version((2048, 512))
+
+
+def test_v1_1_heading_relative_orientation_keeps_robot_tilt() -> None:
+    """A full-relative identity is not identity after heading-only rerooting."""
+    angle = torch.tensor(0.5)
+    robot_roll = torch.tensor(
+        [[torch.sin(angle / 2.0), 0.0, 0.0, torch.cos(angle / 2.0)]],
+        dtype=torch.float32,
+    )
+    identity_matrix = torch.eye(3).reshape(1, 1, 3, 3)
+    full_relative_identity = matrix_to_rot6d(identity_matrix)
+
+    heading_relative = heading_relative_rot6d_from_full_relative(
+        full_relative_identity, robot_roll
+    )
+
+    expected = matrix_to_rot6d(quat_xyzw_to_matrix(robot_roll)).reshape(1, 1, 6)
+    assert torch.allclose(heading_relative, expected, atol=1.0e-6)
+    assert not torch.allclose(heading_relative, full_relative_identity, atol=1.0e-6)
+
+
+def test_proprioception_uses_sonic_policy_field_order() -> None:
+    assert [name for name, _ in PROPRIOCEPTION_TERMS] == [
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action",
+        "gravity_dir",
+    ]
+
+    gravity = torch.full((1, 10, 3), 1.0)
+    ang_vel = torch.full((1, 10, 3), 2.0)
+    joint_pos = torch.full((1, 10, 29), 3.0)
+    joint_vel = torch.full((1, 10, 29), 4.0)
+    action = torch.full((1, 10, 29), 5.0)
+
+    proprioception = assemble_proprioception(
+        gravity, ang_vel, joint_pos, joint_vel, action
+    )
+
+    assert proprioception.shape == (1, PROPRIOCEPTION_DIM)
+    assert torch.equal(proprioception[:, :30], ang_vel.reshape(1, -1))
+    assert torch.equal(proprioception[:, -30:], gravity.reshape(1, -1))
+
+
 @pytest.mark.skipif(_checkpoint() is None, reason="released SONIC checkpoint absent")
 def test_released_actor_matches_the_published_shapes() -> None:
     actor = load_sonic_release_actor(_checkpoint())
@@ -87,6 +145,8 @@ def test_released_actor_matches_the_published_shapes() -> None:
     assert spec.decoder_input_dim == 64 + PROPRIOCEPTION_DIM
     assert spec.action_dim == ACTION_DIM
     assert spec.encoder_frame_width == 64
+    assert spec.version == "release"
+    assert spec.orientation_contract == "motion_anchor_ori_b_mf_nonflat"
 
 
 @pytest.mark.skipif(_checkpoint() is None, reason="released SONIC checkpoint absent")
