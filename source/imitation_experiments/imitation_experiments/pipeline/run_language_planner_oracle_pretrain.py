@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
 import shlex
 import subprocess
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from imitation_experiments.paths import REPO_ROOT
 
@@ -94,6 +95,14 @@ def _resolve(path: Path) -> Path:
     return path.resolve() if path.is_absolute() else (REPO_ROOT / path).resolve()
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _manifest_names(path: Path) -> list[str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     entries = payload.get("dataset", {}).get("trajectories", {}).get("lafan1_csv")
@@ -109,13 +118,213 @@ def _slug(value: str) -> str:
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
 
 
+def _require_equal(actual: Any, expected: Any, label: str) -> None:
+    if actual != expected:
+        raise ValueError(f"{label} mismatch: expected {expected!r}, got {actual!r}.")
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a JSON object.")
+    return payload
+
+
+def _validate_binding_record(
+    path: Path,
+    *,
+    low_level_checkpoint: Path,
+    skill_checkpoint: Path,
+) -> None:
+    payload = _load_json(path)
+    _require_equal(payload.get("passed"), True, "latent skill binding passed")
+    _require_equal(
+        payload.get("low_level_checkpoint"),
+        str(low_level_checkpoint),
+        "low-level checkpoint path",
+    )
+    _require_equal(
+        payload.get("low_level_checkpoint_sha256"),
+        _sha256(low_level_checkpoint),
+        "low-level checkpoint hash",
+    )
+    _require_equal(
+        payload.get("skill_checkpoint"),
+        str(skill_checkpoint),
+        "skill checkpoint path",
+    )
+    _require_equal(
+        payload.get("skill_checkpoint_sha256"),
+        _sha256(skill_checkpoint),
+        "skill checkpoint hash",
+    )
+
+
+def _validate_language10_collection_summary(
+    path: Path,
+    *,
+    args: argparse.Namespace,
+    names: Sequence[str],
+    expected_envs: int,
+) -> None:
+    summary = _load_json(path)
+    _require_equal(
+        summary.get("low_level_checkpoint"),
+        str(args.low_level_checkpoint),
+        "low-level checkpoint",
+    )
+    _require_equal(
+        summary.get("skill_checkpoint_override"),
+        str(args.skill_checkpoint),
+        "skill checkpoint",
+    )
+    _require_equal(
+        summary.get("language_embeddings_override"),
+        str(args.language_embeddings),
+        "language embeddings",
+    )
+    _require_equal(summary.get("num_envs"), int(expected_envs), "collection env count")
+    _require_equal(summary.get("seed"), int(args.seed), "collection seed")
+    _require_equal(summary.get("motion_names"), list(names), "collection motion names")
+    _require_equal(
+        summary.get("trajectory_ranks"),
+        list(range(len(names))),
+        "collection trajectory ranks",
+    )
+    _require_equal(
+        summary.get("sonic_success_terminations"), True, "SONIC success terminations"
+    )
+    _require_equal(summary.get("disable_push_event"), True, "push disabled")
+    _require_equal(summary.get("reward_clipping_enabled"), False, "reward clipping")
+    _require_equal(summary.get("save_rollout_training_samples"), True, "sample saving")
+    _require_equal(
+        summary.get("require_root_qpos_samples"), True, "root_qpos sample requirement"
+    )
+    aggregate = summary.get("aggregate", {})
+    if not isinstance(aggregate, dict):
+        raise ValueError("Collection summary has no aggregate object.")
+    _require_equal(aggregate.get("done_rate"), 1.0, "collection done rate")
+    _require_equal(
+        aggregate.get("completed_tracking_success_count"),
+        int(expected_envs),
+        "collection completed SONIC successes",
+    )
+    balanced = summary.get("balanced_trajectory_collection")
+    if not isinstance(balanced, dict):
+        raise ValueError("Collection summary has no balanced trajectory record.")
+    _require_equal(balanced.get("motion_names"), list(names), "balanced motion names")
+    _require_equal(
+        balanced.get("trajectories_per_motion"),
+        int(args.trajectories_per_motion),
+        "trajectories per motion",
+    )
+    _require_equal(balanced.get("complete"), True, "balanced trajectory completion")
+    _require_equal(balanced.get("missing"), {}, "missing balanced trajectories")
+    _require_equal(
+        balanced.get("discarded_incomplete_trajectory_count"),
+        0,
+        "discarded incomplete trajectories",
+    )
+
+
+def _validate_language10_eval_summary(
+    summary: dict[str, Any],
+    *,
+    args: argparse.Namespace,
+    goal: str,
+    goal_rank: int,
+    checkpoint: Path,
+) -> None:
+    _require_equal(
+        summary.get("low_level_checkpoint"),
+        str(args.low_level_checkpoint),
+        "eval low-level checkpoint",
+    )
+    _require_equal(
+        summary.get("planner_checkpoint"), str(checkpoint), "eval planner checkpoint"
+    )
+    _require_equal(
+        summary.get("skill_checkpoint_override"),
+        str(args.skill_checkpoint),
+        "eval skill checkpoint",
+    )
+    _require_equal(
+        summary.get("language_embeddings_override"),
+        str(args.language_embeddings),
+        "eval language embeddings",
+    )
+    _require_equal(
+        summary.get("num_envs"),
+        int(args.eval_trajectories_per_motion),
+        "eval env count",
+    )
+    _require_equal(summary.get("seed"), int(args.seed), "eval seed")
+    _require_equal(summary.get("motion_name"), str(goal), "eval motion name")
+    _require_equal(
+        summary.get("trajectory_ranks"), [int(goal_rank)], "eval trajectory rank"
+    )
+    _require_equal(
+        summary.get("goal_motion_match_required"), True, "goal-motion match gate"
+    )
+    _require_equal(
+        summary.get("sonic_success_terminations"),
+        True,
+        "eval SONIC success terminations",
+    )
+    _require_equal(summary.get("disable_push_event"), True, "eval push disabled")
+    _require_equal(
+        summary.get("reward_clipping_enabled"), False, "eval reward clipping"
+    )
+    aggregate = summary.get("aggregate", {})
+    if not isinstance(aggregate, dict):
+        raise ValueError("Eval summary has no aggregate object.")
+    _require_equal(aggregate.get("done_rate"), 1.0, "eval done rate")
+    _require_equal(summary.get("stop_reason"), "all_envs_done", "eval stop reason")
+    language = summary.get("metadata", {}).get("language_conditioning", {})
+    if isinstance(language, dict) and language.get("enabled"):
+        _require_equal(language.get("goal_name"), str(goal), "eval explicit goal")
+    per_environment = summary.get("per_environment", [])
+    if not isinstance(per_environment, list):
+        raise ValueError("Eval summary per_environment must be a list.")
+    _require_equal(
+        len(per_environment), int(args.eval_trajectories_per_motion), "eval rows"
+    )
+    motion_names = {str(row.get("motion_name")) for row in per_environment}
+    _require_equal(motion_names, {str(goal)}, "per-env motion names")
+
+
+def _validate_language10_eval_file(
+    path: Path,
+    *,
+    args: argparse.Namespace,
+    goal: str,
+    goal_rank: int,
+    checkpoint: Path,
+) -> None:
+    _validate_language10_eval_summary(
+        _load_json(path),
+        args=args,
+        goal=goal,
+        goal_rank=goal_rank,
+        checkpoint=checkpoint,
+    )
+
+
 class Runner:
     def __init__(self, *, dry_run: bool, resume: bool) -> None:
         self.dry_run = bool(dry_run)
         self.resume = bool(resume)
 
-    def run(self, command: Sequence[str], *, expected: Path | None = None) -> None:
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        expected: Path | None = None,
+        validator: Callable[[Path], None] | None = None,
+    ) -> None:
         if expected is not None and expected.exists() and self.resume:
+            if validator is not None:
+                validator(expected)
             print(f"[SKIP] Existing output: {expected}", flush=True)
             return
         command = [str(item) for item in command]
@@ -125,6 +334,8 @@ class Runner:
         subprocess.run(command, cwd=REPO_ROOT, check=True)
         if expected is not None and not expected.exists():
             raise FileNotFoundError(f"Command did not create {expected}.")
+        if expected is not None and validator is not None:
+            validator(expected)
 
 
 def _tracker_overrides(args: argparse.Namespace) -> list[str]:
@@ -426,6 +637,9 @@ def _weighted_metric(
 def aggregate_milestone_evaluations(
     milestone_summaries: dict[int, list[dict[str, Any]]],
     *,
+    args: argparse.Namespace | None = None,
+    goal_names: Sequence[str] | None = None,
+    checkpoints_by_update: dict[int, Path] | None = None,
     training_metrics: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a closed-loop budget curve and a conservative plateau diagnostic."""
@@ -433,6 +647,23 @@ def aggregate_milestone_evaluations(
     stable_intervals = 0
     for update in sorted(milestone_summaries):
         summaries = milestone_summaries[update]
+        if args is not None and goal_names is not None:
+            checkpoint = (checkpoints_by_update or {}).get(
+                update, Path(f"update_{update:07d}.pt")
+            )
+            _require_equal(
+                len(summaries),
+                len(goal_names),
+                f"milestone {update} goal count",
+            )
+            for goal_rank, (goal, summary) in enumerate(zip(goal_names, summaries)):
+                _validate_language10_eval_summary(
+                    summary,
+                    args=args,
+                    goal=goal,
+                    goal_rank=goal_rank,
+                    checkpoint=checkpoint,
+                )
         env_count = sum(
             len(summary.get("per_environment", [])) for summary in summaries
         )
@@ -584,6 +815,11 @@ def main() -> None:
             str(binding),
         ],
         expected=binding,
+        validator=lambda path: _validate_binding_record(
+            path,
+            low_level_checkpoint=args.low_level_checkpoint,
+            skill_checkpoint=args.skill_checkpoint,
+        ),
     )
 
     stages = {args.stage} if args.stage != "all" else {"collect", "train", "eval"}
@@ -598,6 +834,12 @@ def main() -> None:
                 output_dir=collection_dir,
             ),
             expected=collection_dir / "summary.json",
+            validator=lambda path: _validate_language10_collection_summary(
+                path,
+                args=args,
+                names=names,
+                expected_envs=collection_num_envs,
+            ),
         )
     train_dir = args.output_root / "planner_oracle_pretrain"
     if "train" in stages:
@@ -636,6 +878,15 @@ def main() -> None:
                         output_dir=output_dir,
                     ),
                     expected=summary_path,
+                    validator=lambda path, goal=goal, goal_rank=goal_rank, checkpoint=checkpoint: (
+                        _validate_language10_eval_file(
+                            path,
+                            args=args,
+                            goal=goal,
+                            goal_rank=goal_rank,
+                            checkpoint=checkpoint,
+                        )
+                    ),
                 )
                 if not args.dry_run:
                     summaries.append(
@@ -646,6 +897,12 @@ def main() -> None:
         if not args.dry_run:
             curve = aggregate_milestone_evaluations(
                 milestone_summaries,
+                args=args,
+                goal_names=names,
+                checkpoints_by_update={
+                    update: train_dir / "checkpoints" / f"update_{update:07d}.pt"
+                    for update in milestone_summaries
+                },
                 training_metrics=_training_metrics_by_update(
                     train_dir / "metrics.jsonl"
                 ),
