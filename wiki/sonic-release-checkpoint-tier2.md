@@ -77,9 +77,17 @@ root-relative tracking error on this subset.
 | `sonic_release/last.pt`, matched selected-ten | 1.000 (100/100) | 23.53 mm | 99.94 mm | 0.0968 m |
 | `sonic_v1_1/last.pt`, seed-0 selected-ten | **1.000** (100/100) | **21.17 mm** | 100.99 mm | 0.0988 m |
 
-This does not change the 4096-motion ranking below. It only updates the
-selected-ten release reproduction with the v1.1 public checkpoint under the
-same local adapter and SONIC-compatible success criterion.
+On the matched 4096-motion block, v1.1 also improves local tracking slightly
+and completes two more motions, but its global/root drift is larger:
+
+| checkpoint | SONIC SR | success-only MPJPE-L | success-only MPJPE-G | anchor position |
+| --- | ---: | ---: | ---: | ---: |
+| `sonic_release/last.pt` | 0.98999 (4055/4096) | 28.49 mm | 196.99 mm | 0.193 m |
+| `sonic_v1_1/last.pt` | **0.99048** (4057/4096) | **26.93 mm** | 228.82 mm | 0.226 m |
+
+The rank assignment is identical for the two public checkpoints. This update
+does not change the later comparison against our tracker, which uses the
+original release checkpoint.
 
 ### Our own tracker beats it on the same ten motions
 
@@ -264,6 +272,10 @@ Verified against the released ONNX on random input, max abs diff `0.0`:
   weights/FSQ from input layout.
 - Regression test `tests/test_sonic_release_actor.py` (7 tests) runs against a
   saved fixture; the checkpoint-dependent test skips when `last.pt` is absent.
+
+For `sonic_v1_1/last.pt`, the official export matches the same torch adapter
+pattern after selecting the g1 path with scalar `encoder_mode_4 = 0`: encoder
+max abs diff **0.0**, decoder max abs diff **4.77e-07**.
 
 FSQ convention (`vector_quantize_pytorch.FSQ`, 32 levels): bound with
 `eps=1e-3`, half-level shift so `z=0` maps to a level center, round with a
