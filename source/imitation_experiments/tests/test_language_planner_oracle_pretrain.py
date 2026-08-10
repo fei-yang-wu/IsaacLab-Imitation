@@ -7,6 +7,7 @@ from imitation_experiments.pipeline.run_language_planner_oracle_pretrain import 
     _collection_command,
     _eval_command,
     _train_command,
+    _validate_language10_eval_summary,
     aggregate_milestone_evaluations,
 )
 
@@ -33,8 +34,24 @@ def _eval_args(**overrides) -> argparse.Namespace:
 
 def _summary(successes: int, total: int, mpjpe: float) -> dict:
     return {
-        "aggregate": {"completed_tracking_success_count": successes},
-        "per_environment": [{} for _ in range(total)],
+        "low_level_checkpoint": "low_level.pt",
+        "planner_checkpoint": "planner.pt",
+        "skill_checkpoint_override": "skill.pt",
+        "language_embeddings_override": "language.pt",
+        "num_envs": total,
+        "seed": 0,
+        "motion_name": "goal_motion",
+        "trajectory_ranks": [0],
+        "goal_motion_match_required": True,
+        "sonic_success_terminations": True,
+        "disable_push_event": True,
+        "reward_clipping_enabled": False,
+        "stop_reason": "all_envs_done",
+        "metadata": {
+            "language_conditioning": {"enabled": True, "goal_name": "goal_motion"}
+        },
+        "aggregate": {"completed_tracking_success_count": successes, "done_rate": 1.0},
+        "per_environment": [{"motion_name": "goal_motion"} for _ in range(total)],
         "successful_trajectory_metrics": {
             "tracking_mpjpe_mm": {"mean": mpjpe, "count": successes * 10},
             "tracked_body_pos_error_m": {"mean": 0.1, "count": successes * 10},
@@ -54,6 +71,35 @@ def test_budget_curve_detects_two_stable_intervals() -> None:
     assert curve["rows"][0]["success_rate"] == 0.9
     assert curve["rows"][2]["plateau_candidate"] is True
     assert curve["plateau_candidate_update"] == 6000
+
+
+def test_budget_curve_validates_language10_eval_protocol() -> None:
+    args = _eval_args()
+    curve = aggregate_milestone_evaluations(
+        {2000: [_summary(90, 100, 20.0)]},
+        args=args,
+        goal_names=["goal_motion"],
+        checkpoints_by_update={2000: Path("planner.pt")},
+    )
+    assert curve["rows"][0]["completed_success_count"] == 90
+
+
+def test_language10_eval_validation_rejects_wrong_goal() -> None:
+    args = _eval_args()
+    summary = _summary(90, 100, 20.0)
+    summary["metadata"]["language_conditioning"]["goal_name"] = "other_goal"
+    try:
+        _validate_language10_eval_summary(
+            summary,
+            args=args,
+            goal="goal_motion",
+            goal_rank=0,
+            checkpoint=Path("planner.pt"),
+        )
+    except ValueError as exc:
+        assert "explicit goal" in str(exc)
+    else:
+        raise AssertionError("wrong explicit goal was accepted")
 
 
 def test_eval_command_binds_explicit_goal_to_trajectory_rank() -> None:
