@@ -12,7 +12,7 @@ resulting joint targets directly.
 Verified alignment (see wiki/sonic-release-checkpoint-tier2.md):
 actuators/action-scale match SONIC (via the overrides below), the encoder input
 is qpos+qvel+anchor_ori(pelvis) at stride 5, and proprioception is term-major
-[gravity, ang_vel, joint_pos_rel, joint_vel_rel, last_action] x10. SONIC's
+[ang_vel, joint_pos_rel, joint_vel_rel, last_action, gravity] x10. SONIC's
 29-vectors use the interleaved IsaacLab joint order; the reference and action
 term already use it, but proprioception read from the live Newton articulation
 (grouped SDK order) is permuted into it.
@@ -104,8 +104,7 @@ def _apply_sonic_actuator_overrides(env_cfg, anchor_body: str) -> None:
     # (the preset carries default/physx/newton_mjwarp sub-configs).
     robot = env_cfg.scene.robot
     variants = [
-        getattr(robot, name, None)
-        for name in ("default", "physx", "newton_mjwarp")
+        getattr(robot, name, None) for name in ("default", "physx", "newton_mjwarp")
     ]
     variants = [v for v in variants if v is not None] or [robot]
     for variant in variants:
@@ -197,7 +196,10 @@ def _run(env_cfg, args: argparse.Namespace) -> None:
         f"[INFO] live physics joint order: {list(raw.robot.joint_names)}",
         flush=True,
     )
-    print(f"[INFO] proprioception permutation (physics->SONIC): {prop_perm_list}", flush=True)
+    print(
+        f"[INFO] proprioception permutation (physics->SONIC): {prop_perm_list}",
+        flush=True,
+    )
 
     frames = int(args.encoder_frames)
     stride = int(args.frame_stride)

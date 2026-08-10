@@ -196,6 +196,27 @@ split.
 **Isaac Sim's PhysX does not help.** It is consistently ~2 mm worse than
 Newton/MJWarp, three-seed ranges disjoint (25.15-25.70 versus 23.23-23.65).
 
+### SONIC v1.1 checkpoint
+
+The public `sonic_v1_1/last.pt` checkpoint has a larger decoder and uses
+`motion_anchor_ori_heading_mf_nonflat` for the encoder root orientation instead
+of `motion_anchor_ori_b_mf_nonflat`. It cannot use the original release adapter
+as is, even though the input width is still 640. The v1.1 adapter reconstructs
+the heading-relative orientation from our full `expert_anchor_ori_b` and the
+live robot root heading.
+
+The table below uses the same selected-ten references, assignment, backend,
+randomization profile, deterministic actions, and SONIC-compatible success
+criterion for both public checkpoints. v1.1 keeps perfect completion and lowers
+root-relative tracking error on this subset.
+
+| checkpoint | SONIC SR | success-only MPJPE-L | success-only MPJPE-G | anchor position |
+| --- | ---: | ---: | ---: | ---: |
+| `sonic_release/last.pt`, matched selected-ten | 1.000 (100/100) | 23.53 mm | 99.94 mm | 0.0968 m |
+| `sonic_v1_1/last.pt`, seed-0 selected-ten | **1.000** (100/100) | **21.17 mm** | 100.99 mm | 0.0988 m |
+
+This is a selected-ten reproduction update only. 
+
 ### Matched comparison against our own tracker
 
 Identical references, protocol, thresholds, backend, seeds, and MPJPE definition
