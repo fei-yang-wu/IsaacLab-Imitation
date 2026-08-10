@@ -129,6 +129,13 @@ Four single-variable arms, each against a stated control, all on ICE:
 | `2026-08-09-bones129k-encoder-finetune` | `agent.ipmd.hl_skill_finetune_enabled=true` | `5573516` | `5573413` |
 | `2026-08-09-bones129k-fullbody-encoder` | encoder input `root_qpos` 380 -> `full_body` 670 (adds reference joint velocity) | pretrain + dependent tracker | `5573413` |
 | `2026-08-08-bones129k-fsq-anchor-critic` | combined: `sonic_fsq` 64x32, scaled nets, expert-heading frame, critic `[reference]` | `5573502` -> `5573503` | not single-variable; see its README |
+| `2026-08-09-bones129k-hold1` | command hold 10 -> 1 control steps, on the old z256 recipe | `5573633` | `5567801` (`old_z256`) |
+
+The hold-1 arm publishes 50 commands/second instead of 5 and runs the encoder
+every control step. It is a **low-level ceiling**, not a planner-interface row:
+the paper's planner comparison publishes at 5 Hz and cannot produce a 50 Hz
+latent stream. Its throughput will also be lower than its control, so compare
+it at equal frames.
 
 The comparison target itself — the explicit 38-D `root_qpos` command
 (`5567809`) — had no scoreboard row until 2026-08-09. It now scores SR 0.9358
