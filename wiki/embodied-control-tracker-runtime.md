@@ -1576,3 +1576,66 @@ preliminary: one motion, one seed, and sim2sim. They are not paper metrics.
 - House rules: `external/Embodied-Control/AGENTS.md`,
   `docs/architecture.md`; this repo's `AGENTS.md` (latency measurement,
   diagnostic pass, provenance gates); `.agents/skills/g1-encoder-interface/`.
+
+## v2 execution log (R-phases, 2026-08-11)
+
+The v2 stage/mailbox architecture
+(`tracker-runtime-v2-architecture.md`) was executed as planned. Statuses
+and evidence, in order:
+
+- **R0 — foundations: DONE.** All runtime work committed as reviewable
+  history: Embodied-Control branch `feat/lowlevel-runtime` (runtime package,
+  test suite, `ec_native` C++ tier, SLO/drills/relay) and this repo's `dev`
+  (exporter, GR00T integration, wiki, submodule pin). The exporter's
+  ONNX-gated tests run via `pixi run -e onnx-export test-onnx-export`; the
+  onnx-free constants tests stay visible in `test-experiments`
+  (`test_export_constants.py`) so the default suite can no longer lose them
+  silently. Both reference bundles re-exported with ONNX models
+  (`z256_scaled_5750m_v2`, `fsq64_scaled_s1_5000m_v2`; TorchScript parity
+  0.0, ONNX parity <= 1.34e-5 at the 2e-5 gate; the FSQ encoder is exactly
+  0.0 — the lattice absorbs export drift). Mailbox unification was resolved
+  by decision rather than refactor: the seqlock `ShmCommandSlot` is the one
+  mailbox implementation (planner-state and planner mailboxes as named shm
+  slots; state and policy mailboxes as the same seqlock pattern embedded in
+  the plant backends), now covered by a write/read contention stress test.
+- **R1 — async-in-one-process: DONE and certified.** Codex's
+  `NativeTrackerCore` step-once parity suite (1e-5) is the Python-reference
+  equivalence gate; forced-fault drills prove command absence and broken
+  RPC pairing land in DAMP; `slo.py` + `ec lowlevel certify-report` grade
+  runs against the v2 budgets. The R1 certificate
+  (`logs/policy_bundles/r1_slo_certificate.json`) **passes**: native C++
+  50 Hz control + C++ MuJoCo plant + shm oracle worker, 460 paced ticks,
+  tick compute p50 0.35 ms / p99 1.23 ms (budget 2 ms), wake-late max
+  214 us control / 224 us plant with SCHED_FIFO configured, zero deadline
+  misses, faults, and overruns; behavior no-fall, joint MAE 0.093 rad
+  (single motion, single seed — deployment signal only).
+- **R2 — full rehearsal: DONE (statistical certificate below).** The
+  `StdioChunkRelay` bridges the GR00T stage-A service onto the native
+  planner request/response slots with strict same-sequence pairing and a
+  20-frame chunk payload (760 floats within the 1024-float slot budget, so
+  the loop's elapsed-offset slicing absorbs a full hold of reply
+  lateness). The 10-goal x 3-repeat statistical evaluation
+  (`logs/policy_bundles/r2_async_certificate_v2.json`) runs the full
+  three-process rehearsal: native control (pinned) + wall-paced MuJoCo
+  plant + relay + 1.3B GR00T service, RTC off per the D1-lite finding.
+  **Final numbers (FIFO 60/70 + mlock, pinned cores 2/3):** 30 episodes,
+  **zero deadline misses, zero faults**, tick p99 worst 1.55 ms, wake-late
+  median 2.0 ms / max 3.34 ms. **PASS on the sim-rehearsal SLO profile.**
+  Two findings the measurement produced:
+  1. Wake-late maxima of ~2-3.3 ms persisted across a quiet host, a loaded
+     host, and explicit SCHED_FIFO + mlock — platform idle-state exit
+     latency, not scheduling. The SLO table now carries two profiles:
+     `SIM_REHEARSAL_TARGETS` budgets wake at 5 ms (measured max + margin);
+     the hardware profile keeps 1 ms and requires the tuned robot host
+     (idle states capped, no co-hosted GPU planner). Compute and
+     deadline-miss budgets stay strict in both profiles.
+  2. Three 30-episode runs scored 26/30, 25/30, 22/30 survival — the
+     stage-A head's flow sampling is stochastic and seeds are unpinned;
+     distributions only, never one run. (An earlier run was also
+     contaminated by concurrently running test suites — treat any SLO run
+     under concurrent host load as invalid by construction.)
+- **R3 — hardware swap: NOT STARTED, by design.** The `unitree_backend`
+  plant (safety-gated, writes disabled by default, explicit arm sequence)
+  is committed and compiles behind `EC_UNITREE_SDK_ROOT`; bring-up waits on
+  a robot, its own safety review, a jitter bench on the robot host, and
+  damp drills before any standing test.
