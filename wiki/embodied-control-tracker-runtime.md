@@ -1639,3 +1639,49 @@ and evidence, in order:
   is committed and compiles behind `EC_UNITREE_SDK_ROOT`; bring-up waits on
   a robot, its own safety review, a jitter bench on the robot host, and
   damp drills before any standing test.
+
+### Post-R2 additions (2026-08-11): MPJPE metrics, telemetry, DDS plant
+
+- **Oracle MPJPE on the rehearsal rig.** The runtime records joint
+  positions, the anchor pose, and the absolute reference frame each tick
+  in preallocated C++ arrays (no control-path allocation). Python replays
+  them through MuJoCo FK (`lowlevel/metrics.py`) and computes the frozen
+  protocol formulas (root-relative MPJPE-L, world MPJPE-G, position-only,
+  micro-averaged per frame, mm). `ec lowlevel mujoco-native --mpjpe`
+  requires the oracle source plus `--reference-root/--motion`, initializes
+  the robot on the reference frame-0 pose, and writes `mpjpe_per_frame.npz`
+  next to the report. Two alignment bugs this surfaced: the robot must
+  start ON frame 0 (Isaac reset semantics), and the recorded frame must be
+  `active_reference_tick + slot`, not the window slot.
+- **Selected-ten oracle sweep** (`scripts/oracle_mpjpe_eval.py` in
+  Embodied-Control, single seed, frame-0 starts, `z256_scaled_5750m_v2`,
+  RTF 1.0, zero deadline misses/faults, tick p99 <= 1.3 ms): survival
+  8/10; on the eight survivors MPJPE-L 9.4-19.7 mm (frame-weighted
+  ~13.7 mm) and MPJPE-G 10.8-109.6 mm (~48.9 mm). The two falls
+  (`fishing_standing_loop`, `feeding_birds_start`) collapse the pooled
+  micro-average to L 97 / G 934 mm, so report survivors and falls
+  separately. Preliminary: single seed, sim2sim rig, not an Isaac number.
+- **Non-blocking telemetry.** `TelemetryRecorder` (constructor-injected
+  `EcLogger`, null default) drains runtime stats on a low-rate thread and
+  saves `telemetry.npz` + summary after the run; the control thread only
+  memcpy-appends.
+- **Digit-style unified plant interface.** Following the Digit v3
+  sim/real convention (identical protocol, only the address differs), the
+  new `MujocoDdsPlant` serves the exact G1 hardware wire protocol —
+  `rt/lowstate` out at the physics rate, `rt/lowcmd` in, hg IDL, CRC
+  checked both ways, per-message kp/kd applied, `tau + kd*dq_des` injected
+  beyond the servo term — so `NativeUnitreeLoop` is the one hardware code
+  path and only `--network` changes (`lo` against the plant, robot NIC on
+  hardware). `unitree_sdk2` is pinned at `21d0a3b2` under
+  `native/thirdparty/` and auto-detected by CMake. Until the first valid
+  command the plant holds the default pose (virtual gantry). `ec lowlevel
+  plant <bundle> --model <xml> --network lo` serves it standalone.
+- **Loopback certification** (`tests/lowlevel/test_dds_plant.py`): plant
+  subprocess + real controller runtime on `lo` — state flows, CRC clean
+  both directions, init ramp -> WAIT -> armed CONTROL, robot stays
+  standing through the controlled window under a zero-action bundle with
+  a deliberately nontrivial Isaac->SDK permutation. One physics lesson:
+  the straight-leg zero pose is only marginally stable and tips ~2 s
+  after any ramp transient; the test stance uses bent knees. The sim/real
+  gap that remains: the motion-switcher release RPC times out harmlessly
+  against the plant (~5 s in `begin_initialization`).
