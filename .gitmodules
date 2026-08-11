@@ -6,3 +6,9 @@
 	path = ImitationLearningTools
 	url = https://github.com/GTLIDAR/ImitationLearningTools.git
 	branch = main
+[submodule "Isaac-GR00T"]
+	path = external/Isaac-GR00T
+	url = https://github.com/NVIDIA/Isaac-GR00T.git
+[submodule "external/Embodied-Control"]
+	path = external/Embodied-Control
+	url = https://github.com/fei-yang-wu/Embodied-Control.git
