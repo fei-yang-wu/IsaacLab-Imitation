@@ -193,7 +193,13 @@ C++ instrumentation and reported as histograms in `metrics.json`:
 
 Targets are initial engineering budgets, to be replaced by measured
 baselines after R1; regressions against the recorded baseline fail the
-certificate. Behavioral evaluation on top of a passing timing certificate:
+certificate. **Baseline amendment (2026-08-11, R2):** wake-jitter budgets
+are now profiled. The measured sim-rehearsal baseline on the workstation
+(co-hosted GPU planner, FIFO + mlock) shows wake-late maxima of ~3.3 ms
+driven by platform idle-state exit latency, so the sim-rehearsal profile
+budgets wake at 5 ms; the 200 us / 1 ms figures remain the hardware
+profile and assume a tuned robot host. Compute, deadline-miss, and fault
+budgets are identical in both profiles. Behavioral evaluation on top of a passing timing certificate:
 selected-ten x >= 3 repeats, distributions reported, protocol-labeled
 preliminary until repeats support the difference.
 
