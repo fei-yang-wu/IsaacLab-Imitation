@@ -1,0 +1,50 @@
+{
+  "campaign": "2026-08-09-bones129k-l2t",
+  "submitted_utc": "2026-08-09T19:45:42Z",
+  "cluster": "ICE",
+  "job_id": 5573723,
+  "source_contract_sha256": "22f369d62d123989b2867a77d237a4d365d4523e66b74368d1b7c6fdba8f8925",
+  "workspace_archive_sha256": "bc3c4f66853c55b49f2f4bdbccf87d756854c6827c8b57fc15f286680ff74717",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "l2t"
+  },
+  "data": {
+    "reference_arrays": "/data/bones_seed_ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1",
+    "motions": 129785,
+    "frames": 47491234,
+    "persist_id": "bones_seed_sonic_full_129785@e714bbff"
+  },
+  "encoder": {
+    "path": "/data/bones129k_anchor_frame/expert_heading_encoder/checkpoints/latest.pt",
+    "sha256": "be6d533f1d1ca4aa6b1e819af1d3ef63eb033125018c8309c7448384b6a9583e",
+    "input_interface": "root_qpos",
+    "input_dim": 380,
+    "macro_anchor_mode": "expert_heading",
+    "macro_frame_stride": 1,
+    "horizon_steps": 10,
+    "z_dim": 256
+  },
+  "l2t": {
+    "teacher_command": "explicit reference",
+    "teacher_input_dim": 286,
+    "student_command": "258-D DiffSR latent plus phase",
+    "student_input_dim": 351,
+    "imitation_coeff": 1.0
+  },
+  "training": {
+    "task": "Isaac-Imitation-G1-v2",
+    "algorithm": "IPMD_L2T",
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 1000000000,
+    "max_iterations": 2544,
+    "checkpoint_interval_frames": 50000000,
+    "reset_sampler": "random80_adaptive20",
+    "walltime": "15:59:00",
+    "persistent_output": "/data/bones129k_l2t/l2t_teacher_explicit_student_latent/rlopt_train"
+  }
+}

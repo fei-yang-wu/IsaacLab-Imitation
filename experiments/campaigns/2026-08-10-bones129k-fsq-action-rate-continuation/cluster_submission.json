@@ -1,0 +1,42 @@
+{
+  "campaign": "2026-08-10-bones129k-fsq-action-rate-continuation",
+  "submitted_utc": "2026-08-10T17:53:10Z",
+  "cluster": "ICE",
+  "source_contract_sha256": "4f5fbfd3fce5881c43f6ddb3849c526978e1ebc7bf2607e231c9d4df0205636e",
+  "wandb": {
+    "project": "g1-bones-seed",
+    "group": "fsq-anchor-critic"
+  },
+  "resume": {
+    "checkpoint": "/data/bones129k_fsq_anchor_critic/fsq64_heading_critic_no_latent_tracker/rlopt_train/2026-08-09_00-34-44_wandb-o5pqhvgr/models/model_step_5750390784.pt",
+    "frames_at_resume": 5750390784,
+    "source_job_id": 5573503,
+    "source_state": "TIMEOUT"
+  },
+  "change": {
+    "env.rewards.action_rate_l2.weight": -0.1
+  },
+  "protocol": {
+    "task": "Isaac-Imitation-G1-v2",
+    "latent_mode": "sonic_fsq",
+    "z_dim": 64,
+    "fsq_levels": 32,
+    "command_dim": 66,
+    "macro_frame_stride": 1,
+    "macro_anchor_mode": "expert_heading",
+    "critic_channels": [
+      "reference"
+    ],
+    "num_envs": 16384,
+    "rollout_steps": 24,
+    "frames_per_batch": 393216,
+    "mini_batch_size": 294912,
+    "gamma": 0.97,
+    "seed": 0,
+    "frame_cap": 10000000000,
+    "max_iterations": 25432,
+    "checkpoint_interval_frames": 250000000,
+    "expected_state": "ICE walltime may stop this segment before the 10B cap; checkpoints persist under /data."
+  },
+  "job_id": 5575163
+}
