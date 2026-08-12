@@ -53,6 +53,15 @@ parser.add_argument(
     "--checkpoint", type=str, default=None, help="Path to model checkpoint (.pt)."
 )
 parser.add_argument(
+    "--ipmd_l2t_policy_role",
+    choices=("teacher", "student"),
+    default=None,
+    help=(
+        "Render one role from a full IPMD-L2T checkpoint. 'teacher' uses the "
+        "privileged teacher policy; 'student' uses the deployable policy."
+    ),
+)
+parser.add_argument(
     "--agent_entry_point",
     type=str,
     default=None,
@@ -275,8 +284,12 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.imitation_g1_env
     G1_EE_BODY_NAMES,
 )
 from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWrapper
+from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (
+    bind_command_interface,
+)
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import IPMD, PPO, SAC
+from rlopt.agent.ipmd.ipmd_l2t import IPMDL2T
 from rlopt.agent.skill_commander import FrozenSkillCommanderSampler
 from tensordict.nn import InteractionType
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
@@ -962,9 +975,10 @@ def main(
     agent_cfg,
 ):
     """Play an RLOpt policy next to the expert reference motion."""
-    sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
-    if callable(sync_input_keys):
-        sync_input_keys()
+    if bind_command_interface(agent_cfg, env_cfg) is None:
+        sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
+        if callable(sync_input_keys):
+            sync_input_keys()
 
     if args_cli.seed == -1:
         args_cli.seed = random.randint(0, 10000)
@@ -1161,7 +1175,17 @@ def main(
     )
     role_markers = _create_role_markers()
 
-    agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
+    l2t_policy_role = args_cli.ipmd_l2t_policy_role
+    if l2t_policy_role is not None:
+        if args_cli.algorithm != "IPMD":
+            raise ValueError("--ipmd_l2t_policy_role requires --algo IPMD.")
+        if not hasattr(agent_cfg, "ipmd_l2t"):
+            raise ValueError(
+                "--ipmd_l2t_policy_role requires an IPMD-L2T agent entry point."
+            )
+        agent_class = IPMDL2T
+    else:
+        agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     ipmd_cfg = getattr(agent_cfg, "ipmd", None)
     command_source = str(getattr(ipmd_cfg, "command_source", ""))
     h30_planner = False
@@ -1334,7 +1358,12 @@ def main(
             "Latent temporal ensembling requires command_source=skill_commander."
         )
 
-    collector_policy = agent.collector_policy
+    if l2t_policy_role == "teacher":
+        collector_policy = agent.teacher_policy
+    elif l2t_policy_role == "student":
+        collector_policy = agent.deployment_policy
+    else:
+        collector_policy = agent.collector_policy
     collector_policy.eval()
 
     dt = getattr(base_env, "step_dt", None)
@@ -1540,6 +1569,7 @@ def main(
 
         payload = {
             "checkpoint": checkpoint_path,
+            "ipmd_l2t_policy_role": l2t_policy_role,
             "task": args_cli.task,
             "physics_cfg": type(env_cfg.sim.physics).__name__,
             "emulated_joint_order_from": args_cli.emulate_joint_order_from,

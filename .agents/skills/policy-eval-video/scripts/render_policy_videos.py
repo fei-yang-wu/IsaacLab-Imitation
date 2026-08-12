@@ -94,6 +94,12 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[
     parser.add_argument("--output_root", type=Path, required=True)
     parser.add_argument("--task", default="Isaac-Imitation-G1-v2")
     parser.add_argument("--algo", default="IPMD")
+    parser.add_argument(
+        "--ipmd_l2t_policy_role",
+        choices=("teacher", "student"),
+        default=None,
+        help="Render one policy role from a full IPMD-L2T checkpoint.",
+    )
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument(
@@ -342,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"[INFO] checkpoint : {checkpoint}")
     print(f"[INFO] agent cfg  : {args.agent_entry_point}")
+    if args.ipmd_l2t_policy_role is not None:
+        print(f"[INFO] L2T role   : {args.ipmd_l2t_policy_role}")
     if planner_checkpoint is not None:
         print(f"[INFO] planner    : {planner_checkpoint}")
         print(f"[INFO] skill      : {skill_checkpoint}")
@@ -408,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if args.keep_terminations:
             cmd.append("--keep_terminations")
+        if args.ipmd_l2t_policy_role is not None:
+            cmd += ["--ipmd_l2t_policy_role", args.ipmd_l2t_policy_role]
         if args.randomized_no_push:
             cmd += ["--keep_domain_randomization", "--disable_push_event"]
         # Deliberately no --video_length: each motion runs to its own end.
