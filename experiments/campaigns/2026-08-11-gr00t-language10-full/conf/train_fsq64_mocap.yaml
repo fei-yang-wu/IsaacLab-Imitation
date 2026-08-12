@@ -1,0 +1,14 @@
+defaults:
+  - base_train
+  - _self_
+
+output_dir: outputs/gr00t_language10/arms/fsq64_mocap
+target: latent
+data:
+  table: outputs/gr00t_language10/tables/fsq64_mocap_table.pt
+  state_field: oracle_rollout_state_history
+goal_features: outputs/gr00t_language10/goal_features/goal_features.pt
+pretrained_bundle: outputs/gr00t_language10/goal_features/action_head_trunk.pt
+wandb:
+  name: fsq64_mocap
+  tags: [gr00t-head, language10, fsq64_mocap, target-latent, data-mocap, Isaac-Imitation-G1-v2]

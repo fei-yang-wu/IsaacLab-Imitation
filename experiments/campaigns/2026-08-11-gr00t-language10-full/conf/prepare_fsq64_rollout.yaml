@@ -1,0 +1,9 @@
+defaults:
+  - base_prepare
+  - _self_
+
+collection_dir: logs/bones_language10_fsq64_planner_seed0/collection
+output: outputs/gr00t_language10/tables/fsq64_rollout_table.pt
+latent:
+  source: fsq_prequant
+  encoder_checkpoint: logs/bones129k_sonic_fsq_scale_eval/encoders/fsq64_scaled.pt

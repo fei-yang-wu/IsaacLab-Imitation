@@ -1,0 +1,17 @@
+defaults:
+  - base_train
+  - _self_
+
+output_dir: outputs/gr00t_language30/arms/fsq64
+target: latent
+data:
+  table: outputs/gr00t_language30/tables/fsq64_replay_table.pt
+  state_field: oracle_rollout_state_history
+goal_features: outputs/gr00t_language30/goal_features/goal_features.pt
+pretrained_bundle: outputs/gr00t_language10/goal_features/action_head_trunk.pt
+run:
+  checkpoint_interval: 4000
+wandb:
+  name: l30_fsq64
+  tags: [gr00t-head, language30, compositionality, fsq64, target-latent, data-replay]
+  group: gr00t-language30-compositionality

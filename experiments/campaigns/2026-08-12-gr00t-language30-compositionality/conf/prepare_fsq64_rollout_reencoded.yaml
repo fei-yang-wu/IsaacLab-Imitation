@@ -1,0 +1,18 @@
+# FSQ targets re-encoded from the EXISTING z256 rollout collection.
+#
+# Cheap (no new simulation) and self-consistent: each row's FSQ target is what
+# the FSQ encoder produces from that row's own expert window, so target and
+# state agree. What it does NOT provide is a matched deployment distribution —
+# the state histories (and `last_action`) come from the z256 tracker's
+# closed-loop rollout, not the FSQ tracker's. Use the freshly collected
+# `prepare_fsq64_rollout.yaml` for the matched-dynamics arm.
+defaults:
+  - base_prepare
+  - _self_
+
+collection_dir: logs/bones_language30_compositionality_oracle_seed0/collection
+output: outputs/gr00t_language30/tables/fsq64_rollout_reencoded_table.pt
+latent:
+  source: fsq_prequant
+  encoder_checkpoint: logs/bones129k_sonic_fsq_scale_eval/encoders/fsq64_scaled.pt
+  layout_check_encoder: logs/rollout24_gamma097_foot_disabled_eval/encoder/latest.pt

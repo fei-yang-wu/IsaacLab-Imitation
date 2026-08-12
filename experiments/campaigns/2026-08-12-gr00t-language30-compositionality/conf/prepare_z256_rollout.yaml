@@ -1,0 +1,11 @@
+# Oracle-rollout data for the 30 motions (already collected 2026-08-11 with the
+# rollout24_gamma097 tracker): 137,801 rows, 30-frame lookahead, rows every 10
+# control steps. Serves the z256 AND explicit rollout arms.
+defaults:
+  - base_prepare
+  - _self_
+
+collection_dir: logs/bones_language30_compositionality_oracle_seed0/collection
+output: outputs/gr00t_language30/tables/z256_rollout_table.pt
+latent:
+  source: stored

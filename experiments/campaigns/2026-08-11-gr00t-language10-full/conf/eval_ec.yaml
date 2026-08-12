@@ -1,0 +1,60 @@
+# Closed-loop EC (Embodied-Control) evaluation grid: 6 arms x rtc on/off x
+# 10 goals on the MuJoCo deployment-rehearsal runtime. Statistical signal
+# only; the synced Isaac evaluation remains the number of record.
+ec_repo: external/Embodied-Control
+pixi_bin: /home/fwu91/Storage/.pixi/bin/pixi
+mjcf: source/isaaclab_imitation/isaaclab_imitation/assets/unitree/g1_description/g1_29dof_rev_1_0.xml
+goal_features: outputs/gr00t_language10/goal_features/goal_features.pt
+output_root: logs/gr00t_language10_ec_eval/grid_v1
+
+only_arms: null # e.g. [z256_mocap] to run a subset of the grid
+reference_arrays: data/bones_seed_language10_v1/reference_arrays/root_qpos_v1
+record_states: false # per-tick joint+anchor logs (states_ep*.npz)
+compute_mpjpe: false # post-hoc MPJPE-L/G vs the reference (needs record_states)
+hold_steps: 10
+slots: 3
+rtc_freeze_steps: 0
+rtc_variants: [false, true]
+episodes: 1
+max_steps: 500 # the 10-second M3 episode convention
+seed: 0
+min_base_height_m: 0.4 # matches the training env's base_too_low
+cell_timeout_s: 1800
+
+goals:
+  - Neutral_stoop_down_001_A057
+  - lift_crate_walk_ff_start_180_R_001_A140
+  - drinking_standing_mug_R_001_A282
+  - fishing_standing_loop_R_001_A500
+  - cellphone_typing_sequence_one_hand_idle_R_001_A423
+  - feeding_birds_start_R_001_A456
+  - walk_arc_cw_start_R_slow_001_A443
+  - mosquito_drive_away_R_001_A500
+  - casual_greeting_R_001_A428
+  - surrender_stop_R_001_A468
+
+arms:
+  chunk_mocap:
+    mode: chunk
+    bundle: logs/policy_bundles/rollout24_gamma097_3500m
+    checkpoint: outputs/gr00t_language10/arms/chunk_mocap/checkpoints/update_0012000.pt
+  chunk_rollout:
+    mode: chunk
+    bundle: logs/policy_bundles/rollout24_gamma097_3500m
+    checkpoint: outputs/gr00t_language10/arms/chunk_rollout/checkpoints/update_0012000.pt
+  z256_mocap:
+    mode: latent
+    bundle: logs/policy_bundles/rollout24_gamma097_3500m
+    checkpoint: outputs/gr00t_language10/arms/z256_mocap/checkpoints/update_0012000.pt
+  z256_rollout:
+    mode: latent
+    bundle: logs/policy_bundles/rollout24_gamma097_3500m
+    checkpoint: outputs/gr00t_language10/arms/z256_rollout/checkpoints/update_0012000.pt
+  fsq64_mocap:
+    mode: latent
+    bundle: logs/policy_bundles/fsq64_sonic_4500m
+    checkpoint: outputs/gr00t_language10/arms/fsq64_mocap/checkpoints/update_0012000.pt
+  fsq64_rollout:
+    mode: latent
+    bundle: logs/policy_bundles/fsq64_sonic_4500m
+    checkpoint: outputs/gr00t_language10/arms/fsq64_rollout/checkpoints/update_0012000.pt

@@ -260,6 +260,53 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--gr00t_checkpoint",
+    type=Path,
+    default=None,
+    help=(
+        "Publish latent commands from a trained GR00T action head instead of "
+        "the expert window. Reads only the causal robot history plus the "
+        "explicit language goal. Requires command_source=hl_skill."
+    ),
+)
+parser.add_argument(
+    "--gr00t_goal_features",
+    type=Path,
+    default=None,
+    help="Cached Cosmos goal-feature table for --gr00t_checkpoint.",
+)
+parser.add_argument(
+    "--gr00t_goal",
+    type=str,
+    default="",
+    help=(
+        "Explicit language goal name published to every environment. Never "
+        "inferred from the reference cursor or trajectory rank."
+    ),
+)
+parser.add_argument(
+    "--gr00t_consumption",
+    choices=("open_loop", "fresh"),
+    default="open_loop",
+    help=(
+        "open_loop consumes the head's consecutive predicted latents one per "
+        "publication; fresh re-runs the head at every publication."
+    ),
+)
+parser.add_argument(
+    "--gr00t_route",
+    choices=("latent", "chunk_native", "chunk_encoded"),
+    default="latent",
+    help=(
+        "How a GR00T head's prediction reaches the tracker. 'latent': the head "
+        "predicts latents published directly (latent arm). 'chunk_native': a "
+        "chunk head's explicit frames are published into the chunk actor term "
+        "and consumed slot-by-slot by an explicit tracker. 'chunk_encoded': the "
+        "SAME chunk head's window is routed through the frozen skill encoder "
+        "onto a LATENT tracker -- the tracker-matched chunk-vs-latent row."
+    ),
+)
+parser.add_argument(
     "--packet_source",
     choices=("planner", "expert"),
     default="planner",
@@ -2237,6 +2284,159 @@ def main(
             device=agent._get_device(agent.config.device),
         )
         agent._command_source = command_source
+    gr00t_sampler = None
+    gr00t_chunk_publisher = None
+    # Shared by the BB1 packet route below and by a GR00T chunk_encoded run;
+    # declared here so whichever installs the packet->encoder source owns them.
+    packet_encoder_stats: Any = None
+    packet_encoder_provenance: dict[str, Any] | None = None
+    if args_cli.gr00t_checkpoint is not None and args_cli.gr00t_route != "latent":
+        # Chunk-target head. Both routes share the head and the causal input;
+        # they differ only in which channel carries the prediction to the
+        # tracker, which is exactly the variable the comparison isolates.
+        from imitation_experiments.planner.gr00t_chunk_publisher import (  # noqa: PLC0415
+            Gr00tChunkPublisher,
+            Gr00tPacketPlanner,
+        )
+
+        oracle_sampler = getattr(agent, "_hl_skill_command_sampler", None)
+        if oracle_sampler is None:
+            raise ValueError(
+                "--gr00t_route=chunk_* requires agent.ipmd.command_source="
+                "hl_skill so the frozen sampler and its skill encoder exist."
+            )
+        if args_cli.gr00t_goal_features is None or not args_cli.gr00t_goal:
+            raise ValueError(
+                "--gr00t_checkpoint requires --gr00t_goal_features and --gr00t_goal."
+            )
+        causal_fn = agent._discover_env_method(
+            agent.env, "current_causal_planner_observation"
+        )
+        if causal_fn is None:
+            raise ValueError(
+                "the environment exposes no current_causal_planner_observation; "
+                "the GR00T planner input is causal-only by contract."
+            )
+        chunk_term = None
+        if args_cli.gr00t_route == "chunk_native":
+            chunk_term = getattr(raw_isaac_env, "actor_command", None)
+            if chunk_term is None or not hasattr(chunk_term, "window_steps"):
+                raise ValueError(
+                    "--gr00t_route=chunk_native needs a chunk actor term: run "
+                    "with env.command_interface.actor=chunk and "
+                    "env.command_interface.actor.source=external."
+                )
+        gr00t_chunk_publisher = Gr00tChunkPublisher(
+            chunk_term=chunk_term,
+            causal_observation_fn=causal_fn,
+            state_history_steps=int(args_cli.state_history_steps),
+            gr00t_checkpoint=args_cli.gr00t_checkpoint,
+            goal_features_path=args_cli.gr00t_goal_features,
+            goal_name=str(args_cli.gr00t_goal),
+            num_envs=int(env_cfg.scene.num_envs),
+            device=agent._get_device(agent.config.device),
+        )
+        if args_cli.gr00t_route == "chunk_encoded":
+            # Tracker-matched row: the identical chunk head drives the SAME
+            # latent tracker the latent arm uses, through the frozen encoder.
+            def _gr00t_causal_state(env_ids: Tensor) -> Tensor:
+                return _planner_state(
+                    raw_isaac_env.current_causal_planner_observation(
+                        env_ids=env_ids,
+                        history_steps=int(args_cli.state_history_steps),
+                    ),
+                    int(args_cli.state_history_steps),
+                )
+
+            # The layout verifier reads `env._expert_macro_feature_slices`, but
+            # in the v2 env that cache lives on the composed ExpertDataPlane and
+            # is filled lazily. Resolve it through the public accessor and mirror
+            # it where the verifier looks, so the first publish is checked
+            # instead of refused.
+            raw_isaac_env._expert_macro_feature_slices = (
+                raw_isaac_env.expert_macro_feature_slices(
+                    horizon_steps=int(trainer.horizon_steps)
+                )
+            )
+            # PacketLayout carries (term_name, width) pairs, in packet order.
+            gr00t_packet_layout = PacketLayout(
+                tuple(gr00t_chunk_publisher._components),
+                packet_frames=int(gr00t_chunk_publisher._gr00t_horizon),
+            )
+            packet_encoder_stats = install_packet_encoder_command_source(
+                oracle_sampler,
+                planner=Gr00tPacketPlanner(gr00t_chunk_publisher),
+                causal_state_provider=_gr00t_causal_state,
+                env=raw_isaac_env,
+                packet_layout=gr00t_packet_layout,
+                packet_source="planner",
+            )
+            packet_encoder_provenance = {
+                "packet_source": "gr00t_chunk_head",
+                "packet_planner_checkpoint": str(args_cli.gr00t_checkpoint),
+                "packet_interface": "root_qpos",
+            }
+        print(
+            f"[INFO] GR00T {args_cli.gr00t_route} route: "
+            f"{gr00t_chunk_publisher.provenance}"
+        )
+    elif args_cli.gr00t_checkpoint is not None:
+        # Swap the oracle latent source for the GR00T head, keeping the frozen
+        # sampler's hold/phase/renewal machinery and its skill encoder (the
+        # oracle latent stays available as a diagnostic and never reaches the
+        # policy).
+        from imitation_experiments.planner.gr00t_latent_sampler import (  # noqa: PLC0415
+            Gr00tLatentCommandSampler,
+        )
+
+        oracle_sampler = getattr(agent, "_hl_skill_command_sampler", None)
+        if oracle_sampler is None:
+            raise ValueError(
+                "--gr00t_checkpoint requires agent.ipmd.command_source=hl_skill "
+                "so the frozen sampler (and its skill encoder) exists."
+            )
+        if args_cli.gr00t_goal_features is None or not args_cli.gr00t_goal:
+            raise ValueError(
+                "--gr00t_checkpoint requires --gr00t_goal_features and --gr00t_goal."
+            )
+        causal_fn = agent._discover_env_method(
+            agent.env, "current_causal_planner_observation"
+        )
+        if causal_fn is None:
+            raise ValueError(
+                "the environment exposes no current_causal_planner_observation; "
+                "the GR00T planner input is causal-only by contract."
+            )
+        gr00t_sampler = Gr00tLatentCommandSampler(
+            causal_observation_fn=causal_fn,
+            state_history_steps=int(args_cli.state_history_steps),
+            gr00t_checkpoint=args_cli.gr00t_checkpoint,
+            goal_features_path=args_cli.gr00t_goal_features,
+            goal_name=str(args_cli.gr00t_goal),
+            num_envs=int(env_cfg.scene.num_envs),
+            consumption=str(args_cli.gr00t_consumption),
+            env=agent.env,
+            checkpoint_path=str(agent_cfg.ipmd.hl_skill_checkpoint_path),
+            latent_dim=int(agent_cfg.ipmd.latent_dim),
+            latent_steps_min=int(agent_cfg.ipmd.latent_steps_min),
+            latent_steps_max=int(agent_cfg.ipmd.latent_steps_max),
+            horizon_steps=(
+                int(agent_cfg.ipmd.hl_skill_horizon_steps)
+                if int(agent_cfg.ipmd.hl_skill_horizon_steps) > 0
+                else None
+            ),
+            command_phase_mode=str(agent_cfg.ipmd.latent_learning.command_phase_mode),
+            code_latent_dim=int(agent_cfg.ipmd.latent_learning.code_latent_dim),
+            phase_period=int(agent_cfg.ipmd.latent_learning.code_period),
+            command_mode=str(agent_cfg.ipmd.hl_skill_command_mode),
+            discover_env_method=agent._discover_env_method,
+            device=agent._get_device(agent.config.device),
+        )
+        agent._hl_skill_command_sampler = gr00t_sampler
+        print(
+            "[INFO] GR00T latent command source: "
+            f"{gr00t_sampler.gr00t_provenance}"
+        )
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
     resolved_policy_input_keys = tuple(agent_cfg.policy.get_input_keys())
     supported_latent_policy_input_keys = {
@@ -2317,8 +2517,9 @@ def main(
     # packet planner routed through the frozen skill encoder, so the only thing
     # that differs from the latent row is the planner's output space. Requires
     # the oracle sampler, because that is the one holding the encoder.
-    packet_encoder_stats: Any = None
-    packet_encoder_provenance: dict[str, Any] | None = None
+    # NOTE: `packet_encoder_stats` / `packet_encoder_provenance` are initialized
+    # before the GR00T routes above, because a chunk_encoded run installs the
+    # packet->encoder source there and must not have it cleared here.
     packet_planner_metadata: dict[str, Any] | None = None
     packet_planner_target_dim: int | None = None
     packet_planner_path: Path | None = None
@@ -2654,6 +2855,21 @@ def main(
                     if planner_checkpoint_path is not None
                     else ""
                 ),
+                # Present only when a GR00T action head published the latents.
+                # `head_calls` counts head forwards, so a summary cannot
+                # silently report the oracle path as a planner result.
+                "gr00t_planner": (
+                    gr00t_sampler.gr00t_report()
+                    if gr00t_sampler is not None
+                    else (
+                        {
+                            "route": str(args_cli.gr00t_route),
+                            **gr00t_chunk_publisher.report(),
+                        }
+                        if gr00t_chunk_publisher is not None
+                        else None
+                    )
+                ),
                 "skill_checkpoint": str(
                     args_cli.skill_checkpoint
                     or planner_checkpoint.get("skill_checkpoint_path", "")
@@ -2760,6 +2976,17 @@ def main(
                 int(trainer.horizon_steps),
                 initial_publication=timestep == 0,
             )
+            if (
+                gr00t_chunk_publisher is not None
+                and str(args_cli.gr00t_route) == "chunk_native"
+                and int(renew_env_ids.numel()) > 0
+            ):
+                # Native chunk route: publish the head's explicit packet into
+                # the chunk actor term on the same per-environment renewal
+                # schedule the latent routes use. Asynchronous resets make a
+                # global timestep-modulo publication invalid, which is why this
+                # rides `planner_renew_env_ids`.
+                gr00t_chunk_publisher.publish(renew_env_ids)
             if int(renew_env_ids.numel()) > 0:
                 active_on_device = step_active.to(device=renew_env_ids.device)
                 renew_env_ids = renew_env_ids[
@@ -3151,6 +3378,21 @@ def main(
             "algorithm": args_cli.algorithm,
             "checkpoint": str(checkpoint_path),
             "low_level_tracker": tracker_provenance,
+            # Present only when a GR00T action head produced the commands.
+            # `head_calls` / `publications` count real head forwards, so an
+            # oracle run can never be read as a planner result.
+            "gr00t_planner": (
+                gr00t_sampler.gr00t_report()
+                if gr00t_sampler is not None
+                else (
+                    {
+                        "route": str(args_cli.gr00t_route),
+                        **gr00t_chunk_publisher.report(),
+                    }
+                    if gr00t_chunk_publisher is not None
+                    else None
+                )
+            ),
             # BB1: present only when the command came from an explicit packet
             # planner through the frozen encoder. `publishes` counts encoder
             # calls so a summary cannot silently report the latent oracle path.

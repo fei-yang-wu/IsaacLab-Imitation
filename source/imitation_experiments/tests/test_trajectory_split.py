@@ -8,8 +8,6 @@ history -- so these tests check membership, not sizes.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
 import pytest
 import torch
