@@ -13,6 +13,7 @@ extend-exclude = [
     # Dependency submodules (see the Submodule Boundary section of AGENTS.md).
     "RLOpt",
     "ImitationLearningTools",
+    "external",
     "ipmd",
     # Generated run artifacts and caches.
     "logs",
