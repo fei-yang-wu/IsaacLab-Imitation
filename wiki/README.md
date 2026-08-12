@@ -28,6 +28,10 @@ Start with:
   local pipeline (det-SR encoder + tuned low level), what the defaults
   resolve to, evaluation passes, MPJPE-L vs MPJPE-G, and the measurement
   traps.
+- [EC Reference-Streaming Oracle Run](ec-reference-streaming-oracle-run.md):
+  detailed local runbook for the asynchronous native oracle producer, C++
+  tracker and MuJoCo plant, MPJPE and SONIC scoring, retained artifacts,
+  validation, and failure diagnosis.
 - [Experiment Workflow](experiment-workflow.md): local tests, full cluster job
   submission, and experiment tracking conventions.
 - [Causal High-Level Interface Paper Plan](causal-interface-paper-plan.md):

@@ -336,23 +336,28 @@ refused rather than silently retuning the physics rate. The conversion pipeline
 in `scripts/data/` resamples sources to 50 Hz, so a mismatch means the wrong
 manifest.
 
-Train the IPMD learning-to-teach variant on a current-v2 command surface:
+Train the IPMD learning-to-teach variant on the current latent surface:
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-Explicit-v2 \
+    --task Isaac-Imitation-G1-v2 \
     --algo IPMD_L2T \
     --headless \
-    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json \
+    agent.ipmd.hl_skill_checkpoint_path=/absolute/path/to/root_qpos/latest.pt \
+    agent.ipmd.hl_skill_horizon_steps=10 \
+    agent.ipmd.latent_steps_min=10 \
+    agent.ipmd.latent_steps_max=10 \
+    agent.ipmd.latent_learning.code_period=10
 ```
 
 `IPMD_L2T` keeps rollout control and the ordinary IPMD/PPO objectives on a
-privileged teacher that reads the critic observations. A second actor reads
-the normal policy observations and learns from the teacher's executed actions;
-it never controls training rollouts. The same algorithm entry point is
-registered on `Isaac-Imitation-G1-v2`, `Isaac-Imitation-G1-Explicit-v2`, and
-`Isaac-Imitation-G1-Chunk-v2`. Latent v2 runs retain the usual IPMD skill-command
-checkpoint requirements.
+privileged teacher. On the latent surface, the teacher receives the explicit
+full-body reference command and privileged robot state. A second actor receives
+the 258-D DiffSR latent command plus deployable proprioception and learns the
+teacher's executed actions; it never controls training rollouts. The value
+function uses the teacher inputs. The encoder checkpoint must match the v2
+`root_qpos` macro state and frame stride.
 
 Play an IPMD-L2T checkpoint with the deployable student policy:
 
@@ -360,9 +365,13 @@ Play an IPMD-L2T checkpoint with the deployable student policy:
 python scripts/rlopt/play.py \
     --task Isaac-Imitation-G1-v2 \
     --algo IPMD_L2T \
-    --agent rlopt_ipmd_l2t_tuned_cfg_entry_point \
     --checkpoint /absolute/path/to/checkpoint.pt \
-    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json \
+    agent.ipmd.hl_skill_checkpoint_path=/absolute/path/to/root_qpos/latest.pt \
+    agent.ipmd.hl_skill_horizon_steps=10 \
+    agent.ipmd.latent_steps_min=10 \
+    agent.ipmd.latent_steps_max=10 \
+    agent.ipmd.latent_learning.code_period=10
 ```
 
 ### LAFAN1 local pretrain + low-level pipeline (reproducible)

@@ -8,7 +8,7 @@ Always talk in ASD-STE100 Simplified Technical English. Always read CONTEXT.md f
 
 - This guidance is for the top-level `IsaacLab-Imitation` repo only.
 - Do not add or maintain agent guidance inside dependency submodules.
-- Treat `IsaacLab/`, `RLOpt/`, and `ImitationLearningTools/` as dependency submodules unless a task explicitly requires changes there.
+- Treat `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/`, and `external/Isaac-GR00T/` as dependency submodules unless a task explicitly requires changes there. `external/` holds adjacent upstream code used verbatim, not hard workspace dependencies. `external/Isaac-GR00T/` is upstream NVIDIA code (pinned commit, own `gr00t` Pixi environment); never edit it — adapters live in `RLOpt` and `source/imitation_experiments/`.
 - For RLOpt or ImitationLearningTools work, use the in-repo submodules at `./RLOpt` and `./ImitationLearningTools`; do not route active work to sibling checkouts.
 - `unitree_rl_lab` is not required for normal training; G1 robot configuration and URDF/mesh assets are owned by this repo. `loco-mujoco` is optional and only needed when explicitly selecting the `loco_mujoco` dataset loader.
 - Prefer edits in files owned by this repo, especially:
@@ -161,6 +161,28 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   submodule pointers, or deciding which repository owns an edit.
 - Keep changes aligned with the existing terminal-first workflow.
 - Prefer minimal, targeted edits over broad refactors.
+- Be rigorous. Do not treat a preliminary result as a fact. A preliminary
+  result is a sign that tells you where to look next. It is not a conclusion,
+  and it is not evidence for or against a research claim.
+- A result is preliminary until it meets all of these conditions:
+  - The protocol is the frozen one for that comparison.
+  - The compared arms differ in one variable only.
+  - The run is complete. A partial aggregate, an unfinished grid, a cancelled
+    job, or a missing cell keeps the result preliminary.
+  - The measured difference is larger than the known evaluation noise. Isaac
+    evaluation is not deterministic; treat a relative difference below about
+    15% in the high-error regime as unresolved.
+  - Repeated seeds support the difference.
+- Before you cite a stored result, find out how it was produced. Read its
+  campaign README, its aggregate manifest, and the status of the jobs that
+  made it. An artifact on disk is not proof that its protocol was complete.
+- State the qualification with the number, in the same sentence. Say
+  "preliminary", "one seed", "partial grid", or "frames not matched" where the
+  number appears, not in a later paragraph.
+- Do not build an argument, a recommendation, or a paper claim on a
+  preliminary result. Say what experiment would settle the question instead.
+- Take time to be correct. A slow, verified answer is worth more than a fast
+  one. Ask the user when the status of a result is unclear.
 - Before using a newly coined project term, abbreviation, variant label,
   metric shorthand, or overloaded word, define it in plain language first and
   say exactly what changes relative to the baseline. Do not make the user infer
