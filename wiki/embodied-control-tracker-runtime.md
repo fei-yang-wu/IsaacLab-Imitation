@@ -7,7 +7,7 @@
 > milestone chronology, run results, and incident notes.
 
 Status: native inference implementation and generic-runtime construction plan,
-2026-08-11, revision 8. Revision 2 made the
+2026-08-11, revision 9. Revision 2 made the
 command buffer the central seam (VLA -> buffer -> tracker -> eval env), the
 VLA command interface-agnostic (explicit, latent, or chunk over one
 envelope), and added a C++/pybind11 native tier for hardware communication.
@@ -39,6 +39,53 @@ sits between an asynchronous planner or oracle worker and the synchronous
 the planner side and publish only their final command packet. The current
 `ec.bundle/v1` and fixed native command tags are prototype code to replace;
 the `ec.bundle/v2` plan below is the construction target.
+
+Revision 9 implements the first generic history-aware observation contract.
+Every new bundle observation term records its sample width, history length,
+history stride, history order, reset fill, and normalization. Older v1 bundles
+that omit these fields load with history length and stride one for backward
+compatibility; re-export them before a release so the fields are explicit. The
+C++ runtime compiles the ordered terms into fixed rings and a preallocated
+term-major policy input. The Python path is the parity specification. This
+makes the SONIC release actor an ordinary bundle instance: its five
+proprioception terms
+use ten-frame oldest-first histories, while its latent command has history one.
+It also separates command hold, encoder reference stride, encoder trigger, and
+low-level observation history. Planner temporal aggregation remains outside
+the low-level runtime.
+
+The first SONIC bundle is
+`logs/policy_bundles/sonic_v1_1_native`. It binds checkpoint SHA-256
+`af24831ae59424a0cf92cb56e9bb6dc1a59ab859fd055ba13187e9e6f0a59f43`.
+ONNX Runtime parity is 0.0 maximum absolute error for the encoder and
+3.34e-6 for the policy. A preliminary, deterministic EC real-time rehearsal
+over the selected ten motions completed 10/10 motions under the offline SONIC
+thresholds. Success-only MPJPE-L is 17.89 mm over 5,137 frames, with a
+per-motion range of 9.87-22.98 mm. There were zero command deadline misses,
+zero scheduler deadline misses, and zero runtime faults. Per-motion control
+p99 was 3.73-5.37 ms. This is one pass with deterministic MuJoCo reset and no
+randomization; it is not the randomized Isaac paper protocol. The retained
+report is
+`logs/sonic_release_eval/ec_realtime_v1_1_selected10_seed0/sonic_eval.json`.
+
+The matched local `z256_scaled` bundle at 5.75B frames uses the same ten
+motions, frame-0 poses, deterministic plant, full horizons, and offline SONIC
+success scorer. It succeeds on 8/10 motions. Its success-only MPJPE-L is
+13.63 mm; thus it is more precise on its success set than SONIC, but less
+robust. `fishing_standing` first fails the end-effector height threshold at
+tick 233, and `feeding_birds` first fails it at tick 499; both motions later
+fall. It also has zero command deadline misses, zero scheduler deadline
+misses, and zero runtime faults. This matched one-pass result is preliminary
+for the same reason as the SONIC result. The retained report is
+`logs/deployment_eval/ec_realtime_z256_selected10_seed0/sonic_eval.json`.
+
+Four SONIC full-horizon diagnostics also retain native telemetry and
+reference-left / policy-right videos: neutral stoop, lift-crate-and-walk,
+standing mug drinking, and curved walking. The runtime completes and measures
+each asynchronous rollout before off-path replay renders the video, so
+rendering cannot change control timing. All four pass the offline SONIC
+thresholds. The report and per-motion artifacts are under
+`logs/sonic_release_eval/ec_realtime_v1_1_diagnostic4_seed0/`.
 
 The runtime code lives in `external/Embodied-Control`
 (github.com/fei-yang-wu/Embodied-Control, our repo), package
@@ -1655,12 +1702,13 @@ and evidence, in order:
   `active_reference_tick + slot`, not the window slot.
 - **Selected-ten oracle sweep** (`scripts/oracle_mpjpe_eval.py` in
   Embodied-Control, single seed, frame-0 starts, `z256_scaled_5750m_v2`,
-  RTF 1.0, zero deadline misses/faults, tick p99 <= 1.3 ms): survival
-  8/10; on the eight survivors MPJPE-L 9.4-19.7 mm (frame-weighted
-  ~13.7 mm) and MPJPE-G 10.8-109.6 mm (~48.9 mm). The two falls
-  (`fishing_standing_loop`, `feeding_birds_start`) collapse the pooled
-  micro-average to L 97 / G 934 mm, so report survivors and falls
-  separately. Preliminary: single seed, sim2sim rig, not an Isaac number.
+  RTF 1.0, zero deadline misses/faults, tick p99 <= 1.36 ms): SONIC success
+  and survival are both 8/10. Success-only MPJPE-L is 13.63 mm. The two
+  failures (`fishing_standing_loop`, `feeding_birds_start`) first cross the
+  end-effector height threshold, then fall. They raise the full-horizon pooled
+  micro-average to L 102.25 / G 867.52 mm, so report success-only error and
+  failure causes together. Preliminary: one deterministic pass on the EC
+  rehearsal rig, not a randomized Isaac paper number.
 - **Non-blocking telemetry.** `TelemetryRecorder` (constructor-injected
   `EcLogger`, null default) drains runtime stats on a low-rate thread and
   saves `telemetry.npz` + summary after the run; the control thread only

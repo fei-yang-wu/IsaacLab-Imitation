@@ -60,6 +60,43 @@ submitted workspace archive SHA-256 is
 the complete arm-to-tag mapping and smoke provenance are retained in the
 campaign's `cluster_submission.json`.
 
+## BONES-129k L2T run (2026-08-09)
+
+Learning-to-track (L2T) uses a privileged teacher with the explicit reference
+command and a deployable student with the 258-value DiffSR latent command.
+The command split passed 146 RLOpt tests, five Isaac configuration tests, and a
+real local Newton iteration over the full reference arrays. ICE H200 job
+`5573723` used the pinned 380-input root-qpos encoder and W&B project/group
+`g1-bones-seed` / `l2t` (run `2znme7lg`). It completed normally at
+1,000,341,504 frames, but that submission was incorrectly capped at 1B instead
+of the required 10B frames. Treat it as an incomplete qualification, not the
+requested result. It was not used as a resume point. Corrected ICE H200 job
+`5574140` started from scratch on 2026-08-09 with 25,432 iterations
+(10,000,269,312 actual frames), a fresh persistent output tree, and the same
+verified data and encoder contracts. Its W&B run is `ycmodfu3` in
+`g1-bones-seed` / `l2t`. The local launcher defaults to this 10B budget.
+The workspace archive SHA-256 is
+`d153c3d784ae322a0d7790b40cd3005e9d2f5b0bc7352c417e0165bd2e3e9449`.
+The launcher and full provenance record are in
+`experiments/campaigns/2026-08-09-bones129k-l2t/`.
+
+The incomplete 1B run's student was evaluated on the canonical selected-ten
+language motions at frame 0. Under the SONIC-compatible randomized-no-push
+criterion it completed 0/10 motions; eight motions fired `ee_body_pos`, two
+fired `anchor_ori`, and one fired `anchor_pos`, with one double termination.
+The separate non-terminating diagnostic covered all 5,137 transitions: nine
+motions fell below 0.4 m, step-weighted pre-fall MPJPE-L was 135.98 mm, and
+full-horizon MPJPE-L including post-fall frames was 328.75 mm.
+
+The checkpoint's privileged teacher completed 10/10 of the same motions under
+the SONIC-compatible pass, with 14.71 mm success-only MPJPE-L and no tracking
+failure. Its non-terminating pass had no falls and 14.00 mm frame-weighted
+full-horizon MPJPE-L. The teacher consumes the explicit reference and
+privileged robot state, so it is a training ceiling and is not deployable. The
+teacher-student gap isolates the incomplete 1B result to student distillation
+or the latent interface. The checkpoint, fresh ten-motion manifest, metrics,
+and both sets of ten videos are recorded in the campaign README.
+
 A 2026-08-07 fidelity audit against the SONIC paper (arXiv 2511.07820) and
 the released `gear_sonic` BONES-SEED config found that `5567802` matches
 SONIC's latent-learning objective exactly — hold-1 per-step re-encoding,

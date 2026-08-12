@@ -77,9 +77,21 @@ root-relative tracking error on this subset.
 | `sonic_release/last.pt`, matched selected-ten | 1.000 (100/100) | 23.53 mm | 99.94 mm | 0.0968 m |
 | `sonic_v1_1/last.pt`, seed-0 selected-ten | **1.000** (100/100) | **21.17 mm** | 100.99 mm | 0.0988 m |
 
-This does not change the 4096-motion ranking below. It only updates the
-selected-ten release reproduction with the v1.1 public checkpoint under the
-same local adapter and SONIC-compatible success criterion.
+The same local adapter was then run on the canonical 4,096-motion rank block
+12288 through 16383. The rank SHA-256 is
+`786ef6775930c34179b774cb215e233c3f7b2bb32ef46bb6fc660206324e8285` for both
+public checkpoints and every local comparison row.
+
+| checkpoint | completed motions | SONIC SR | success-only MPJPE-L |
+| --- | ---: | ---: | ---: |
+| `sonic_release/last.pt` | 4,070/4,096 | 0.9937 | 28.65 mm |
+| `sonic_v1_1/last.pt` | **4,073/4,096** | **0.9944** | **26.96 mm** |
+
+The v1.1 checkpoint preserves the public release as the robustness leader and
+improves both raw success and success-only tracking error. Its 23 failed
+motions fired 21 `ee_body_pos`, four `anchor_pos`, and two `anchor_ori` events;
+some terms fired together. The result is in
+`logs/bones129k_recent_ice_local_eval/scoreboard4096/sonic_v1_1/sonic.json`.
 
 ### Our own tracker beats it on the same ten motions
 

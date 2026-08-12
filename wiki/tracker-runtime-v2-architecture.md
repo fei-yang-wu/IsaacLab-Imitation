@@ -1,6 +1,7 @@
 # Tracker runtime v2: asynchronous stage/mailbox architecture
 
-Status: proposed specification, 2026-08-11. This page is the timeless spec.
+Status: adopted specification with the first native implementation, 2026-08-11.
+This page is the timeless spec.
 History, run results, and incident notes stay in
 [`embodied-control-tracker-runtime.md`](embodied-control-tracker-runtime.md),
 which this page supersedes as the architecture reference.
@@ -83,6 +84,64 @@ cross-process form; the in-process form is the same layout without
 `shm_open`. A single C++ `Mailbox` template with pybind bindings replaces
 today's three ad-hoc paths (in-process Python buffer, ZMQ, shm). ZMQ remains
 only at the EC orchestrator boundary, not on the control path.
+
+## Compiled observation plan
+
+The policy bundle records the complete actor observation plan. Each ordered
+term has these fields:
+
+| field | meaning |
+| --- | --- |
+| `name` | Runtime state or actor-command component to read. |
+| `width` | Number of values in one sample. |
+| `history_length` | Number of samples supplied to the policy. A value of one disables history. |
+| `history_stride` | Number of control ticks between retained samples. |
+| `history_order` | `oldest_first` or `newest_first`. |
+| `reset_fill` | Fill the unavailable history with the first sample or with zero. |
+| `normalize` | Records whether the exported policy normalizer covers this term; the ONNX model owns the actual scale and offset. |
+
+The flat width of one term is `width * history_length`. The policy input is
+the term-major concatenation in the exact bundle order. The exporter reads
+these values from the resolved training configuration. The runtime does not
+infer history from a policy name or from a model input width.
+
+The C++ control stage compiles this plan once at bundle load. It allocates one
+fixed ring for each term, records one sample on each control tick, selects
+samples at the declared history stride, and writes the policy input into
+preallocated memory. It does not allocate on a control tick. Reset fill is part
+of the model contract because it changes the first policy actions. The Python
+observation assembler is the executable specification and must produce the
+same bytes in the parity tests.
+
+SONIC is an ordinary instance of this contract. Its proprioception terms have
+history length 10, history stride 1, oldest-first order, and repeat-first reset
+fill. The latent command has history length 1. A DiffSR tracker is another
+ordinary instance, with its own ordered terms and history fields. Adding a new
+tracker must require a new bundle, not a native policy-family branch.
+
+## Time behavior of the actor command term
+
+The following settings describe different clocks. They must remain explicit:
+
+- `hold_steps` says how many 50 Hz policy ticks consume one accepted command
+  packet.
+- `macro_frame_stride` says how far apart the reference frames are inside one
+  encoder window. It does not set the command hold time.
+- `encoder_trigger` is `on_acceptance` or `every_control_tick`. The latter can
+  encode a moving window each tick while an asynchronous oracle worker renews
+  the underlying reference block only when needed.
+- Observation `history_length` and `history_stride` describe past robot state
+  supplied to the low-level policy. They do not describe a planner forecast.
+- A chunk command has an execution slot and valid length. These fields are
+  independent of the low-level observation history.
+
+For the current DiffSR bundle, the actor term encodes on packet acceptance and
+holds the latent command for ten control ticks. For the SONIC release bundle,
+the oracle worker supplies a stride-five reference block and the control stage
+encodes the live moving window on every control tick. Both use the same actor
+command term and command buffer. Temporal aggregation, real-time chunking, and
+forecast history stay in the planner process. The low-level runtime sees only
+the final packet and its declared execution schedule.
 
 ## Threading model
 
@@ -185,7 +244,7 @@ C++ instrumentation and reported as histograms in `metrics.json`:
 | quantity | target | notes |
 | --- | --- | --- |
 | control tick wake jitter | p99 < 200 us | SCHED_FIFO + pinning |
-| control tick compute | p99 < 2 ms | assemble + forward + decode + publishes |
+| control tick compute | p99 < 20 ms and below the recorded bundle regression budget | hard 50 Hz period; assemble + forward + decode + publishes |
 | policy-mailbox age at plant read | p99 < 22 ms | one control period + jitter margin |
 | state-mailbox age at control read | p99 < 4 ms | one plant publication period + margin |
 | planner-mailbox deadline misses | 0 at spec'd lead | lead must exceed measured inference ticks |
@@ -202,6 +261,14 @@ profile and assume a tuned robot host. Compute, deadline-miss, and fault
 budgets are identical in both profiles. Behavioral evaluation on top of a passing timing certificate:
 selected-ten x >= 3 repeats, distributions reported, protocol-labeled
 preliminary until repeats support the difference.
+
+The preferred target for a small tracker remains 2 ms. A larger observation
+history or encoder can need more compute. For these bundles, record encoder
+and policy time separately, set a bundle-specific regression budget below the
+20 ms hard period, and keep sufficient watchdog margin. Optimize ONNX Runtime
+threading, CPU affinity, and input copies first. TensorRT can be added behind
+the same engine interface if these changes are insufficient. A faster engine
+must not change observation bytes, command timing, or action decode semantics.
 
 ## Migration map (nothing is thrown away)
 

@@ -75,6 +75,10 @@ ownership boundaries.
   reproduces and extends (FSQ commands, tracking terminations).
 - **IPMD** — the RLOpt policy-mirror-descent algorithm family used for
   low-level training.
+- **IPMD-L2T** — the IPMD learning-to-teach variant. On the latent G1 task, a
+  privileged teacher controls rollouts from the explicit reference command,
+  while a deployable student receives the DiffSR latent command and learns the
+  teacher's executed actions.
 - **Latent task IDs** — `Isaac-Imitation-G1-vN`. The default is always the
   highest N; superseded versions stay registered unchanged. See the env
   `CONTEXT.md`.
