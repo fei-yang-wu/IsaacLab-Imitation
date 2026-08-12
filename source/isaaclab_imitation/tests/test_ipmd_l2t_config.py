@@ -59,17 +59,40 @@ def test_ipmd_l2t_v2_input_contracts(env_cfg_cls, kind, uses_latent) -> None:
     teacher_latent = ("critic", "latent_command")
     student_latent = ("policy", "latent_command")
     if uses_latent:
-        assert agent_cfg.ipmd.latent_key == teacher_latent
-        assert agent_cfg.ipmd_l2t.student_latent_key == student_latent
-        assert teacher_latent in teacher_keys
+        explicit_teacher_command = {
+            ("critic", "expert_motion"),
+            ("critic", "expert_anchor_pos_b"),
+            ("critic", "expert_anchor_ori_b"),
+        }
+        assert explicit_teacher_command.issubset(teacher_keys)
+        assert teacher_latent not in teacher_keys
+        assert student_latent not in teacher_keys
         assert student_latent in student_keys
-        assert teacher.normalize_input_exclude_keys == [teacher_latent]
+        assert ("policy", "expert_motion") not in student_keys
+        assert ("policy", "expert_anchor_pos_b") not in student_keys
+        assert ("policy", "expert_anchor_ori_b") not in student_keys
+        assert agent_cfg.ipmd.latent_key == student_latent
+        assert agent_cfg.ipmd_l2t.student_latent_key == student_latent
+        assert teacher.normalize_input_exclude_keys == []
+        assert agent_cfg.value_function.normalize_input_exclude_keys == []
         assert student.normalize_input_exclude_keys == [student_latent]
     else:
         assert teacher_latent not in teacher_keys
         assert student_latent not in student_keys
         assert teacher.normalize_input_exclude_keys == []
         assert student.normalize_input_exclude_keys == []
+
+
+def test_ipmd_l2t_uses_the_current_tuned_recipe() -> None:
+    agent_cfg = G1ImitationRLOptIPMDL2TConfig()
+
+    assert agent_cfg.policy.num_cells == [1024, 1024, 512]
+    assert agent_cfg.ipmd_l2t.student_policy.num_cells == [1024, 1024, 512]
+    assert agent_cfg.policy.activation_fn == "silu"
+    assert agent_cfg.ipmd_l2t.student_policy.activation_fn == "silu"
+    assert agent_cfg.loss.gamma == pytest.approx(0.97)
+    assert agent_cfg.optim.kl_adapt_step == "iteration"
+    assert agent_cfg.ppo.entropy_coeff == pytest.approx(0.0)
 
 
 def test_ipmd_l2t_entry_point_is_registered_only_on_current_v2_surfaces() -> None:

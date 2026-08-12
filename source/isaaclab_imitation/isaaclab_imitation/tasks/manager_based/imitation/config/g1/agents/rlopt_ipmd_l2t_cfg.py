@@ -9,18 +9,21 @@ from isaaclab.utils.configclass import configclass
 
 from isaaclab_imitation.envs.rlopt import IPMDL2TConfig
 
-from .rlopt_ipmd_cfg import G1ImitationLatentSonicRLOptIPMDConfig
+from .rlopt_ipmd_cfg import G1ImitationTunedRLOptIPMDConfig
 
 
 @configclass
-class G1ImitationRLOptIPMDL2TConfig(G1ImitationLatentSonicRLOptIPMDConfig):
+class G1ImitationRLOptIPMDL2TConfig(G1ImitationTunedRLOptIPMDConfig):
     """Current-v2 IPMD teacher/student configuration.
 
-    The teacher keeps the ordinary actor architecture but reads the exact
-    ordered critic input contract. The student keeps the original deployable
-    actor observations and architecture. Command-interface binding reruns
-    :meth:`sync_input_keys`, so the same class supports latent, explicit, and
-    chunk v2 surfaces without stale key lists.
+    On the latent surface, the teacher receives the explicit reference command
+    and privileged robot state. The student receives the DiffSR latent command
+    and deployable proprioception. The value function uses the same inputs as
+    the teacher. Explicit and chunk surfaces keep their normal command split.
+
+    Both roles use the current tuned IPMD architecture. Command-interface
+    binding reruns :meth:`sync_input_keys`, so no stale key list survives a
+    surface selection.
     """
 
     ipmd_l2t: IPMDL2TConfig = field(default_factory=IPMDL2TConfig)
@@ -46,30 +49,44 @@ class G1ImitationRLOptIPMDL2TConfig(G1ImitationLatentSonicRLOptIPMDConfig):
         self._sync_student_architecture()
         student_keys = list(self.policy.get_input_keys())
         teacher_keys = list(self.value_function.get_input_keys())
+        if bool(self.ipmd.use_latent_command):
+            # A latent interface exposes both the actor's latent and the
+            # reference command to the critic group. L2T assigns only the
+            # explicit reference command to the privileged teacher/value role.
+            teacher_keys = [
+                key for key in teacher_keys if key != ("critic", "latent_command")
+            ]
+            self.value_function.input_keys = list(teacher_keys)
         self.ipmd_l2t.student_policy.input_keys = student_keys
         self.policy.input_keys = teacher_keys
 
         if bool(self.ipmd.use_latent_command):
-            teacher_latent_key = ("critic", "latent_command")
             student_latent_key = ("policy", "latent_command")
-            if teacher_latent_key not in teacher_keys:
+            explicit_teacher_keys = {
+                ("critic", "expert_motion"),
+                ("critic", "expert_anchor_pos_b"),
+                ("critic", "expert_anchor_ori_b"),
+            }
+            if not explicit_teacher_keys.issubset(teacher_keys):
                 raise ValueError(
-                    "Latent IPMDL2T teacher inputs must contain "
-                    f"{teacher_latent_key!r}."
+                    "Latent IPMDL2T teacher inputs must contain the explicit "
+                    f"full-body reference command; got {teacher_keys!r}."
                 )
             if student_latent_key not in student_keys:
                 raise ValueError(
                     "Latent IPMDL2T student inputs must contain "
                     f"{student_latent_key!r}."
                 )
-            self.ipmd.latent_key = teacher_latent_key
+            self.ipmd.latent_key = student_latent_key
             self.ipmd_l2t.student_latent_key = student_latent_key
-            self.policy.normalize_input_exclude_keys = [teacher_latent_key]
+            self.policy.normalize_input_exclude_keys = []
+            self.value_function.normalize_input_exclude_keys = []
             self.ipmd_l2t.student_policy.normalize_input_exclude_keys = [
                 student_latent_key
             ]
         else:
             self.policy.normalize_input_exclude_keys = []
+            self.value_function.normalize_input_exclude_keys = []
             self.ipmd_l2t.student_policy.normalize_input_exclude_keys = []
 
     def __post_init__(self) -> None:
