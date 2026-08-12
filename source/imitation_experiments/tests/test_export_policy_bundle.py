@@ -117,6 +117,14 @@ def test_export_and_verify_round_trip(tmp_path):
     assert manifest["obs"]["total_width"] == 351
     assert [t["name"] for t in manifest["obs"]["terms"]][0] == "latent_command"
     assert manifest["obs"]["terms"][0]["normalize"] is False
+    assert all(term["history_length"] == 1 for term in manifest["obs"]["terms"])
+    assert all(term["history_stride"] == 1 for term in manifest["obs"]["terms"])
+    assert all(
+        term["history_order"] == "oldest_first" for term in manifest["obs"]["terms"]
+    )
+    assert all(
+        term["reset_fill"] == "repeat_first" for term in manifest["obs"]["terms"]
+    )
     assert manifest["command"]["macro_frame_stride"] == 1
     assert manifest["command"]["encoder_state_interface"] == "root_qpos"
     assert manifest["command"]["macro_anchor_mode"] == "expert_heading"
@@ -346,6 +354,10 @@ def test_fsq_export_lattice_and_manifest(tmp_path):
         "name": "latent_command",
         "width": 66,
         "normalize": False,
+        "history_length": 1,
+        "history_stride": 1,
+        "history_order": "oldest_first",
+        "reset_fill": "repeat_first",
     }
     assert manifest["command"]["quantizer"] == "fsq"
     assert manifest["command"]["z_dim"] == 64

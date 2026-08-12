@@ -216,6 +216,33 @@ _PROPRIO_TERMS = [
 ]
 
 
+def _observation_term(
+    name: str,
+    width: int,
+    normalize: bool,
+    *,
+    history_length: int = 1,
+    history_stride: int = 1,
+    history_order: str = "oldest_first",
+    reset_fill: str = "repeat_first",
+) -> dict:
+    """Return one complete runtime observation term.
+
+    History fields are explicit even when history is disabled. This keeps the
+    model input contract visible in the bundle instead of relying on runtime
+    defaults.
+    """
+    return {
+        "name": name,
+        "width": width,
+        "normalize": normalize,
+        "history_length": history_length,
+        "history_stride": history_stride,
+        "history_order": history_order,
+        "reset_fill": reset_fill,
+    }
+
+
 @dataclasses.dataclass(frozen=True)
 class Preset:
     name: str
@@ -908,14 +935,14 @@ def export_bundle(args: argparse.Namespace) -> Path:
     isaac_to_sdk = [sdk_names.index(name) for name in G1_ISAAC_JOINT_NAMES]
     obs_contract = {
         "terms": [
-            {"name": name, "width": width, "normalize": normalize}
+            _observation_term(name, width, normalize)
             for name, width, normalize in preset.terms
         ],
         "total_width": preset.total_width if role == "student" else in_features,
     }
     if role != "student":
         obs_contract["terms"] = [
-            {"name": "privileged_input", "width": in_features, "normalize": True}
+            _observation_term("privileged_input", in_features, True)
         ]
     action_contract = {
         "width": 29,
