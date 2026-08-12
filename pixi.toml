@@ -71,6 +71,14 @@ isaaclab = { version = "==3.0.0b2.post1", extras = [
 tinyobjloader = "==2.0.0rc13"
 isaaclab_imitation = { path = "./source/isaaclab_imitation", editable = true }
 imitation-experiments = { path = "./source/imitation_experiments", editable = true }
+# Minimal extras so the Isaac-GR00T action head (external/Isaac-GR00T on
+# explicit sys.path in the adapter) imports for closed-loop inference.
+# torchcodec / flash-attn / deepspeed are NOT needed: they sit outside the
+# head's import chain (torchcodec only in gr00t/utils/video_utils.py).
+tyro = "*"
+dm-tree = "*"
+albumentations = "==1.4.18"
+opencv-python-headless = "*"
 
 [feature.isaaclab.tasks]
 test-isaaclab = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES pytest source/isaaclab_imitation/tests/test_g1_task_layout_contract.py source/isaaclab_imitation/tests/test_causal_planner_observation.py source/isaaclab_imitation/tests/test_planner_publish_schedule.py source/isaaclab_imitation/tests/test_g1_backend_joint_contract.py source/isaaclab_imitation/tests/test_g1_metrics_contract.py source/isaaclab_imitation/tests/test_command_interface_cfg.py source/isaaclab_imitation/tests/test_termination_window.py source/isaaclab_imitation/tests/test_heading_quat.py source/isaaclab_imitation/tests/test_expert_heading_anchor.py"
@@ -91,6 +99,67 @@ bench-renderers = "env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 py
 [feature.lerobot.pypi-dependencies]
 datasets = "*"
 
+# ONNX export and CPU parity checks are isolated from Isaac Sim. Adding ONNX
+# to the default feature forces Pixi to re-resolve Isaac Sim's strict NumPy
+# pins even though export does not import Isaac.
+[feature.onnx-export.dependencies]
+onnx = ">=1.17,<2"
+onnxruntime = { version = ">=1.26,<2", build = "*_cpu" }
+protobuf = ">=5.29,<7"
+
+[feature.onnx-export.tasks]
+test-onnx-export = "pytest -q source/imitation_experiments/tests/test_export_policy_bundle.py"
+
+# Isolated environment for the Isaac-GR00T submodule (planner action-head work).
+# GR00T pins its own torch (2.9.0/cu128) and transformers (4.57.3), which
+# conflict with both the default env (torch 2.11/cu130) and the isaaclab env,
+# so this environment excludes the default feature entirely.
+#
+# The `gr00t` package is NOT pip-installed: its pyproject hard-requires
+# deepspeed (sdist-only, torch-importing setup.py — unbuildable under uv's
+# prepare-first model) and tensorrt, neither of which our use of the code
+# (backbone feature caching + action-head training with our own loop) touches.
+# Instead the submodule is put on PYTHONPATH via activation, and the runtime
+# dependencies below pin exactly the versions from
+# external/Isaac-GR00T/pyproject.toml.
+[feature.gr00t.dependencies]
+python = "3.12.*"
+pytest = "*"
+git = "*"
+
+[feature.gr00t.activation.env]
+PYTHONPATH = "$PIXI_PROJECT_ROOT/external/Isaac-GR00T"
+
+[feature.gr00t.pypi-dependencies]
+# Pins copied from Isaac-GR00T/pyproject.toml @ 376ba890.
+torch = { version = "==2.9.0", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "==0.24.0", index = "https://download.pytorch.org/whl/cu128" }
+transformers = "==4.57.3"
+diffusers = "==0.35.1"
+numpy = "==1.26.4"
+einops = "==0.8.1"
+pandas = "==2.2.3"
+scipy = "==1.15.3"
+opencv-python-headless = ">=4.5,<4.13"
+albumentations = "==1.4.18"
+tyro = "==0.9.17"
+omegaconf = "==2.3.0"
+peft = "==0.17.1"
+torchcodec = "==0.8.0"
+wandb = "==0.23.0"
+dm-tree = "*"
+huggingface-hub = { version = "*", extras = ["cli"] }
+tqdm = "*"
+imitation-experiments = { path = "./source/imitation_experiments", editable = true }
+# Direct wheel URL (cp312/cu12/torch2.9) mirrored from Isaac-GR00T's
+# [tool.uv.sources]; avoids a source build.
+flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }
+
+[feature.gr00t.tasks]
+test-gr00t-import = "python -c \"from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7ActionHead; from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config; from gr00t.model.modules.dit import DiT; print('gr00t head import: OK')\""
+smoke-gr00t-train = "python -m imitation_experiments.planner.train_gr00t_head --output_dir outputs/gr00t_head_smoke --preset debug --synthetic_rows 256 --num_updates 20 --batch_size 16 --log_interval 5 --checkpoint_interval 20"
+test-gr00t = "pytest -q source/imitation_experiments/tests/test_gr00t_head.py"
+
 [feature.static.dependencies]
 python = "3.12.*"
 ruff = "==0.12.12"
@@ -103,5 +172,7 @@ ci-static = { depends-on = ["lint-owned", "compile-owned"] }
 [environments]
 isaaclab = ["isaaclab"]
 lerobot = ["lerobot"]
+onnx-export = ["onnx-export"]
 isaaclab-lerobot = ["isaaclab", "lerobot"]
 static = { features = ["static"], no-default-feature = true }
+gr00t = { features = ["gr00t"], no-default-feature = true }
