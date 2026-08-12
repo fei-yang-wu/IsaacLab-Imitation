@@ -59,6 +59,16 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--ipmd_l2t_policy_role",
+    choices=("teacher", "student"),
+    default=None,
+    help=(
+        "Evaluate one role from a full IPMD-L2T checkpoint. 'teacher' uses the "
+        "privileged teacher policy; 'student' uses the deployable policy. This "
+        "requires --algo IPMD and the IPMD-L2T agent entry point."
+    ),
+)
+parser.add_argument(
     "--low_level_command_mode",
     choices=("native", "streamed_vanilla"),
     default="native",
@@ -262,6 +272,7 @@ from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipm
 )
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import IPMD, PPO, SAC
+from rlopt.agent.ipmd.ipmd_l2t import IPMDL2T
 from tensordict import TensorDict, TensorDictBase
 from tensordict.nn import InteractionType
 from torchrl.envs import Compose, RewardSum, StepCounter, TransformedEnv
@@ -1556,7 +1567,22 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         env.close()
         return
 
-    agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
+    l2t_policy_role = args_cli.ipmd_l2t_policy_role
+    if l2t_policy_role is not None:
+        if args_cli.algorithm != "IPMD":
+            raise ValueError("--ipmd_l2t_policy_role requires --algo IPMD.")
+        if not hasattr(agent_cfg, "ipmd_l2t"):
+            raise ValueError(
+                "--ipmd_l2t_policy_role requires an IPMD-L2T agent entry point."
+            )
+        if args_cli.policy_only_checkpoint:
+            raise ValueError(
+                "--ipmd_l2t_policy_role cannot be combined with "
+                "--policy_only_checkpoint."
+            )
+        agent_class = IPMDL2T
+    else:
+        agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
     print(f"[INFO] Loading checkpoint: {checkpoint_path}")
     tracker_provenance: dict[str, Any] | None = None
@@ -1574,7 +1600,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         tracker_provenance = frozen_tracker.provenance
     else:
         agent.load_model(str(checkpoint_path))
-        collector_policy = agent.collector_policy
+        if l2t_policy_role == "teacher":
+            collector_policy = agent.teacher_policy
+        elif l2t_policy_role == "student":
+            collector_policy = agent.deployment_policy
+        else:
+            collector_policy = agent.collector_policy
         collector_policy.eval()
 
     if args_cli.certify_streamed_vanilla_equivalence:
@@ -1915,6 +1946,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "label": args_cli.label,
             "task": args_cli.task,
             "algorithm": args_cli.algorithm,
+            "ipmd_l2t_policy_role": l2t_policy_role,
             "checkpoint": str(checkpoint_path),
             "motion_manifest": str(motion_manifest)
             if motion_manifest is not None
