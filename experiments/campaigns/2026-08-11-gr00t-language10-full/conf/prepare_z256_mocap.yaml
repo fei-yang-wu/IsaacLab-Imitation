@@ -1,0 +1,8 @@
+defaults:
+  - base_prepare
+  - _self_
+
+collection_dir: logs/gr00t_language10_mocap_z256/collection
+output: outputs/gr00t_language10/tables/z256_mocap_table.pt
+latent:
+  source: stored

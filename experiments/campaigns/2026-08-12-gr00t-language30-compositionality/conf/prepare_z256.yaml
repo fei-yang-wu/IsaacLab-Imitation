@@ -1,0 +1,8 @@
+defaults:
+  - base_prepare
+  - _self_
+
+collection_dir: logs/gr00t_language30_replay_z256/collection
+output: outputs/gr00t_language30/tables/z256_replay_table.pt
+latent:
+  source: stored

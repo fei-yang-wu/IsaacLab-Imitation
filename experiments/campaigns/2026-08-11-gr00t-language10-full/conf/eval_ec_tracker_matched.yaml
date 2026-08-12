@@ -1,0 +1,22 @@
+# Tracker-confound resolver: the SAME chunk-head checkpoints evaluated
+# through the fsq64_sonic tracker (the chunk head is interface-agnostic —
+# its root_qpos frames feed whichever encoder the bundle embeds). Compare
+# against the chunk rows of the main grid (rollout24_gamma097 tracker).
+defaults:
+  - eval_ec
+  - _self_
+
+output_root: logs/gr00t_language10_ec_eval/tracker_matched
+rtc_variants: [false]
+
+arms:
+  chunk_mocap_fsqtracker:
+    mode: chunk
+    bundle: logs/policy_bundles/fsq64_sonic_4500m
+    checkpoint: outputs/gr00t_language10/arms/chunk_mocap/checkpoints/update_0012000.pt
+  chunk_rollout_fsqtracker:
+    mode: chunk
+    bundle: logs/policy_bundles/fsq64_sonic_4500m
+    checkpoint: outputs/gr00t_language10/arms/chunk_rollout/checkpoints/update_0012000.pt
+
+only_arms: [chunk_mocap_fsqtracker, chunk_rollout_fsqtracker]

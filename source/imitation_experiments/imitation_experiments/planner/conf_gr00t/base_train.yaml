@@ -1,0 +1,44 @@
+# Base defaults for imitation_experiments.planner.train_gr00t_head.
+# Campaign configs compose on top: `defaults: [base_train, _self_]` plus a
+# `--config-dir <campaign>/conf` on the command line. Every path is config,
+# never a code pin.
+output_dir: ???
+preset: n17 # debug | n17
+target: chunk # chunk | latent
+data:
+  table: null # table from prepare_gr00t_dataset.py
+  state_field: oracle_rollout_state_history # or demonstration_state_history
+  synthetic_rows: 0 # >0 replaces the table with random rows (pipeline smoke)
+  synthetic_horizon: 30
+  synthetic_action_dim: 38
+goal_features: null # Cosmos goal-feature cache (cache_gr00t_goal_features.py)
+pretrained_bundle: null # trunk bundle for the warm start; null = from scratch
+stage_a_updates: 0 # 0 = GR00T's conforming recipe (projectors + DiT together)
+# Optimization defaults mirror Isaac-GR00T's finetune recipe at the pinned
+# commit (gr00t/configs/{finetune_config,training/training_config}.py):
+# AdamW(fused) lr 1e-4, wd 1e-5, cosine schedule with warmup_ratio 0.05,
+# grad clip 1.0, batch 64, bf16 + tf32, no EMA.
+optim:
+  num_updates: 12000
+  batch_size: 64
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  grad_clip: 1.0
+  lr_schedule: cosine # cosine | constant
+  warmup_ratio: 0.05
+model:
+  state_dropout_prob: 0.2 # GR00T finetune default; also forces language reliance
+  gradient_checkpointing: true
+  num_inference_timesteps: 4
+run:
+  seed: 0
+  device: cuda
+  bf16: true
+  log_interval: 50
+  checkpoint_interval: 1000
+wandb:
+  enabled: true
+  project: g1-lafan1
+  group: gr00t-language10-full
+  name: null
+  tags: []

@@ -69,13 +69,21 @@ def main() -> None:
     goal_names = list(goal_table["goal_names"])
     if args.goal not in goal_names:
         raise SystemExit(f"goal {args.goal!r} not in {goal_names}")
-    goal_index = goal_names.index(args.goal)
-    features = goal_table["features"][goal_index : goal_index + 1].to(device, dtype)
-    feature_mask = goal_table["attention_mask"][goal_index : goal_index + 1].to(device)
+
+    def goal_slice(name: str) -> tuple[torch.Tensor, torch.Tensor]:
+        index = goal_names.index(name)
+        return (
+            goal_table["features"][index : index + 1].to(device, dtype),
+            goal_table["attention_mask"][index : index + 1].to(device),
+        )
+
+    active_goal = args.goal
+    features, feature_mask = goal_slice(active_goal)
 
     config = build_g1_head_config(
         trunk=checkpoint["trunk_config"],
         action_horizon=int(checkpoint["action_horizon"]),
+        max_action_dim=int(checkpoint.get("action_dim", 38)),
         state_dropout_prob=0.0,
     )
     _, head_cls = import_head_classes()
@@ -95,22 +103,24 @@ def main() -> None:
     # Warm both inference paths (plain and RTC) before declaring readiness so
     # the first real request does not pay compile/allocator latency.
     horizon = int(checkpoint["action_horizon"])
-    if not 0 < args.window_frames <= horizon:
-        raise SystemExit(
-            f"window frames must be in [1, {horizon}], got {args.window_frames}"
-        )
+    action_dim = int(checkpoint.get("action_dim", 38))
+    # Latent heads have short horizons (e.g. 3 slots); the window option only
+    # matters for chunk heads whose frames feed a tracker-side encoder.
+    args.window_frames = min(int(args.window_frames), horizon)
+    if args.window_frames < 1:
+        raise SystemExit(f"window frames must be >= 1, got {args.window_frames}")
     warm_state = torch.zeros(1, STATE_HISTORY, STATE_WIDTH, device=device, dtype=dtype)
     for warm_rtc in (False, True):
         warm_action = None
         warm_mask = None
         warm_options = None
         if warm_rtc:
-            warm_action = torch.zeros(1, horizon, 38, device=device, dtype=dtype)
+            warm_action = torch.zeros(1, horizon, action_dim, device=device, dtype=dtype)
             warm_mask = torch.ones(1, horizon, dtype=torch.bool, device=device)
             warm_options = {
                 "action_horizon": horizon,
-                "rtc_overlap_steps": horizon - WINDOW_FRAMES - 1,
-                "rtc_frozen_steps": 4,
+                "rtc_overlap_steps": max(horizon - 2, 0),
+                "rtc_frozen_steps": min(4, max(horizon - 2, 0)),
                 "rtc_ramp_rate": 5.0,
             }
         warm_backbone, warm_input = build_batch(
@@ -133,7 +143,8 @@ def main() -> None:
                 "goal": args.goal,
                 "state_history": STATE_HISTORY,
                 "state_width": STATE_WIDTH,
-                "action_width": 38,
+                "action_width": action_dim,
+                "target_mode": checkpoint.get("target_mode"),
                 "window_frames": args.window_frames,
                 "params_m": round(
                     sum(v.numel() for v in checkpoint["head_state_dict"].values()) / 1e6
@@ -162,22 +173,37 @@ def main() -> None:
         if request.get("prev_chunk") is not None:
             # Real-time chunking: seed the overlap with the previous chunk's
             # tail, freeze the slots covering the inference latency, ramp the
-            # rest (gr00t_n1d7.py:356-395 semantics). Chunks start one frame
-            # AFTER their request state, so with renewal every `hold` ticks
-            # the new chunk's frame 0 aligns with the previous chunk's frame
-            # `hold + 1`: overlap = horizon - hold - 1, seeded from the tail.
+            # rest (gr00t_n1d7.py:356-395 semantics). The caller states the
+            # overlap explicitly via "rtc_overlap_steps" (frame/slot 0 of a
+            # prediction aligns WITH its request state for the 2026-08-11
+            # heads, so re-requesting after `h` consumed steps overlaps
+            # `horizon - h`). The legacy derivation `horizon - hold - 1`
+            # remains the fallback for old callers.
             prev = torch.tensor(request["prev_chunk"], dtype=torch.float32).reshape(
                 1, horizon, -1
             )
             action = normalize_minmax(prev, action_q01, action_q99).to(device, dtype)
             action_mask = torch.ones(1, horizon, dtype=torch.bool, device=device)
             hold = int(request.get("hold_steps", 10))
+            overlap = int(request.get("rtc_overlap_steps", horizon - hold - 1))
             options = {
                 "action_horizon": horizon,
-                "rtc_overlap_steps": horizon - hold - 1,
+                "rtc_overlap_steps": overlap,
                 "rtc_frozen_steps": int(request.get("freeze_steps", 0)),
                 "rtc_ramp_rate": float(request.get("rtc_ramp_rate", 5.0)),
             }
+        # Per-request goal switch: a "goal" key re-selects the cached Cosmos
+        # features so one service can chain language goals inside an episode.
+        requested_goal = request.get("goal")
+        if requested_goal is not None and requested_goal != active_goal:
+            if requested_goal not in goal_names:
+                print(
+                    json.dumps({"error": f"unknown goal {requested_goal!r}"}),
+                    flush=True,
+                )
+                continue
+            active_goal = requested_goal
+            features, feature_mask = goal_slice(active_goal)
         backbone_output, action_input = build_batch(
             state=state,
             action=action,

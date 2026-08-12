@@ -144,6 +144,7 @@ opencv-python-headless = ">=4.5,<4.13"
 albumentations = "==1.4.18"
 tyro = "==0.9.17"
 omegaconf = "==2.3.0"
+hydra-core = "==1.3.2"
 peft = "==0.17.1"
 torchcodec = "==0.8.0"
 wandb = "==0.23.0"
@@ -157,7 +158,7 @@ flash-attn = { url = "https://github.com/Dao-AILab/flash-attention/releases/down
 
 [feature.gr00t.tasks]
 test-gr00t-import = "python -c \"from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7ActionHead; from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config; from gr00t.model.modules.dit import DiT; print('gr00t head import: OK')\""
-smoke-gr00t-train = "python -m imitation_experiments.planner.train_gr00t_head --output_dir outputs/gr00t_head_smoke --preset debug --synthetic_rows 256 --num_updates 20 --batch_size 16 --log_interval 5 --checkpoint_interval 20"
+smoke-gr00t-train = "python -m imitation_experiments.planner.train_gr00t_head output_dir=outputs/gr00t_head_smoke preset=debug data.synthetic_rows=256 optim.num_updates=20 optim.batch_size=16 run.log_interval=5 run.checkpoint_interval=20 wandb.enabled=false"
 test-gr00t = "pytest -q source/imitation_experiments/tests/test_gr00t_head.py"
 
 [feature.static.dependencies]

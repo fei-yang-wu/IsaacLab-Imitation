@@ -1,0 +1,18 @@
+# Base defaults for imitation_experiments.planner.prepare_gr00t_dataset.
+collection_dir: ??? # dir with rollout_training_samples/*.pt (+ summary.json)
+output: ??? # consolidated training table (.pt)
+latent:
+  slots: 3 # consecutive publications the head predicts
+  hold_steps: 10 # control steps between publications
+  source: stored # stored (z256: join stored z_target) | fsq_prequant
+  encoder_checkpoint: null # skill checkpoint, required for fsq_prequant
+  # Cross-encoder re-encoding: when set, targets come from `encoder_checkpoint`
+  # while the collection's OWN encoder (this one) proves the window layout.
+  # Use only when the stored z_target came from a different encoder.
+  layout_check_encoder: null
+chunk:
+  horizon: 30
+state_fields:
+  - oracle_rollout_state_history
+  - demonstration_state_history
+require_distinct_demonstration: false # true for mocap (expert-state) collections

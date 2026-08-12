@@ -1,0 +1,8 @@
+defaults:
+  - base_prepare
+  - _self_
+
+collection_dir: logs/bones_language10_oracle_pretrain_seed0/collection
+output: outputs/gr00t_language10/tables/z256_rollout_table.pt
+latent:
+  source: stored
