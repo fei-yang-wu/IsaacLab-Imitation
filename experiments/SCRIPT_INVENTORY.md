@@ -236,3 +236,6 @@ test now enforces that every `experiments/` script is classified.
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_latent_budget_curve_ice.sh` | guarded launcher | Submits the latent budget curve to ICE. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_pure_root_qpos_planner_ice.sh` | guarded launcher | Submits the pure root+qpos planner variant to ICE. |
 | `experiments/campaigns/2026-07-23-lafan1-planner-capacity/submit_auxiliary_capacity_seed0_ice.sh` | guarded launcher | Submits the auxiliary seed-0 capacity cells to ICE. |
+| `experiments/campaigns/2026-08-09-bones129k-l2t/run.sh` | guarded launcher | Smokes, validates, and submits the full BONES-SEED privileged-teacher/latent-student L2T run to ICE. |
+| `experiments/campaigns/2026-08-09-bones129k-recent-local-eval/run.sh` | qualification | Evaluates seven recent finished ICE low-level trackers on the selected ten motions and the fixed 4,096-motion SONIC rank block. |
+| `experiments/campaigns/2026-08-09-bones129k-recent-local-eval/run_sonic_v1_1.sh` | qualification | Runs NVIDIA's public SONIC v1.1 tracker on the same fixed 4,096-motion SONIC rank block and validates its native actor contract. |

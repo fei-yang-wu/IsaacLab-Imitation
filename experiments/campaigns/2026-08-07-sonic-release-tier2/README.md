@@ -215,7 +215,13 @@ root-relative tracking error on this subset.
 | `sonic_release/last.pt`, matched selected-ten | 1.000 (100/100) | 23.53 mm | 99.94 mm | 0.0968 m |
 | `sonic_v1_1/last.pt`, seed-0 selected-ten | **1.000** (100/100) | **21.17 mm** | 100.99 mm | 0.0988 m |
 
-This is a selected-ten reproduction update only. 
+The follow-up canonical 4,096-motion run pins ranks 12288 through 16383, with
+rank SHA-256
+`786ef6775930c34179b774cb215e233c3f7b2bb32ef46bb6fc660206324e8285`.
+SONIC v1.1 completes 4,073/4,096 motions (SR 0.9944) at 26.96 mm success-only
+MPJPE-L. The original release completed 4,070/4,096 at 28.65 mm on the same
+block. The v1.1 result is under
+`logs/bones129k_recent_ice_local_eval/scoreboard4096/sonic_v1_1/`.
 
 ### Matched comparison against our own tracker
 
