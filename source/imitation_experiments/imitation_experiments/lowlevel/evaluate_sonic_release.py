@@ -89,12 +89,15 @@ parser.add_argument(
 )
 parser.add_argument(
     "--termination_contract",
-    choices=("sonic", "task"),
+    choices=("sonic", "task", "fall_only"),
     default="sonic",
     help=(
         "Termination contract for reportable release scores. 'sonic' applies "
         "SONIC's released thresholds and disables foot_pos_xyz/base_too_low. "
-        "'task' keeps the task config and is for diagnostics only."
+        "'fall_only' is the M3 planner contract: every tracking termination "
+        "off, `base_too_low` the only failure, so surviving means not falling "
+        "and tracking error stays a continuous metric. 'task' keeps the task "
+        "config and is for diagnostics only."
     ),
 )
 parser.add_argument(
@@ -167,8 +170,82 @@ parser.add_argument(
         "action, and the resulting joint state for this many steps."
     ),
 )
+parser.add_argument(
+    "--save_rollout_training_samples",
+    action="store_true",
+    default=False,
+    help=(
+        "Write planner training rows to <output_dir>/rollout_training_samples. "
+        "One row per environment per CONTROL STEP, not per publication: the "
+        "released tracker re-encodes its token every 50 Hz step, so a planner "
+        "that replaces the encoder has to supply one latent per step too."
+    ),
+)
+parser.add_argument(
+    "--sample_output_dir",
+    type=Path,
+    default=None,
+    help="Collection root. Required with --save_rollout_training_samples.",
+)
+parser.add_argument("--sample_rows_per_file", type=int, default=8192)
+parser.add_argument(
+    "--sample_future_window_frames",
+    type=int,
+    default=0,
+    help=(
+        "Store this many frames of expert `root_qpos` lookahead per row. Zero "
+        "omits it, which is right for a SONIC-latent target. Set 30 to make "
+        "the collection re-encodable through OUR encoders."
+    ),
+)
+parser.add_argument(
+    "--sample_target",
+    choices=("pre_quantization", "post_quantization"),
+    default="pre_quantization",
+    help=(
+        "Which SONIC latent becomes `z_target`. 'pre_quantization' is the "
+        "continuous encoder output before the FSQ lattice snap; the consumer "
+        "snaps at publication, so the deployed value is identical while the "
+        "regression target stays continuous. 'post_quantization' regresses the "
+        "snapped lattice value directly."
+    ),
+)
+parser.add_argument("--state_history_steps", type=int, default=9)
+parser.add_argument(
+    "--gr00t_checkpoint",
+    type=Path,
+    default=None,
+    help=(
+        "Latent GR00T action head that REPLACES the SONIC encoder. The tracker "
+        "decoder is unchanged; only the source of its 64-D token changes, from "
+        "the reference-driven encoder to the planner's causal prediction."
+    ),
+)
+parser.add_argument("--gr00t_goal_features", type=Path, default=None)
+parser.add_argument(
+    "--gr00t_goals_per_env",
+    type=str,
+    nargs="+",
+    default=None,
+    help=(
+        "One language goal per environment, in environment order. The rank "
+        "assignment blocks environments by motion, so this list must be blocked "
+        "the same way; the binding is asserted against the live motion names."
+    ),
+)
+parser.add_argument(
+    "--gr00t_publish_interval",
+    type=int,
+    default=10,
+    help=(
+        "Control steps between planner publications. The head predicts a "
+        "30-latent horizon; only the first `interval` slots are consumed."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+if args_cli.save_rollout_training_samples and args_cli.sample_output_dir is None:
+    parser.error("--save_rollout_training_samples requires --sample_output_dir")
 if args_cli.video:
     # Rendering needs the camera pipeline; asking for a video without it
     # produces blank frames rather than an error.
@@ -185,6 +262,13 @@ import torch
 from isaaclab.utils import math as math_utils
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
+from imitation_experiments.data.planner_sample_schema import (
+    PAIRED_TARGET_CONTRACT,
+    PLANNER_SAMPLE_FORMAT,
+    PLANNER_SAMPLE_VERSION,
+    PlannerSampleWriter,
+    build_planner_sample,
+)
 from imitation_experiments.lowlevel.sonic_release_actor import (
     ENCODER_FRAMES,
     heading_relative_rot6d_from_full_relative,
@@ -331,6 +415,48 @@ def _apply_sonic_success_terminations(env_cfg: Any) -> dict[str, Any]:
             setattr(terminations, term_name, None)
         applied["disabled"].append(term_name)
     return applied
+
+
+FALL_ONLY_DISABLED_TERMINATIONS = (
+    "anchor_pos",
+    "anchor_ori",
+    "ee_body_pos",
+    "foot_pos_xyz",
+)
+
+
+def _apply_fall_only_terminations(env_cfg: Any) -> dict[str, Any]:
+    """M3 planner contract: falling is the only failure.
+
+    Every tracking-error termination is removed and `base_too_low` is required
+    to be present, so `success` means "finished the reference without falling"
+    and tracking error is reported as a continuous metric rather than deciding
+    the episode. This is the contract the 30-motion planner arms are scored
+    under; SONIC's own contract does the opposite (tracking thresholds on,
+    `base_too_low` off), so the two are not comparable without this mode.
+    """
+    terminations = getattr(env_cfg, "terminations", None)
+    if terminations is None:
+        raise RuntimeError("env_cfg has no terminations group.")
+    disabled: list[str] = []
+    for term_name in FALL_ONLY_DISABLED_TERMINATIONS:
+        if getattr(terminations, term_name, None) is not None:
+            setattr(terminations, term_name, None)
+            disabled.append(term_name)
+    if getattr(terminations, "base_too_low", None) is None:
+        # The v2 task ships with `base_too_low = None` (a fall is not a
+        # transient there), so the M3 contract restores the repository's
+        # standard detector rather than leaving the run with no failure term.
+        from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.terminations import (  # noqa: PLC0415,E501
+            G1TerminationsCfg,
+        )
+
+        terminations.base_too_low = G1TerminationsCfg().base_too_low
+    return {
+        "mode": "fall_only",
+        "disabled": disabled,
+        "failure_terms": ["base_too_low"],
+    }
 
 
 def _describe_task_termination_contract(env_cfg: Any) -> dict[str, Any]:
@@ -750,6 +876,8 @@ def main(env_cfg, agent_cfg):
         termination_contract = {"mode": "disabled"}
     elif args_cli.termination_contract == "sonic":
         termination_contract = _apply_sonic_success_terminations(env_cfg)
+    elif args_cli.termination_contract == "fall_only":
+        termination_contract = _apply_fall_only_terminations(env_cfg)
     else:
         termination_contract = _describe_task_termination_contract(env_cfg)
         print(
@@ -887,6 +1015,108 @@ def main(env_cfg, agent_cfg):
         flush=True,
     )
 
+    sample_writer: PlannerSampleWriter | None = None
+    sample_metadata: dict[str, Any] = {}
+    sample_motion_names: list[str] = []
+    state_history_steps = int(args_cli.state_history_steps)
+    sample_future_frames = int(args_cli.sample_future_window_frames)
+    episode_ids = torch.zeros(base_env.num_envs, dtype=torch.long)
+    if bool(args_cli.save_rollout_training_samples):
+        collection_root = Path(args_cli.sample_output_dir)
+        if collection_root.exists():
+            raise FileExistsError(f"Refusing to overwrite {collection_root}.")
+        sample_writer = PlannerSampleWriter(
+            collection_root / "rollout_training_samples",
+            rows_per_file=int(args_cli.sample_rows_per_file),
+        )
+        # Rank order is pinned for the whole run by `--trajectory_ranks`, so the
+        # per-environment motion name is a constant. It is still read from the
+        # live manager rather than assumed, because without pinned ranks the
+        # sequential schedule reassigns a motion on every reset.
+        rank_names = [str(name) for name in base_env.expert_trajectory_motion_names()]
+        sample_motion_names = [
+            rank_names[rank] if 0 <= rank < len(rank_names) else str(rank)
+            for rank in trajectory_ranks
+        ]
+        sample_metadata = {
+            "sample_format": {
+                "name": PLANNER_SAMPLE_FORMAT,
+                "version": PLANNER_SAMPLE_VERSION,
+            },
+            "paired_target_contract": PAIRED_TARGET_CONTRACT,
+            "planner_observation_spec": base_env.causal_planner_observation_spec(
+                history_steps=state_history_steps
+            ),
+            "state_history_steps": state_history_steps,
+            # One row per control step, so a downstream `hold_steps: 1` join
+            # yields consecutive 50 Hz latents rather than 5 Hz publications.
+            "collection_unit": "control_step_row",
+            "planner_rate_hz": 50.0,
+            "planner_state_source": (
+                "causal_robot_history_during_sonic_release_oracle_rollout"
+            ),
+            "target_encoding": {"kind": "continuous"},
+            "latent_interface": {
+                "producer": "sonic_release_g1_encoder",
+                "sonic_version": str(sonic_version),
+                "token_dim": int(actor.spec.token_dim),
+                "target": str(args_cli.sample_target),
+                "fsq_levels": 32,
+                "max_num_tokens": 2,
+                "hold_steps": 1,
+                "encoder_frames": int(actor.spec.encoder_frames),
+                "encoder_frame_stride": 5,
+            },
+            "sonic_checkpoint": str(checkpoint),
+            "sonic_checkpoint_sha256": hashlib.sha256(
+                checkpoint.read_bytes()
+            ).hexdigest(),
+            "reference_start_frame": int(args_cli.reference_start_frame),
+            "randomization": str(args_cli.randomization),
+            "seed": int(args_cli.seed),
+        }
+
+    planner: Any | None = None
+    planner_record: dict[str, Any] = {}
+    if args_cli.gr00t_checkpoint is not None:
+        if args_cli.gr00t_goal_features is None or args_cli.gr00t_goals_per_env is None:
+            raise ValueError(
+                "--gr00t_checkpoint needs --gr00t_goal_features and "
+                "--gr00t_goals_per_env."
+            )
+        from imitation_experiments.planner.gr00t_isaac_sampler import (  # noqa: PLC0415
+            Gr00tSkillCommandSampler,
+        )
+
+        class _StandalonePlanner(Gr00tSkillCommandSampler):
+            """The mixin's `gr00t_*` methods need no sampler base state."""
+
+        planner = _StandalonePlanner()
+        planner_record = planner.configure_gr00t(
+            checkpoint_path=args_cli.gr00t_checkpoint,
+            goal_features_path=args_cli.gr00t_goal_features,
+            goal_name=list(args_cli.gr00t_goals_per_env),
+            num_envs=int(base_env.num_envs),
+            consumption="open_loop",
+            # SONIC's lattice: 32 levels per coordinate, half width 16. The head
+            # regresses the continuous pre-quantization value, so the snap here
+            # is what makes the published token identical to one the encoder
+            # could have produced.
+            fsq_half_levels=torch.tensor(16.0),
+            device=device,
+            expected_target_mode="latent",
+            consume_slots=int(args_cli.gr00t_publish_interval),
+        )
+        rank_names = [str(name) for name in base_env.expert_trajectory_motion_names()]
+        planner.gr00t_assert_goal_matches(
+            torch.arange(base_env.num_envs, device=device),
+            [
+                rank_names[rank] if 0 <= rank < len(rank_names) else str(rank)
+                for rank in trajectory_ranks
+            ],
+        )
+        print(f"[PLANNER] {planner_record}", flush=True)
+
     survived = torch.zeros(base_env.num_envs, dtype=torch.long, device=device)
     done_once = torch.zeros(base_env.num_envs, dtype=torch.bool, device=device)
     termination_causes: dict[str, int] = {}
@@ -934,7 +1164,21 @@ def main(env_cfg, agent_cfg):
             )
             # The decoder emits joint targets in SONIC's order; the action term
             # indexes them in its own.
-            action = actor(window, proprioception).index_select(
+            if planner is None:
+                token = actor.encode(window)
+            else:
+                # Same decoder, same proprioception: the ONLY difference from
+                # the oracle row above is where the 64-D token comes from, so a
+                # score gap is attributable to the planner and nothing else.
+                token = planner.gr00t_z(
+                    base_env.current_causal_planner_observation(
+                        history_steps=state_history_steps
+                    )
+                    .get(("planner", "state_history"))
+                    .flatten(1),
+                    torch.arange(base_env.num_envs, device=device),
+                )
+            action = actor.decode(token, proprioception).index_select(
                 -1, orders.sonic_to_action
             )
             action = action.clamp(
@@ -979,9 +1223,102 @@ def main(env_cfg, agent_cfg):
                     flush=True,
                 )
 
+            if sample_writer is not None:
+                # Written from the PRE-step state, so the row's history and its
+                # latent describe the same instant the tracker acted on.
+                if args_cli.sample_target == "pre_quantization":
+                    # The BOUNDED, lattice-scaled value, not the raw encoder
+                    # output: `FSQ.snap` expects an already-normalized code, so
+                    # this is the continuous quantity whose only difference
+                    # from the deployed token is the rounding. The raw output
+                    # is unbounded and saturates through `tanh`, which would
+                    # put the regression target on a different scale.
+                    quantizer = actor.quantizer
+                    latent = (
+                        quantizer.bound(actor.encode_pre_quantization(window))
+                        / quantizer.half_width
+                    )
+                else:
+                    latent = actor.encode(window)
+                latent = latent.to(dtype=torch.float32)
+                causal_history = base_env.current_causal_planner_observation(
+                    history_steps=state_history_steps
+                ).get(("planner", "state_history"))
+                # `episode_length_buf` is read before `step`, so it is the
+                # episode-local index of the state just observed and advances by
+                # exactly one per row. `_join_slots` needs that to find slot k at
+                # `control_step + k`, and needs the key to stay unique: the reset
+                # inside `step` returns the counter to 0 while `episode_id`
+                # increments below, so the pair never repeats.
+                control_step = base_env.episode_length_buf.detach().cpu().reshape(-1)
+                row = build_planner_sample(
+                    causal_state_history=causal_history,
+                    demonstration_state_history=causal_history,
+                    causal_target=latent,
+                    demonstration_target=latent,
+                    trajectory_rank=torch.as_tensor(trajectory_ranks),
+                    # Cloned, not passed by reference: the writer buffers rows
+                    # until a flush, and the in-place `episode_ids += done`
+                    # below would otherwise rewrite the episode number of every
+                    # row still in the buffer.
+                    episode_id=episode_ids.clone(),
+                    env_id=torch.arange(base_env.num_envs),
+                    control_step=control_step,
+                    planner_step=control_step,
+                    motion_names=sample_motion_names,
+                    metadata=sample_metadata,
+                )
+                row["z_target"] = row["causal_target"]
+                row["latent_skill_target"] = row["causal_target"]
+                row["oracle_rollout_state_history"] = row["planner_state"]
+                if sample_future_frames > 0:
+                    # The 30-frame expert `root_qpos` lookahead, so OUR
+                    # encoders can be applied to a SONIC-driven rollout
+                    # offline. Without it the collection can only ever train a
+                    # SONIC-latent head.
+                    expert = base_env.current_expert_macro_transition_batch(
+                        horizon_steps=sample_future_frames
+                    )
+                    expert_state = expert.get(("hl", "state")).float()
+                    if int(expert_state.shape[-1]) != 38:
+                        raise ValueError(
+                            "--sample_future_window_frames needs a 38-D "
+                            f"root_qpos macro state, got {int(expert_state.shape[-1])}."
+                        )
+                    window = expert.get(("hl", "future_window")).float()
+                    row["expert_root_qpos_future"] = (
+                        torch.cat(
+                            [
+                                expert_state.unsqueeze(1),
+                                window[:, : sample_future_frames - 1],
+                            ],
+                            dim=1,
+                        )
+                        .detach()
+                        .cpu()
+                        .contiguous()
+                    )
+                    offsets = torch.arange(
+                        sample_future_frames, device=device, dtype=torch.long
+                    ).unsqueeze(0)
+                    local = expert.get(("hl", "local_step")).long().reshape(-1, 1)
+                    length = (
+                        expert.get(("hl", "trajectory_length")).long().reshape(-1, 1)
+                    )
+                    row["expert_root_qpos_future_valid"] = (
+                        (local + offsets < length).detach().cpu().contiguous()
+                    )
+                sample_writer.add(row)
+
             observations, _, terminated, truncated, _ = env.step(action)
             steps_run += 1
             done = terminated | truncated
+            episode_ids += done.detach().cpu().long()
+            if planner is not None and bool(done.any()):
+                # A reset environment must re-plan from its own fresh state
+                # rather than keep consuming slots predicted for the pose it
+                # had before the reset.
+                planner.gr00t_reset(done.nonzero(as_tuple=False).reshape(-1))
             survived += (~done_once).long()
 
             newly_done = done & ~done_once
@@ -1018,6 +1355,19 @@ def main(env_cfg, agent_cfg):
             done_once |= done
             if bool(done_once.all()):
                 break
+
+    collection: dict[str, Any] = {}
+    if sample_writer is not None:
+        sample_writer.flush()
+        collection = {
+            "root": str(Path(args_cli.sample_output_dir)),
+            "rows": int(sample_writer.row_count),
+            "files": int(sample_writer.file_count),
+            "rows_per_file": int(args_cli.sample_rows_per_file),
+            "target": str(args_cli.sample_target),
+            "collection_unit": "control_step_row",
+        }
+        print(f"[COLLECT] {collection}", flush=True)
 
     unfinished = (~done_once).cpu()
     for name, value in carried_metrics.items():
@@ -1099,6 +1449,10 @@ def main(env_cfg, agent_cfg):
         "seed": int(args_cli.seed),
         "randomization_profile": str(args_cli.randomization),
         "randomization_kept": randomization_kept,
+        "collection": collection,
+        "planner": (
+            {**planner_record, **planner.gr00t_stats()} if planner is not None else {}
+        ),
         "metadata": {
             "label": str(args_cli.label),
             "task": str(args_cli.task),

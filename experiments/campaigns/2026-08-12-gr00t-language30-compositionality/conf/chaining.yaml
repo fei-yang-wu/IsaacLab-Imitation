@@ -1,0 +1,38 @@
+# Can motions be chained through language alone?
+#
+# Each pair runs twice: a control that keeps goal A for the whole episode, and
+# a switch run that moves to goal B at `switch_tick`. Everything else is
+# identical, so post-switch divergence is attributable to the language change.
+#
+# Arm: fsq64_rollout — the only arm top-two in BOTH Isaac and EC, so a null
+# result here is least likely to be an artifact of a weak planner.
+ec_repo: external/Embodied-Control
+pixi_bin: /home/fwu91/Storage/.pixi/bin/pixi
+mjcf: source/isaaclab_imitation/isaaclab_imitation/assets/unitree/g1_description/g1_29dof_rev_1_0.xml
+goal_features: outputs/gr00t_language30/goal_features/goal_features.pt
+output_root: logs/gr00t_language30_chaining/v1
+
+arm:
+  mode: latent
+  bundle: logs/policy_bundles/fsq64_sonic_4500m
+  checkpoint: outputs/gr00t_language30/arms/fsq64_rollout/checkpoints/update_0012000.pt
+
+hold_steps: 10
+slots: 3
+max_steps: 600
+switch_tick: 300 # 6 s in at 50 Hz
+seed: 0
+head_seed: 0 # pins the flow sampler so the two runs match pre-switch
+min_base_height_m: 0.4
+timeout_s: 1800
+
+# Ordered pairs chosen for compositional plausibility: a locomotion or idle
+# state first, then a distinct whole-body action.
+pairs:
+  - [walk_ff_loop_180_R_slow_001_A443, casual_greeting_R_001_A428]
+  - [crossed_arms_idle_R_001_A456, jump_around_001_A492]
+  - [Neutral_stoop_down_001_A057, walk_arc_cw_start_R_slow_001_A443]
+  - [hurry_idle_001_A277, surrender_stop_R_001_A468]
+
+# Render all three runs of a pair so the switch can be judged visually.
+record_video: false

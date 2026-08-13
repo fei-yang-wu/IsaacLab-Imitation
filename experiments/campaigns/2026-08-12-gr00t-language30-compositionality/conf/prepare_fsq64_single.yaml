@@ -1,0 +1,12 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# Phase 4: one motion only. Reuses the hold-10 rollout collection; the
+# single-motion filter happens at train time via the goal list, so no new
+# simulation is needed.
+collection_dir: logs/gr00t_language30_rollout_fsq64/collection
+output: outputs/gr00t_language30/tables/fsq64_rollout_table.pt
+latent:
+  source: fsq_prequant
+  encoder_checkpoint: logs/bones129k_sonic_fsq_scale_eval/encoders/fsq64_scaled.pt

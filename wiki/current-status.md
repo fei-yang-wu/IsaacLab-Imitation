@@ -26,6 +26,20 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## GR00T language planner — best result to date (2026-08-13)
+
+`fsq64_scaled28` with exponential temporal ensembling: **46.95 mm MPJPE-L /
+0.998 fall-free** over 28 motions x 20 episodes, fall-only + Newton +
+2000-step cap. Level with the released NVIDIA SONIC v1.1 planner on its own
+tracker (46.33 / 1.000); the 0.6 mm gap is inside evaluation noise.
+
+This is the current baseline for planner iteration. Recipe, the refuted
+alternatives (hold 1, single-motion training, sample averaging), the two
+tracker-limited motions excluded from the set, and the blocked SONIC-data
+cross are recorded in
+[`progress-report.md`](progress-report.md) section 2 and in
+`experiments/campaigns/2026-08-12-gr00t-language30-compositionality/PLAN.md`.
+
 ## Default BONES-129k H200 training recipe (2026-08-05)
 
 The default single-H200 BONES-SEED 129k controller geometry is now **16,384

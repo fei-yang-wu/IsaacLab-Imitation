@@ -12,7 +12,7 @@ job chronology, and incident history stay in
 documents. Update this page whenever a campaign produces or invalidates a
 result, and stamp the section with the verification date.
 
-Last updated: 2026-07-30.
+Last updated: 2026-08-13.
 
 ---
 
@@ -194,6 +194,82 @@ tracker is the low-level ceiling, not a row.
   rows per goal. A latent-only, `preliminary_unqualified=true` H200 pilot
   chain was submitted 2026-07-23 (jobs `3560697`-`3560701`); it cannot enter
   the paper aggregate.
+
+### Language-conditioned GR00T planner, best result to date (2026-08-13)
+
+The strongest planner we have on our own tracker, and the reference point for
+further iteration. Protocol: M3 fall-only termination, `physics=newton_mjwarp`,
+28 motions x 20 episodes = 560 episodes, 2000-step cap (`done_rate` 1.000),
+root-relative MPJPE-L.
+
+| arm | latent | ensemble | MPJPE-L | fall-free |
+| --- | --- | --- | ---: | ---: |
+| **fsq64 scaled** | discrete 64-D | **exponential 0.5** | **46.95 mm** | **0.998** |
+| fsq64 scaled | discrete 64-D | none | 48.79 mm | 0.986 |
+| z256 scaled | continuous 256-D | exponential 0.5 | 49.88 mm | 0.986 |
+| z256 scaled | continuous 256-D | none | 52.42 mm | 0.945 |
+| NVIDIA SONIC v1.1 planner (its own tracker) | discrete 64-D | its own | 46.33 mm | 1.000 |
+
+Oracle ceilings under the same protocol: fsq64 tracker 22.06 mm / 0.947,
+z256 tracker 22.57 mm / 0.960 (hold 10). The released SONIC tracker's oracle
+is 25.41 mm / 1.000 — WORSE than ours, so its planner advantage is not
+inherited from the low level.
+
+Recipe of the best arm: verbatim GR00T N1.7 action head, 12k updates, batch
+64, warm-started trunk; 889,044 training rows (2 seeds x 896 environments,
+one row per control step) from oracle-latent rollouts driven by the fsq64
+tracker; `state_dropout_prob` 0; 3 latents held 10 control steps each;
+FSQ pre-quantization target snapped at publication; exponential temporal
+ensembling with decay 0.5 over the head's overlapping predictions.
+
+**Discrete beats continuous.** Matched pair (889,044 vs 889,006 rows, same
+motions, seeds, and budget): fsq64 is 6.2% better than z256 with ensembling
+and 7.4% without, on both axes. Per motion, fsq64 better on 9, level on 17,
+z256 better on 2. Caveat: the two interfaces are welded to different trackers
+whose ceilings differ by 0.5 mm, so a small part of the gap is tracker.
+
+**What moved the number** (from 59.21 mm / 0.940 on 30 motions):
+
+- Excluding two motions whose ORACLE falls 4/5 (`panic_run_away_180`,
+  `walk_big_dog_ff_225_stop`, ranks 22 and 28). They carried 33 of 36 falls.
+  On those two the TRACKER is the bottleneck and no planner can help.
+- 6.3x more training rows (141k -> 889k): -6.6% MPJPE.
+- `state_dropout_prob` 0.2 -> 0: -4.7%.
+- Exponential temporal ensembling: -3.8% MPJPE and survival 0.986 -> 0.998.
+
+**Hold 1 is NOT refuted as an interface — only as a drop-in.** The planner at
+hold 1 scored 85.77 mm, 46% worse than hold 10, and worse at 12k than at 8k
+updates. That test is confounded: our tracker was trained with latents held 10
+steps and carries a 2-wide `sin_cos` phase channel (`code_period=10`) that
+pins to slot 0 at hold 1, so a per-step stream of predicted latents is
+off-distribution for it in a way it never is for SONIC's tracker, which was
+TRAINED at hold 1 with no phase channel. The oracle tolerates hold 1 fine
+(24.19 vs 22.06 mm, better survival), which is consistent with either reading:
+the tracker accepts CORRECT per-step latents but not PREDICTED ones. Settling
+it needs a tracker retrained at hold 1, preferably without the phase channel,
+and then a planner retrained against it — a low-level change this campaign did
+not scope. Treat hold 1 as untested at the interface level.
+
+**Refuted, do not retry without new evidence** (clean tests: same tracker,
+same protocol, only the named variable changed):
+- *Single-motion training*: 44.55 mm vs 39.76 mm for the 30-goal model on the
+  same motion. Multi-motion data helps; language interference does not hurt.
+- *Sample averaging, more ODE steps, `fresh` consumption*: all trade MPJPE for
+  survival. Temporal ensembling is the only inference knob that improves both,
+  because it blends estimates from DIFFERENT states rather than redraws at one.
+
+**Blocked:** training our-encoder targets on SONIC-driven rollouts. An
+environment carries one macro-state configuration and
+`_configure_sonic_contract` overwrites it after Hydra, so SONIC's encoder view
+and our 38-D `root_qpos` view cannot coexist in a run. Unblocking needs an
+offline two-pass rig; design in the campaign `PLAN.md`.
+
+Sample sizes: single seed per arm, 20 episodes per motion. Measured run-to-run
+MPJPE spread is 0.2-6.4%, so differences below ~15% are directional only. The
+46.95-vs-46.33 gap to SONIC is NOT resolved.
+
+Campaign: `experiments/campaigns/2026-08-12-gr00t-language30-compositionality/`
+(`PLAN.md` carries the full phase log).
 
 ---
 

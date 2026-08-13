@@ -23,7 +23,9 @@ from rlopt.agent.hl_skill_diffsr import FrozenHighLevelSkillCommandSampler
 from imitation_experiments.planner.gr00t_isaac_sampler import Gr00tSkillCommandSampler
 
 
-class Gr00tLatentCommandSampler(Gr00tSkillCommandSampler, FrozenHighLevelSkillCommandSampler):
+class Gr00tLatentCommandSampler(
+    Gr00tSkillCommandSampler, FrozenHighLevelSkillCommandSampler
+):
     def __init__(
         self,
         *,
@@ -34,6 +36,11 @@ class Gr00tLatentCommandSampler(Gr00tSkillCommandSampler, FrozenHighLevelSkillCo
         goal_name: str,
         num_envs: int,
         consumption: str = "open_loop",
+        num_inference_timesteps: int = 4,
+        samples_per_publication: int = 1,
+        consume_slots: int | None = None,
+        temporal_ensemble: str = "none",
+        temporal_ensemble_decay: float = 0.5,
         **base_kwargs: Any,
     ) -> None:
         super().__init__(**base_kwargs)
@@ -48,6 +55,11 @@ class Gr00tLatentCommandSampler(Gr00tSkillCommandSampler, FrozenHighLevelSkillCo
             consumption=consumption,
             fsq_half_levels=None if fsq_half is None else fsq_half.detach(),
             device=self.device,
+            num_inference_timesteps=int(num_inference_timesteps),
+            samples_per_publication=int(samples_per_publication),
+            consume_slots=consume_slots,
+            temporal_ensemble=temporal_ensemble,
+            temporal_ensemble_decay=float(temporal_ensemble_decay),
         )
         self.oracle_cosine: list[float] = []
 

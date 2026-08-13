@@ -1,0 +1,23 @@
+defaults:
+  - base_train
+  - _self_
+
+# 28-motion arm on 889k rows (6.3x the original 141k), `state_dropout` 0
+# (the Phase-2A win). Same head, same interface, same optimizer budget as the
+# arm it is compared against — data volume and the motion set are the only
+# changes.
+output_dir: outputs/gr00t_language30/arms/fsq64_scaled28
+target: latent
+data:
+  table: outputs/gr00t_language30/tables/fsq64_scaled28_table.pt
+  state_field: oracle_rollout_state_history
+goal_features: outputs/gr00t_language30/goal_features/goal_features.pt
+pretrained_bundle: outputs/gr00t_language10/goal_features/action_head_trunk.pt
+model:
+  state_dropout_prob: 0
+run:
+  checkpoint_interval: 12000
+wandb:
+  name: l28_fsq64_scaled
+  tags: [gr00t-head, language28, compositionality, fsq64, target-latent, data-scaled]
+  group: gr00t-language30-compositionality

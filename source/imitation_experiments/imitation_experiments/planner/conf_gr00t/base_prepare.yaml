@@ -12,6 +12,10 @@ latent:
   layout_check_encoder: null
 chunk:
   horizon: 30
+  # Set false for a latent-only collection whose rows carry no expert
+  # `root_qpos` lookahead. Ignored (forced on) when latent.source is
+  # fsq_prequant, which re-encodes from that lookahead.
+  enabled: true
 state_fields:
   - oracle_rollout_state_history
   - demonstration_state_history
