@@ -368,10 +368,19 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # xy-only origin. Pretrain and rollout inputs are then identical by
     # construction, the latent is a pure function of (trajectory, cursor), and
     # the window keeps absolute height and roll/pitch relative to gravity --
-    # the exact invariance group of the re-rooted tracking reward. The macro
-    # width is identical in both modes, so a mismatch cannot be caught by a
-    # shape check: the value is recorded in the skill checkpoint and compared
-    # on load, like the frame stride above.
+    # the exact invariance group of the re-rooted tracking reward.
+    # "robot_heading" is SONIC v1.1's own convention: the live encoder input is
+    # anchored at the LIVE robot's heading (yaw-only) frame with an xy-only
+    # origin -- upstream's `motion_anchor_ori_heading_mf_nonflat`, which is
+    # `inv(get_heading_q(robot_anchor_quat_w)) * ref`. It differs from "robot"
+    # (upstream's `motion_anchor_ori_b_mf`, the full robot pose) by keeping the
+    # reference's tilt relative to gravity, and from "expert_heading" by using
+    # the robot instead of the expert slot-0 frame, so the encoder input
+    # carries the live tracking error. Pretraining has no robot, so under
+    # "robot_heading" it uses the expert slot-0 heading frame -- the same frame
+    # under perfect tracking. The macro width is identical in every mode, so a
+    # mismatch cannot be caught by a shape check: the value is recorded in the
+    # skill checkpoint and compared on load, like the frame stride above.
     expert_macro_anchor_mode: str = "robot"
     # Optional whitelist of expert_window group terms to keep. The observation
     # manager computes every window term each step whether or not anything
@@ -957,10 +966,10 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     def _effective_expert_macro_anchor_mode(self) -> str:
         """Frame convention of the DiffSR macro window."""
         mode = self.expert_macro_anchor_mode.strip()
-        if mode not in ("robot", "expert_heading"):
+        if mode not in ("robot", "expert_heading", "robot_heading"):
             raise ValueError(
-                "expert_macro_anchor_mode must be 'robot' or 'expert_heading', "
-                f"got {mode!r}."
+                "expert_macro_anchor_mode must be 'robot', 'expert_heading' or "
+                f"'robot_heading', got {mode!r}."
             )
         return mode
 

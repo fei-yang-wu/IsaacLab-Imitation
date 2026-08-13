@@ -666,8 +666,15 @@ def export_bundle(args: argparse.Namespace) -> Path:
         raise ValueError("hold_steps must be positive")
     if args.macro_frame_stride is not None and args.macro_frame_stride < 1:
         raise ValueError("macro_frame_stride must be positive")
-    if args.macro_anchor_mode not in (None, "robot", "expert_heading"):
-        raise ValueError("macro_anchor_mode must be 'robot' or 'expert_heading'")
+    if args.macro_anchor_mode not in (
+        None,
+        "robot",
+        "expert_heading",
+        "robot_heading",
+    ):
+        raise ValueError(
+            "macro_anchor_mode must be 'robot', 'expert_heading' or 'robot_heading'"
+        )
     checkpoint_path = Path(args.checkpoint).expanduser().resolve()
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"checkpoint not found: {checkpoint_path}")
@@ -817,8 +824,11 @@ def export_bundle(args: argparse.Namespace) -> Path:
         if encoder_provenance["macro_anchor_mode"] not in {
             "robot",
             "expert_heading",
+            "robot_heading",
         }:
-            raise ValueError("macro_anchor_mode must be 'robot' or 'expert_heading'")
+            raise ValueError(
+                "macro_anchor_mode must be 'robot', 'expert_heading' or 'robot_heading'"
+            )
         encoder = _encoder_from_state(
             embedded,
             activation=encoder_provenance["encoder_activation"],

@@ -138,10 +138,19 @@ def _data_plane_with_mode(mode: object) -> ExpertDataPlane:
 
 def test_macro_builder_collapses_both_contexts_under_expert_heading():
     """Pretrain (expert) and live (rollout) macro windows must use ONE frame
-    under expert_heading; under robot they must keep their split semantics."""
+    under expert_heading; under robot they must keep their split semantics.
+
+    ``robot_heading`` is SONIC v1.1's convention: the live path anchors at the
+    LIVE robot's heading frame, while the pretrain path -- which has no robot
+    -- keeps the expert slot-0 heading frame.
+    """
     for mode, expected in (
         ("expert_heading", {"expert": "expert_heading", "rollout": "expert_heading"}),
         ("robot", {"expert": "expert", "rollout": "rollout"}),
+        (
+            "robot_heading",
+            {"expert": "expert_heading", "rollout": "robot_heading"},
+        ),
     ):
         plane = _data_plane_with_mode(mode)
         seen: list[str] = []
@@ -165,6 +174,72 @@ def test_macro_builder_collapses_both_contexts_under_expert_heading():
             assert seen == [expected[caller_context]], (
                 f"mode={mode} caller={caller_context}: got {seen}"
             )
+
+
+def _window_plane(robot_pos: torch.Tensor, robot_quat: torch.Tensor) -> ExpertDataPlane:
+    """A data plane whose only live state is one robot anchor pose."""
+    plane = _data_plane_with_mode("robot_heading")
+    plane._env.device = torch.device("cpu")  # type: ignore[attr-defined]
+    plane._get_joint_ids_tensor_fast = lambda ids: ids  # type: ignore[method-assign]
+    plane._transform_reference_pose_to_world = (  # type: ignore[method-assign]
+        lambda pos, quat=None, env_ids=None: (pos, quat)
+    )
+    plane._get_robot_anchor_state_w_fast = (  # type: ignore[method-assign]
+        lambda _name: (robot_pos, robot_quat)
+    )
+    return plane
+
+
+def test_robot_heading_context_uses_the_live_robot_heading_frame():
+    """`robot_heading` must anchor at the LIVE robot, yaw-only.
+
+    SONIC v1.1's encoder reads
+    ``inv(get_heading_q(robot_anchor_quat_w)) * ref``. Two things are pinned
+    here: the frame comes from the robot (not the expert slot), and only its
+    heading is cancelled, so the reference keeps its tilt relative to gravity.
+    """
+    robot_pos = torch.tensor([[0.4, -0.7, 0.79]])
+    robot_quat = _quat_xyzw(roll=0.18, pitch=-0.12, yaw=0.65).unsqueeze(0)
+    ref_pos = torch.tensor([[[0.9, -0.2, 0.83], [1.1, 0.1, 0.86]]])
+    ref_quat = torch.stack(
+        [_quat_xyzw(0.05, 0.02, 0.9), _quat_xyzw(0.04, 0.03, 1.0)]
+    ).unsqueeze(0)
+    window = {
+        "joint_pos": torch.zeros(1, 2, 3),
+        "_macro_anchor_pos_w": ref_pos,
+        "_macro_anchor_quat_w": ref_quat,
+    }
+    env_ids = torch.zeros(1, dtype=torch.long)
+
+    plane = _window_plane(robot_pos, robot_quat)
+    terms = plane._build_expert_window_terms(
+        window,  # type: ignore[arg-type]
+        env_ids,
+        context="robot_heading",
+        past_steps=0,
+    )
+
+    origin, heading = heading_anchor_frame(robot_pos, robot_quat)
+    expected_pos, expected_quat = body_pose_in_anchor_frame(
+        origin, heading, ref_pos, ref_quat
+    )
+    assert torch.allclose(
+        terms["expert_anchor_pos_b"], expected_pos.reshape(1, -1), atol=_ATOL
+    )
+
+    # The full-pose "rollout" convention is a DIFFERENT frame whenever the
+    # robot is tilted: it also cancels the robot's roll/pitch.
+    rollout_terms = _window_plane(robot_pos, robot_quat)._build_expert_window_terms(
+        window,  # type: ignore[arg-type]
+        env_ids,
+        context="rollout",
+        past_steps=0,
+    )
+    assert not torch.allclose(
+        rollout_terms["expert_anchor_pos_b"],
+        terms["expert_anchor_pos_b"],
+        atol=1e-3,
+    )
 
 
 def test_unknown_anchor_mode_is_refused():
