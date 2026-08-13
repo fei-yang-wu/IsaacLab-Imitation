@@ -1,0 +1,23 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# SONIC-style interface: the released tracker re-encodes its 64-D FSQ token on
+# every 50 Hz control step, so the planner replaces the encoder at hold 1 and
+# emits 30 consecutive latents per publication instead of 3 held for 10 steps.
+collection_dir: logs/gr00t_language30_sonic_hold1/collection
+output: outputs/gr00t_language30/tables/sonic_hold1_table.pt
+latent:
+  slots: 30
+  hold_steps: 1
+  # The collector already stored the SONIC encoder's continuous pre-FSQ latent
+  # as `z_target`; re-encoding here would need an expert lookahead the rows do
+  # not carry, and would use our encoder rather than the released one.
+  source: stored
+chunk:
+  enabled: false
+# The rollout and demonstration histories are the same tensor in this
+# collection (the tracker is the oracle), so keeping both would double the
+# table for no information.
+state_fields:
+  - oracle_rollout_state_history

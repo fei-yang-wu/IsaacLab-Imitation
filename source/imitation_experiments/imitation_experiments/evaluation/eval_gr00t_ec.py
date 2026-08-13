@@ -53,6 +53,21 @@ def _service_cmd(cfg: DictConfig, checkpoint: Path, goal: str) -> list[str]:
     ]
 
 
+def _batched_job(
+    cfg: DictConfig, arm: str, arm_cfg: Any, rtc: bool, goals: list[str], out: Path
+) -> dict:
+    """One process covering every goal: one episode each, one loaded head.
+
+    Only ~10-12s of a 56s per-goal cell was the episode; the rest was service
+    start-up reloading the 1.3B head. `goal_sequence` advances the goal on each
+    episode reset instead, so the head loads once per variant.
+    """
+    job = _job(cfg, arm, arm_cfg, rtc, goals[0], out)
+    job["command"]["gr00t"]["goal_sequence"] = list(goals)
+    job["rollout"]["episodes"] = len(goals)
+    return job
+
+
 def _job(cfg: DictConfig, arm: str, arm_cfg: Any, rtc: bool, goal: str, out: Path) -> dict:
     checkpoint = _resolve(arm_cfg.checkpoint)
     if not checkpoint.is_file():
@@ -159,6 +174,45 @@ def main(cfg: DictConfig) -> None:
     only_arms = (
         {str(arm) for arm in cfg.only_arms} if cfg.get("only_arms") else None
     )
+    if bool(cfg.get("batched_goals", False)):
+        goals = [str(goal) for goal in cfg.goals]
+        results: dict[str, dict] = {}
+        for arm, arm_cfg in cfg.arms.items():
+            if only_arms is not None and str(arm) not in only_arms:
+                continue
+            for rtc in cfg.rtc_variants:
+                variant = f"{arm}__{'rtc' if rtc else 'basic'}"
+                cell_dir = output_root / variant
+                job = _batched_job(cfg, str(arm), arm_cfg, bool(rtc), goals, cell_dir)
+                record = _run_cell(cfg, job, cell_dir / "job.yaml")
+                # Map each episode back to the goal it ran, from the runner's
+                # own record rather than by assuming the episode order.
+                run_dir = record.get("run_dir")
+                episode_goals = []
+                if run_dir and (Path(run_dir) / "episode_goals.json").is_file():
+                    episode_goals = json.loads(
+                        (Path(run_dir) / "episode_goals.json").read_text()
+                    )
+                record["episode_goals"] = episode_goals
+                results[variant] = {"batched": record}
+                survived = sum(
+                    1
+                    for episode in record.get("episodes", [])
+                    if episode["status"] in {"completed", "reference_finished"}
+                )
+                print(
+                    f"[{variant}] {survived}/{len(record.get('episodes', []))} "
+                    f"episodes survived",
+                    flush=True,
+                )
+        summary = {
+            "cells": results,
+            "config": OmegaConf.to_container(cfg, resolve=True),
+        }
+        (output_root / "summary.json").write_text(json.dumps(summary, indent=2))
+        print(f"[PASS] batched EC summary -> {output_root}/summary.json", flush=True)
+        return
+
     results: dict[str, dict] = {}
     for arm, arm_cfg in cfg.arms.items():
         if only_arms is not None and str(arm) not in only_arms:

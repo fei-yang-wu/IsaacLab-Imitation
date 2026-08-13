@@ -285,12 +285,92 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--gr00t_goals_per_env",
+    nargs="+",
+    default=None,
+    help=(
+        "Explicit per-environment goal names, one per environment (cycled if "
+        "shorter). Evaluates every goal in ONE process instead of paying the "
+        "simulator start-up per goal. The assignment is fixed at start-up; a "
+        "later goal/reference divergence is a hard error, never a silent "
+        "re-derivation from the trajectory rank."
+    ),
+)
+parser.add_argument(
     "--gr00t_consumption",
     choices=("open_loop", "fresh"),
     default="open_loop",
     help=(
         "open_loop consumes the head's consecutive predicted latents one per "
         "publication; fresh re-runs the head at every publication."
+    ),
+)
+parser.add_argument(
+    "--gr00t_temporal_ensemble",
+    choices=("none", "exponential"),
+    default="none",
+    help=(
+        "Blend the head's overlapping predictions across publications. Each "
+        "publication is covered by the current prediction and by the earlier "
+        "ones whose horizon still reaches it; exponential weights them by "
+        "--gr00t_temporal_ensemble_decay ** age. Distinct from sample "
+        "averaging: the estimates come from different states, not redraws."
+    ),
+)
+parser.add_argument("--gr00t_temporal_ensemble_decay", type=float, default=0.5)
+parser.add_argument(
+    "--gr00t_consume_slots",
+    type=int,
+    default=None,
+    help=(
+        "Slots consumed before the head re-plans. Defaults to the full action "
+        "horizon. Setting it below the horizon is a receding-horizon "
+        "schedule: a hold-1 head predicting 30 latents with "
+        "--gr00t_consume_slots 10 republishes every 10 control steps and "
+        "discards the tail."
+    ),
+)
+parser.add_argument(
+    "--sample_every_control_step",
+    action="store_true",
+    default=False,
+    help=(
+        "Write a training row at every control step instead of only at "
+        "planner publication boundaries. Required for a hold-1 collection, "
+        "where the downstream join needs a latent at `control_step + k` for "
+        "every k. Costs one row per environment per step."
+    ),
+)
+parser.add_argument(
+    "--gr00t_inference_steps",
+    type=int,
+    default=4,
+    help=(
+        "Euler steps for the head's flow-matching integration. GR00T's "
+        "default is 4; more steps trade inference time for a tighter solve of "
+        "the same learned velocity field, with no retraining."
+    ),
+)
+parser.add_argument(
+    "--gr00t_samples_per_publication",
+    type=int,
+    default=1,
+    help=(
+        "Average this many independent flow samples before publishing. Flow "
+        "matching starts from a fresh noise draw, so this cuts the sampler's "
+        "own variance at inference cost only. Averaging happens on the "
+        "continuous value, before any FSQ snap."
+    ),
+)
+parser.add_argument(
+    "--fall_only_success",
+    action="store_true",
+    default=False,
+    help=(
+        "Success means only 'did not fall'. Also disables the foot_pos_xyz "
+        "tracking termination, which otherwise ends a large share of episodes "
+        "that never fell and truncates the horizon tracking error averages "
+        "over. Pair with --disable_tracking_terminations."
     ),
 )
 parser.add_argument(
@@ -1252,12 +1332,52 @@ def _configured_step_dt(env_cfg: object) -> float | None:
 
 
 TRACKING_TERMINATION_NAMES = ("anchor_pos", "anchor_ori", "ee_body_pos")
+# `foot_pos_xyz` is a tracking termination too, but it is NOT in the M3 set
+# above. Under a fall-only success definition it must also be disabled, or a
+# large share of episodes end on it while never falling -- which truncates the
+# horizon that tracking error is averaged over.
+FOOT_TRACKING_TERMINATION_NAME = "foot_pos_xyz"
 FALL_TERMINATION_NAME = "base_too_low"
 
 
-def _disable_tracking_terminations(terminations: Any) -> list[str]:
+def _tracking_mpjpe_mm(base_env: Any) -> Tensor | None:
+    """Per-env root-relative MPJPE in mm, or None if bodies are untracked.
+
+    Same computation as the 4,096-motion tracker scoreboard: subtract each
+    side's own root position before comparing the tracked bodies, so the metric
+    is blind to global drift and is directly comparable to that board's
+    successful MPJPE-L.
+
+    Written against the environment's accessors rather than importing the
+    scoreboard module: `evaluate_checkpoint` is a SCRIPT with module-level
+    argparse, so importing it mid-run re-parses `sys.argv` and aborts the
+    evaluation.
+    """
+    names = list(getattr(base_env.cfg.data, "runtime_cache_body_names", []) or [])
+    if not names:
+        return None
+    body_ids = [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
+    actual_pos, _ = base_env._get_robot_body_pose_w_fast(body_ids)
+    reference_pos, _ = base_env._get_reference_body_pose_w_fast(tuple(names))
+    robot_root = base_env.robot.data.root_pos_w
+    robot_root = getattr(robot_root, "torch", robot_root)
+    reference_root, _, _, _ = base_env._get_reference_root_state_w_fast()
+    actual_rel = actual_pos - robot_root[:, None, :]
+    reference_rel = reference_pos - reference_root[:, None, :]
+    return (
+        torch.linalg.vector_norm(actual_rel - reference_rel, dim=-1).mean(dim=-1)
+        * 1000.0
+    )
+
+
+def _disable_tracking_terminations(
+    terminations: Any, *, include_foot: bool = False
+) -> list[str]:
     disabled: list[str] = []
-    for name in TRACKING_TERMINATION_NAMES:
+    names = TRACKING_TERMINATION_NAMES + (
+        (FOOT_TRACKING_TERMINATION_NAME,) if include_foot else ()
+    )
+    for name in names:
         if hasattr(terminations, name) and getattr(terminations, name) is not None:
             setattr(terminations, name, None)
             disabled.append(name)
@@ -1810,6 +1930,22 @@ def main(
         )
     if args_cli.num_envs is not None:
         env_cfg.scene.num_envs = int(args_cli.num_envs)
+    if str(args_cli.gr00t_route) == "chunk_native":
+        # The environment config is the authority on what the actor reads. The
+        # latent routes hard-code that contract, but a chunk actor driving an
+        # explicit tracker must derive it -- otherwise the agent either builds
+        # a latent controller the env does not publish, or falls back to a
+        # proprio list missing `projected_gravity` and mismatches the trained
+        # 131-wide policy by exactly 3. Same binding the training and
+        # evaluate_checkpoint entry points perform.
+        from isaaclab_imitation.tasks.manager_based.imitation.command_interface import (  # noqa: PLC0415
+            bind_command_interface,
+        )
+
+        if bind_command_interface(agent_cfg, env_cfg) is None:
+            sync_input_keys = getattr(agent_cfg, "sync_input_keys", None)
+            if callable(sync_input_keys):
+                sync_input_keys()
     agent_cfg.env.num_envs = env_cfg.scene.num_envs
     agent_cfg.env.env_name = args_cli.task
     agent_cfg.seed = int(args_cli.seed)
@@ -1903,7 +2039,7 @@ def main(
                 "termination configuration."
             )
         disabled_tracking_termination_terms = _disable_tracking_terminations(
-            terminations
+            terminations, include_foot=bool(args_cli.fall_only_success)
         )
         missing = sorted(
             set(TRACKING_TERMINATION_NAMES) - set(disabled_tracking_termination_terms)
@@ -2286,10 +2422,21 @@ def main(
         agent._command_source = command_source
     gr00t_sampler = None
     gr00t_chunk_publisher = None
+    gr00t_packet_planner = None
     # Shared by the BB1 packet route below and by a GR00T chunk_encoded run;
     # declared here so whichever installs the packet->encoder source owns them.
     packet_encoder_stats: Any = None
     packet_encoder_provenance: dict[str, Any] | None = None
+    # One goal for all environments, or an explicit per-environment assignment
+    # that lets a single process cover every goal.
+    if args_cli.gr00t_goals_per_env:
+        _requested = [str(name) for name in args_cli.gr00t_goals_per_env]
+        gr00t_goal_spec: Any = [
+            _requested[index % len(_requested)]
+            for index in range(int(env_cfg.scene.num_envs))
+        ]
+    else:
+        gr00t_goal_spec = str(args_cli.gr00t_goal)
     if args_cli.gr00t_checkpoint is not None and args_cli.gr00t_route != "latent":
         # Chunk-target head. Both routes share the head and the causal input;
         # they differ only in which channel carries the prediction to the
@@ -2299,15 +2446,23 @@ def main(
             Gr00tPacketPlanner,
         )
 
+        # Only the ENCODED route needs the oracle sampler: it borrows that
+        # sampler's frozen skill encoder to turn the packet into a latent. The
+        # native route publishes the packet straight into the chunk actor term
+        # and touches no encoder, so it must not require a latent agent.
         oracle_sampler = getattr(agent, "_hl_skill_command_sampler", None)
-        if oracle_sampler is None:
+        if args_cli.gr00t_route == "chunk_encoded" and oracle_sampler is None:
             raise ValueError(
-                "--gr00t_route=chunk_* requires agent.ipmd.command_source="
+                "--gr00t_route=chunk_encoded requires agent.ipmd.command_source="
                 "hl_skill so the frozen sampler and its skill encoder exist."
             )
-        if args_cli.gr00t_goal_features is None or not args_cli.gr00t_goal:
+        if args_cli.gr00t_goal_features is None or not (
+            args_cli.gr00t_goal or args_cli.gr00t_goals_per_env
+        ):
             raise ValueError(
-                "--gr00t_checkpoint requires --gr00t_goal_features and --gr00t_goal."
+                "--gr00t_checkpoint requires --gr00t_goal_features plus either "
+                "--gr00t_goal (one goal for every environment) or "
+                "--gr00t_goals_per_env (an explicit per-environment assignment)."
             )
         causal_fn = agent._discover_env_method(
             agent.env, "current_causal_planner_observation"
@@ -2332,7 +2487,7 @@ def main(
             state_history_steps=int(args_cli.state_history_steps),
             gr00t_checkpoint=args_cli.gr00t_checkpoint,
             goal_features_path=args_cli.gr00t_goal_features,
-            goal_name=str(args_cli.gr00t_goal),
+            goal_name=gr00t_goal_spec,
             num_envs=int(env_cfg.scene.num_envs),
             device=agent._get_device(agent.config.device),
         )
@@ -2340,6 +2495,11 @@ def main(
             # Tracker-matched row: the identical chunk head drives the SAME
             # latent tracker the latent arm uses, through the frozen encoder.
             def _gr00t_causal_state(env_ids: Tensor) -> Tensor:
+                # BB1 calls this immediately before the planner, and the
+                # planner signature carries no env ids -- record them here so
+                # each row is conditioned on ITS environment's goal.
+                if gr00t_packet_planner is not None:
+                    gr00t_packet_planner.note_env_ids(env_ids)
                 return _planner_state(
                     raw_isaac_env.current_causal_planner_observation(
                         env_ids=env_ids,
@@ -2358,14 +2518,22 @@ def main(
                     horizon_steps=int(trainer.horizon_steps)
                 )
             )
-            # PacketLayout carries (term_name, width) pairs, in packet order.
+            # PacketLayout carries (term_name, width) pairs, in packet order,
+            # and is verified against the ENV's expert-macro frame layout --
+            # so it must use the macro term names, not the command-space names
+            # the chunk actor term uses for the same 38 values.
+            from imitation_experiments.planner.gr00t_chunk_publisher import (  # noqa: PLC0415
+                ROOT_QPOS_MACRO_TERMS,
+            )
+
             gr00t_packet_layout = PacketLayout(
-                tuple(gr00t_chunk_publisher._components),
+                ROOT_QPOS_MACRO_TERMS,
                 packet_frames=int(gr00t_chunk_publisher._gr00t_horizon),
             )
+            gr00t_packet_planner = Gr00tPacketPlanner(gr00t_chunk_publisher)
             packet_encoder_stats = install_packet_encoder_command_source(
                 oracle_sampler,
-                planner=Gr00tPacketPlanner(gr00t_chunk_publisher),
+                planner=gr00t_packet_planner,
                 causal_state_provider=_gr00t_causal_state,
                 env=raw_isaac_env,
                 packet_layout=gr00t_packet_layout,
@@ -2395,9 +2563,13 @@ def main(
                 "--gr00t_checkpoint requires agent.ipmd.command_source=hl_skill "
                 "so the frozen sampler (and its skill encoder) exists."
             )
-        if args_cli.gr00t_goal_features is None or not args_cli.gr00t_goal:
+        if args_cli.gr00t_goal_features is None or not (
+            args_cli.gr00t_goal or args_cli.gr00t_goals_per_env
+        ):
             raise ValueError(
-                "--gr00t_checkpoint requires --gr00t_goal_features and --gr00t_goal."
+                "--gr00t_checkpoint requires --gr00t_goal_features plus either "
+                "--gr00t_goal (one goal for every environment) or "
+                "--gr00t_goals_per_env (an explicit per-environment assignment)."
             )
         causal_fn = agent._discover_env_method(
             agent.env, "current_causal_planner_observation"
@@ -2412,9 +2584,18 @@ def main(
             state_history_steps=int(args_cli.state_history_steps),
             gr00t_checkpoint=args_cli.gr00t_checkpoint,
             goal_features_path=args_cli.gr00t_goal_features,
-            goal_name=str(args_cli.gr00t_goal),
+            goal_name=gr00t_goal_spec,
             num_envs=int(env_cfg.scene.num_envs),
             consumption=str(args_cli.gr00t_consumption),
+            num_inference_timesteps=int(args_cli.gr00t_inference_steps),
+            samples_per_publication=int(args_cli.gr00t_samples_per_publication),
+            consume_slots=(
+                None
+                if args_cli.gr00t_consume_slots is None
+                else int(args_cli.gr00t_consume_slots)
+            ),
+            temporal_ensemble=str(args_cli.gr00t_temporal_ensemble),
+            temporal_ensemble_decay=float(args_cli.gr00t_temporal_ensemble_decay),
             env=agent.env,
             checkpoint_path=str(agent_cfg.ipmd.hl_skill_checkpoint_path),
             latent_dim=int(agent_cfg.ipmd.latent_dim),
@@ -2433,21 +2614,29 @@ def main(
             device=agent._get_device(agent.config.device),
         )
         agent._hl_skill_command_sampler = gr00t_sampler
-        print(
-            "[INFO] GR00T latent command source: "
-            f"{gr00t_sampler.gr00t_provenance}"
-        )
+        print(f"[INFO] GR00T latent command source: {gr00t_sampler.gr00t_provenance}")
     print(f"[INFO] Loading low-level checkpoint: {checkpoint_path}")
     resolved_policy_input_keys = tuple(agent_cfg.policy.get_input_keys())
     supported_latent_policy_input_keys = {
         tuple(LATENT_POLICY_INPUT_KEYS),
         tuple(SONIC_LATENT_POLICY_INPUT_KEYS),
     }
-    if resolved_policy_input_keys not in supported_latent_policy_input_keys:
+    if (
+        resolved_policy_input_keys not in supported_latent_policy_input_keys
+        and str(args_cli.gr00t_route) != "chunk_native"
+    ):
         raise ValueError(
             "Closed-loop latent evaluation requires either the legacy/Strict "
             "or SONIC/Stable ordered actor-input contract, got "
             f"{resolved_policy_input_keys!r}."
+        )
+    if str(args_cli.gr00t_route) == "chunk_native":
+        # A genuinely explicit tracker reads command terms instead of a
+        # latent, so the latent contract above does not apply. The tracker's
+        # own restore below is still strict, which is what actually protects
+        # against a mismatched policy.
+        print(
+            f"[INFO] chunk_native actor-input contract: {resolved_policy_input_keys!r}"
         )
     frozen_tracker = load_frozen_low_level_tracker(
         agent,
@@ -2993,12 +3182,49 @@ def main(
                     active_on_device.index_select(0, renew_env_ids)
                 ]
             sample_env_ids = renew_env_ids
+            if bool(args_cli.sample_every_control_step):
+                # Hold-1 collection: the planner must supply one latent per
+                # control step, so `_join_slots(hold_steps=1)` needs a row at
+                # every step rather than only at the publication boundaries the
+                # renewal mask selects. Publication itself is untouched — the
+                # tracker still consumes on its own schedule; only the sampling
+                # rate changes.
+                sample_env_ids = step_active.nonzero(as_tuple=False).reshape(-1)
             sample_motion_names: list[str] = []
             current_motion_names: list[str] = (
                 _trajectory_metadata(raw_isaac_env)["motion_names"]
                 if trajectory_sample_writer is not None
+                or bool(args_cli.sample_every_control_step)
                 else []
             )
+            if bool(args_cli.sample_every_control_step):
+                # The balanced writer is the only other producer of per-row
+                # motion names, and a hold-1 collection does not use it: rows
+                # are written every step rather than per completed trajectory.
+                # Without this the sample builder receives an empty name list.
+                sample_motion_names = [
+                    current_motion_names[int(env_id)]
+                    for env_id in sample_env_ids.detach().cpu().tolist()
+                ]
+            gr00t_goal_owner = gr00t_sampler or gr00t_chunk_publisher
+            if (
+                gr00t_goal_owner is not None
+                and args_cli.gr00t_goals_per_env
+                and int(renew_env_ids.numel()) > 0
+            ):
+                # Per-environment goals are assigned once at start-up; the
+                # reference channel can reassign a trajectory on reset. Verify
+                # every publication rather than let language and motion drift
+                # apart silently.
+                if not current_motion_names:
+                    current_motion_names = _trajectory_metadata(raw_isaac_env)[
+                        "motion_names"
+                    ]
+                renew_cpu = renew_env_ids.detach().cpu()
+                gr00t_goal_owner.gr00t_assert_goal_matches(
+                    renew_cpu,
+                    [current_motion_names[int(i)] for i in renew_cpu.tolist()],
+                )
             if (
                 bool(args_cli.save_rollout_training_samples)
                 and int(renew_env_ids.numel()) > 0
@@ -3075,6 +3301,16 @@ def main(
                         env_ids=env_ids,
                     )
                 )
+                # Root-relative MPJPE, the repo's headline tracking metric,
+                # computed exactly as the 4,096-motion tracker scoreboard does
+                # so planner numbers are comparable to the oracle ceilings.
+                mpjpe_mm = _tracking_mpjpe_mm(raw_isaac_env)
+                if mpjpe_mm is not None:
+                    active_mask = step_active.to(mpjpe_mm.device)
+                    if bool(active_mask.any()):
+                        metric_row["tracking_mpjpe_mm"] = float(
+                            mpjpe_mm[active_mask].mean()
+                        )
             if should_save:
                 sample_env_ids_cpu = sample_env_ids.detach().cpu()
                 _measure_commander(

@@ -112,7 +112,6 @@ pixi run -e isaaclab python scripts/rlopt/eval_skill_commander_closed_loop.py \
     --sonic_success_terminations --disable_push_event \
     --disable_reward_clipping --assert-kitless \
     physics=newton_mjwarp \
-    
     env.data.manifest=null env.data.cache_dir=null \
     env.data.reference_arrays_dir="${DATA_ROOT}/reference_arrays/root_qpos_v1" \
     env.data.persist_id=bones_seed_language30_compositionality_v1@f31fd755 \

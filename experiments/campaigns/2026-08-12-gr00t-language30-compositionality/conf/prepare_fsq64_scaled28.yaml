@@ -1,0 +1,20 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# 28-motion scaled collection: 889k rows (2 seeds x 896 environments, one row
+# per control step) against the 141k publication rows the original arm used.
+# The two motions whose ORACLE falls 4/5 are excluded — a planner cannot learn
+# a recovery the tracker does not have.
+collection_dir: logs/gr00t_language28_scaled_fsq64/collection
+output: outputs/gr00t_language30/tables/fsq64_scaled28_table.pt
+latent:
+  # Same interface as the arm being improved: 3 latents, each held 10 control
+  # steps. Every-step rows just mean the join finds slot k at step+10k from any
+  # phase, which is 10x the training pairs for the same trajectories.
+  slots: 3
+  hold_steps: 10
+  source: fsq_prequant
+  encoder_checkpoint: logs/bones129k_sonic_fsq_scale_eval/encoders/fsq64_scaled.pt
+state_fields:
+  - oracle_rollout_state_history

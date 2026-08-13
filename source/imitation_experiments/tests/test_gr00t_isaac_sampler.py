@@ -21,11 +21,13 @@ class _Sampler(Gr00tSkillCommandSampler):
         self._gr00t_fsq_half = fsq_half
         self._gr00t_cache = torch.zeros((num_envs, horizon, dim))
         self._gr00t_cursor = torch.full((num_envs,), horizon, dtype=torch.long)
+        self._gr00t_goal_index = torch.zeros(num_envs, dtype=torch.long)
+        self._gr00t_goal_names = ["goal"] * num_envs
         self._gr00t_calls = 0
         self._gr00t_latency_ms = []
         self.predictions: list[int] = []
 
-    def _gr00t_predict(self, planner_state: torch.Tensor) -> torch.Tensor:
+    def _gr00t_predict(self, planner_state, goal_index=None) -> torch.Tensor:
         rows = int(planner_state.shape[0])
         self.predictions.append(rows)
         base = float(self._gr00t_calls) * 100.0
@@ -113,6 +115,7 @@ def test_chunk_publisher_splits_frames_term_major():
     publisher._gr00t_device = torch.device("cpu")
     publisher._gr00t_horizon = horizon
     publisher._gr00t_action_dim = width
+    publisher._gr00t_goal_index = torch.zeros(4, dtype=torch.long)
     publisher.publications = 0
 
     # Frame f, dim d carries the value f*100 + d, so the split is checkable.
@@ -120,18 +123,18 @@ def test_chunk_publisher_splits_frames_term_major():
     prediction = prediction + (
         torch.arange(horizon, dtype=torch.float32).reshape(1, horizon, 1) * 100.0
     )
-    publisher._gr00t_predict = lambda state: prediction
+    publisher._gr00t_predict = lambda state, goal_index=None: prediction
     publisher._causal_observation_fn = lambda env_ids, history_steps: _Batch()
 
     publisher.publish(torch.tensor([0]))
     packet = term.packets[0]
     assert set(packet) == {name for name, _ in ROOT_QPOS_COMPONENT_WIDTHS}
-    qpos = packet["expert_motion_qpos"].reshape(1, horizon, 29)
+    qpos = packet["joint_qpos"].reshape(1, horizon, 29)
     assert float(qpos[0, 0, 0]) == 0.0
     assert float(qpos[0, 1, 0]) == 100.0  # frame 1, dim 0
-    pos = packet["expert_anchor_pos_b"].reshape(1, horizon, 3)
+    pos = packet["root_pos"].reshape(1, horizon, 3)
     assert float(pos[0, 0, 0]) == 29.0  # frame 0, first anchor-pos dim
-    ori = packet["expert_anchor_ori_b"].reshape(1, horizon, 6)
+    ori = packet["root_ori"].reshape(1, horizon, 6)
     assert float(ori[0, 0, 0]) == 32.0
     assert publisher.publications == 1
 
@@ -152,12 +155,14 @@ def test_packet_planner_returns_term_major_full_horizon():
     publisher._gr00t_device = torch.device("cpu")
     publisher._gr00t_horizon = horizon
     publisher._gr00t_action_dim = width
+    publisher._gr00t_goal_index = torch.zeros(4, dtype=torch.long)
     prediction = torch.arange(width, dtype=torch.float32).reshape(1, 1, width) + (
         torch.arange(horizon, dtype=torch.float32).reshape(1, horizon, 1) * 100.0
     )
-    publisher._gr00t_predict = lambda state: prediction
+    publisher._gr00t_predict = lambda state, goal_index=None: prediction
 
     planner = Gr00tPacketPlanner(publisher)
+    planner.note_env_ids(torch.tensor([0]))
     packet = planner(torch.zeros(1, 930), num_inference_steps=4)
     assert packet.shape == (1, horizon * width)
     # Term-major: the whole qpos block precedes the anchor-pos block.
@@ -167,3 +172,62 @@ def test_packet_planner_returns_term_major_full_horizon():
     assert float(pos[0, 0]) == 29.0
     ori = packet[0, horizon * 32 :].reshape(horizon, 6)
     assert float(ori[0, 0]) == 32.0
+
+
+def _per_env_sampler(goals, num_envs, horizon=3, dim=4):
+    s = _Sampler(num_envs=num_envs, horizon=horizon, dim=dim, consumption="fresh")
+    s._gr00t_goal_names = list(goals)
+    s._gr00t_goal_index = torch.tensor([0, 1, 2][: len(goals)], dtype=torch.long)
+    s._gr00t_features = torch.arange(3 * 2 * 5, dtype=torch.float32).reshape(3, 2, 5)
+    s._gr00t_feature_mask = torch.ones(3, 2, dtype=torch.bool)
+    return s
+
+
+def test_per_env_goal_index_selects_that_envs_language():
+    seen = {}
+
+    class _S(_Sampler):
+        def _gr00t_predict(self, planner_state, goal_index=None):
+            seen["idx"] = None if goal_index is None else goal_index.tolist()
+            return torch.zeros(planner_state.shape[0], self._gr00t_horizon,
+                               self._gr00t_action_dim)
+
+    s = _S(num_envs=3, horizon=3, dim=4, consumption="fresh")
+    s._gr00t_goal_index = torch.tensor([2, 0, 1], dtype=torch.long)
+    s.gr00t_z(_state(2), torch.tensor([1, 2]))
+    assert seen["idx"] == [0, 1], "each row must carry its own env's goal"
+
+
+def test_goal_reference_mismatch_is_a_hard_error():
+    s = _per_env_sampler(["walk", "greet", "stoop"], num_envs=3)
+    s.gr00t_assert_goal_matches(torch.tensor([0, 1]), ["walk", "greet"])
+    try:
+        s.gr00t_assert_goal_matches(torch.tensor([0, 1]), ["walk", "stoop"])
+    except ValueError as error:
+        assert "goal/reference mismatch" in str(error)
+    else:
+        raise AssertionError("a reassigned trajectory must fail loudly")
+
+
+def test_root_qpos_vocabularies_agree_on_widths_but_not_names():
+    """The two routes name the same 38 values differently; keep them distinct.
+
+    Mixing them fails only at run time (one validates against the chunk actor
+    term, the other against the env's macro frame layout), so pin both here.
+    """
+    from imitation_experiments.planner.gr00t_chunk_publisher import (
+        ROOT_QPOS_COMMAND_COMPONENTS,
+        ROOT_QPOS_MACRO_TERMS,
+    )
+
+    command_widths = [w for _, w in ROOT_QPOS_COMMAND_COMPONENTS]
+    macro_widths = [w for _, w in ROOT_QPOS_MACRO_TERMS]
+    assert command_widths == macro_widths == [29, 3, 6]
+    assert sum(command_widths) == 38
+    command_names = [n for n, _ in ROOT_QPOS_COMMAND_COMPONENTS]
+    macro_names = [n for n, _ in ROOT_QPOS_MACRO_TERMS]
+    assert command_names == ["joint_qpos", "root_pos", "root_ori"]
+    assert macro_names == [
+        "expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b",
+    ]
+    assert not set(command_names) & set(macro_names)

@@ -136,9 +136,7 @@ def _fsq_prequant(
         _encoder_trunk_from_state,
     )
 
-    checkpoint = torch.load(
-        encoder_checkpoint, map_location="cpu", weights_only=False
-    )
+    checkpoint = torch.load(encoder_checkpoint, map_location="cpu", weights_only=False)
     state = checkpoint["skill_encoder_state_dict"]
     config = checkpoint["config"]
     activation = str(config.get("encoder_activation", "mish"))
@@ -226,9 +224,7 @@ def _join_slots(
     return target, valid
 
 
-@hydra.main(
-    version_base="1.3", config_path="conf_gr00t", config_name="base_prepare"
-)
+@hydra.main(version_base="1.3", config_path="conf_gr00t", config_name="base_prepare")
 def main(cfg: DictConfig) -> None:
     collection_dir = _resolve(cfg.collection_dir)
     output = _resolve(cfg.output)
@@ -239,6 +235,13 @@ def main(cfg: DictConfig) -> None:
         msg = f"latent.source must be stored|fsq_prequant, got {latent_source!r}."
         raise ValueError(msg)
     chunk_horizon = int(cfg.chunk.horizon)
+    # A latent-only collection carries no expert lookahead: the SONIC-style
+    # collector writes one row per control step, and a 30-frame `root_qpos`
+    # window on every row would cost more disk than the states it explains.
+    # Re-encoding still needs it, so `fsq_prequant` keeps the requirement.
+    chunk_enabled = (
+        bool(cfg.chunk.get("enabled", True)) or latent_source == "fsq_prequant"
+    )
     state_fields = [str(field) for field in cfg.state_fields]
 
     files = _load_sample_files(collection_dir)
@@ -251,8 +254,11 @@ def main(cfg: DictConfig) -> None:
             "episode_id",
             "control_step",
             "z_target",
-            "expert_root_qpos_future",
-            "expert_root_qpos_future_valid",
+            *(
+                ["expert_root_qpos_future", "expert_root_qpos_future_valid"]
+                if chunk_enabled
+                else []
+            ),
             *state_fields,
         ]
         for key in required:
@@ -268,11 +274,14 @@ def main(cfg: DictConfig) -> None:
         msg = f"motion_name count {len(motion_names)} != rows {rows}."
         raise ValueError(msg)
 
-    future = data["expert_root_qpos_future"].float()
-    future_valid = data["expert_root_qpos_future_valid"].bool()
-    if future.shape[1] < chunk_horizon or future.shape[2] != ROOT_QPOS_WIDTH:
-        msg = f"chunk window {tuple(future.shape)} incompatible with horizon {chunk_horizon}."
-        raise ValueError(msg)
+    future: torch.Tensor | None = None
+    future_valid: torch.Tensor | None = None
+    if chunk_enabled:
+        future = data["expert_root_qpos_future"].float()
+        future_valid = data["expert_root_qpos_future_valid"].bool()
+        if future.shape[1] < chunk_horizon or future.shape[2] != ROOT_QPOS_WIDTH:
+            msg = f"chunk window {tuple(future.shape)} incompatible with horizon {chunk_horizon}."
+            raise ValueError(msg)
 
     encoder_record: dict[str, Any] | None = None
     if latent_source == "fsq_prequant":
@@ -321,28 +330,29 @@ def main(cfg: DictConfig) -> None:
 
     table: dict[str, Any] = {
         "states": states,
-        "chunk_target": future[:, :chunk_horizon].contiguous(),
-        "chunk_valid": future_valid[:, :chunk_horizon].contiguous(),
+        "chunk_target": (
+            future[:, :chunk_horizon].contiguous() if future is not None else None
+        ),
+        "chunk_valid": (
+            future_valid[:, :chunk_horizon].contiguous()
+            if future_valid is not None
+            else None
+        ),
         "latent_target": latent_target.contiguous(),
         "latent_valid": latent_valid.contiguous(),
         "goal_id": goal_id,
         "goal_names": goal_names,
         "provenance": {
             "collection_dir": str(collection_dir),
-            "sample_files": {
-                str(path.name): _sha256_file(path) for path in files
-            },
-            "collection_summary_sha256": _sha256_file(
-                collection_dir / "summary.json"
-            )
+            "sample_files": {str(path.name): _sha256_file(path) for path in files},
+            "collection_summary_sha256": _sha256_file(collection_dir / "summary.json")
             if (collection_dir / "summary.json").is_file()
             else None,
             "latent_source": latent_source,
             "latent_slots": slots,
             "latent_hold_steps": hold_steps,
             "latent_slot_valid_fraction": [
-                float(latent_valid[:, slot].float().mean())
-                for slot in range(slots)
+                float(latent_valid[:, slot].float().mean()) for slot in range(slots)
             ],
             "chunk_horizon": chunk_horizon,
             "encoder": encoder_record,

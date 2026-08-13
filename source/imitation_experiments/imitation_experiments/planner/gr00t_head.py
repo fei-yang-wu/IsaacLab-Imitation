@@ -53,12 +53,9 @@ FRESH_PREFIXES: tuple[str, ...] = (
 
 def gr00t_submodule_commit() -> str:
     """Pinned commit of the Isaac-GR00T submodule, for provenance records."""
-    return (
-        subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=GR00T_SUBMODULE, text=True
-        )
-        .strip()
-    )
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=GR00T_SUBMODULE, text=True
+    ).strip()
 
 
 def ensure_gr00t_importable(*, stub_model_package: bool = False) -> None:
@@ -170,7 +167,9 @@ def build_g1_head_config(
         use_alternate_vl_dit=True,
         attend_text_every_n_blocks=1,
         num_inference_timesteps=int(num_inference_timesteps),
-        vl_self_attention_cfg=dict(trunk.get("vl_self_attention_cfg", {"num_layers": 0})),
+        vl_self_attention_cfg=dict(
+            trunk.get("vl_self_attention_cfg", {"num_layers": 0})
+        ),
         **{
             key: (dict(value) if isinstance(value, Mapping) else value)
             for key, value in trunk.items()
@@ -260,6 +259,9 @@ def filtered_pretrained_load(
     }
 
 
+QUANTILE_ROW_LIMIT = 8_000_000
+
+
 def compute_quantile_stats(
     values: torch.Tensor, valid: torch.Tensor | None = None
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -271,6 +273,17 @@ def compute_quantile_stats(
             msg = "No valid frames to compute quantile statistics from."
             raise ValueError(msg)
         flat = flat[mask]
+    # `torch.quantile` refuses an input above roughly 16M elements. A hold-1
+    # collection is one row per control step, so the flattened frame count runs
+    # past that. Estimate from a deterministic random subsample instead: q01 and
+    # q99 of millions of frames are unchanged by sampling a few million of them,
+    # and the alternative (a full sort) would cost far more memory than the
+    # statistic is worth.
+    limit = QUANTILE_ROW_LIMIT
+    if int(flat.shape[0]) > limit:
+        generator = torch.Generator(device="cpu").manual_seed(0)
+        index = torch.randperm(int(flat.shape[0]), generator=generator)[:limit]
+        flat = flat[index]
     q01 = torch.quantile(flat, 0.01, dim=0)
     q99 = torch.quantile(flat, 0.99, dim=0)
     return q01, q99
@@ -309,7 +322,10 @@ def build_batch(
     if state.ndim != 3:
         msg = f"state must be [B, T, D], got {tuple(state.shape)}."
         raise ValueError(msg)
-    if language_features.ndim != 3 or language_features.shape[-1] != BACKBONE_EMBEDDING_DIM:
+    if (
+        language_features.ndim != 3
+        or language_features.shape[-1] != BACKBONE_EMBEDDING_DIM
+    ):
         msg = (
             f"language_features must be [B, S, {BACKBONE_EMBEDDING_DIM}], "
             f"got {tuple(language_features.shape)}."

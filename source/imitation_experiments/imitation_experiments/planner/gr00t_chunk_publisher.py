@@ -27,6 +27,7 @@ open loop.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,12 +36,26 @@ from torch import Tensor
 
 from imitation_experiments.planner.gr00t_isaac_sampler import Gr00tSkillCommandSampler
 
-# Component widths of the root_qpos macro frame, in packet order.
-ROOT_QPOS_COMPONENT_WIDTHS: tuple[tuple[str, int], ...] = (
+# The same 38 root_qpos values are named by TWO different vocabularies, and
+# the two routes each validate against their own. Mixing them fails loudly at
+# run time, which is how this pair was found.
+#
+# Command space — what `ChunkCommandCfg.components` accepts, so this is the
+# payload keying for the native chunk route.
+ROOT_QPOS_COMMAND_COMPONENTS: tuple[tuple[str, int], ...] = (
+    ("joint_qpos", 29),
+    ("root_pos", 3),
+    ("root_ori", 6),
+)
+# Expert-macro-state terms — what the environment's frame layout exposes, so
+# this is what a PacketLayout must use on the encoded (BB1) route.
+ROOT_QPOS_MACRO_TERMS: tuple[tuple[str, int], ...] = (
     ("expert_motion_qpos", 29),
     ("expert_anchor_pos_b", 3),
     ("expert_anchor_ori_b", 6),
 )
+# Back-compat alias for the publish payload.
+ROOT_QPOS_COMPONENT_WIDTHS = ROOT_QPOS_COMMAND_COMPONENTS
 
 
 class Gr00tChunkPublisher(Gr00tSkillCommandSampler):
@@ -54,7 +69,7 @@ class Gr00tChunkPublisher(Gr00tSkillCommandSampler):
         state_history_steps: int,
         gr00t_checkpoint: str | Path,
         goal_features_path: str | Path,
-        goal_name: str,
+        goal_name: str | Sequence[str],
         num_envs: int,
         device: torch.device | str = "cuda",
         components: tuple[tuple[str, int], ...] = ROOT_QPOS_COMPONENT_WIDTHS,
@@ -108,7 +123,9 @@ class Gr00tChunkPublisher(Gr00tSkillCommandSampler):
             .reshape(int(env_ids.numel()), -1)
             .to(device=self._gr00t_device, dtype=torch.float32)
         )
-        prediction = self._gr00t_predict(planner_state)
+        prediction = self._gr00t_predict(
+            planner_state, self._gr00t_goal_index[env_ids.to(self._gr00t_device)]
+        )
         payload: dict[str, Tensor] = {}
         cursor = 0
         for name, width in self._components:
@@ -139,6 +156,12 @@ class Gr00tPacketPlanner(torch.nn.Module):
     The returned packet spans the head's full horizon. BB1 slices the leading
     frames the encoder needs (or ensembles the overlap), so a horizon-30 head
     feeds a 10-frame encoder without any change here.
+
+    Per-environment goals: BB1's planner signature carries no environment ids,
+    so `note_env_ids` must be called with the ids for the rows about to be
+    predicted. BB1 calls `causal_state_provider(env_ids)` immediately before
+    `planner(...)` in the same function, which is where the eval entrypoint
+    records them. Without that call the adapter refuses to guess a goal.
     """
 
     def __init__(
@@ -159,6 +182,11 @@ class Gr00tPacketPlanner(torch.nn.Module):
                 torch.zeros(1, device=publisher._gr00t_device), requires_grad=False
             ),
         )
+        self._pending_env_ids: Tensor | None = None
+
+    def note_env_ids(self, env_ids: Tensor) -> None:
+        """Record which environments the next `forward` call predicts for."""
+        self._pending_env_ids = torch.as_tensor(env_ids, dtype=torch.long).reshape(-1)
 
     def forward(
         self,
@@ -168,7 +196,23 @@ class Gr00tPacketPlanner(torch.nn.Module):
         inference_noise_std: float = 0.0,
     ) -> Tensor:
         del num_inference_steps, inference_noise_std
-        prediction = self._publisher._gr00t_predict(causal_state)
+        if self._pending_env_ids is None:
+            msg = (
+                "no environment ids recorded for this packet; the eval "
+                "entrypoint must call note_env_ids in its causal-state provider."
+            )
+            raise RuntimeError(msg)
+        env_ids = self._pending_env_ids.to(self._publisher._gr00t_device)
+        self._pending_env_ids = None
+        if int(env_ids.numel()) != int(causal_state.shape[0]):
+            msg = (
+                f"recorded {int(env_ids.numel())} env ids but the packet batch "
+                f"has {int(causal_state.shape[0])} rows."
+            )
+            raise ValueError(msg)
+        prediction = self._publisher._gr00t_predict(
+            causal_state, self._publisher._gr00t_goal_index[env_ids]
+        )
         rows, frames, _ = prediction.shape
         blocks: list[Tensor] = []
         cursor = 0

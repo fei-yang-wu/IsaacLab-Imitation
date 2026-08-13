@@ -1,0 +1,20 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# z256 twin of prepare_fsq64_scaled28: same 28 motions, same two seeds, same
+# every-control-step sampling. The only difference is the latent interface —
+# a 256-D CONTINUOUS code instead of the 64-D FSQ lattice — so the pair
+# isolates continuous vs discrete.
+collection_dir: logs/gr00t_language28_scaled_z256/collection
+output: outputs/gr00t_language30/tables/z256_scaled28_table.pt
+latent:
+  slots: 3
+  hold_steps: 10
+  # The z256 encoder has no quantizer, so the stored latent IS the target;
+  # there is no pre-quantization value to recompute.
+  source: stored
+chunk:
+  enabled: false
+state_fields:
+  - oracle_rollout_state_history

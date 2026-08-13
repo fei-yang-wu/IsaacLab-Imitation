@@ -56,6 +56,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="float32")
     parser.add_argument("--window-frames", type=int, default=WINDOW_FRAMES)
     parser.add_argument("--include-window", action="store_true")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed the flow-matching sampler. The head initializes its ODE from "
+            "randn, so two runs with identical inputs otherwise diverge. Pin "
+            "this whenever two runs must be compared step by step; leave it "
+            "unset to sample the distribution."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -63,6 +74,10 @@ def main() -> None:
     args = _parse_args()
     device = torch.device(args.device)
     dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
+    if args.seed is not None:
+        torch.manual_seed(int(args.seed))
+        if device.type == "cuda":
+            torch.cuda.manual_seed_all(int(args.seed))
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     goal_table = torch.load(args.goal_features, map_location="cpu", weights_only=False)

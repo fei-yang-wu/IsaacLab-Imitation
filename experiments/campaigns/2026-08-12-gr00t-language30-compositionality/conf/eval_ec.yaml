@@ -1,0 +1,78 @@
+# EC (Embodied-Control) MuJoCo evaluation of the 30-motion arms.
+#
+# Deployment-rehearsal signal, NOT the number of record — MuJoCo actuator
+# dynamics differ from Newton by design. The Isaac grid is the record.
+#
+# `batched_goals` runs every goal in ONE process per variant via the job's
+# `goal_sequence`, so the 1.3B head loads once instead of once per goal.
+ec_repo: external/Embodied-Control
+pixi_bin: /home/fwu91/Storage/.pixi/bin/pixi
+mjcf: source/isaaclab_imitation/isaaclab_imitation/assets/unitree/g1_description/g1_29dof_rev_1_0.xml
+goal_features: outputs/gr00t_language30/goal_features/goal_features.pt
+reference_arrays: data/bones_seed_language30_compositionality_v1/reference_arrays/root_qpos_v1
+output_root: logs/gr00t_language30_ec_eval/grid_v1
+
+batched_goals: true
+only_arms: null
+record_states: true # per-tick states, so MPJPE can be computed post-hoc
+compute_mpjpe: false # batched runs need per-episode motions; see eval_mpjpe
+hold_steps: 10
+slots: 3
+rtc_freeze_steps: 0
+rtc_variants: [false]
+episodes: 1 # overridden by the goal count in batched mode
+max_steps: 500
+seed: 0
+min_base_height_m: 0.4 # matches the env's base_too_low: survival = did not fall
+cell_timeout_s: 5400
+
+# Manifest order, matching the Isaac grid's per-environment goal assignment.
+goals:
+  - Neutral_stoop_down_001_A057
+  - big_heavy_one_hand_front_high_to_front_low_R_001_A524
+  - big_heavy_one_hand_front_low_to_front_high_R_001_A524
+  - big_light_two_hands_put_down_right_side_high_R_001_A520
+  - casual_greeting_R_001_A428
+  - cellphone_typing_sequence_one_hand_idle_R_001_A423
+  - cough_tuberculosis_R_001_A500
+  - crossed_arms_idle_R_001_A456
+  - drinking_standing_mug_R_001_A282
+  - exercise_3_A029
+  - feeding_birds_start_R_001_A456
+  - fishing_standing_loop_R_001_A500
+  - hurry_idle_001_A277
+  - injured_R_leg_turn_walk_360_001_A069
+  - injured_torso_walk_ff_start_315_R_001_A214
+  - inside_door_handle_right_side_open_walk_turn_close_R_001_A514
+  - jump_around_001_A492
+  - lift_crate_walk_ff_start_180_R_001_A140
+  - looking_in_the_mirror_amateur_001_A001
+  - medium_big_light_one_hand_walk_ff_start_360_R_001_A504
+  - mosquito_drive_away_R_001_A500
+  - painting_R_001_A097
+  - panic_run_away_180_R_001_A423
+  - rock_out_002_A484
+  - surrender_stop_R_001_A468
+  - talking_with_adult_turn_walk_360_R_walk_ff_loop_270_R_004_A476
+  - triumph_001_A033
+  - walk_arc_cw_start_R_slow_001_A443
+  - walk_big_dog_ff_225_stop_R_001_A492
+  - walk_ff_loop_180_R_slow_001_A443
+
+arms:
+  z256:
+    mode: latent
+    bundle: logs/policy_bundles/rollout24_gamma097_3500m
+    checkpoint: outputs/gr00t_language30/arms/z256/checkpoints/update_0012000.pt
+  z256_rollout:
+    mode: latent
+    bundle: logs/policy_bundles/rollout24_gamma097_3500m
+    checkpoint: outputs/gr00t_language30/arms/z256_rollout/checkpoints/update_0012000.pt
+  fsq64_rollout:
+    mode: latent
+    bundle: logs/policy_bundles/fsq64_sonic_4500m
+    checkpoint: outputs/gr00t_language30/arms/fsq64_rollout/checkpoints/update_0012000.pt
+  explicit_rollout:
+    mode: chunk
+    bundle: logs/policy_bundles/rollout24_gamma097_3500m
+    checkpoint: outputs/gr00t_language30/arms/explicit_rollout/checkpoints/update_0012000.pt

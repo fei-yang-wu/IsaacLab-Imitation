@@ -1,0 +1,18 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# Phase 2B: hold-1 target on OUR fsq64 tracker. 30 consecutive per-step
+# latents instead of 3 latents held for 10 steps.
+collection_dir: logs/gr00t_language30_hold1_fsq64/collection
+output: outputs/gr00t_language30/tables/fsq64_hold1_table.pt
+latent:
+  slots: 30
+  hold_steps: 1
+  # Rows already carry the fsq64 encoder's per-step pre-quantization latent as
+  # `z_target`; re-encoding would need an expert lookahead the rows omit.
+  source: stored
+chunk:
+  enabled: false
+state_fields:
+  - oracle_rollout_state_history
