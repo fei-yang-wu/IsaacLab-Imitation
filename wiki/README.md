@@ -59,5 +59,10 @@ Start with:
   current RTX re-image note.
 - [Isaac Consumer Data Plan](isaac-consumer-data-plan.md): current branch split
   between off-machine action labeling and this repo's Isaac/data-consumer work.
+- [Skill Encoder JEPA Plan](skill-encoder-jepa-plan.md): design-only plan for
+  fitting the skill encoder on robot-produced windows, moving from
+  state-chunk-state to chunk-chunk-chunk with one encoder, and replacing the
+  raw-target objective with JEPA plus SIGReg; prerequisites, gates, and
+  sequencing. Nothing measured yet.
 
 Index every `wiki/*.md` file here so future pages do not become orphaned.
