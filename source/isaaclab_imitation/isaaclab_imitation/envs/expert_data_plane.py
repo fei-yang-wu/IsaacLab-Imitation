@@ -3305,7 +3305,7 @@ class ExpertDataPlane:
                     body_pos.reshape(batch_size, -1, 3),
                     body_quat.reshape(batch_size, -1, 4),
                 )
-        elif context == "rollout":
+        elif context in ("rollout", "robot_heading"):
             window_size = int(anchor_pos.shape[1])
             flat_env_ids = env_ids[:, None].expand(-1, window_size).reshape(-1)
             anchor_pos_w, anchor_quat_w_opt = self._transform_reference_pose_to_world(
@@ -3325,6 +3325,18 @@ class ExpertDataPlane:
             )
             robot_anchor_pos_w = robot_anchor_pos_w.index_select(0, env_ids)
             robot_anchor_quat_w = robot_anchor_quat_w.index_select(0, env_ids)
+            if context == "robot_heading":
+                # SONIC v1.1's convention. Its encoder reads
+                # `motion_anchor_ori_heading_mf_nonflat`, i.e.
+                # `inv(get_heading_q(robot_anchor_quat_w)) * ref`, so the frame
+                # is the LIVE robot's heading twist, not its full pose. Taking
+                # the full pose (the "rollout" branch above, SONIC's
+                # `motion_anchor_ori_b_mf`) also cancels the robot's own
+                # roll/pitch, which removes the reference's tilt relative to
+                # gravity from the encoder input.
+                robot_anchor_pos_w, robot_anchor_quat_w = compiled.heading_anchor_frame(
+                    robot_anchor_pos_w, robot_anchor_quat_w
+                )
             anchor_pos_b, anchor_ori_b = compiled.body_pose_in_anchor_frame(
                 robot_anchor_pos_w,
                 robot_anchor_quat_w,
@@ -3454,16 +3466,21 @@ class ExpertDataPlane:
         differs from its pretraining input by exactly the live tracking
         error. "expert_heading" anchors both contexts at the expert's slot-0
         heading (yaw-only) frame with an xy-only origin, making pretrain and
-        rollout inputs identical by construction. The width is unchanged
-        either way, so the mode is recorded in the skill checkpoint and the
+        rollout inputs identical by construction. "robot_heading" is SONIC
+        v1.1's convention: the live encoder input is anchored at the LIVE
+        robot's heading (yaw-only) frame with an xy-only origin, which is what
+        `motion_anchor_ori_heading_mf_nonflat` computes upstream; pretraining
+        has no robot, so it keeps the expert's own slot-0 heading frame -- the
+        perfect-tracking limit of the same frame. The width is unchanged in
+        every mode, so the mode is recorded in the skill checkpoint and the
         low level refuses an encoder pretrained under a different mode.
         """
         configured = getattr(self._env.cfg, "expert_macro_anchor_mode", "robot")
         mode = str(configured).strip()
-        if mode not in ("robot", "expert_heading"):
+        if mode not in ("robot", "expert_heading", "robot_heading"):
             raise ValueError(
-                "expert_macro_anchor_mode must be 'robot' or 'expert_heading', "
-                f"got {mode!r}."
+                "expert_macro_anchor_mode must be 'robot', 'expert_heading' or "
+                f"'robot_heading', got {mode!r}."
             )
         return mode
 
@@ -3533,7 +3550,8 @@ class ExpertDataPlane:
         anchor_body_name: str = "torso_link",
     ) -> dict[str, torch.Tensor]:
         """Build independently selectable joint, EE, and keypoint macro terms."""
-        if self._expert_macro_anchor_mode() == "expert_heading":
+        anchor_mode = self._expert_macro_anchor_mode()
+        if anchor_mode == "expert_heading":
             # One frame convention for both callers: the pretrain path
             # (context="expert") and the live encoder path (context="rollout")
             # collapse onto the expert slot-0 heading frame, so the frozen
@@ -3541,6 +3559,13 @@ class ExpertDataPlane:
             # construction. Only the macro state changes; the expert_window
             # observation terms keep their per-context semantics.
             context = "expert_heading"
+        elif anchor_mode == "robot_heading":
+            # SONIC v1.1: the live encoder input is expressed in the LIVE
+            # robot's heading frame, so the reference the encoder sees carries
+            # the current tracking error. Pretraining has no robot, so it keeps
+            # the expert's own slot-0 heading frame -- the same frame in the
+            # perfect-tracking limit, which is the closest offline analogue.
+            context = "expert_heading" if context == "expert" else "robot_heading"
         selected = set(self._expert_macro_feature_term_order())
         terms = self._build_expert_window_terms(
             expert_window,
