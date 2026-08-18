@@ -1,0 +1,17 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# Discrete arm on the 10B FSQ tracker. Identical join to the 2026-08-13 winner
+# (46.95 mm): 3 latents, each held 10 control steps, target = the PRE-quantized
+# bounded vector, snapped onto the lattice at publication. Only the tracker and
+# its encoder changed (4.5B -> 10.0B, `robot` -> `robot_heading` frame).
+collection_dir: logs/planner_10b/fsq64_10b/collection_merged
+output: outputs/planner_10b/tables/fsq64_10b_table.pt
+latent:
+  slots: 3
+  hold_steps: 10
+  source: fsq_prequant
+  encoder_checkpoint: logs/bottleneck_10b_mirror/fsq64_hold10_seed0/encoder/checkpoints/latest.pt
+state_fields:
+  - oracle_rollout_state_history

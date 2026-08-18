@@ -8,30 +8,6 @@ echo "(run_singularity.py): Called on compute node from current isaaclab directo
 # Helper functions
 #==
 
-CLUSTER_ENV_OVERRIDES=()
-
-capture_cluster_env_overrides() {
-    local name
-    local value
-
-    CLUSTER_ENV_OVERRIDES=()
-    while IFS='=' read -r name value; do
-        case "$name" in
-            CLUSTER_*)
-                CLUSTER_ENV_OVERRIDES+=("$name=$value")
-                ;;
-        esac
-    done < <(env)
-}
-
-restore_cluster_env_overrides() {
-    local assignment
-
-    for assignment in "${CLUSTER_ENV_OVERRIDES[@]}"; do
-        export "$assignment"
-    done
-}
-
 prefix_home_if_relative() {
     local home_dir="$1"
     local raw_path="$2"
@@ -292,107 +268,6 @@ seed_shared_project_logs_from_submission() {
     rsync -a "$submitted_project_logs/" "$CLUSTER_ISAACLAB_DIR/logs/"
 }
 
-capture_requested_env_var() {
-    local var_name="$1"
-    local marker_name="REQUESTED_${var_name}_IS_SET"
-    local value_name="REQUESTED_${var_name}"
-
-    if [ "${!var_name+x}" ]; then
-        printf -v "$marker_name" '%s' "1"
-        printf -v "$value_name" '%s' "${!var_name}"
-    else
-        printf -v "$marker_name" '%s' ""
-        printf -v "$value_name" '%s' ""
-    fi
-}
-
-restore_requested_env_var() {
-    local var_name="$1"
-    local marker_name="REQUESTED_${var_name}_IS_SET"
-    local value_name="REQUESTED_${var_name}"
-
-    if [ -n "${!marker_name:-}" ]; then
-        printf -v "$var_name" '%s' "${!value_name}"
-    fi
-}
-
-capture_cluster_env_overrides() {
-    local var_name
-
-    for var_name in \
-        CLUSTER_ISAAC_SIM_CACHE_DIR \
-        CLUSTER_ISAACLAB_DIR \
-        CLUSTER_PROJECT_LOGS_DIR \
-        CLUSTER_SIF_PATH \
-        CLUSTER_DATA_DIR \
-        CLUSTER_HF_TOKEN_FILE \
-        CLUSTER_WANDB_API_KEY_FILE \
-        CLUSTER_CONTAINER_HOME \
-        CLUSTER_PYTHON_EXECUTABLE \
-        CLUSTER_SIM_BACKEND \
-        CLUSTER_USE_OVERLAY \
-        CLUSTER_CU130_RUNTIME_ROOT \
-        CLUSTER_G1_USD_PATH \
-        CLUSTER_AUTO_SETUP_G1_DATA \
-        CLUSTER_G1_EXPECTED_MOTION_COUNT \
-        CLUSTER_G1_DATA_ROOT \
-        CLUSTER_G1_REPO_ID \
-        CLUSTER_G1_MANIFEST_PATH \
-        CLUSTER_G1_MANIFEST_REFRESH_POLICY \
-        CLUSTER_SKIP_CACHE_COPY \
-        CLUSTER_OVERLAY_SIZE_MB \
-        CLUSTER_JOB_TMPDIR_ROOT \
-        CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB \
-        CLUSTER_USE_SHARED_SIF \
-        CLUSTER_SHARED_SIF_PATH \
-        CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
-        CLUSTER_USE_XVFB \
-        CLUSTER_EXTRA_PYTHONPATH_REL \
-        REMOVE_CODE_COPY_AFTER_JOB \
-        REMOVE_OVERLAY_AFTER_JOB; do
-        capture_requested_env_var "$var_name"
-    done
-}
-
-restore_cluster_env_overrides() {
-    local var_name
-
-    for var_name in \
-        CLUSTER_ISAAC_SIM_CACHE_DIR \
-        CLUSTER_ISAACLAB_DIR \
-        CLUSTER_PROJECT_LOGS_DIR \
-        CLUSTER_SIF_PATH \
-        CLUSTER_DATA_DIR \
-        CLUSTER_HF_TOKEN_FILE \
-        CLUSTER_WANDB_API_KEY_FILE \
-        CLUSTER_CONTAINER_HOME \
-        CLUSTER_PYTHON_EXECUTABLE \
-        CLUSTER_SIM_BACKEND \
-        CLUSTER_USE_OVERLAY \
-        CLUSTER_CU130_RUNTIME_ROOT \
-        CLUSTER_G1_USD_PATH \
-        CLUSTER_AUTO_SETUP_G1_DATA \
-        CLUSTER_G1_EXPECTED_MOTION_COUNT \
-        CLUSTER_G1_DATA_ROOT \
-        CLUSTER_G1_REPO_ID \
-        CLUSTER_G1_MANIFEST_PATH \
-        CLUSTER_G1_MANIFEST_REFRESH_POLICY \
-        CLUSTER_SKIP_CACHE_COPY \
-        CLUSTER_OVERLAY_SIZE_MB \
-        CLUSTER_JOB_TMPDIR_ROOT \
-        CLUSTER_REMOVE_JOB_TMPDIR_AFTER_JOB \
-        CLUSTER_USE_SHARED_SIF \
-        CLUSTER_SHARED_SIF_PATH \
-        CLUSTER_ALLOW_TORCH_COMPILE_DEBUG \
-        CLUSTER_USE_XVFB \
-        CLUSTER_EXTRA_PYTHONPATH_REL \
-        REMOVE_CODE_COPY_AFTER_JOB \
-        REMOVE_OVERLAY_AFTER_JOB; do
-        restore_requested_env_var "$var_name"
-    done
-}
-
-
 #==
 # Main
 #==
@@ -401,10 +276,23 @@ restore_cluster_env_overrides() {
 # get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 
-# load variables to set the Isaac Lab path on the cluster
-capture_cluster_env_overrides
-source $SCRIPT_DIR/.env.cluster
-restore_cluster_env_overrides
+# load variables to set the Isaac Lab path on the cluster.
+# A workspace submitted by `python -m imitation_experiments.pipeline.cluster`
+# carries a frozen, fully-resolved env file; source ONLY that. The legacy
+# .env.cluster re-source plus its capture/restore allow-lists (which silently
+# reverted any variable not registered in every list) was retired 2026-08-15
+# along with cluster_interface.sh, so a workspace without the frozen file is a
+# legacy invocation and gets a loud, immediate error instead of that fallback.
+if [ -f "$SCRIPT_DIR/job_env.resolved.sh" ]; then
+    echo "[INFO] Using frozen job environment: $SCRIPT_DIR/job_env.resolved.sh"
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/job_env.resolved.sh"
+else
+    echo "[ERROR] No frozen job environment found at '$SCRIPT_DIR/job_env.resolved.sh'." >&2
+    echo "[ERROR] The legacy .env.cluster submission path was retired 2026-08-15." >&2
+    echo "[ERROR] Submit through 'python -m imitation_experiments.pipeline.cluster plan/submit' instead." >&2
+    exit 2
+fi
 source $SCRIPT_DIR/../.env.base
 
 base_tmpdir="${CLUSTER_JOB_TMPDIR_ROOT:-${TMPDIR:-/tmp}}"
@@ -508,6 +396,25 @@ if [ -n "${CLUSTER_WANDB_TAGS:-}" ]; then
     echo "[INFO] W&B run tags for container runtime: ${CLUSTER_WANDB_TAGS}"
 fi
 
+# The rest of the W&B controls a submitter may set. Same `--containall`
+# boundary as the tags above: a campaign that exports WANDB_RUN_ID in its stage
+# env gets an auto-generated run id anyway unless the variable is forwarded
+# here, which is silent -- the run appears, just not under the id that was
+# asked for. WANDB__PRIMARY / WANDB__LABEL (double underscore) are the env
+# spellings of wandb's x_primary / x_label settings, which together with
+# WANDB_MODE=shared let a second process (the evaluation sidecar) write
+# Eval/* into the training run.
+for _wandb_var in WANDB_RUN_ID WANDB_RESUME WANDB_RUN_GROUP WANDB_MODE \
+    WANDB__PRIMARY WANDB__LABEL; do
+    _wandb_value="$(printenv "${_wandb_var}" || true)"
+    if [ -n "${_wandb_value}" ]; then
+        export "SINGULARITYENV_${_wandb_var}=${_wandb_value}"
+        export "APPTAINERENV_${_wandb_var}=${_wandb_value}"
+        echo "[INFO] Forwarding ${_wandb_var}=${_wandb_value} into the container."
+    fi
+done
+unset _wandb_var _wandb_value
+
 # `--containall` isolates the workload environment, so Slurm's array index is
 # not inherited automatically. Staged array workflows use it to select an
 # explicit goal; forward it deliberately across the container boundary.
@@ -565,6 +472,27 @@ cp -r $1 $TMPDIR
 # Get the directory name
 dir_name=$(basename "$1")
 seed_shared_project_logs_from_submission
+# Extra read-only binds for shared allocations that live OUTSIDE
+# CLUSTER_DATA_DIR (e.g. PACE's /storage/ice-shared project space). Without an
+# explicit bind these are invisible inside the container even though the
+# compute node mounts them, and a dataset there fails as "manifest missing"
+# (diagnosed 2026-08-15, ICE job 5577484). Colon-separated list of host paths.
+cluster_extra_bind_args=()
+if [[ -n "${CLUSTER_EXTRA_BIND_PATHS:-}" ]]; then
+    IFS=':' read -r -a _extra_bind_paths <<< "${CLUSTER_EXTRA_BIND_PATHS}"
+    for _p in "${_extra_bind_paths[@]}"; do
+        [[ -n "$_p" ]] || continue
+        # Skip absent paths: Singularity errors on a bind whose source does not
+        # exist, and this env file is shared across clusters.
+        [[ -d "$_p" ]] || { echo "[INFO] extra bind skipped (absent): $_p"; continue; }
+        # rw, not ro: the reference-array loader opens .memmap files in
+        # read-write mode even for pure reads, so a read-only bind fails with
+        # "Read-only file system (30)" (ICE job 5577498, 2026-08-15).
+        echo "[INFO] extra bind: $_p (rw)"
+        cluster_extra_bind_args+=(-B "${_p}:${_p}:rw")
+    done
+fi
+
 project_logs_bind_args=()
 if [ -n "${CLUSTER_PROJECT_LOGS_DIR:-}" ]; then
     mkdir -p "$CLUSTER_PROJECT_LOGS_DIR" "$TMPDIR/$dir_name/logs"
@@ -734,6 +662,7 @@ set +e
     "${project_logs_bind_args[@]}" \
     -B "${CLUSTER_DATA_DIR}:/data:rw" \
     -B "${CLUSTER_DATA_DIR}:${CLUSTER_DATA_DIR}:rw" \
+    ${cluster_extra_bind_args[@]+"${cluster_extra_bind_args[@]}"} \
     "${container_overlay_args[@]}" \
     --nv --containall "$container_image" \
     bash -c "$container_entry_cmd"

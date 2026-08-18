@@ -214,6 +214,7 @@ class Gr00tSkillCommandSampler:
             )
         self._gr00t_calls = 0
         self._gr00t_latency_ms: list[float] = []
+        self._gr00t_inference_steps = int(num_inference_timesteps)
         return {
             "checkpoint": str(checkpoint_path),
             "goal_name": goal_name if isinstance(goal_name, str) else "per_env",
@@ -225,6 +226,33 @@ class Gr00tSkillCommandSampler:
             "consumption": consumption,
             "quantizer": "fsq" if fsq_half_levels is not None else "none",
             "update": int(checkpoint.get("update", -1)),
+            **self.gr00t_inference_provenance(),
+        }
+
+    def gr00t_inference_provenance(self) -> dict[str, Any]:
+        """Return the inference-time knobs that distinguish one arm from another.
+
+        Every value here changes a published number without changing the
+        checkpoint. Until 2026-08-16 none of them reached the evaluation
+        summary, so an arm was identifiable only by the string somebody typed
+        into the output directory name -- `..._ens0.5_m28` against `..._n20_m28`
+        -- and no tool could tell an ensembled run from a plain one by reading
+        the artifact. Reporting had to take them from a hand-maintained YAML.
+
+        `temporal_ensemble_decay` is None when ensembling is off, so a reader
+        cannot mistake the unused default for a setting that was in effect.
+        """
+        ensemble = str(getattr(self, "_gr00t_ensemble", "none"))
+        return {
+            "temporal_ensemble": ensemble,
+            "temporal_ensemble_decay": (
+                float(getattr(self, "_gr00t_ensemble_decay", 0.0))
+                if ensemble != "none"
+                else None
+            ),
+            "num_inference_timesteps": int(getattr(self, "_gr00t_inference_steps", -1)),
+            "samples_per_publication": int(getattr(self, "_gr00t_samples", 1)),
+            "consume_slots": int(self._gr00t_slots),
         }
 
     def _gr00t_predict(

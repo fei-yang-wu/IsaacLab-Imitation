@@ -1,0 +1,50 @@
+# PACE ICE profile for the new control plane. Source of truth for the values:
+# docker/cluster/.env.ice_runtime (legacy path) — the test
+# test_ice_profile_covers_env_ice_runtime guards drift between the two.
+name: ice
+login: ice
+control_root: /home/hice1/fwu91/scratch/Research/IsaacLab/cluster_control
+data_dir: /home/hice1/fwu91/scratch/Research/IsaacLab/data
+# On the shared VIP-VWT allocation (2 TB, no per-user quota) rather than the
+# 300 GB personal scratch: the image is a 14.7 GB read-only artifact every job
+# pulls, and one copy serves the whole team. Verified byte-identical to the
+# personal-scratch copy before the switch (2026-08-17).
+shared_sif_path: /storage/ice-shared/vip-vwt/scratch-fwu91/isaaclabsif/isaaclab-runtime-3.0.0b2-cu130.sif
+isaac_cache_dir: /home/hice1/fwu91/scratch/Research/IsaacLab/cache
+job_tmpdir_root: /tmp
+project_logs_dir: /home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab/logs
+# The container binds only data_dir plus these; a dataset anywhere else is
+# invisible inside the job (ICE job 5577484, 2026-08-15).
+extra_bind_paths:
+  - /storage/ice-shared/vip-vwt
+hf_token_file: /home/hice1/fwu91/.hf_token
+wandb_api_key_file: /home/hice1/fwu91/.wandb_api_key
+# Home quota is a 300 GB hard cap that silently kills checkpoint saves.
+min_free_gb: 50
+slurm:
+  qos: coe-ice
+  partition: ice-gpu
+  gres: gpu:h100:1
+  cpus_per_task: 16
+  mem: 96G
+  time_limit: "15:59:00"
+  # Relative Slurm log dirs kill the job in ~100s with no log anywhere
+  # (jobs 5577430/5577435, 2026-08-15). Must be absolute and existing.
+  log_dir: /home/hice1/fwu91/scratch/slurm_logs
+  job_name_prefix: imit
+env:
+  # Runtime keys consumed by run_singularity.sh inside the job. Everything
+  # here reaches the job verbatim; add keys freely, there is no allow-list.
+  CLUSTER_ISAACLAB_DIR: /home/hice1/fwu91/scratch/Research/IsaacLab/isaaclab
+  CLUSTER_PYTHON_EXECUTABLE: scripts/rlopt/train.py
+  CLUSTER_SIM_BACKEND: auto
+  CLUSTER_CU130_RUNTIME_ROOT: /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime
+  CLUSTER_G1_USD_PATH: repo
+  CLUSTER_USE_OVERLAY: "0"
+  CLUSTER_SKIP_CACHE_COPY: "1"
+  CLUSTER_AUTO_SETUP_G1_DATA: "0"
+  CLUSTER_APPEND_DEFAULT_G1_MANIFEST: "0"
+  CLUSTER_G1_MANIFEST_REFRESH_POLICY: never
+  CLUSTER_EXTRA_PYTHONPATH_REL: IsaacLab/source/isaaclab:IsaacLab/source/isaaclab_tasks:IsaacLab/source/isaaclab_assets:IsaacLab/source/isaaclab_rl:IsaacLab/source/isaaclab_mimic:source/isaaclab_imitation:RLOpt:ImitationLearningTools
+  REMOVE_CODE_COPY_AFTER_JOB: "false"
+  REMOVE_OVERLAY_AFTER_JOB: "true"

@@ -5,10 +5,11 @@ open-source release. It contains no diagnostic command styles, recovery jobs,
 or historical launchers.
 
 It holds only the guarded entrypoints — [`run.sh`](run.sh), the Phase-4 and
-Phase-5 submit plus aggregate scripts, the release-bundle builder, and the
-reference-buffer workflow. Shared implementation, diagnostics, and tests live in
-the campaign that owns them, so this surface stays stable as campaigns come and
-go. See [`../README.md`](../README.md) for the campaign layout.
+Phase-5 submit plus aggregate scripts, the release-bundle builder, the results
+page builder, and the reference-buffer workflow. Shared implementation,
+diagnostics, and tests live in the campaign that owns them, so this surface
+stays stable as campaigns come and go. See [`../README.md`](../README.md) for
+the campaign layout.
 
 ## Script standard for this directory
 
@@ -100,6 +101,36 @@ pixi run python experiments/paper/run_enc380_planner_route_comparison.py executi
 The checked-in config pins the completed 5B tracker and encoder hashes. A real
 run remains blocked until the corrected 500-control-step, `[0, 200]`-start
 qualification passes.
+
+## Results page
+
+[`build_report.sh`](build_report.sh) with [`conf/report.yaml`](conf/report.yaml)
+renders the interactive results page from the evaluation artifacts on disk:
+
+```bash
+./experiments/paper/build_report.sh
+```
+
+It writes a single self-contained HTML file to `logs/report/index.html` plus the
+reduced records beside it as JSON. The page opens from a `file://` URL, fetches
+nothing, and carries four sections — the moving best low-level ceiling, the
+planner rows driving that ceiling, the ablation blocks, and the method cards
+with their objectives in MathML.
+
+The curated run list lives in the YAML. The implementation is
+`imitation_experiments.reporting`, whose tests pin the three things that are
+easy to get silently wrong:
+
+- the headline MPJPE is the **episode mean**, not the transition-weighted or the
+  successful-only reduction stored in the same summary;
+- an oracle ceiling is scored on the **arm's own motion set**, under the arm's
+  own reduction, so the reported gap is not inflated by motions the arm never
+  ran;
+- a relative difference inside the evaluation noise band renders as
+  **unresolved** rather than as a win.
+
+A referenced run with no `summary.json` is a build error, so the page never
+silently drops a row.
 
 ## Reference buffer workflow
 

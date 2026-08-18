@@ -1,0 +1,21 @@
+defaults:
+  - base_train
+  - _self_
+
+# Same head, same optimizer budget, same warm start as the 2026-08-13 arm that
+# reached 46.95 mm. The tracker underneath it and the motion set (30, the v2 set)
+# are the only changes.
+output_dir: outputs/planner_10b/arms/fsq64_10b
+target: latent
+data:
+  table: outputs/planner_10b/tables/fsq64_10b_table.pt
+  state_field: oracle_rollout_state_history
+goal_features: outputs/planner_10b/goal_features/goal_features.pt
+pretrained_bundle: outputs/gr00t_language10/goal_features/action_head_trunk.pt
+model:
+  state_dropout_prob: 0
+run:
+  checkpoint_interval: 4000
+wandb:
+  name: planner_fsq64_10b
+  tags: [gr00t-head, planner-10b, fsq64, hold10, target-latent, language30-v2]

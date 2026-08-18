@@ -1,0 +1,38 @@
+# Skynet profile for the new control plane. EXPERIMENTAL: transcribed from
+# docker/cluster/.env.skynet_runtime but not yet exercised by a migrated
+# campaign; verify against a real submission before first use.
+name: skynet
+login: skynet
+control_root: /coc/flash12/fwu91/Research/IsaacLab/cluster_control
+data_dir: /coc/flash12/fwu91/Research/IsaacLab/data
+shared_sif_path: /coc/flash12/fwu91/Research/IsaacLab/isaaclabsif/isaaclab-runtime-3.0.0b2-cu130.sif
+isaac_cache_dir: /coc/flash12/fwu91/Research/IsaacLab/cache
+job_tmpdir_root: /tmp
+project_logs_dir: /coc/flash12/fwu91/Research/IsaacLab/isaaclab/logs
+extra_bind_paths: []
+hf_token_file: /nethome/fwu91/.hf_token
+wandb_api_key_file: /nethome/fwu91/.wandb_api_key
+min_free_gb: 50
+slurm:
+  qos: short
+  partition: wu-lab
+  gres: gpu:a40:1
+  cpus_per_task: 8
+  mem: 96G
+  time_limit: "00:30:00"
+  log_dir: /coc/flash12/fwu91/Research/IsaacLab/slurm_logs
+  job_name_prefix: imit
+env:
+  CLUSTER_ISAACLAB_DIR: /coc/flash12/fwu91/Research/IsaacLab/isaaclab
+  CLUSTER_PYTHON_EXECUTABLE: scripts/rlopt/train.py
+  CLUSTER_SIM_BACKEND: auto
+  CLUSTER_CU130_RUNTIME_ROOT: /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime
+  CLUSTER_G1_USD_PATH: repo
+  CLUSTER_USE_OVERLAY: "0"
+  CLUSTER_SKIP_CACHE_COPY: "1"
+  CLUSTER_AUTO_SETUP_G1_DATA: "0"
+  CLUSTER_APPEND_DEFAULT_G1_MANIFEST: "0"
+  CLUSTER_G1_MANIFEST_REFRESH_POLICY: never
+  CLUSTER_EXTRA_PYTHONPATH_REL: IsaacLab/source/isaaclab:IsaacLab/source/isaaclab_tasks:IsaacLab/source/isaaclab_assets:IsaacLab/source/isaaclab_rl:IsaacLab/source/isaaclab_mimic:source/isaaclab_imitation:RLOpt:ImitationLearningTools
+  REMOVE_CODE_COPY_AFTER_JOB: "false"
+  REMOVE_OVERLAY_AFTER_JOB: "true"

@@ -231,7 +231,7 @@ Pick the smallest relevant check:
 | Shell scripts | `bash -n <script>` |
 | RLOpt pure-Python tests | `pixi run test-rlopt` |
 | Isaac Lab imports or runtime env behavior | `pixi run -e isaaclab test-isaaclab` |
-| Cluster script behavior | `bash -n docker/cluster/cluster_interface.sh` |
+| Cluster control-plane behavior | `pixi run test-experiments` (covers `pipeline/cluster/`) |
 | Training entrypoint or config routing | targeted `scripts/rlopt/train.py` smoke run |
 
 Do not submit cluster jobs until the relevant local check passes.

@@ -1,0 +1,319 @@
+# Curated results page. Implementation: imitation_experiments.reporting.
+#
+# Every `run` below is a directory under `logs/` holding a `summary.json`. The
+# builder fails if one is missing, so a stale entry is a build error rather than
+# a table that quietly lost a row. Archived runs resolve through the symlinks
+# left in `logs/` when their artifacts moved to the HDD pool.
+#
+# Attributes carry what the artifact does not record. Temporal ensembling used to
+# be the clearest case: before 2026-08-16 it survived only in the evaluation
+# label, so it had to be declared here. The evaluation now writes it, its decay,
+# the ODE-step count, the samples per publication, and the consumed slot count
+# into `metadata.gr00t_planner`, and the renderer prefers the artifact over
+# anything declared here. Every run below predates that change, so the `ensemble`
+# attributes still carry it; drop them as each arm is re-evaluated. Attributes
+# the evaluation genuinely cannot know, such as training row counts, stay here
+# permanently.
+
+meta:
+  title: "Causal Interface — Results"
+  subtitle: >-
+    Does a learned latent skill command beat the explicit action chunk that
+    current humanoid VLA systems publish? Every number here is reduced from an
+    evaluation summary.json under the same episode-mean, root-relative MPJPE,
+    with fall-only survival.
+  updated: "2026-08-16"
+  logs_root: logs
+  noise_band_pct: 15.0
+
+low_level:
+  headline:
+    id: best_tracker
+    run: bottleneck_10b_eval/cont_det_hold1_resetramp_stepseg3_1500119040
+    name: "cont_det hold-1 + reset ramp, 1.5B frames"
+    attributes:
+      campaign: latent-bottleneck-10b
+      status: mid-flight segment
+    note: >-
+      Standing best oracle ceiling. The campaign targets 10B frames and this is
+      a 1.5B segment, so the number can only improve or be superseded.
+
+  history:
+    - date: "2026-08-13"
+      run: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      name: "fsq64 hold-10, 4.5B"
+      note: "Tracker behind the best planner arm."
+    - date: "2026-08-13"
+      run: gr00t_language30_oracle_ceiling/oracle_z256_hold10
+      name: "z256 hold-10, 5.75B"
+    - date: "2026-08-16"
+      run: bottleneck_10b_eval/jepa_sigreg_ebm_hold10_256d_stepseg3_1500119040
+      name: "JEPA sigreg-EBM 256d"
+    - date: "2026-08-16"
+      run: bottleneck_10b_eval/cont_det_hold1_resetramp_stepseg3_1500119040
+      name: "cont_det hold-1 + ramp"
+
+  rows:
+    - id: cont_det_ramp
+      run: bottleneck_10b_eval/cont_det_hold1_resetramp_stepseg3_1500119040
+      name: "cont_det hold-1 + reset ramp"
+      attributes: {bottleneck: "continuous 256-D", hold: "1", frames: "1.5B"}
+    - id: jepa_sigreg
+      run: bottleneck_10b_eval/jepa_sigreg_ebm_hold10_256d_stepseg3_1500119040
+      name: "JEPA sigreg-EBM 256d"
+      attributes: {bottleneck: "continuous 256-D", hold: "10", frames: "1.5B"}
+    - id: cont_det_hold1
+      run: bottleneck_10b_eval/cont_det_hold1_stepseg3_1500119040
+      name: "cont_det hold-1"
+      attributes: {bottleneck: "continuous 256-D", hold: "1", frames: "1.5B"}
+    - id: cont_det_ln
+      run: bottleneck_10b_eval/cont_det_ln_hold1_stepseg3_1500119040
+      name: "cont_det hold-1 + LayerNorm"
+      attributes: {bottleneck: "continuous 256-D", hold: "1", frames: "1.5B"}
+    - id: fsq64_10b
+      run: bottleneck_10b_eval/fsq64_hold10_stepseg3_1500119040
+      name: "FSQ-64 hold-10"
+      attributes: {bottleneck: "discrete 64-D", hold: "10", frames: "1.5B"}
+    - id: jepa_pure
+      run: bottleneck_10b_eval/jepa_pure_256d_hold1_stepseg3_1500119040
+      name: "JEPA pure 256d hold-1"
+      attributes: {bottleneck: "continuous 256-D", hold: "1", frames: "1.5B"}
+    - id: fsq64_planner_tracker
+      run: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      name: "FSQ-64 hold-10, 4.5B (planner tracker)"
+      attributes: {bottleneck: "discrete 64-D", hold: "10", frames: "4.5B"}
+    - id: z256_planner_tracker
+      run: gr00t_language30_oracle_ceiling/oracle_z256_hold10
+      name: "z256 hold-10, 5.75B (planner tracker)"
+      attributes: {bottleneck: "continuous 256-D", hold: "10", frames: "5.75B"}
+
+planner:
+  baseline: fsq64_ens
+  rows:
+    - id: fsq64_ens
+      run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__ens0.5_m28
+      name: "FSQ-64 scaled + temporal ensembling"
+      ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      attributes:
+        latent: "discrete 64-D"
+        ensemble: "exponential 0.5"
+        rows: "889k"
+    - id: fsq64_ens025
+      run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__ens0.25_m28
+      name: "FSQ-64 scaled, ensembling decay 0.25"
+      ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      attributes: {latent: "discrete 64-D", ensemble: "exponential 0.25"}
+    - id: fsq64_plain
+      run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__n20_m28
+      name: "FSQ-64 scaled, no ensembling"
+      ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      attributes: {latent: "discrete 64-D", ensemble: "none"}
+    - id: z256_ens
+      run: gr00t_language30_isaac_eval/z256_scaled28__latent__ens0.5_m28
+      name: "z256 scaled + temporal ensembling"
+      ceiling: gr00t_language30_oracle_ceiling/oracle_z256_hold10
+      attributes: {latent: "continuous 256-D", ensemble: "exponential 0.5"}
+    - id: z256_plain
+      run: gr00t_language30_isaac_eval/z256_scaled28__latent__n20_m28
+      name: "z256 scaled, no ensembling"
+      ceiling: gr00t_language30_oracle_ceiling/oracle_z256_hold10
+      attributes: {latent: "continuous 256-D", ensemble: "none"}
+    - id: explicit_chunk
+      run: gr00t_language30_isaac_eval/explicit_rollout__chunk_encoded
+      name: "Explicit 670-value packet"
+      attributes: {latent: "none, explicit chunk", ensemble: "none"}
+      note: >-
+        Different tracker and 30 motions, so it is not a matched row against the
+        latent arms above. Read it as a scale marker, not a head-to-head.
+
+ablations:
+  - id: discrete_vs_continuous
+    title: "Discrete versus continuous latent"
+    variable: "bottleneck at the command boundary (FSQ-64 lattice against a real 256-vector)"
+    question: >-
+      Matched training budget and motion set, same planner backbone. Each
+      interface is welded to its own tracker, so part of any gap is tracker and
+      not interface — the matched ceiling column separates the two.
+    baseline: z256_ens
+    status: preliminary
+    rows:
+      - id: fsq64_ens
+        run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__ens0.5_m28
+        name: "FSQ-64, 889,044 rows"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {latent: "discrete 64-D", ensemble: "exponential 0.5"}
+      - id: z256_ens
+        run: gr00t_language30_isaac_eval/z256_scaled28__latent__ens0.5_m28
+        name: "z256, 889,006 rows"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_z256_hold10
+        attributes: {latent: "continuous 256-D", ensemble: "exponential 0.5"}
+    verdict: >-
+      FSQ-64 measures 5.9% better with a single seed at 20 episodes per motion,
+      which is inside the ±15% band and therefore directional only. Under the
+      matched-motion, matched-reduction ceiling the FSQ tracker is the WEAKER of
+      the two, so the planner-side result is not inherited from the low level.
+      This reverses the caveat recorded in the 2026-08-13 progress report, which
+      compared a transition-weighted 30-motion oracle against an episode-mean
+      28-motion planner.
+
+  - id: temporal_ensembling
+    title: "Temporal ensembling at inference"
+    variable: "ensembling decay over the head's overlapping predictions"
+    question: >-
+      Identical checkpoint, identical protocol; only the inference-time blend
+      changes. This is the only knob measured so far that moved MPJPE and
+      survival in the same direction.
+    baseline: fsq64_plain
+    status: preliminary
+    rows:
+      - id: fsq64_plain
+        run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__n20_m28
+        name: "No ensembling"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {ensemble: "none"}
+      - id: fsq64_ens025
+        run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__ens0.25_m28
+        name: "Exponential decay 0.25"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {ensemble: "exponential 0.25"}
+      - id: fsq64_ens
+        run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__ens0.5_m28
+        name: "Exponential decay 0.5"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {ensemble: "exponential 0.5"}
+    verdict: >-
+      Both decays lift fall-free from 0.986 to 0.998 — one fallen episode in 560
+      against eight. The MPJPE gain is under 4% and unresolved on its own; the
+      survival change is what carries the setting.
+
+  - id: hold_length
+    title: "Hold 1 as a drop-in"
+    variable: "control steps per published latent, planner side only"
+    question: >-
+      The tracker was trained at hold 10 and carries a 2-wide sin_cos phase
+      channel with code_period 10, which pins to slot 0 at hold 1. A per-step
+      stream of PREDICTED latents is therefore off-distribution for it.
+    baseline: fsq64_plain
+    status: preliminary
+    rows:
+      - id: fsq64_plain
+        run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__n20_m28
+        name: "Hold 10, 12k updates"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {hold: "10"}
+      - id: hold1_8k
+        run: gr00t_language30_isaac_eval/fsq64_hold1__latent__hold1_u8000_s2000
+        name: "Hold 1, 8k updates"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold1
+        attributes: {hold: "1"}
+      - id: hold1_12k
+        run: gr00t_language30_isaac_eval/fsq64_hold1__latent__hold1_s2000
+        name: "Hold 1, 12k updates"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold1
+        attributes: {hold: "1"}
+    verdict: >-
+      Hold 1 is worse and gets worse with more updates, but the test is
+      confounded by the phase channel, so hold 1 is refuted as a DROP-IN and
+      untested as an interface. Settling it needs a tracker retrained at hold 1
+      without the phase channel, then a planner retrained against it.
+
+  - id: inference_knobs
+    title: "Inference knobs that did not work"
+    variable: "sampling strategy at fixed checkpoint"
+    question: >-
+      Sample averaging, extra ODE steps, and fresh consumption all redraw at one
+      state. Ensembling blends estimates made from different states, which is
+      the proposed reason only the last one helps.
+    baseline: fsq64_rollout_base
+    status: refuted
+    rows:
+      - id: fsq64_rollout_base
+        run: gr00t_language30_isaac_eval/fsq64_rollout__latent__steps2000
+        name: "Rollout arm, default sampling"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      - id: avg4
+        run: gr00t_language30_isaac_eval/fsq64_rollout__latent__avg4_s2000
+        name: "Average 4 samples"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      - id: ode16
+        run: gr00t_language30_isaac_eval/fsq64_rollout__latent__ode16_s2000
+        name: "16 ODE steps"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+      - id: fresh
+        run: gr00t_language30_isaac_eval/fsq64_rollout__latent__fresh
+        name: "Fresh consumption"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+    verdict: >-
+      Every variant trades MPJPE for survival. None is a candidate for the paper
+      configuration.
+
+  - id: training_data
+    title: "Training data and dropout"
+    variable: "row count and state dropout"
+    question: >-
+      What actually moved the headline from 59.21 mm. Rows differ in motion
+      count and step cap, so the chips on each row show where the protocol is
+      not matched.
+    baseline: fsq64_rollout_base
+    status: preliminary
+    rows:
+      - id: fsq64_rollout_base
+        run: gr00t_language30_isaac_eval/fsq64_rollout__latent__steps2000
+        name: "141k rows, state_dropout 0.2"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {rows: "141k", state_dropout: "0.2"}
+      - id: nodrop
+        run: gr00t_language30_isaac_eval/fsq64_rollout_nodrop__latent__nodrop_s2000
+        name: "141k rows, state_dropout 0"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {rows: "141k", state_dropout: "0"}
+      - id: scaled_nodrop
+        run: gr00t_language30_isaac_eval/fsq64_scaled28__latent__n20_m28
+        name: "889k rows, state_dropout 0"
+        ceiling: gr00t_language30_oracle_ceiling/oracle_fsq64_hold10
+        attributes: {rows: "889k", state_dropout: "0"}
+    verdict: >-
+      Dropping state dropout and scaling rows 6.3x both help, and both survive
+      the noise band on this pairing. The 889k row also drops the two motions
+      whose ORACLE falls 4 times in 5, so its motion set differs — the chip on
+      that row says so.
+
+method_cards:
+  - mpjpe
+  - tracker_ipmd
+  - fsq64
+  - z256
+  - diffsr
+  - explicit_packet
+  - flow_planner
+  - temporal_ensembling
+
+caveats:
+  - >-
+    Single seed per arm. Measured run-to-run MPJPE spread on this rig is
+    0.2-6.4%, and Isaac evaluation is not deterministic, so any relative
+    difference under about 15% is directional and is marked unresolved.
+  - >-
+    The headline MPJPE is the episode mean of the root-relative per-joint error.
+    The same artifact also stores a transition-weighted and a successful-only
+    reduction, which read several millimetres apart; open any row's provenance
+    to see all three before quoting a number elsewhere.
+  - >-
+    An oracle ceiling is scored on the arm's own motion set and under the arm's
+    own reduction. The "ceiling, own full set" line in the provenance shows what
+    the same run reads over all its motions, which is usually worse.
+  - >-
+    The latent-bottleneck-10b rows are mid-flight segments of a 10B-frame
+    campaign, not converged results. They can only be superseded.
+  - >-
+    Every planner row here was evaluated before 2026-08-16, when the evaluation
+    began recording its inference knobs (ensembling and decay, ODE steps,
+    samples per publication, consumed slots) into the summary. Their provenance
+    disclosures say "inference knobs NOT RECORDED", and the ensembling shown on
+    those rows comes from this spec. Re-evaluated arms read theirs from the
+    artifact.
+  - >-
+    The released SONIC v1.1 planner comparison is NOT on this page. Its
+    evaluation summaries carry no per-episode tracking metrics, so it cannot be
+    reduced the same way as everything else; adding it needs a re-run that
+    writes them.

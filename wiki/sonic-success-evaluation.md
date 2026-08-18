@@ -3,6 +3,12 @@
 This page defines the checkpoint-evaluation pass used when reporting SONIC's
 motion-level success rate and success-only MPJPE-L. Status: 2026-08-05.
 
+Superseded on the reporting side by
+[Canonical Paper-Facing Metrics](canonical-paper-metrics.md), which fixes the
+board, the randomization profile, and the SONIC paper number a row may be
+compared against. This page remains the authority on the criterion itself and
+on the upstream field definitions.
+
 This is an **external metric-compatibility pass**, not the task's strict oracle
 qualification protocol. It also does not replace the required full-horizon,
 non-terminating diagnostic. Keep all three artifacts separately labeled.

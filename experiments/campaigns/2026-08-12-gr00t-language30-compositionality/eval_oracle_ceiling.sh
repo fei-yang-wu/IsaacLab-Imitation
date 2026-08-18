@@ -61,10 +61,57 @@ case "${ARM}" in
         ACTOR_DIM=258; CODE_DIM=256; NJMAX=289
         EXTRA_CFG=()
         ;;
+    # The 2026-08-15 latent-bottleneck arms at 10B. Both were trained with the
+    # SONIC v1.1 `robot_heading` macro frame, which is NOT the environment
+    # default, so the override below is mandatory: a wrong anchor frame is
+    # width-invisible and would silently score a different interface.
+    fsq64_10b)
+        MIRROR="${REPO_ROOT}/logs/bottleneck_10b_mirror/fsq64_hold10_seed0"
+        TRACKER="${MIRROR}/tracker/f10000269312/models/model_step_10000269312.pt"
+        ENCODER="${MIRROR}/encoder/checkpoints/latest.pt"
+        ACTOR_DIM=66; CODE_DIM=64; NJMAX=320
+        EXTRA_CFG=(
+            'agent.policy.num_cells=[2048,2048,1024,1024,512,512]'
+            'agent.value_function.num_cells=[2048,2048,1024,1024,512,512]'
+            agent.policy.activation_fn=silu agent.value_function.activation_fn=silu
+            env.expert_macro_anchor_mode=robot_heading
+        )
+        ;;
+    # Trained at hold 1, so run it with HOLD=1 CODE_PERIOD=1; at that period the
+    # `sin_cos` phase channel is the constant (0, 1) both in training and here.
+    ln_hold1_10b)
+        MIRROR="${REPO_ROOT}/logs/bottleneck_10b_mirror/cont_det_ln_hold1_seed0"
+        TRACKER="${MIRROR}/tracker/f10000269312/models/model_step_10000269312.pt"
+        ENCODER="${MIRROR}/encoder/checkpoints/latest.pt"
+        ACTOR_DIM=258; CODE_DIM=256; NJMAX=320
+        EXTRA_CFG=(
+            'agent.policy.num_cells=[2048,2048,1024,1024,512,512]'
+            'agent.value_function.num_cells=[2048,2048,1024,1024,512,512]'
+            agent.policy.activation_fn=silu agent.value_function.activation_fn=silu
+            env.expert_macro_anchor_mode=robot_heading
+        )
+        ;;
     *)
-        echo "arm must be z256|fsq64, got ${ARM}" >&2
+        echo "arm must be z256|fsq64|fsq64_10b|ln_hold1_10b, got ${ARM}" >&2
         exit 1
         ;;
+esac
+
+# TERMINATION_MODE picks what ends an episode, and therefore what "success"
+# means. They are mutually exclusive in the evaluator:
+#   fall_only (default) — tracking terminations off, success = did not fall.
+#                         This is the planner protocol, so it is the ceiling a
+#                         planner arm is normalized against.
+#   sonic               — the released SONIC thresholds terminate (anchor
+#                         height 0.25 m, squared anchor orientation 1.0 rad^2,
+#                         end-effector height 0.25 m), success = finished the
+#                         reference without tripping one. This is the SR the
+#                         4,096-motion scoreboard and the SONIC release report.
+TERMINATION_MODE="${TERMINATION_MODE:-fall_only}"
+case "${TERMINATION_MODE}" in
+    fall_only) TERMINATION_ARGS=(--disable_tracking_terminations --fall_only_success) ;;
+    sonic)     TERMINATION_ARGS=(--sonic_success_terminations) ;;
+    *) echo "TERMINATION_MODE must be fall_only|sonic, got ${TERMINATION_MODE}" >&2; exit 1 ;;
 esac
 
 # LABEL_SUFFIX separates protocol variants (step cap, seed) of the same
@@ -86,7 +133,7 @@ pixi run -e isaaclab python scripts/rlopt/eval_skill_commander_closed_loop.py \
     --metric_interval "${METRIC_INTERVAL:-10}" \
     --motion_names "${MOTIONS[@]}" --trajectory_ranks "${RANKS[@]}" \
     --disable_push_event --disable_reward_clipping --assert-kitless \
-    --disable_tracking_terminations --fall_only_success \
+    "${TERMINATION_ARGS[@]}" \
     physics=newton_mjwarp env.data.manifest=null env.data.cache_dir=null \
     env.data.reference_arrays_dir="${DATA_ROOT}/reference_arrays/root_qpos_v1" \
     env.data.persist_id=bones_seed_language30_compositionality_v1@f31fd755 \

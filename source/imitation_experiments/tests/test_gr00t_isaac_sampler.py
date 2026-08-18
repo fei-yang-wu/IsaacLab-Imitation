@@ -10,8 +10,14 @@ from imitation_experiments.planner.gr00t_isaac_sampler import Gr00tSkillCommandS
 class _Sampler(Gr00tSkillCommandSampler):
     """Bypass head loading; drive `gr00t_z` with a scripted prediction."""
 
-    def __init__(self, num_envs: int, horizon: int, dim: int, consumption: str,
-                 fsq_half: torch.Tensor | None = None):
+    def __init__(
+        self,
+        num_envs: int,
+        horizon: int,
+        dim: int,
+        consumption: str,
+        fsq_half: torch.Tensor | None = None,
+    ):
         device = torch.device("cpu")
         self._gr00t_device = device
         self._gr00t_consumption = consumption
@@ -40,6 +46,42 @@ class _Sampler(Gr00tSkillCommandSampler):
 
 def _state(rows: int) -> torch.Tensor:
     return torch.zeros(rows, 930)
+
+
+def test_inference_provenance_records_every_arm_distinguishing_knob():
+    """The knobs that separate published arms must reach the summary.
+
+    Ensembling, sample averaging, and ODE-step count each move the reported
+    MPJPE without touching the checkpoint. When they lived only in the output
+    directory name, no consumer could read an arm's configuration back off its
+    artifact.
+    """
+    sampler = _Sampler(num_envs=2, horizon=3, dim=4, consumption="open_loop")
+    sampler._gr00t_ensemble = "exponential"
+    sampler._gr00t_ensemble_decay = 0.5
+    sampler._gr00t_inference_steps = 16
+    sampler._gr00t_samples = 4
+
+    record = sampler.gr00t_inference_provenance()
+
+    assert record == {
+        "temporal_ensemble": "exponential",
+        "temporal_ensemble_decay": 0.5,
+        "num_inference_timesteps": 16,
+        "samples_per_publication": 4,
+        "consume_slots": 3,
+    }
+
+
+def test_unused_ensemble_decay_is_not_reported_as_a_setting():
+    sampler = _Sampler(num_envs=2, horizon=3, dim=4, consumption="open_loop")
+    sampler._gr00t_ensemble = "none"
+    sampler._gr00t_ensemble_decay = 0.5
+
+    record = sampler.gr00t_inference_provenance()
+
+    assert record["temporal_ensemble"] == "none"
+    assert record["temporal_ensemble_decay"] is None
 
 
 def test_open_loop_consumes_cached_slots_before_re_planning():
@@ -189,8 +231,9 @@ def test_per_env_goal_index_selects_that_envs_language():
     class _S(_Sampler):
         def _gr00t_predict(self, planner_state, goal_index=None):
             seen["idx"] = None if goal_index is None else goal_index.tolist()
-            return torch.zeros(planner_state.shape[0], self._gr00t_horizon,
-                               self._gr00t_action_dim)
+            return torch.zeros(
+                planner_state.shape[0], self._gr00t_horizon, self._gr00t_action_dim
+            )
 
     s = _S(num_envs=3, horizon=3, dim=4, consumption="fresh")
     s._gr00t_goal_index = torch.tensor([2, 0, 1], dtype=torch.long)
@@ -228,6 +271,8 @@ def test_root_qpos_vocabularies_agree_on_widths_but_not_names():
     macro_names = [n for n, _ in ROOT_QPOS_MACRO_TERMS]
     assert command_names == ["joint_qpos", "root_pos", "root_ori"]
     assert macro_names == [
-        "expert_motion_qpos", "expert_anchor_pos_b", "expert_anchor_ori_b",
+        "expert_motion_qpos",
+        "expert_anchor_pos_b",
+        "expert_anchor_ori_b",
     ]
     assert not set(command_names) & set(macro_names)

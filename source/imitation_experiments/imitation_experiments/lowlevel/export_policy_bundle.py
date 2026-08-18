@@ -549,14 +549,39 @@ def _rlopt_native_parity(
 
 
 def _tensors_identical(left: dict, right: dict) -> None:
+    _encoder_divergence(left, right, allow_finetuned=False)
+
+
+def _encoder_divergence(left: dict, right: dict, *, allow_finetuned: bool) -> float:
+    """Compare the runtime encoder against the pretrained skill encoder.
+
+    Returns the largest absolute difference, which is 0.0 for a frozen encoder.
+    A key-set, shape, or dtype difference is always fatal: that is a wrong
+    pairing, not fine-tuning. A value difference is fatal too unless the caller
+    declares the arm fine-tunes its encoder
+    (``agent.ipmd.hl_skill_finetune_enabled=true``), in which case the bundle
+    deliberately ships the tracker's own encoder and the divergence is
+    recorded instead of silently accepted.
+    """
     if sorted(left) != sorted(right):
         raise ValueError(
             f"encoder key sets differ: {sorted(set(left) ^ set(right))[:6]}"
         )
+    worst = 0.0
     for key in left:
         a, b = left[key], right[key]
-        if a.shape != b.shape or a.dtype != b.dtype or not torch.equal(a, b):
+        if a.shape != b.shape or a.dtype != b.dtype:
             raise ValueError(f"encoder tensor mismatch at {key}")
+        if torch.equal(a, b):
+            continue
+        if not allow_finetuned:
+            raise ValueError(
+                f"encoder tensor mismatch at {key}; pass "
+                "--allow-finetuned-encoder if this arm fine-tunes the encoder "
+                "during low-level training"
+            )
+        worst = max(worst, float((a.float() - b.float()).abs().max()))
+    return worst
 
 
 def sha256_file(path: Path) -> str:
@@ -729,6 +754,7 @@ def export_bundle(args: argparse.Namespace) -> Path:
     encoder = None
     encoder_provenance: dict = {}
     skill_checkpoint_path: Path | None = None
+    encoder_divergence: float | None = None
     if preset.interface == "latent" and role == "student":
         if preset.z_dim is None:
             raise ValueError(f"latent preset {preset.name} must define z_dim")
@@ -757,7 +783,11 @@ def export_bundle(args: argparse.Namespace) -> Path:
             skill = torch.load(
                 skill_checkpoint_path, map_location="cpu", weights_only=False
             )
-            _tensors_identical(embedded, skill["skill_encoder_state_dict"])
+            encoder_divergence = _encoder_divergence(
+                embedded,
+                skill["skill_encoder_state_dict"],
+                allow_finetuned=bool(args.allow_finetuned_encoder),
+            )
             config = skill.get("config", {})
             # Config values are authoritative; CLI flags only fill fields a
             # pre-field skill checkpoint does not carry.
@@ -1079,6 +1109,16 @@ def export_bundle(args: argparse.Namespace) -> Path:
             {
                 "skill_checkpoint_path": str(skill_checkpoint_path),
                 "skill_checkpoint_sha256": sha256_file(skill_checkpoint_path),
+                # 0.0 means the deployed encoder is the pretrained one; a
+                # positive value means the arm fine-tuned it and the bundle
+                # ships the tracker's copy, so a downstream planner gate can
+                # tell the two cases apart instead of assuming a frozen pair.
+                "encoder_binding": (
+                    "frozen_identical"
+                    if not encoder_divergence
+                    else "finetuned_in_tracker"
+                ),
+                "encoder_divergence_max_abs": encoder_divergence,
             }
         )
     if encoder is not None:
@@ -1180,6 +1220,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--role", choices=["student", "teacher"], default="student")
     parser.add_argument("--allow-privileged", action="store_true")
+    parser.add_argument(
+        "--allow-finetuned-encoder",
+        action="store_true",
+        help=(
+            "accept a runtime encoder whose weights moved away from the skill "
+            "checkpoint (arms with hl_skill_finetune_enabled=true); the "
+            "divergence is recorded in the manifest"
+        ),
+    )
     parser.add_argument("--activation", choices=sorted(_ACTIVATIONS), default="silu")
     parser.add_argument(
         "--skill-checkpoint",

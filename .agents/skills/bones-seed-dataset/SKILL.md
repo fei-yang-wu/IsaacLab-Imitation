@@ -231,6 +231,43 @@ The full cache and every subset cache must use different, content-specific
 directories and identities. Never pass `env.data.clips`, a subset manifest, or
 a one-motion visualization together with the full replay `persist_dir`.
 
+## Audit The NPZ Tree Before Every Training Or Evaluation Run
+
+The tracking environment's whole learning signal comes from the NPZ
+`body_pos_w` / `body_quat_w` arrays — there is no FK at train time — and the
+loader **falls back silently** when a key is missing (root taken from the
+pelvis column, body names mapped by position). A stale or slim NPZ vintage
+therefore corrupts the reward with no error at all.
+
+Do not trust that a local tree still matches what you inspected earlier in the
+session. Codex and Claude share this checkout, and `data/` has been
+overwritten mid-session by a concurrent Hugging Face re-sync: a rich 15-key
+export was replaced by the legacy 7-key vintage (no `root_pos`, no
+`root_quat`, no `joint_names` or `body_names`, 30 bodies instead of 32).
+
+Before any run that reads a motion NPZ tree:
+
+1. Check file mtimes for changes since the last known-good state.
+2. Verify the full 15-key set, including `root_pos`, `joint_names`, and
+   `body_names`.
+3. Run the frame audit:
+
+```bash
+pixi run python scripts/audit_g1_lafan1_body_frames.py \
+    --manifest data/lafan1/manifests/g1_lafan1_manifest.json --report <tmp>
+```
+
+4. For a BONES-SEED tree, run the sidecar audit as well:
+
+```bash
+pixi run python scripts/audit_bones_seed_phase5.py \
+    --require-body-names --require-temporal-events ...
+```
+
+Never sync a Hugging Face copy over a locally rebuilt tree without checking
+which one is the newer vintage. A large replay or memmap directory is not
+proof that its sidecar still describes the full dataset.
+
 ## Validation Checks
 
 Use these checks before training:

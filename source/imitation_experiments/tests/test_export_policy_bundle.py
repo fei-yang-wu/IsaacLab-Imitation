@@ -266,6 +266,69 @@ def test_skill_binding_gate(tmp_path):
         )
 
 
+def test_finetuned_encoder_is_recorded_not_silently_accepted(tmp_path):
+    """Arms with hl_skill_finetune_enabled=true ship a moved encoder.
+
+    The bundle must still carry the tracker's own weights (those are what
+    ran), but the divergence from the pretrained skill checkpoint has to be
+    on the record so a planner gate can tell a fine-tuned pair from a frozen
+    one.
+    """
+    checkpoint = _checkpoint(tmp_path)
+    moved = tmp_path / "skill_moved.pt"
+    torch.save(
+        {
+            "skill_encoder_state_dict": _encoder_state(seed=9),
+            "config": {
+                "macro_frame_stride": 1,
+                "macro_anchor_mode": "expert_heading",
+                "horizon_steps": 10,
+                "encoder_window_mode": "intermediate",
+                "encoder_activation": "mish",
+                "encoder_layer_norm": True,
+            },
+        },
+        moved,
+    )
+
+    output = _export(
+        tmp_path,
+        checkpoint,
+        "--skill-checkpoint",
+        str(moved),
+        "--allow-finetuned-encoder",
+    )
+
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["source"]["encoder_binding"] == "finetuned_in_tracker"
+    assert manifest["source"]["encoder_divergence_max_abs"] > 0.0
+
+
+def test_frozen_encoder_binding_is_labelled(tmp_path):
+    checkpoint = _checkpoint(tmp_path)
+    matching = tmp_path / "skill_same.pt"
+    torch.save(
+        {
+            "skill_encoder_state_dict": _encoder_state(),
+            "config": {
+                "macro_frame_stride": 1,
+                "macro_anchor_mode": "expert_heading",
+                "horizon_steps": 10,
+                "encoder_window_mode": "intermediate",
+                "encoder_activation": "mish",
+                "encoder_layer_norm": True,
+            },
+        },
+        matching,
+    )
+
+    output = _export(tmp_path, checkpoint, "--skill-checkpoint", str(matching))
+
+    manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["source"]["encoder_binding"] == "frozen_identical"
+    assert manifest["source"]["encoder_divergence_max_abs"] == 0.0
+
+
 def test_golden_trace_tamper_detected(tmp_path):
     checkpoint = _checkpoint(tmp_path)
     output = _export(tmp_path, checkpoint)

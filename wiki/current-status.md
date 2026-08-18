@@ -26,6 +26,73 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Low-level leaderboard: the latent interface catches the explicit baseline (2026-08-17)
+
+Eight arms of `experiments/campaigns/2026-08-15-latent-bottleneck-10b/` scored
+on the frozen 4,096-motion scoreboard (ranks 12288-16383, frame-0, seed 0, mode
+actions, `no_push`, Newton/MJWarp, released-SONIC thresholds, `foot_pos_xyz` and
+`base_too_low` disabled) — the same protocol as the 2026-08-09 table below, run
+locally in about four minutes per arm.
+
+| arm | frames | SR | succ MPJPE-L | `ee_body_pos` |
+|---|---:|---:|---:|---:|
+| released SONIC | - | 0.9937 | 28.65 mm | 26 |
+| **`cont_det_ln_hold1`** | **10.00B** | **0.9368** | **22.86 mm** | 217 |
+| `root_qpos_explicit` (explicit baseline) | 7.60B | 0.9358 | 19.21 mm | 212 |
+| `cont_det_hold1` | 10.00B | 0.9343 | 22.60 mm | 235 |
+| `cont_det_hold1_resetramp` | 10.00B | 0.9307 | 23.84 mm | 248 |
+| `jepa_sigreg_ebm_hold10_256d` | 10.00B | 0.9282 | 22.26 mm | 234 |
+| `fsq64_hold10` | 10.00B | 0.9197 | 24.93 mm | 260 |
+| `jepa_sigreg_ebm_hold10_fsq64` | 10.00B | 0.9197 | 25.83 mm | 270 |
+| `jepa_ntp_hold10_256d` | 8.50B | 0.9077 | 25.71 mm | 307 |
+| `critic_no_latent` (best pre-08-15 latent) | 5.00B | 0.9062 | 24.39 mm | 318 |
+| `jepa_pure_256d_hold1` | 10.00B | 0.9050 | 27.94 mm | 336 |
+
+Every new arm beats the best previous latent arm on both axes, and the top four
+reach the explicit baseline's success rate. Two limits on that reading: the
+explicit row has 7.60B frames against these 10.00B, so nothing here is
+frame-matched; and the explicit row still wins success-only MPJPE-L by 15-18%.
+"The latent interface has caught up on falls" is what this table supports; "the
+latent interface wins" is not.
+
+The best arm is a continuous deterministic 256-D latent, held one control step,
+with encoder LayerNorm on. Its pair without LayerNorm (`cont_det_hold1`) is
+0.0025 SR behind and 0.26 mm ahead, which is inside noise on both axes, so
+LayerNorm is not established as the cause — the two continuous hold-1 arms
+together are simply the strongest interface tested.
+
+`ee_body_pos` is still the dominant failure in every row, and its spread across
+arms (217-336) is wider than either tracking metric's, exactly as the
+2026-08-09 attribution found.
+
+Not on this board: the two `*_dyn` arms (their encoder is fine-tuned inside the
+tracker checkpoint, so the pretrained-encoder path would score a mismatched
+pair) and the categorical arms (no bundle exporter for a learned codebook).
+Campaign README carries the EC/MuJoCo screen, the checkpoint neighbourhood
+check, and the board-correlation study.
+
+### The CPU screen board changed (2026-08-17)
+
+The ten-motion `selected10_repeats5_v1` sidecar board does not predict this
+scoreboard's survival axis: over the eight arms above, its fall-free rate ranks
+them at Spearman **-0.238** against scoreboard success rate. Cause: 3,545 of the
+4,096 scoreboard motions are passed by every arm, and the ten language clips are
+quiet standing motions scored on a pelvis-height fall only.
+
+Replacement, approved and built the same day: profile
+`sidecar_ec_strat64_v1` — 64 motions drawn from the scoreboard ranks, seven or
+eight from each "how many arms fail this motion" bucket, three noise draws each
+(192 episodes, ~3.6 min CPU), success judged by the released SONIC thresholds,
+and every figure re-weighted to the population by the board's per-case
+`population_weight`. Measured against the same eight arms: survival **+0.571**
+(from -0.238), quality **+0.929** (from +0.690).
+
+The survival axis is better but still only moderate, and the residual is a
+**backend** disagreement rather than a sampling one: `fsq64_hold10` scores 0.55
+weighted success in MuJoCo under sensor noise against 0.92 in Isaac, the largest
+per-arm gap in the set. Use the new board as the screen; the 4,096 Isaac board
+stays the deciding board until that backend gap is explained.
+
 ## GR00T language planner — best result to date (2026-08-13)
 
 `fsq64_scaled28` with exponential temporal ensembling: **46.95 mm MPJPE-L /
@@ -128,6 +195,9 @@ recipe; recon on a dedicated Adam(2e-5) instead of SONIC's single summed
 loss) are recorded in the campaign README.
 
 ## What the 4,096-motion scoreboard says we are losing to (2026-08-09)
+
+Superseded as a leaderboard by the 2026-08-17 section above; the rows here stay
+because the failure attribution and the stride-5 result are still current.
 
 `experiments/campaigns/2026-08-08-bones129k-4096-scoreboard/` scores every
 finished BONES-129k arm under ONE protocol: 4,096 environments, ranks

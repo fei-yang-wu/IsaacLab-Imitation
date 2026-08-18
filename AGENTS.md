@@ -181,7 +181,9 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   number appears, not in a later paragraph.
 - Do not build an argument, a recommendation, or a paper claim on a
   preliminary result. Say what experiment would settle the question instead.
-- Ask the user when the status of a result is unclear.
+- Ask the user when the status of a result is unclear. Invoke the
+  `result-rigor` skill before citing a stored number, and the
+  `experiment-campaign` skill when starting or extending a campaign.
 - Before using a newly coined project term, abbreviation, variant label,
   metric shorthand, or overloaded word, define it in plain language first and
   say exactly what changes relative to the baseline. Do not make the user infer
@@ -215,6 +217,14 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   line when the default moves.
 - Unless the user specifies another budget, cluster training jobs should target
   about 10B environment frames per task/run and a two-day SLURM walltime.
+- Never shrink a run's frame budget or `max_iterations` to fit a scheduler
+  walltime. Submit every segment of a chained run with the full frame target
+  and let the walltime end it: sbatch delivers SIGTERM before the kill, the
+  trainer writes a final resume checkpoint, and the next segment (chained
+  `afterany`, `--checkpoint <tracker tree>`) continues the same global budget
+  through the checkpoint's `cumulative_env_frames`. The chain stops at the
+  target no matter how the walltime divides it. Write checkpoints to
+  persistent storage, never node-local disk.
 - Prefer cluster for large training and paper-scale batch evaluation. Prefer the
   local workstation for inference, playback, metric inspection, and video
   rendering because a fresh Isaac Lab container is expensive to initialize on
@@ -290,7 +300,8 @@ pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
   `validate_latent_skill_checkpoint_binding.py` before Isaac evaluation and
   require the binding record in later planner submission gates. Prefer the
   exact skill checkpoint path recorded by low-level training even when another
-  checkpoint happens to contain identical runtime encoder weights.
+  checkpoint happens to contain identical runtime encoder weights. Invoke the
+  `planner-submission-gate` skill for the full ordered gate sequence.
 
 ## Validation
 

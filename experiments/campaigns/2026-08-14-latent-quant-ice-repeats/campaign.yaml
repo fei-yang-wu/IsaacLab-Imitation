@@ -1,0 +1,804 @@
+# ICE seed repeats / scale-ups of the latent-quant ablation arms, declared for
+# the control plane: python -m imitation_experiments.pipeline.cluster.
+#
+#   ./submit.sh <arm> <seed>                          # plan (preflight, frozen artifacts)
+#   ... submit --plan <dir> --confirm <PLAN_SHA>      # printed by plan
+#
+# The transitional parity test (tests/test_latent_quant_repeats_campaign_yaml.py)
+# asserts this file reproduces run.sh's command lines exactly; delete that test
+# together with run.sh after cutover.
+name: latent-quant-ice-repeats
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: latent-quant-repeats
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  stride: 1
+  z_dim: 64
+  # command width = z_dim + phase channels; phase 'sin_cos' adds 2.
+  command_dim: ${vars.z_dim}
+  phase_mode: none
+  anchor_mode: robot_heading
+  hold: 1
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+  train_num_envs: 16384
+  rollout_steps: 24
+  frame_cap: 100000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  # Data lives on the shared allocation (bound via the profile's
+  # extra_bind_paths); outputs go under /data, the only rw data bind.
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/quant_repeats/${vars.arm}_seed${vars.seed}
+
+  # Per-arm axes (overridden inside arms.*.vars).
+  pretrain_mode_args: []
+  ln_args: []
+  dyn_args: [agent.ipmd.hl_skill_finetune_enabled=false]
+  smooth_args: []
+  curriculum_args: []
+
+  # SONIC-style adaptive-reset curriculum; ramp spans the whole frame budget.
+  curriculum_block:
+    - env.command_interface.reference.selection.start_mode=adaptive
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=${vars.frame_cap}
+  # 3x action-rate penalty + 10-step proprio histories on the actor terms.
+  smooth_block:
+    - env.rewards.action_rate_l2.weight=-0.3
+    - env.observations.policy.projected_gravity.history_length=10
+    - env.observations.policy.base_ang_vel.history_length=10
+    - env.observations.policy.joint_pos_rel.history_length=10
+    - env.observations.policy.joint_vel_rel.history_length=10
+    - env.observations.policy.last_action.history_length=10
+  # Online-dynamics finetune (obs-ring design; no policy gradient).
+  dyn_block:
+    - env.achieved_ring_capacity=128
+    - agent.ipmd.hl_skill_finetune_enabled=true
+    - agent.ipmd.hl_skill_pg_coeff=0
+    - agent.ipmd.hl_skill_offline_diffsr_coeff=1.0
+    - agent.ipmd.hl_skill_achieved_coeff=1.0
+    - agent.ipmd.hl_skill_anchor_coeff=0.01
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  pretrain_head:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bones-seed
+    - --wandb_group
+    - latent-quant-repeats
+    - --wandb_run_name
+    - ${vars.wandb_arm}-pretrain-s${vars.seed}
+    - --horizon_steps
+    - "10"
+    - --encoder_window_mode
+    - intermediate
+    - --transition_objective
+    - endpoint
+    - --z_dim
+    - ${vars.z_dim}
+  # Exact-replica pretrain trunk for the z256_replica arm: the 08-09
+  # `bones129k_v2_root_qpos_det_sr_h10_z256_seed0` contract (deterministic
+  # z256, mish, LayerNorm, feature 128 / embed 512, g/mu [512]).
+  replica_pretrain_tail:
+    - --encoder_hidden_dims
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - mish
+  replica_pretrain_end:
+    - --diffsr_feature_dim
+    - "128"
+    - --diffsr_embed_dim
+    - "512"
+    - --diffsr_g_hidden_dims
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  pretrain_tail:
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+  pretrain_end:
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=latent-quant-repeats
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.output_root}/encoder/checkpoints/latest.pt
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.z_dim}
+  # Tuned hold-1 low-level contract (2026-08-09-bones129k-hold1; the recipe
+  # behind wandb 2zxhc8su, ep_len 120 @100M). Diagnosed 2026-08-15: the first
+  # 8-arm batch omitted these and reached only ~41 ep_len @100M — the
+  # termination curriculum (relaxed terminations for the first 30M frames) is
+  # the bootstrap, action_rate off + tracking points 4.0 are the tuned
+  # weights, and the selection preset is 80% random full-trajectory + 20%
+  # adaptive. Arms that ablate one of these (smooth: action_rate;
+  # curriculum: selection) override AFTER this block, since later Hydra
+  # overrides win.
+  tuned_lowlevel:
+    - env.rewards.action_rate_l2.weight=0.0
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  output_container_path: /data/quant_repeats/${vars.arm}_seed${vars.seed}
+
+arms:
+  # THE DECISIVE CHECK (2026-08-15): the reference (wandb 2zxhc8su) config
+  # reproduced exactly on CURRENT code — z256 deterministic 258-D sin_cos
+  # command, robot anchor, tuned recipe. Recovers ep_len ~120 @100M => the
+  # session's arms differ by their latent interface and all conclusions
+  # stand. Stays ~45 => the CODE regressed since 08-09 and the hunt moves to
+  # this session's RLOpt/env changes.
+  z256_replica:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      phase_mode: sin_cos
+      anchor_mode: robot
+      pretrain_mode_args: [--latent_mode, deterministic]
+      ln_args: [--encoder_layer_norm]
+    stages:
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.pretrain_mode_args},${vars.replica_pretrain_tail},${vars.ln_args},${vars.replica_pretrain_end},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,replica,z256,robot-anchor,seed${vars.seed},pretrain
+      - name: lowlevel
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,replica,z256,robot-anchor,seed${vars.seed},lowlevel
+  # Same replica but under robot_heading: separates interface from anchor in
+  # the same round.
+  z256_replica_heading:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      phase_mode: sin_cos
+      anchor_mode: robot_heading
+      pretrain_mode_args: [--latent_mode, deterministic]
+      ln_args: [--encoder_layer_norm]
+    stages:
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.pretrain_mode_args},${vars.replica_pretrain_tail},${vars.ln_args},${vars.replica_pretrain_end},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,replica,z256,robot-heading,seed${vars.seed},pretrain
+      - name: lowlevel
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,replica,z256,robot-heading,seed${vars.seed},lowlevel
+  # Separates the two factors confounded in the z256 replica's recovery
+  # (2026-08-15): command WIDTH/phase vs encoder TRUNK.
+  #   fsq64_oldtrunk   : 64-D FSQ command, OLD trunk (mish+LN, feat128/emb512)
+  #   z256_newtrunk    : 258-D sin_cos command, NEW trunk (silu, feat256/emb1024)
+  # Replica recovered at 258-D + old trunk; the 12-arm ablation sat at 64-D +
+  # new trunk. Whichever of these two recovers identifies the cause.
+  fsq64_oldtrunk:
+    vars:
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      ln_args: [--encoder_layer_norm]
+    stages:
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.pretrain_mode_args},${vars.replica_pretrain_tail},${vars.ln_args},${vars.replica_pretrain_end},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,factor-split,fsq64,old-trunk,seed${vars.seed},pretrain
+      - name: lowlevel
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,factor-split,fsq64,old-trunk,seed${vars.seed},lowlevel
+  fsq64:
+    vars: {pretrain_mode_args: [--latent_mode, sonic_fsq]}
+    stages: &default_stages
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.pretrain_mode_args},${vars.pretrain_tail},${vars.ln_args},${vars.pretrain_end},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,robot-heading,hold1,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides}}
+        depends_on: pretrain
+        # ICE rejects >16h ("Requested time limit is invalid", verified live
+        # 2026-08-15 on job chain 5577560); the legacy run.sh chained default
+        # of 23:59:00 carried the same latent bug.
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,robot-heading,hold1,${vars.arm},seed${vars.seed},lowlevel
+  cont_det:
+    vars: {pretrain_mode_args: [--latent_mode, deterministic]}
+    stages: *default_stages
+  z256_newtrunk:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      phase_mode: sin_cos
+      pretrain_mode_args: [--latent_mode, deterministic]
+      ln_args: [--encoder_layer_norm]
+    stages: *default_stages
+  # Code-capacity split (2026-08-15). fsq64_oldtrunk stalled at 51.25 with the
+  # OLD trunk, so the trunk is refuted; z256_newtrunk recovered on the NEW
+  # trunk. What is left is the code the tracker receives per publication.
+  #   fsq64_hold10 : rt33shvd's exact interface (64 code dims, code_period 10,
+  #                  live sin_cos phase, 66-D command) -> does a longer hold
+  #                  make 64 dims sufficient?
+  #   fsq256_hold1 : FSQ widened to 256 at hold 1 -> is it the WIDTH alone, or
+  #                  discreteness? z256 is continuous; cont_det at 64 dims also
+  #                  stalled (53.81), so quantization is already implicated as
+  #                  not the factor and this closes it.
+  # Quantization vs the command boundary. sonic_fsq sets
+  # code_to_latent = Identity with z_dim == len(levels), so the tracker reads
+  # the raw lattice values with NO learned projection; `fsq` keeps the same
+  # quantizer but restores nn.Linear(code_dim, z_dim), so the published command
+  # is continuous again. Levels are forced to the SONIC 64 x 32 lattice (the
+  # (8,8,8,5,5) default is only 12800 codes and would confound the comparison),
+  # leaving the projection as the single difference from fsq64.
+  fsq64_proj:
+    vars:
+      pretrain_mode_args:
+        - --latent_mode
+        - fsq
+        - --fsq_levels
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+    stages: *default_stages
+  fsq64_hold10:
+    vars:
+      hold: 10
+      command_dim: 66
+      phase_mode: sin_cos
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+    stages: *default_stages
+  # sonic_fsq publishes the quantizer output directly, so --z_dim must equal
+  # len(--sonic_fsq_levels); the 64-entry default rejects z_dim=256 (job
+  # 5577687 died on exactly that check). 256 dims x 32 levels keeps the
+  # per-dim resolution of the 64-D arm and only widens the code.
+  fsq256_hold1:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      phase_mode: sin_cos
+      pretrain_mode_args:
+        - --latent_mode
+        - sonic_fsq
+        - --sonic_fsq_levels
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+        - "32"
+    stages: *default_stages
+  cont_det_ln:
+    vars:
+      pretrain_mode_args: [--latent_mode, deterministic]
+      ln_args: [--encoder_layer_norm]
+    stages: *default_stages
+  group_vq:
+    vars:
+      pretrain_mode_args: [--latent_mode, categorical, --categorical_groups, "8", --categorical_categories, "32"]
+    stages: *default_stages
+  jepa_pure:
+    vars:
+      pretrain_mode_args: [--latent_mode, deterministic, --transition_objective, jepa_ntp, --jepa_loss, sigreg]
+    stages: *default_stages
+  jepa_sigreg_ebm:
+    vars:
+      pretrain_mode_args: [--latent_mode, deterministic, --transition_objective, jepa_ntp, --jepa_loss, sigreg_ebm]
+    stages: *default_stages
+  fsq64_s5:
+    vars:
+      stride: 5
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+    stages: *default_stages
+  # LN on the DEPLOYED bottleneck: isolates LayerNorm as the single variable
+  # vs fsq64.
+  fsq64_ln:
+    vars:
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      ln_args: [--encoder_layer_norm]
+    stages: *default_stages
+  fsq64_dyn:
+    vars:
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      dyn_args: ${vars.dyn_block}
+    stages: *default_stages
+  fsq64_curriculum:
+    vars:
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      curriculum_args: ${vars.curriculum_block}
+    stages: *default_stages
+  # Stacked training-side recipe; interpretable only against the
+  # single-factor arms.
+  fsq64_dyn_smooth_curriculum:
+    vars:
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      dyn_args: ${vars.dyn_block}
+      smooth_args: ${vars.smooth_block}
+      curriculum_args: ${vars.curriculum_block}
+    stages: *default_stages
+  fsq64_smooth:
+    vars:
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      smooth_args: ${vars.smooth_block}
+    stages: *default_stages
+  fsq64_ln_dyn_smooth:
+    vars:
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      ln_args: [--encoder_layer_norm]
+      dyn_args: ${vars.dyn_block}
+      smooth_args: ${vars.smooth_block}
+    stages: *default_stages
+  cont_det_ln_dyn:
+    vars:
+      pretrain_mode_args: [--latent_mode, deterministic]
+      ln_args: [--encoder_layer_norm]
+      dyn_args: ${vars.dyn_block}
+    stages: *default_stages

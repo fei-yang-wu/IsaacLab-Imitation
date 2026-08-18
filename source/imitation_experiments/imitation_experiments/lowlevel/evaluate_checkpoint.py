@@ -253,6 +253,7 @@ import gymnasium as gym
 import isaaclab_imitation.tasks  # noqa: F401
 import isaaclab_tasks  # noqa: F401
 import torch
+from isaaclab_imitation.contracts import mpjpe_local_global
 from isaaclab.envs import (
     DirectMARLEnv,
     DirectMARLEnvCfg,
@@ -554,13 +555,12 @@ def _tracking_metrics(
             tracked_tensors["actual_quat"].reshape(-1, 4),
             tracked_tensors["ref_quat"].reshape(-1, 4),
         ).reshape(tracked_tensors["actual_quat"].shape[0], -1)
-        actual_root_rel = (
-            tracked_tensors["actual_pos"] - _as_torch(robot_data.root_pos_w)[:, None, :]
+        tracking_mpjpe_m, tracking_mpjpe_g_m = mpjpe_local_global(
+            tracked_tensors["actual_pos"],
+            _as_torch(robot_data.root_pos_w),
+            tracked_tensors["ref_pos"],
+            root_pos_ref,
         )
-        ref_root_rel = tracked_tensors["ref_pos"] - root_pos_ref[:, None, :]
-        tracking_mpjpe_m = torch.linalg.vector_norm(
-            actual_root_rel - ref_root_rel, dim=-1
-        ).mean(dim=-1)
         body_lin_vel_error = torch.linalg.vector_norm(
             tracked_tensors["actual_lin_vel"] - tracked_tensors["ref_lin_vel"], dim=-1
         ).mean(dim=-1)
@@ -573,6 +573,8 @@ def _tracking_metrics(
         metrics["tracked_body_ang_vel_error_radps"] = body_ang_vel_error
         metrics["tracking_mpjpe_m"] = tracking_mpjpe_m
         metrics["tracking_mpjpe_mm"] = tracking_mpjpe_m * 1000.0
+        metrics["tracking_mpjpe_g_m"] = tracking_mpjpe_g_m
+        metrics["tracking_mpjpe_g_mm"] = tracking_mpjpe_g_m * 1000.0
         metrics["tracking_velocity_distance_mps"] = body_lin_vel_error
         tracked_body_lin_vel = (
             tracked_tensors["actual_lin_vel"].detach(),

@@ -1,0 +1,21 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# Continuous arm on the 10B hold-1 tracker. The tracker re-encodes every 50 Hz
+# control step, so the planner replaces the encoder at hold 1 and emits 30
+# consecutive latents per call instead of 3 held for 10 steps.
+#
+# `source: stored` — the collector already saved the published per-step z, and
+# it is exactly what the planner must reproduce. No re-encoding, so the rows
+# carry no expert lookahead and `chunk` stays off.
+collection_dir: logs/planner_10b/ln_hold1_10b/collection_merged
+output: outputs/planner_10b/tables/ln_hold1_10b_table.pt
+latent:
+  slots: 30
+  hold_steps: 1
+  source: stored
+chunk:
+  enabled: false
+state_fields:
+  - oracle_rollout_state_history

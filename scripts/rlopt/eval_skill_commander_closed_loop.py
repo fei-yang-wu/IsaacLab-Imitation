@@ -767,6 +767,7 @@ from imitation_experiments.audit.backend_determinism import pin_reference_start
 # loudly rather than silently mix protocols.
 DETERMINISTIC_METRIC_PREFIX = "deterministic_tracking/"
 from imitation_experiments.planner.planner_latency import PlannerForwardTimer
+from isaaclab_imitation.contracts import mpjpe_local_global
 from isaaclab_imitation.contracts.planner_publish_schedule import planner_renew_env_ids
 from imitation_experiments.data.planner_sample_schema import (
     CompletedTrajectorySampleWriter,
@@ -1340,8 +1341,8 @@ FOOT_TRACKING_TERMINATION_NAME = "foot_pos_xyz"
 FALL_TERMINATION_NAME = "base_too_low"
 
 
-def _tracking_mpjpe_mm(base_env: Any) -> Tensor | None:
-    """Per-env root-relative MPJPE in mm, or None if bodies are untracked.
+def _tracking_mpjpe_pair_mm(base_env: Any) -> tuple[Tensor, Tensor] | None:
+    """Per-env root-relative and world-frame MPJPE in mm.
 
     Same computation as the 4,096-motion tracker scoreboard: subtract each
     side's own root position before comparing the tracked bodies, so the metric
@@ -1362,12 +1363,13 @@ def _tracking_mpjpe_mm(base_env: Any) -> Tensor | None:
     robot_root = base_env.robot.data.root_pos_w
     robot_root = getattr(robot_root, "torch", robot_root)
     reference_root, _, _, _ = base_env._get_reference_root_state_w_fast()
-    actual_rel = actual_pos - robot_root[:, None, :]
-    reference_rel = reference_pos - reference_root[:, None, :]
-    return (
-        torch.linalg.vector_norm(actual_rel - reference_rel, dim=-1).mean(dim=-1)
-        * 1000.0
+    local_m, global_m = mpjpe_local_global(
+        actual_pos,
+        robot_root,
+        reference_pos,
+        reference_root,
     )
+    return local_m * 1000.0, global_m * 1000.0
 
 
 def _disable_tracking_terminations(
@@ -3304,12 +3306,22 @@ def main(
                 # Root-relative MPJPE, the repo's headline tracking metric,
                 # computed exactly as the 4,096-motion tracker scoreboard does
                 # so planner numbers are comparable to the oracle ceilings.
-                mpjpe_mm = _tracking_mpjpe_mm(raw_isaac_env)
-                if mpjpe_mm is not None:
+                mpjpe_pair_mm = _tracking_mpjpe_pair_mm(raw_isaac_env)
+                if mpjpe_pair_mm is not None:
+                    mpjpe_mm, mpjpe_g_mm = mpjpe_pair_mm
                     active_mask = step_active.to(mpjpe_mm.device)
                     if bool(active_mask.any()):
                         metric_row["tracking_mpjpe_mm"] = float(
                             mpjpe_mm[active_mask].mean()
+                        )
+                # World-frame counterpart, which keeps the global drift the
+                # root-relative metric is blind to. Reported alongside rather
+                # than instead: an arm can track posture well while drifting,
+                # and the two numbers separate those failures.
+                    active_mask = step_active.to(mpjpe_g_mm.device)
+                    if bool(active_mask.any()):
+                        metric_row["tracking_mpjpe_g_mm"] = float(
+                            mpjpe_g_mm[active_mask].mean()
                         )
             if should_save:
                 sample_env_ids_cpu = sample_env_ids.detach().cpu()
