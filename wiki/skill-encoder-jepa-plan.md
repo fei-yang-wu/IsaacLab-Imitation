@@ -199,9 +199,20 @@ paper claim without repeated seeds, a matched protocol, and a completed run.
   finetune path freezes it by default.
 - Whether reconstruction stays in the loss alongside SIGReg or is demoted to a
   diagnostic.
+- Predictor form for a possible phase 4: a deterministic regressor averages
+  multimodal continuations; a denoising predictor over the next code, a
+  masked discrete diffusion model over fsq64 code sequences (diffusion-LM
+  style, enables goal-conditioned infilling), or a diffusion-forcing
+  code-sequence model are the alternatives. See
+  [skill-encoder-jepa-related-work.md](skill-encoder-jepa-related-work.md)
+  section E.
 
 ## Related
 
+- [Related work for this plan](skill-encoder-jepa-related-work.md) —
+  method-level comparison against latent action models, next-token
+  trajectory-code models, the JEPA family, diffusion language models,
+  humanoid deployed-latent systems, and the state/skill unification lineage.
 - `experiments/campaigns/2026-08-13-sonic-frame-parity/` — the frame fix this
   builds on, locally qualified, cluster arm deferred.
 - [IPMD Representation Learning](ipmd-representation-learning.md)

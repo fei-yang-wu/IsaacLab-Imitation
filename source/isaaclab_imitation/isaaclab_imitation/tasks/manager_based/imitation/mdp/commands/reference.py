@@ -114,6 +114,14 @@ class ReferenceSelectionCfg:
     adaptive_sequence_length_agnostic: bool = True
     adaptive_init_num_failures: float = 1.0
     adaptive_uniform_ratio: float = 0.1
+    # SONIC-style adaptive-reset CURRICULUM. With `adaptive_uniform_ratio_final`
+    # set, the uniform fraction ramps LINEARLY from `adaptive_uniform_ratio` to
+    # the final value over `adaptive_ratio_ramp_frames` environment frames, then
+    # holds. Uniform is 1 - adaptive, so 0.8 -> 0.2 grows the failure-weighted
+    # share 20% -> 80%: sample broadly early, concentrate on the trajectories
+    # the tracker keeps failing late. None disables the ramp (static ratio).
+    adaptive_uniform_ratio_final: float | None = None
+    adaptive_ratio_ramp_frames: int = 0
     adaptive_pre_failure_window: int = 200
     adaptive_failure_rate_max_over_mean: float = 50.0
 
@@ -166,6 +174,14 @@ class ReferenceSelectionCfg:
             raise ValueError("adaptive_init_num_failures must be positive.")
         if not 0.0 <= float(self.adaptive_uniform_ratio) <= 1.0:
             raise ValueError("adaptive_uniform_ratio must be in [0, 1].")
+        if self.adaptive_uniform_ratio_final is not None:
+            if not 0.0 <= float(self.adaptive_uniform_ratio_final) <= 1.0:
+                raise ValueError("adaptive_uniform_ratio_final must be in [0, 1].")
+            if int(self.adaptive_ratio_ramp_frames) <= 0:
+                raise ValueError(
+                    "adaptive_uniform_ratio_final needs a positive "
+                    "adaptive_ratio_ramp_frames."
+                )
         if int(self.adaptive_pre_failure_window) < 0:
             raise ValueError("adaptive_pre_failure_window must be >= 0.")
         if float(self.adaptive_failure_rate_max_over_mean) <= 0.0:
@@ -252,6 +268,14 @@ class ReferenceCommandTerm(CommandTerm):
         self._mpjpe_l_sum = torch.zeros(self.num_envs, device=self.device)
         self._mpjpe_g_sum = torch.zeros(self.num_envs, device=self.device)
         self._mpjpe_steps = torch.zeros(self.num_envs, device=self.device)
+        # Global transition-weighted health signal. These scalars are not
+        # cleared by per-environment resets. They are read lazily by the RLOpt
+        # wrapper so updating them does not synchronize CUDA every control
+        # step.
+        self._transition_mpjpe_l_sum = torch.zeros((), device=self.device)
+        self._transition_mpjpe_g_sum = torch.zeros((), device=self.device)
+        self._transition_weight = torch.zeros((), device=self.device)
+        self._transition_metrics_initialized = False
         self.metrics["anchor_pos_err_m"] = torch.zeros(
             self.num_envs, device=self.device
         )
@@ -494,7 +518,29 @@ class ReferenceCommandTerm(CommandTerm):
     Implementation specific functions.
     """
 
+    def _advance_adaptive_ratio_curriculum(self) -> None:
+        """Linear ramp of the adaptive-reset uniform fraction.
+
+        Read once per step from the sampler's own mutable rate, so the schedule
+        is visible to every reset without touching the sampling code path.
+        """
+        selection = self.cfg.selection
+        final = getattr(selection, "adaptive_uniform_ratio_final", None)
+        sampler = getattr(self, "_adaptive_failure_reset_sampler", None)
+        if final is None or sampler is None:
+            return
+        ramp = float(getattr(selection, "adaptive_ratio_ramp_frames", 0))
+        if ramp <= 0.0:
+            return
+        start = float(selection.adaptive_uniform_ratio)
+        # Environment frames elapsed = steps * num_envs, matching the frame
+        # budget the campaign scripts and FRAME_CAP are expressed in.
+        frames = float(self._env.common_step_counter) * float(self._env.num_envs)
+        progress = min(1.0, max(0.0, frames / ramp))
+        sampler.uniform_sampling_rate = start + (float(final) - start) * progress
+
     def _update_command(self):
+        self._advance_adaptive_ratio_curriculum()
         self._refresh_command()
 
     def _update_metrics(self):
@@ -524,6 +570,7 @@ class ReferenceCommandTerm(CommandTerm):
             # what makes the logged value comparable to what evaluation reports.
             self.metrics["mpjpe_l_mm"][:] = self._mpjpe_l_sum / steps
             self.metrics["mpjpe_g_mm"][:] = self._mpjpe_g_sum / steps
+            self._update_transition_metrics(env, local_mm, global_mm)
         robot_anchor_pos_w, robot_anchor_quat_w = env._get_robot_anchor_state_w_fast(
             self.cfg.anchor_body_name
         )
@@ -555,6 +602,44 @@ class ReferenceCommandTerm(CommandTerm):
         # be mistaken for the episode mean.
         self.metrics["anchor_pos_err_final_m"][:] = anchor_pos_err
         self.metrics["anchor_ori_err_final_rad"][:] = anchor_ori_err
+
+    def _update_transition_metrics(
+        self,
+        env: ImitationRLEnv,
+        local_mm: torch.Tensor,
+        global_mm: torch.Tensor,
+    ) -> None:
+        """Update recent active-transition MPJPE without a CPU synchronization."""
+
+        window_steps = int(self.cfg.transition_metric_window_steps)
+        decay = 1.0 - 1.0 / float(window_steps)
+        reset_buf = getattr(env.reset_buf, "torch", env.reset_buf)
+        active = ~reset_buf.to(device=local_mm.device, dtype=torch.bool)
+        active_float = active.to(dtype=local_mm.dtype)
+        self._transition_mpjpe_l_sum.mul_(decay).add_(
+            torch.sum(local_mm * active_float)
+        )
+        self._transition_mpjpe_g_sum.mul_(decay).add_(
+            torch.sum(global_mm * active_float)
+        )
+        self._transition_weight.mul_(decay).add_(torch.sum(active_float))
+        self._transition_metrics_initialized = True
+
+    def transition_metrics(self) -> dict[str, torch.Tensor]:
+        """Return live GPU scalar views for iteration-boundary health logging."""
+
+        if not self._transition_metrics_initialized:
+            return {}
+        denominator = self._transition_weight.clamp_min(1.0)
+        return {
+            "TrainHealth/mpjpe_l_mm_transition_ewma": (
+                self._transition_mpjpe_l_sum / denominator
+            ).detach(),
+            "TrainHealth/mpjpe_g_mm_transition_ewma": (
+                self._transition_mpjpe_g_sum / denominator
+            ).detach(),
+            "TrainHealth/transition_ewma_weight": self._transition_weight.detach(),
+        }
 
     def reset(self, env_ids: Sequence[int] | None = None) -> dict[str, float]:
         """Log the metrics, then clear this episode's MPJPE accumulators.
@@ -818,6 +903,9 @@ class ReferenceChannelCfg(CommandTermCfg):
 
     selection: ReferenceSelectionCfg = ReferenceSelectionCfg()
 
+    transition_metric_window_steps: int = 200
+    """EWMA time constant in control steps for transition health metrics."""
+
     critic_components: tuple[str, ...] | None = None
     """Command components the critic reads from this channel.
 
@@ -830,6 +918,8 @@ class ReferenceChannelCfg(CommandTermCfg):
     def resolve(self) -> None:
         """Normalize and validate in place. Idempotent."""
         self.selection.resolve()
+        if int(self.transition_metric_window_steps) < 1:
+            raise ValueError("transition_metric_window_steps must be >= 1.")
         if is_missing(self.mpjpe_body_names):
             raise ValueError(
                 "ReferenceChannelCfg.mpjpe_body_names is required: the reference "

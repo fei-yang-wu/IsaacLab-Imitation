@@ -382,6 +382,17 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # mismatch cannot be caught by a shape check: the value is recorded in the
     # skill checkpoint and compared on load, like the frame stride above.
     expert_macro_anchor_mode: str = "robot"
+    # Per-environment ring of the robot's OWN raw pose (absolute joint
+    # positions in the pinned action order, anchor-body position, anchor-body
+    # quaternion; 36 values per control step). 0 disables. When enabled, the
+    # data plane records every control step and can serve ACHIEVED macro
+    # windows through the same heading-anchor code path as expert windows
+    # (`sample_achieved_chunk_windows`), so an encoder can train on motion the
+    # robot actually produced. Raw poses are stored, never pre-anchored: a
+    # window is anchored at its own slot 0 at SAMPLE time, which is what makes
+    # re-anchoring possible at all. Size the capacity for the longest chunk
+    # pair: 2 * horizon * frame_stride + 1 (101 at horizon 10, stride 5).
+    achieved_ring_capacity: int = 0
     # Optional whitelist of expert_window group terms to keep. The observation
     # manager computes every window term each step whether or not anything
     # reads it, and each distinct body set forces its own expert-window build.

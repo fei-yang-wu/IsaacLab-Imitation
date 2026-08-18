@@ -29,7 +29,7 @@ environment for Isaac-backed runtime checks.
 
 ```bash
 git diff --check
-bash -n docker/cluster/cluster_interface.sh
+bash -n docker/cluster/run_singularity.sh
 bash -n experiments/campaigns/2026-07-22-latent-learning-ablation/run.sh
 bash -n experiments/paper/run.sh
 ```
@@ -117,42 +117,26 @@ Completed and superseded paths are classified in [`experiments/PRUNED_SCRIPTS.md
 
 ## Full Cluster Jobs
 
-Cluster submission entrypoint:
+**2026-08-15: `docker/cluster/cluster_interface.sh` is a retired deprecation
+shim.** It no longer submits anything — running it errors with a pointer to
+the replacement. Cluster submission now goes through the repo-owned control
+plane:
 
 ```bash
-./docker/cluster/cluster_interface.sh job [profile] [job args...]
+pixi run python -m imitation_experiments.pipeline.cluster plan \
+    --campaign <path/to/campaign.yaml> --arm <arm> --seed <seed>
+pixi run python -m imitation_experiments.pipeline.cluster submit \
+    --plan <plan_dir> --confirm <PLAN_SHA>
 ```
 
-The default profile is `base`. A typical full latent IPMD job:
-
-```bash
-./docker/cluster/cluster_interface.sh job \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --num_envs 4096 \
-    --headless \
-    --video \
-    --algo IPMD \
-    --kit_args=--/app/extensions/fsWatcherEnabled=false \
-    agent.logger.exp_name=ipmd_latent_full_4096
-```
-
-A bilinear job with offline pretraining enabled:
-
-```bash
-./docker/cluster/cluster_interface.sh job \
-    --task Isaac-Imitation-G1-Latent-v0 \
-    --num_envs 4096 \
-    --headless \
-    --video \
-    --algo IPMD_BILINEAR \
-    --kit_args=--/app/extensions/fsWatcherEnabled=false \
-    agent.logger.project_name=G1-Imitation-RLOpt-Pretrain \
-    agent.ipmd.use_latent_command=true \
-    agent.bilinear.policy_include_raw_state=false \
-    agent.bilinear.offline_pretrain.enabled=true \
-    agent.bilinear.offline_pretrain.num_updates=2000 \
-    agent.logger.exp_name=ipmd_bilinear_offline_full_4096
-```
+Unlike the old entry point, the new CLI has no ad-hoc "just run these flags"
+mode: it requires a `campaign.yaml` declaring the arm's stages, resources, and
+preflight requirements (`imitation_experiments.pipeline.cluster.config`). See
+`experiments/campaigns/2026-08-14-latent-quant-ice-repeats/campaign.yaml` for
+a worked 14-arm example, real-ICE validated 2026-08-15 (jobs
+5577564/5577565). A campaign not yet migrated to a `campaign.yaml` has no
+working cluster submission path until one is written; write it, or run the
+job locally, rather than reaching for the retired scripts.
 
 Treat `IPMD_BILINEAR` as a latent-command experiment surface unless the user
 explicitly asks for a vanilla debug run. Do not submit bilinear comparison jobs

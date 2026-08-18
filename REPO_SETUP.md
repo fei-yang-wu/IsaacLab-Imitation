@@ -86,31 +86,30 @@ tracking branches unchanged unless the long-lived default branch changes.
 For cluster submission, you do not need a local conda/venv for IsaacLab Python packages.
 
 - Job execution uses `/isaac-sim/python.sh` inside the container/Apptainer image.
-- Local requirements for submission are mainly Docker, Apptainer, and SSH access to the cluster.
+- Local requirements for submission are mainly Apptainer and SSH access to the cluster.
 
-Typical flow:
-
-```bash
-cd docker/cluster
-# edit .env.cluster for cluster paths/login/script
-bash cluster_interface.sh push base
-bash cluster_interface.sh job --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --headless
-```
-
-**Multiple clusters:** per-cluster env files and submit scripts are supported. Create `docker/cluster/.env.<name>` and optionally `docker/cluster/submit_job_slurm_<name>.sh`, then pass `-c <name>`:
+**2026-08-15: `docker/cluster/cluster_interface.sh` and every
+`submit_job_slurm_*.sh`/`submit_job_pbs.sh` are retired deprecation shims** —
+running any of them errors with a pointer to the replacement instead of
+submitting. Cluster submission goes through the repo-owned control plane:
 
 ```bash
-bash cluster_interface.sh -c ice job --task Isaac-Imitation-G1-Latent-v0 --algo IPMD --headless
+pixi run python -m imitation_experiments.pipeline.cluster plan \
+    --campaign <path/to/campaign.yaml> --arm <arm> --seed <seed> [--profile ice|skynet]
+pixi run python -m imitation_experiments.pipeline.cluster submit \
+    --plan <plan_dir> --confirm <PLAN_SHA>
 ```
 
-If no `-c` is given, the script auto-selects `submit_job_slurm_${CLUSTER_LOGIN}.sh` (from `.env.cluster`) when that file exists, uses `submit_job_slurm_pace.sh` for `*.pace.gatech.edu` logins, and otherwise falls back to `submit_job_slurm.sh`. You can force a submitter with `CLUSTER_SLURM_SUBMIT_SCRIPT=pace`.
+A campaign declares its arms, stages, and resources in one `campaign.yaml`
+consumed by `imitation_experiments.pipeline.cluster.config`; see
+`experiments/campaigns/2026-08-14-latent-quant-ice-repeats/` for a worked
+14-arm example (real-ICE validated 2026-08-15, jobs 5577564/5577565). Cluster
+profiles (ssh alias, data/SIF/log paths, Slurm defaults, frozen env vars) live
+in `source/imitation_experiments/imitation_experiments/pipeline/cluster/conf/profile_<name>.yaml`;
+the `ice` profile is validated, `skynet` is experimental.
 
-For Georgia Tech ICE/PACE pipeline jobs, use:
-
-```bash
-DRY_RUN=1 experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_hl_skill_pipeline_pace_2b.sh
-CLUSTER_SLURM_ACCOUNT=<pace-account> DRY_RUN=0 experiments/campaigns/2026-07-23-bones-phase5-language-h200/submit_hl_skill_pipeline_pace_2b.sh
-```
+A campaign not yet migrated to a `campaign.yaml` has no working submission
+path until one is written.
 
 The helper defaults to `ice-gpu`, `gpu:l40s:1`, `coe-ice`, and 32G RAM; override
 those with `CLUSTER_SLURM_PARTITION`, `CLUSTER_SLURM_GPU_GRES`,

@@ -69,14 +69,35 @@ parser.add_argument(
     "--transition_objective",
     type=str,
     default="endpoint",
-    choices=("endpoint", "state_occupancy", "semimarkov_chain", "endpoint_delta"),
+    choices=(
+        "endpoint",
+        "state_occupancy",
+        "semimarkov_chain",
+        "endpoint_delta",
+        "jepa_ntp",
+    ),
     help=(
         "DiffSR skill factorization. 'endpoint' predicts s[t+H] from (s[t], z); "
         "'state_occupancy' predicts a sampled checkpoint s[t+h_k] from (s[t], z); "
         "'semimarkov_chain' predicts each checkpoint from the preceding checkpoint "
-        "under one held z; 'endpoint_delta' predicts s[t+H]-s[t]."
+        "under one held z; 'endpoint_delta' predicts s[t+H]-s[t]; 'jepa_ntp' is "
+        "chunk-wise next-token prediction against an EMA target encoder with a "
+        "bilinear (spectral) energy head trained by symmetric InfoNCE."
     ),
 )
+parser.add_argument(
+    "--jepa_loss",
+    type=str,
+    default="sigreg",
+    choices=("sigreg", "sigreg_ebm", "infonce"),
+    help=(
+        "jepa_ntp anti-collapse mechanism: 'sigreg' (LeJEPA prediction MSE + "
+        "sketched isotropic-Gaussian regularization, no negatives) or "
+        "'infonce' (bilinear spectral energy over in-batch negatives)."
+    ),
+)
+parser.add_argument("--jepa_sigreg_coeff", type=float, default=1.0)
+parser.add_argument("--jepa_sigreg_sketches", type=int, default=64)
 parser.add_argument(
     "--transition_offsets",
     type=int,
@@ -488,6 +509,9 @@ def _build_trainer_config(
         macro_anchor_mode=macro_anchor_mode,
         encoder_window_mode=args_cli.encoder_window_mode,
         transition_objective=args_cli.transition_objective,
+        jepa_loss=args_cli.jepa_loss,
+        jepa_sigreg_coeff=args_cli.jepa_sigreg_coeff,
+        jepa_sigreg_sketches=args_cli.jepa_sigreg_sketches,
         transition_offsets=tuple(args_cli.transition_offsets or ()),
         z_dim=args_cli.z_dim,
         latent_mode=args_cli.latent_mode,

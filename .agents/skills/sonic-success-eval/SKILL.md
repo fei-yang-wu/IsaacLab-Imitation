@@ -1,6 +1,6 @@
 ---
 name: sonic-success-eval
-description: Evaluate IsaacLab-Imitation low-level G1 checkpoints with the official SONIC motion-success criterion and success-only MPJPE-L. Use when the user asks for SONIC success rate, paper-compatible SR, push-disabled or foot-position-disabled evaluation, checkpoint comparison by completed motions, or MPJPE-L computed only on successful trajectories.
+description: Evaluate IsaacLab-Imitation low-level G1 checkpoints with the official SONIC motion-success criterion and success-only MPJPE-L, pick the right board and randomization profile for a paper-facing row, and apply the repo's planner metric standard (root-relative MPJPE plus fall-only survival). Use when the user asks for SONIC success rate, paper-compatible SR, push-disabled or foot-position-disabled evaluation, checkpoint comparison by completed motions, MPJPE-L computed only on successful trajectories, which SONIC paper number a result may be compared against, or which two numbers a planner evaluation must report.
 ---
 
 # SONIC success evaluation
@@ -10,8 +10,10 @@ checkpoint evaluation with SONIC's released evaluation thresholds. Keep this
 pass distinct from task-strict qualification and the non-terminating
 diagnostic.
 
-Read `wiki/sonic-success-evaluation.md` before launching. Treat its pinned
-upstream links and result-field definitions as the detailed source of truth.
+Read `wiki/canonical-paper-metrics.md` first: it fixes which board, which
+randomization profile, and which SONIC paper number a row may be compared
+against. Then read `wiki/sonic-success-evaluation.md` for the pinned upstream
+links and result-field definitions.
 
 ## Reconstruct the checkpoint contract
 
@@ -33,9 +35,21 @@ Change only the evaluation settings below.
 ## Apply the SONIC criterion at launch
 
 Use `imitation_experiments.lowlevel.evaluate_checkpoint` with deterministic
-policy actions (`--action_sampling mode`), `--randomization no_push`, start
-frame 0, and a fixed sequential assignment. The `no_push` profile retains
-startup and reset randomization while removing the interval push. Pass
+policy actions (`--action_sampling mode`), start frame 0, and a fixed
+sequential assignment.
+
+**Choose the randomization profile by what the row is for** (frozen
+2026-08-17):
+
+- `--randomization none` for a paper-facing **quality** row
+  (`sonic_sr_clean_v1`). This is the headline. Randomization costs the released
+  SONIC checkpoint 2.75 mm of MPJPE-L and 0.001 of success rate, so a quality
+  number measured under randomization understates the tracker.
+- `--randomization no_push` for the **robustness** partner (`sonic_sr_v1`),
+  which retains startup and reset randomization while removing the interval
+  push. Every scoreboard row recorded before 2026-08-17 is one of these.
+
+Never place a clean row and a `no_push` row in the same table column. Pass
 `env.events.push_robot=null` explicitly as an auditable second guard. Apply
 these overrides exactly:
 
@@ -87,10 +101,9 @@ Require all of these:
 - `aggregate.done_rate == 1.0`;
 - `aggregate.time_out_rate == 0.0`;
 - `metadata.action_sampling == "mode"`;
-- `metadata.randomization_profile == "no_push"`;
-- `metadata.randomization_kept.startup == true`;
-- `metadata.randomization_kept.reset == true`;
-- `metadata.randomization_kept.push == false`;
+- `metadata.randomization_profile` matches the intended row (`none` for a
+  quality row, `no_push` for a robustness row), and `randomization_kept` agrees
+  with it on all three of `startup`, `reset`, and `push`;
 - `metadata.push_perturbation.enabled == false`;
 - `stop_reason == "all_envs_done"`;
 - no non-SONIC failure term is active;
@@ -101,12 +114,33 @@ Report:
 - SR from `aggregate.completed_tracking_success_rate`;
 - numerator from `successful_metrics.tracking_mpjpe_mm.num_successful_envs`;
 - denominator from `aggregate.num_evaluated_envs`;
-- MPJPE-L from `successful_metrics.tracking_mpjpe_mm.mean`.
+- MPJPE-L from `successful_metrics.tracking_mpjpe_mm.mean` (frame-weighted
+  micro mean over successful episodes);
+- MPJPE-G from `successful_metrics.mpjpe_g_mm.micro_mean`. It is mandatory:
+  MPJPE-L flatters a policy that holds its pose while drifting.
+
+`python -m imitation_experiments.evaluation.summarize_paper_boards <json>`
+prints the three-number row and refuses to print an incomplete one. Add
+`--subset deployable` for the 123-clip hardware-plausible board.
 
 Do not report `aggregate.tracking_success_rate` as SR unless every evaluated
 environment finished. It intentionally exposes survivor status and can count
 unfinished clips under a short cap. A clip that reaches `reference_finished`
 on the same step as a failure remains a failure.
+
+## Say which SONIC number the row may be compared against
+
+SONIC's headline **22.3 mm at 100% success is its 123-clip hardware deployment
+set scored in simulation**, not a large benchmark. Its large-set rows are
+test-content **98.7% / 23.2 mm**, test-repetition 99.6%, PHUMA 97.0%.
+
+- A 4,096-clip block row compares against **23.2 mm**.
+- The `bones_deployable123_v1` board compares against **22.3 mm**.
+
+Comparing a 4,096-clip block against 22.3 mm understates the tracker by about
+3.7 mm, because the block contains deep-crouch and ground clips no hardware set
+has. On the canonical block the minimum reference pelvis height alone has
+Spearman -0.61 against per-clip MPJPE-L.
 
 State that the result is criterion-compatible but not directly comparable to
 SONIC's paper number when the motion dataset or split differs.
@@ -117,7 +151,56 @@ This pass does not replace:
 
 - task-strict oracle qualification with the checkpoint's frozen task terms;
 - the full-horizon diagnostic with all early terminations disabled and its
-  required retained video.
+  required retained video;
+- the planner metric standard below.
 
 Label artifacts explicitly as `sonic_eval` to prevent accidental aggregation
 with either protocol.
+
+## Planner metric standard (2026-08-12 onward)
+
+A **planner** evaluation is a different pass from the SONIC criterion above,
+and it reports **two** numbers, always:
+
+1. **Root-relative MPJPE (mm)** — the headline tracking metric.
+2. **Success = survival = the robot did not fall** (`base_too_low` only).
+   A tracking-error termination is not a failure.
+
+Either number alone can invert the ranking of two arms. A re-encoded FSQ
+planner arm had perfect survival (1.000, zero falls) and the worst MPJPE
+(102.2 against 57.1 mm) — a degenerate but safe policy. This is the case that
+makes both numbers mandatory.
+
+Command shape:
+
+```bash
+pixi run -e isaaclab python scripts/rlopt/eval_skill_commander_closed_loop.py \
+    --fall_only_success --disable_tracking_terminations \
+    --metric_interval 10 \
+    'env.data.runtime_cache_body_names=[...14 tracked bodies...]' ...
+```
+
+- `--fall_only_success` also disables `foot_pos_xyz`, which is **not** in
+  `TRACKING_TERMINATION_NAMES`. Without it a large share of episodes end on a
+  foot-tracking termination before the robot can fall, so survival reads a
+  saturated 1.000 and the step count measures that termination. Measured on
+  the 30-goal set: with `foot_pos_xyz` on, 0/30 falls and 317 mean steps; with
+  it off, 2/30 falls and 406 mean steps.
+- MPJPE needs `env.data.runtime_cache_body_names=[...]` passed to the
+  evaluation, or the metric silently does not appear at all.
+- `metric_interval` must be far below the episode length. Setting it to the
+  episode length samples once, at step 0, on the reset placement, where every
+  tracking error is 0 by construction. Use about 10 steps.
+- Do **not** import the MPJPE helper from
+  `imitation_experiments.lowlevel.evaluate_checkpoint`. That module is a script
+  with module-level argparse; importing it mid-run re-parses `sys.argv` and
+  aborts the evaluation with a misleading "--checkpoint is required".
+  `_tracking_mpjpe_mm` in the closed-loop script computes it from the
+  environment accessors.
+- Normalize against the matching tracker oracle. On the frozen 4,096-motion
+  board: `root_qpos_explicit` 19.21 mm, `z256_scaled` 23.27 mm, `fsq64_sonic`
+  25.44 mm.
+
+See the `gr00t-planner` skill for the full planner protocol (2000-step cap,
+`physics=newton_mjwarp`, explicit goal) and `result-rigor` before citing any
+of these numbers.

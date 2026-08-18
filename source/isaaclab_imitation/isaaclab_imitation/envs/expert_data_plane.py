@@ -55,6 +55,7 @@ from isaaclab_imitation.envs.reference_arrays import (
     pack_cpu_fields_parallel,
 )
 from tensordict import TensorDict
+from isaaclab_imitation.contracts import mpjpe_local_global
 from torchrl.data.replay_buffers import TensorDictReplayBuffer
 from torchrl.data.replay_buffers.storages import TensorStorage
 
@@ -280,6 +281,30 @@ class ExpertDataPlane:
         self._reference_reset_prefetch_pending = False
         self._reference_reset_prefetch_metrics: dict[str, float] = {}
         self._reference_prefetch_metrics: dict[str, float] = {}
+
+        # Achieved-pose ring (cfg.achieved_ring_capacity > 0): raw robot pose
+        # per control step, per environment, for achieved-window encoder
+        # training. Raw, never pre-anchored — windows are anchored at their own
+        # slot 0 at sample time through the same heading-frame primitives as
+        # expert windows. `_achieved_fill` counts valid CONSECUTIVE frames
+        # since the last reset (capped at capacity), which is what guarantees
+        # a sampled window is one continuous trajectory segment.
+        capacity = int(getattr(cfg, "achieved_ring_capacity", 0) or 0)
+        self._achieved_ring_capacity = capacity
+        if capacity > 0:
+            self._achieved_qpos = torch.zeros(num_envs, capacity, 29, device=device)
+            self._achieved_anchor_pos = torch.zeros(
+                num_envs, capacity, 3, device=device
+            )
+            self._achieved_anchor_quat = torch.zeros(
+                num_envs, capacity, 4, device=device
+            )
+            self._achieved_cursor = torch.zeros(
+                num_envs, dtype=torch.long, device=device
+            )
+            self._achieved_fill = torch.zeros(
+                num_envs, dtype=torch.long, device=device
+            )
 
         # The dataset layout is derived by `MotionDataCfg.resolve`, which the
         # environment config runs before the env reaches here. Nothing about
@@ -1158,15 +1183,12 @@ class ExpertDataPlane:
         )[0]
         robot_root_w = self._robot().data.root_state_w.torch[:, :3]
         reference_root_w = self._get_reference_root_state_w_fast()[0]
-        robot_relative = robot_pos_w - robot_root_w[:, None, :]
-        reference_relative = reference_pos_w - reference_root_w[:, None, :]
-        mpjpe_local = torch.linalg.vector_norm(
-            robot_relative - reference_relative, dim=-1
-        ).mean(dim=-1)
-        mpjpe_global = torch.linalg.vector_norm(
-            robot_pos_w - reference_pos_w, dim=-1
-        ).mean(dim=-1)
-        return mpjpe_local, mpjpe_global
+        return mpjpe_local_global(
+            robot_pos_w,
+            robot_root_w,
+            reference_pos_w,
+            reference_root_w,
+        )
 
     # ------------------------------------------------------------------
     # MDP fast paths.
@@ -1491,6 +1513,127 @@ class ExpertDataPlane:
                 return tuple(int(body_id) for body_id in body_ids.tolist())
             return ("tensor", int(body_ids.data_ptr()), int(body_ids.numel()))
         return tuple(int(body_id) for body_id in body_ids)
+
+    def append_achieved_pose(self) -> None:
+        """Record one raw robot pose per environment into the achieved ring.
+
+        Absolute joint positions in the pinned action order (the same order
+        `expert_motion_qpos` uses), plus the anchor body's world pose. Called
+        once per control step by the environment, alongside the causal-history
+        append.
+        """
+        if self._achieved_ring_capacity <= 0:
+            return
+        joint_ids = self._env._pinned_joint_ids()
+        qpos = self._robot().data.joint_pos.index_select(1, joint_ids)
+        anchor_pos, anchor_quat = self._get_robot_anchor_state_w_fast("torso_link")
+        cursor = self._achieved_cursor
+        index = cursor.view(-1, 1, 1)
+        self._achieved_qpos.scatter_(
+            1, index.expand(-1, 1, 29), qpos.unsqueeze(1)
+        )
+        self._achieved_anchor_pos.scatter_(
+            1, index.expand(-1, 1, 3), anchor_pos.unsqueeze(1)
+        )
+        self._achieved_anchor_quat.scatter_(
+            1, index.expand(-1, 1, 4), anchor_quat.unsqueeze(1)
+        )
+        self._achieved_cursor = (cursor + 1) % self._achieved_ring_capacity
+        self._achieved_fill = torch.clamp(
+            self._achieved_fill + 1, max=self._achieved_ring_capacity
+        )
+
+    def clear_achieved_ring(self, env_ids: torch.Tensor) -> None:
+        """Invalidate reset environments: frames across a reset are not one
+        continuous trajectory, and the fill counter is the consecutiveness
+        guarantee."""
+        if self._achieved_ring_capacity <= 0:
+            return
+        ids = env_ids.to(device=self._achieved_fill.device, dtype=torch.long)
+        self._achieved_fill[ids] = 0
+
+    def sample_achieved_chunk_windows(
+        self, batch_size: int, horizon_steps: int
+    ) -> "TensorDict | None":
+        """Achieved macro windows in the exact shape of the expert macro batch.
+
+        Frames are 38-wide `[qpos, anchor_pos_b, anchor_ori_b]`, anchored at
+        the window's slot-0 HEADING frame (yaw-only, xy-only origin) — the
+        `expert_heading` convention, built with the same compiled primitives
+        the expert path uses. Slots honor `env.expert_macro_frame_stride`.
+        Returns None when no environment holds a long enough consecutive
+        segment yet (early in training, or right after mass resets).
+        """
+        if self._achieved_ring_capacity <= 0:
+            return None
+        horizon = int(horizon_steps)
+        stride = int(self._expert_macro_frame_stride())
+        span = horizon * stride + 1
+        if span > self._achieved_ring_capacity:
+            raise ValueError(
+                f"achieved ring capacity {self._achieved_ring_capacity} cannot "
+                f"hold a window of {horizon} slots at stride {stride} "
+                f"({span} frames)."
+            )
+        eligible = torch.nonzero(
+            self._achieved_fill >= span, as_tuple=False
+        ).reshape(-1)
+        if int(eligible.numel()) == 0:
+            return None
+        device = self._achieved_fill.device
+        rows = torch.randint(
+            0, int(eligible.numel()), (int(batch_size),), device=device
+        )
+        env_ids = eligible.index_select(0, rows)
+        # Newest valid segment ends at cursor-1; choose a random start so the
+        # whole strided window fits inside the env's consecutive fill.
+        fill = self._achieved_fill.index_select(0, env_ids)
+        slack = fill - span
+        start_offset = (
+            torch.rand(int(batch_size), device=device) * (slack + 1).float()
+        ).long()
+        # Ring index of the OLDEST valid frame, then absolute slot indices.
+        cursor = self._achieved_cursor.index_select(0, env_ids)
+        oldest = (cursor - fill) % self._achieved_ring_capacity
+        slots = torch.arange(0, horizon + 1, device=device) * stride
+        index = (
+            oldest.unsqueeze(1) + start_offset.unsqueeze(1) + slots.unsqueeze(0)
+        ) % self._achieved_ring_capacity
+        gather = lambda buf, width: torch.gather(  # noqa: E731
+            buf.index_select(0, env_ids),
+            1,
+            index.unsqueeze(-1).expand(-1, -1, width),
+        )
+        qpos = gather(self._achieved_qpos, 29)
+        anchor_pos = gather(self._achieved_anchor_pos, 3)
+        anchor_quat = gather(self._achieved_anchor_quat, 4)
+        compiled = _get_mdp_compiled_module()
+        center_pos, center_quat = compiled.heading_anchor_frame(
+            anchor_pos[:, 0, :], anchor_quat[:, 0, :]
+        )
+        pos_b, ori_quat_b = compiled.body_pose_in_anchor_frame(
+            center_pos, center_quat, anchor_pos, anchor_quat
+        )
+        # Expert windows carry the anchor orientation as flat 6D; the compiled
+        # frame transform returns quaternions, so convert with the SAME helper
+        # the expert path uses.
+        ori_b = compiled.quat_to_rot6d_flat(
+            ori_quat_b.reshape(-1, 4)
+        ).reshape(int(batch_size), horizon + 1, 6)
+        frames = torch.cat([qpos, pos_b, ori_b], dim=-1)
+        return TensorDict(
+            {
+                "hl": TensorDict(
+                    {
+                        "state": frames[:, 0],
+                        "future_window": frames[:, 1:],
+                        "target": frames[:, -1],
+                    },
+                    batch_size=[int(batch_size)],
+                )
+            },
+            batch_size=[int(batch_size)],
+        )
 
     def _get_robot_anchor_state_w_fast(
         self, anchor_body_name: str

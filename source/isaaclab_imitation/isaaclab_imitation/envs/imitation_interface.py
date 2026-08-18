@@ -76,6 +76,9 @@ class ImitationEnvInterface:
     def expert_macro_anchor_mode(self) -> str:
         return self._env.expert_macro_anchor_mode()
 
+    def sample_achieved_chunk_windows(self, batch_size: int, horizon_steps: int):
+        return self._env.sample_achieved_chunk_windows(batch_size, horizon_steps)
+
     def sample_expert_macro_transition_batch(
         self,
         batch_size: int,

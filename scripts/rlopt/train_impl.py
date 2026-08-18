@@ -35,6 +35,12 @@ def cleanup_pbar(_signum, _frame):
 
 # disable KeyboardInterrupt override
 signal.signal(signal.SIGINT, cleanup_pbar)
+# Slurm walltime expiry delivers SIGTERM (early, when sbatch passes
+# --signal=TERM@<sec>). Route it through the same interrupt path so the
+# training loop can write a final checkpoint before the job dies -- segmented
+# runs resume from that checkpoint instead of losing everything since the
+# last save_interval boundary.
+signal.signal(signal.SIGTERM, cleanup_pbar)
 
 import random
 import time
@@ -319,6 +325,50 @@ def _apply_termination_window_args(
     )
 
 
+def _resolve_checkpoint_path(checkpoint: str) -> str:
+    """Resolve ``--checkpoint`` to a file, accepting a directory.
+
+    A multi-segment cluster run cannot name its predecessor's checkpoint at
+    submission time: the file name carries the step it was written at, and the
+    logger nests it under a per-run ``<timestamp>_wandb-<id>`` directory that
+    does not exist yet. Passing the checkpoint *tree* instead resolves it at
+    launch, so every segment of a chain can be frozen with the same argument.
+
+    Selection is by modification time, NOT by step. Each segment restarts its
+    own step counter at zero, so after segment 2 writes ``model_step_5e8.pt``
+    the highest-numbered file in the tree is still segment 1's
+    ``model_step_25e8.pt`` -- resuming by step would walk the chain backwards.
+    Checkpoints are staged through ``$TMPDIR`` and moved into place, so a
+    visible file is always complete.
+
+    A tree with no checkpoint is an error: an ``afterok`` predecessor that
+    produced none did not do its job, and silently restarting from scratch
+    would burn a whole segment.
+    """
+    path = os.path.abspath(checkpoint)
+    if not os.path.isdir(path):
+        return path
+    found: list[tuple[float, int, str]] = []
+    for root, _dirs, names in os.walk(path):
+        for name in names:
+            match = re.fullmatch(r"model_step_(\d+)\.pt", name)
+            if match:
+                full = os.path.join(root, name)
+                found.append((os.path.getmtime(full), int(match.group(1)), full))
+    if not found:
+        msg = (
+            f"--checkpoint points at a tree with no model_step_<N>.pt file: "
+            f"{path}. A resumed segment must find its predecessor's checkpoint."
+        )
+        raise FileNotFoundError(msg)
+    _mtime, step, resolved = max(found)
+    print(
+        f"[INFO] Resuming from the newest of {len(found)} checkpoints under "
+        f"{path} (segment-local step {step}): {resolved}"
+    )
+    return resolved
+
+
 def train(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     agent_cfg: RLOptConfig,
@@ -548,7 +598,7 @@ def train(
             agent.log_metrics = _log_metrics_with_video
 
     if args_cli.checkpoint is not None:
-        checkpoint_path = os.path.abspath(args_cli.checkpoint)
+        checkpoint_path = _resolve_checkpoint_path(args_cli.checkpoint)
         print(f"[INFO] Loading checkpoint: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         if isinstance(checkpoint, dict) and "actor_critic" in checkpoint:
@@ -561,9 +611,11 @@ def train(
             agent.load_model(checkpoint_path)
 
     # run training
+    interrupted = False
     try:
         agent.train()
     except KeyboardInterrupt:
+        interrupted = True
         print("\n[INFO] Training interrupted by user.")
     finally:
         if video_media_logger is not None:
@@ -571,6 +623,22 @@ def train(
         env.close()
 
     print(f"Training time: {round(time.time() - start_time, 2)} seconds")
+    if interrupted:
+        # An interrupted run has NOT reached its frame budget, so it must not
+        # look like a success. Exiting 0 here satisfies an `afterok` dependency
+        # and lets a chained segment resume from a truncated predecessor: on
+        # 2026-08-15 a SIGINT stopped group_vq64_hold10 at 220M of 2.5B, Slurm
+        # recorded COMPLETED, and the next segment launched. That one was
+        # caught only because no checkpoint exists before save_interval; an
+        # interrupt at 1.2B would have resumed from the 1B checkpoint and
+        # quietly trained 8.8B of a 10B budget.
+        if wandb.run is not None:
+            wandb.finish(exit_code=1)
+        msg = (
+            "Training was interrupted before reaching its frame budget; "
+            "failing so dependent stages do not run."
+        )
+        raise RuntimeError(msg)
     success_marker = os.environ.get("ISAACLAB_WORKLOAD_SUCCESS_MARKER")
     if success_marker:
         Path(success_marker).touch()

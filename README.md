@@ -900,11 +900,12 @@ Note that the current hook set is inherited from upstream Isaac Lab conventions.
 ## Cluster note
 
 For cluster submission, local Isaac Lab Python installation is not required on the submission machine if jobs run inside
-the provided container or Apptainer image. See `docker/cluster` and [REPO_SETUP.md](REPO_SETUP.md) for the expected sync
-layout and environment variables.
+the provided container or Apptainer image. See [REPO_SETUP.md](REPO_SETUP.md) for the control-plane submission flow
+(`python -m imitation_experiments.pipeline.cluster plan/submit`); `docker/cluster/cluster_interface.sh` and the
+`submit_job_slurm_*.sh` helpers it used to invoke are retired 2026-08-15 deprecation shims.
 
-Cluster jobs submitted through `docker/cluster/cluster_interface.sh job ...` now auto-check the G1 dataset tree before
-running the user workload. The container-side preflight in `docker/cluster/run_singularity.sh` verifies that the G1 NPZ
+Cluster jobs submitted through the control plane still auto-check the G1 dataset tree before running the user workload.
+The container-side preflight in `docker/cluster/run_singularity.sh` verifies that the G1 NPZ
 tree under `${CLUSTER_G1_DATA_ROOT:-${CLUSTER_DATA_DIR}/lafan1}` contains at least 40 motions. If the dataset is
 incomplete, it downloads the G1 NPZ dataset from Hugging Face with `scripts/data/setup_g1_lafan1_npz_dataset.py` and
 regenerates `g1_lafan1_manifest.json` with `scripts/data/write_lafan1_npz_manifest.py` only when the manifest is missing or

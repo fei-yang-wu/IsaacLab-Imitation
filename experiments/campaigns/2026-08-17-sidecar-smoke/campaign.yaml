@@ -1,0 +1,222 @@
+# Sidecar smoke: prove the eval sidecar publishes real W&B points during a
+# real cluster run, and exercise the content-addressed workspace store on the
+# way through. This is a PLUMBING test, not an experiment. Its numbers mean
+# nothing: 512 environments and a ~30M frame budget are far below anything
+# that produces a tracking result.
+#
+# What it is built to show, in one short job:
+#   - `cluster submit` uploads a ~21 MB archive (was 3.2 GB) and reuses a
+#     stored one when the tree is unchanged;
+#   - checkpoints land every `save_interval` frames and carry
+#     `cumulative_env_frames`, which is what the sidecar keys its x-axis on;
+#   - the workstation sidecar turns each new checkpoint into an EC/MuJoCo
+#     rehearsal point in W&B while the job is still running.
+#
+# The arm mirrors `fsq64_hold10` from 2026-08-15-latent-bottleneck-10b (SONIC
+# FSQ lattice, hold 10, 66-D command) so the exported bundle matches the
+# sidecar's `fsq64_v2` preset. The encoder pretrain is cut to 400 updates,
+# which is enough to produce a loadable encoder and nothing more.
+#
+#   ./submit.sh                                     # plan (preflight + freeze)
+#   ... submit --plan <dir> --confirm <PLAN_SHA>    # printed by plan
+#   ./watch_sidecar.sh                              # workstation eval loop
+name: sidecar-smoke
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: sidecar-smoke
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  stride: 1
+  z_dim: 64
+  command_dim: 66
+  phase_mode: sin_cos
+  anchor_mode: robot_heading
+  hold: 10
+  # Small enough to start fast and still fill a GPU batch.
+  train_num_envs: 512
+  rollout_steps: 24
+  pretrain_updates: 400
+  pretrain_batch_size: 4096
+  # ~30M frames: about 2,400 iterations at 512 x 24, and six checkpoints at
+  # the 5M save interval below.
+  frame_cap: 30000000
+  save_interval: 5000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/sidecar_smoke/${vars.arm}_seed${vars.seed}
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  pretrain_block:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bones-seed
+    - --wandb_group
+    - sidecar-smoke
+    - --wandb_run_name
+    - ${vars.wandb_arm}-pretrain-s${vars.seed}
+    - --horizon_steps
+    - "10"
+    - --encoder_window_mode
+    - intermediate
+    - --z_dim
+    - ${vars.z_dim}
+    - --transition_objective
+    - endpoint
+    - --latent_mode
+    - sonic_fsq
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "100"
+    - --eval_batches
+    - "2"
+
+  lowlevel_block:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=sidecar-smoke
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.output_root}/encoder/checkpoints/latest.pt
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.z_dim}
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - env.rewards.action_rate_l2.weight=0.0
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.data.reference_prefetch_mode=next
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=8192
+    - agent.loss.gamma=0.97
+    # The point of this campaign: a checkpoint every 5M frames, so the
+    # sidecar has something new to score every few minutes.
+    - agent.save_interval=${vars.save_interval}
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+arms:
+  fsq64_hold10:
+    vars: {}
+    stages:
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_block},${vars.data_overrides}}
+        time_limit: "01:00:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: sidecar-smoke,plumbing,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_block},${vars.data_overrides}}
+        depends_on: pretrain
+        time_limit: "02:00:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: sidecar-smoke,plumbing,${vars.arm},seed${vars.seed},lowlevel
+          # A deterministic run id so the sidecar can attach without a lookup,
+          # and shared mode so it MAY attach: W&B refuses to enable shared
+          # mode on a run that already has history, so the trainer has to
+          # create the run this way from the start. WANDB__PRIMARY (double
+          # underscore) is the env spelling of the x_primary setting.
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  output_container_path: /data/sidecar_smoke/${vars.arm}_seed${vars.seed}

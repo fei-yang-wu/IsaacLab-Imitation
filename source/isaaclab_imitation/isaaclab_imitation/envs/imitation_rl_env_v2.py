@@ -372,6 +372,14 @@ class ImitationRLEnv(ManagerBasedRLEnv):
     # Expert sampling delegators (RLOpt discovers these by name).
     # ------------------------------------------------------------------
 
+    def sample_achieved_chunk_windows(
+        self, batch_size: int, horizon_steps: int
+    ) -> TensorDict | None:
+        """Achieved macro windows from the raw-pose ring; None until filled."""
+        return self.expert_data_plane.sample_achieved_chunk_windows(
+            int(batch_size), int(horizon_steps)
+        )
+
     def sample_expert_batch(
         self, batch_size: int, required_keys: Sequence[Any]
     ) -> TensorDict | None:
@@ -611,6 +619,10 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         if history is None:
             return
         history.append(self._current_causal_planner_frame())
+        # Same cadence, same call sites: the achieved-pose ring records the
+        # raw robot pose whenever the causal history records a frame, so both
+        # views of "what the robot did" stay step-aligned by construction.
+        self.expert_data_plane.append_achieved_pose()
 
     def causal_planner_observation_spec(
         self, history_steps: int = _CAUSAL_PLANNER_HISTORY_STEPS
@@ -927,6 +939,7 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self._last_tracked_root_pos_valid.index_fill_(0, env_ids, True)
 
         self._reset_causal_planner_history(env_ids)
+        self.expert_data_plane.clear_achieved_ring(env_ids)
 
         return result
 

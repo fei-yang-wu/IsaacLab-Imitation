@@ -1,0 +1,757 @@
+# Latent-bottleneck ablation at 10B frames, on interfaces proven to be OUTSIDE
+# the 64-D hold-1 dead zone (2026-08-15 grid: every 64-D hold-1 arm stalled at
+# ep_len 27-51 while every 256-D hold-1 arm and the 64-D hold-10 arm reached
+# 103-124). Two interfaces carry the arms:
+#
+#   hold 10, 64-D  + sin_cos ->  66-D command  (SONIC token space, rt33shvd)
+#   hold  1, 256-D + sin_cos -> 258-D command  (2zxhc8su / z256_replica)
+#
+# Every arm uses the NEW trunk (silu, 2048/1024/512/512, feature 256, embed
+# 1024) so the trunk is constant and only the bottleneck varies.
+#
+#   ./submit.sh <arm> <seed>                          # plan (preflight, frozen artifacts)
+#   ... submit --plan <dir> --confirm <PLAN_SHA>      # printed by plan
+#
+# 10B does not fit ICE's 16h GPU walltime cap (every GPU partition, verified
+# 2026-08-15), so each arm is one pretrain plus FOUR chained lowlevel segments
+# of 2.5B. Segments 2-4 pass --checkpoint <tracker tree>, which train_impl
+# resolves to the NEWEST model_step_<N>.pt by mtime; step numbers restart per
+# segment, so resolving by step would walk the chain backwards.
+name: latent-bottleneck-10b
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: latent-bottleneck-10b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  stride: 1
+  z_dim: 64
+  # command width = z_dim + phase channels; phase 'sin_cos' adds 2.
+  command_dim: ${vars.z_dim}
+  phase_mode: sin_cos
+  anchor_mode: robot_heading
+  hold: 1
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+  train_num_envs: 16384
+  rollout_steps: 24
+  # The FULL per-arm budget, given to EVERY segment (user directive
+  # 2026-08-16: never shrink max_iterations to fit a walltime). A segment ends
+  # either by reaching this target or by Slurm's 16h walltime -- sbatch sends
+  # SIGTERM 5 minutes early, the trainer writes a final resume checkpoint, and
+  # the next segment continues the SAME global budget: checkpoints carry
+  # cumulative_env_frames and init_metadata resumes the count, so the chain
+  # stops at exactly this many frames no matter how segments divide it.
+  frame_cap: 10000000000
+  segments: 4
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  # Data lives on the shared allocation (bound via the profile's
+  # extra_bind_paths); outputs go under /data, the only rw data bind.
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/bottleneck_10b/${vars.arm}_seed${vars.seed}
+  # A dyn variant reuses its base arm's pretrained encoder instead of paying
+  # for an identical pretrain: set encoder_arm to the base arm. Online
+  # finetuning writes the reshaped encoder into the TRACKER checkpoint's
+  # sampler state, never back into this file, so the base arm is unaffected.
+  encoder_arm: ${vars.arm}
+  encoder_root: /data/bottleneck_10b/${vars.encoder_arm}_seed${vars.seed}
+
+  # Resume plumbing for segments 2-4. The tracker TREE is passed, not a file:
+  # the logger nests checkpoints under a per-run <timestamp>_wandb-<id> dir
+  # that does not exist at submit time. `parse_known_args` means the flag may
+  # sit after the Hydra overrides. The termination curriculum (5M -> 30M) has
+  # already completed in segment 1, so later segments disable it, which leaves
+  # terminations at their strict SONIC values -- exactly the post-anneal state.
+  # All segments resume ONE W&B run whose id is the functional arm-seed name
+  # above; the segment index is carried as a W&B tag on each stage, and RLOpt
+  # adds each segment's generated logdir timestamp as another tag.
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+  seg3_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+  seg4_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  # Hoisted out of pretrain_head so a jepa arm overrides it instead of
+  # appending a second --transition_objective and leaning on argparse
+  # last-wins inside a frozen 10B command.
+  objective_args:
+    - --transition_objective
+    - endpoint
+
+  # Post-ramp state for the reset-curriculum arm's segments 2-4. The ramp keys
+  # off common_step_counter, which restarts every segment, so a ramp left
+  # enabled would sweep 0.8 -> 0.2 and snap back to 0.8 four times. The ramp
+  # therefore completes inside segment 1 (2.5B) and later segments pin the
+  # sampler at the final fraction: `_advance_adaptive_ratio_curriculum` returns
+  # immediately when adaptive_uniform_ratio_final is null, so the static
+  # adaptive_uniform_ratio stands.
+  curriculum_hold_block:
+    - env.command_interface.reference.selection.start_mode=adaptive
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.2
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+
+  # Per-arm axes (overridden inside arms.*.vars).
+  pretrain_mode_args: []
+  ln_args: []
+  dyn_args: [agent.ipmd.hl_skill_finetune_enabled=false]
+  smooth_args: []
+  curriculum_args: []
+  # Every arm that sets `curriculum_args` MUST also set this to
+  # `${vars.curriculum_hold_block}`, so segments 2-4 pin the sampler instead of
+  # re-running the ramp. `cont_det_hold1_resetramp_dyn` was submitted on
+  # 2026-08-17 without it (it uses the shared `segmented_stages` anchor, whose
+  # segments 2-4 carried no hold block until this line existed) and re-swept
+  # 0.8 -> 0.2 from the start of every segment; found and fixed the same day.
+  curriculum_hold_args: []
+
+  # SONIC-style adaptive-reset curriculum; ramp spans the whole frame budget.
+  curriculum_block:
+    - env.command_interface.reference.selection.start_mode=adaptive
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+    # Pinned: the ramp keys off the segment-local step counter, so it must
+    # complete inside segment 1 regardless of the arm's total budget.
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=2500000000
+  # 3x action-rate penalty + 10-step proprio histories on the actor terms.
+  smooth_block:
+    - env.rewards.action_rate_l2.weight=-0.3
+    - env.observations.policy.projected_gravity.history_length=10
+    - env.observations.policy.base_ang_vel.history_length=10
+    - env.observations.policy.joint_pos_rel.history_length=10
+    - env.observations.policy.joint_vel_rel.history_length=10
+    - env.observations.policy.last_action.history_length=10
+  # Online-dynamics finetune (obs-ring design; no policy gradient).
+  dyn_block:
+    - env.achieved_ring_capacity=128
+    - agent.ipmd.hl_skill_finetune_enabled=true
+    - agent.ipmd.hl_skill_pg_coeff=0
+    - agent.ipmd.hl_skill_offline_diffsr_coeff=1.0
+    - agent.ipmd.hl_skill_achieved_coeff=1.0
+    - agent.ipmd.hl_skill_anchor_coeff=0.01
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  pretrain_head:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bones-seed
+    - --wandb_group
+    - latent-bottleneck-10b
+    - --wandb_run_name
+    - ${vars.wandb_arm}-pretrain-s${vars.seed}
+    - --horizon_steps
+    - "10"
+    - --encoder_window_mode
+    - intermediate
+    - --z_dim
+    - ${vars.z_dim}
+  # Exact-replica pretrain trunk for the z256_replica arm: the 08-09
+  # `bones129k_v2_root_qpos_det_sr_h10_z256_seed0` contract (deterministic
+  # z256, mish, LayerNorm, feature 128 / embed 512, g/mu [512]).
+  replica_pretrain_tail:
+    - --encoder_hidden_dims
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - mish
+  replica_pretrain_end:
+    - --diffsr_feature_dim
+    - "128"
+    - --diffsr_embed_dim
+    - "512"
+    - --diffsr_g_hidden_dims
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  pretrain_tail:
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+  pretrain_end:
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=latent-bottleneck-10b
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_root}/encoder/checkpoints/latest.pt
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.z_dim}
+  # Tuned hold-1 low-level contract (2026-08-09-bones129k-hold1; the recipe
+  # behind wandb 2zxhc8su, ep_len 120 @100M). Diagnosed 2026-08-15: the first
+  # 8-arm batch omitted these and reached only ~41 ep_len @100M — the
+  # termination curriculum (relaxed terminations for the first 30M frames) is
+  # the bootstrap, action_rate off + tracking points 4.0 are the tuned
+  # weights, and the selection preset is 80% random full-trajectory + 20%
+  # adaptive. Arms that ablate one of these (smooth: action_rate;
+  # curriculum: selection) override AFTER this block, since later Hydra
+  # overrides win.
+  tuned_lowlevel:
+    - env.rewards.action_rate_l2.weight=0.0
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  output_container_path: /data/bottleneck_10b/${vars.arm}_seed${vars.seed}
+
+arms:
+  # Continuous deterministic on the wide hold-1 interface. The control row:
+  # same bottleneck (none) as z256_replica, which reached ep_len 121.49 @100M.
+  cont_det_hold1:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      pretrain_mode_args:
+        - --latent_mode
+        - deterministic
+    stages: &segmented_stages
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.objective_args},${vars.pretrain_mode_args},${vars.pretrain_tail},${vars.ln_args},${vars.pretrain_end},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+          # Shared mode so the EC/MuJoCo sidecar can write Eval/* into this
+          # run while it trains. W&B refuses to enable it once a run has
+          # history, so it must be set at creation. These cross --containall
+          # only because run_singularity.sh forwards them (2026-08-17).
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args},${vars.curriculum_hold_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+          # Shared mode so the EC/MuJoCo sidecar can write Eval/* into this
+          # run while it trains. W&B refuses to enable it once a run has
+          # history, so it must be set at creation. These cross --containall
+          # only because run_singularity.sh forwards them (2026-08-17).
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg3_args},${vars.curriculum_hold_args}}
+        depends_on: lowlevel2
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment3
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+          # Shared mode so the EC/MuJoCo sidecar can write Eval/* into this
+          # run while it trains. W&B refuses to enable it once a run has
+          # history, so it must be set at creation. These cross --containall
+          # only because run_singularity.sh forwards them (2026-08-17).
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel4
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg4_args},${vars.curriculum_hold_args}}
+        depends_on: lowlevel3
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment4
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+          # Shared mode so the EC/MuJoCo sidecar can write Eval/* into this
+          # run while it trains. W&B refuses to enable it once a run has
+          # history, so it must be set at creation. These cross --containall
+          # only because run_singularity.sh forwards them (2026-08-17).
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+  # Same, plus encoder LayerNorm. LN was refuted as the cause of the dead
+  # zone (51.25 on vs 50.53 off at 64-D) but is untested as a quality knob
+  # on a healthy interface at scale.
+  cont_det_ln_hold1:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      pretrain_mode_args:
+        - --latent_mode
+        - deterministic
+      ln_args:
+        - --encoder_layer_norm
+    stages: *segmented_stages
+  # SONIC's own interface: 64 x 32 lattice, published with NO learned
+  # projection, held for 10 steps with a live phase. rt33shvd's config,
+  # which reached ep_len 195.96 / MPJPE-L 30.52 at 5B.
+  fsq64_hold10:
+    vars:
+      hold: 10
+      command_dim: 66
+      pretrain_mode_args:
+        - --latent_mode
+        - sonic_fsq
+    stages: *segmented_stages
+  # Online dynamics on the two arms leading the 6.5B frames-matched table
+  # (jepa_sigreg_ebm_hold10_256d 17.88mm, cont_det_hold1_resetramp 17.55mm).
+  # Both reuse their base arm's encoder via encoder_arm, so only the lowlevel
+  # stages are submitted -- the pretrain would be bit-identical work.
+  jepa_sigreg_ebm_hold10_256d_dyn:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      hold: 10
+      encoder_arm: jepa_sigreg_ebm_hold10_256d
+      objective_args: [--transition_objective, jepa_ntp]
+      pretrain_mode_args: [--latent_mode, deterministic, --jepa_loss, sigreg_ebm]
+      dyn_args: ${vars.dyn_block}
+    stages: *segmented_stages
+  cont_det_hold1_resetramp_dyn:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      encoder_arm: cont_det_hold1_resetramp
+      pretrain_mode_args: [--latent_mode, deterministic]
+      curriculum_args: ${vars.curriculum_block}
+      # Without this the shared segments 2-4 re-run the ramp from 0.8 every
+      # time, because progress is `common_step_counter * num_envs` and nothing
+      # restores that counter across a resume.
+      curriculum_hold_args: ${vars.curriculum_hold_block}
+      dyn_args: ${vars.dyn_block}
+    stages: *segmented_stages
+  # Online dynamics on the arm currently leading the table (204.8 ep_len /
+  # 30.32 mm at 10B, one seed). The resetramp_dyn pair already exists, so this
+  # separates the online encoder finetune from the reset-curriculum ramp
+  # instead of confounding them. Endpoint objective, so it clears the guard in
+  # hl_skill_diffsr.py that refuses finetuning a jepa_ntp encoder. Reuses
+  # cont_det_hold1's encoder via encoder_arm: plan with
+  # `--only-stage lowlevel1,lowlevel2,lowlevel3,lowlevel4`, since repeating the
+  # pretrain would be bit-identical work.
+  cont_det_hold1_dyn:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      encoder_arm: cont_det_hold1
+      pretrain_mode_args: [--latent_mode, deterministic]
+      dyn_args: ${vars.dyn_block}
+    stages: *segmented_stages
+  # Online dynamics on a HEALTHY interface (2026-08-16). The achieved-pose
+  # ring + online DiffSR finetune was exercised twice in the 08-13 campaign
+  # (fsq64_dyn, fsq64_dyn_smooth_curriculum) and both ran at latent_dim=64,
+  # hold 1, phase none -- the dead zone, where every arm capped near ep_len 50
+  # regardless of mechanism. Neither run is evidence about online dynamics.
+  # This pairs the SAME dyn_block with fsq64_hold10, so it differs from that
+  # arm in the encoder-adaptation term alone. No policy gradient into the
+  # encoder (hl_skill_pg_coeff=0): the encoder is reshaped by DiffSR on
+  # ACHIEVED robot poses, not by the RL objective.
+  fsq64_hold10_dyn:
+    vars:
+      hold: 10
+      command_dim: 66
+      pretrain_mode_args: [--latent_mode, sonic_fsq]
+      dyn_args: ${vars.dyn_block}
+    stages: *segmented_stages
+  # Capacity-matched categorical (2026-08-16 gumbel diagnosis): the 8x32
+  # product codebook is 40 bits per command against sonic_fsq's 320, and both
+  # 8-group pretrains sit at ~5-6x real-vs-zero-z information gain against
+  # FSQ's ~84x -- the encoder, not the tracker, is the floor behind gumbel's
+  # 67.5mm. g=64, c=32 at z_dim=64 gives code_dim=1: a learned 32-entry scalar
+  # codebook per dim, i.e. FSQ's exact bit budget with learned levels instead
+  # of the fixed 1/16 lattice. The LAFAN1 capacity sweep that "learned well"
+  # used g16-g128, never 8.
+  gumbel_multicat64g64_hold10:
+    vars:
+      hold: 10
+      command_dim: 66
+      pretrain_mode_args:
+        - --latent_mode
+        - gumbel_multicat
+        - --categorical_groups
+        - "64"
+        - --categorical_categories
+        - "32"
+    stages: *segmented_stages
+  # Composition probe (2026-08-17), NOT an ablation: it changes three axes at
+  # once against fsq64_hold10 -- categorical bottleneck, JEPA+SIGReg objective,
+  # and online encoder finetune. It exists because the base gumbel arm is the
+  # campaign's weakest interface (ep_len 131.6 at segment 4 against 183-195 for
+  # the JEPA arms), and the open question is whether that floor is the codebook
+  # itself or the endpoint-DiffSR objective the codebook was trained under.
+  #
+  # Deliberately budgeted at ONE 2.5B segment, not the campaign's 10B chain: if
+  # the composition cannot clear the base gumbel arm by 2.5B, the chain is not
+  # worth a GPU-week. Two known tensions, both untested rather than refuted:
+  # SIGReg pulls z toward an isotropic Gaussian while the codebook pins it to
+  # discrete points, and `dyn_block` has only ever reshaped FSQ or continuous
+  # encoders, never a categorical one.
+  gumbel_multicat64g64_hold10_jepa_dyn:
+    vars:
+      hold: 10
+      command_dim: 66
+      frame_cap: 2500000000
+      encoder_arm: gumbel_multicat64g64_hold10_jepa_dyn
+      objective_args:
+        - --transition_objective
+        - jepa_ntp
+      pretrain_mode_args:
+        - --latent_mode
+        - gumbel_multicat
+        - --categorical_groups
+        - "64"
+        - --categorical_categories
+        - "32"
+        - --jepa_loss
+        - sigreg_ebm
+      dyn_args: ${vars.dyn_block}
+    stages:
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.objective_args},${vars.pretrain_mode_args},${vars.pretrain_tail},${vars.ln_args},${vars.pretrain_end},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+          # Shared mode so the EC/MuJoCo sidecar can write Eval/* into THIS
+          # run. W&B refuses to enable it after a run has history, so it has
+          # to be set at creation. These reach the container only because
+          # run_singularity.sh forwards them past --containall (2026-08-17).
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+  # The composition the 2.5B eval pass motivates: the fsq64_hold10 interface
+  # (SONIC 64x32 lattice published raw, hold 10) trained with the
+  # jepa_sigreg_ebm objective (NTP + DiffSR + SIGReg) instead of plain
+  # endpoint DiffSR. Note the built-in tension: SIGReg pulls z toward an
+  # isotropic Gaussian while FSQ pins z to a bounded lattice; this arm
+  # measures whether the pair cooperates or fights.
+  jepa_sigreg_ebm_hold10_fsq64:
+    vars:
+      hold: 10
+      command_dim: 66
+      objective_args:
+        - --transition_objective
+        - jepa_ntp
+      pretrain_mode_args:
+        - --latent_mode
+        - sonic_fsq
+        - --jepa_loss
+        - sigreg_ebm
+    stages: *segmented_stages
+  # Same product codebook as group_vq64_hold10 (8 x 32, per-group codebook,
+  # code_to_latent = Identity, deterministic inference = per-group argmax), and
+  # the SAME 40-bit capacity -- only the training sampler differs: annealed
+  # Gumbel-softmax instead of the hard straight-through one-hot. The pair
+  # isolates whether ST commits prematurely. Not `--latent_mode gumbel`, whose
+  # single 512-entry codebook is 9 bits per command against sonic_fsq's 320,
+  # and would confound the sampler question with a 35x capacity drop.
+  gumbel_multicat64_hold10:
+    vars:
+      hold: 10
+      command_dim: 66
+      pretrain_mode_args:
+        - --latent_mode
+        - gumbel_multicat
+        - --categorical_groups
+        - "8"
+        - --categorical_categories
+        - "32"
+    stages: *segmented_stages
+  # 8 groups x 32 categories on the same hold-10 interface. Note this
+  # bottleneck REQUIRES the learned code_to_latent projection that
+  # fsq64_proj showed to hurt badly (26.52 vs 50.53 at 64-D hold 1); the
+  # projection is structural here, not a free choice.
+  group_vq64_hold10:
+    vars:
+      hold: 10
+      command_dim: 66
+      pretrain_mode_args:
+        - --latent_mode
+        - categorical
+        - --categorical_groups
+        - 8
+        - --categorical_categories
+        - 32
+    stages: *segmented_stages
+  # Chunk-wise next-token prediction with an InfoNCE energy, wide command,
+  # hold 10.
+  jepa_ntp_hold10_256d:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      hold: 10
+      objective_args:
+        - --transition_objective
+        - jepa_ntp
+      pretrain_mode_args:
+        - --latent_mode
+        - deterministic
+        - --jepa_loss
+        - infonce
+    stages: *segmented_stages
+  # NTP + DiffSR + SIGReg (Epps-Pulley on sketched 1-D projections).
+  jepa_sigreg_ebm_hold10_256d:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      hold: 10
+      objective_args:
+        - --transition_objective
+        - jepa_ntp
+      pretrain_mode_args:
+        - --latent_mode
+        - deterministic
+        - --jepa_loss
+        - sigreg_ebm
+    stages: *segmented_stages
+  # LeJEPA-style NTP + SIGReg on the best-measured interface (wide, hold 1).
+  # The ceiling row: if a JEPA objective can beat DiffSR anywhere, here.
+  jepa_pure_256d_hold1:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      objective_args:
+        - --transition_objective
+        - jepa_ntp
+      pretrain_mode_args:
+        - --latent_mode
+        - deterministic
+        - --jepa_loss
+        - sigreg
+    stages: *segmented_stages
+  # cont_det_hold1 plus the SONIC adaptive-reset ramp: uniform fraction
+  # 0.8 -> 0.2 (adaptive share 20% -> 80%) across segment 1's 2.5B, then held.
+  # Its pair is cont_det_hold1, identical in every other respect, so the two
+  # isolate the reset schedule on a healthy interface. The only prior ramp
+  # datum, fsq64_curriculum at ep_len 35.07, was measured inside the 64-D
+  # hold-1 dead zone and says nothing.
+  cont_det_hold1_resetramp:
+    vars:
+      z_dim: 256
+      command_dim: 258
+      pretrain_mode_args:
+        - --latent_mode
+        - deterministic
+      curriculum_args: ${vars.curriculum_block}
+    stages:
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.objective_args},${vars.pretrain_mode_args},${vars.pretrain_tail},${vars.ln_args},${vars.pretrain_end},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args},${vars.curriculum_hold_block}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg3_args},${vars.curriculum_hold_block}}
+        depends_on: lowlevel2
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment3
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel4
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.smooth_args},${vars.curriculum_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg4_args},${vars.curriculum_hold_block}}
+        depends_on: lowlevel3
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,bottleneck-10b,${vars.arm},seed${vars.seed},lowlevel,segment4
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow

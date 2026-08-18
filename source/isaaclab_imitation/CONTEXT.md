@@ -37,6 +37,11 @@ the repository root [`CONTEXT.md`](../../CONTEXT.md) first.
   (`envs/imitation_rl_env_legacy.py`) stays byte-frozen for v0/v1.
 - **Command term** — a term managed by the Isaac Lab CommandManager
   (`tasks/.../mdp/commands/`); metrics live on command terms.
+- **Transition EWMA** — the recent active environment-step MPJPE health signal,
+  with reset-step samples excluded and a default 200-control-step (about 4 s
+  at 50 Hz) time constant. It lags policy changes by about 4 s and briefly
+  mixes pre-resume and post-resume behavior. It is a training health signal,
+  not a fixed-protocol evaluation result.
 - **Manifest** (`motion_manifest.py`, `manifests/`) — the declared list of
   NPZ motions. Dataset caches (Zarr) are content-specific: latent and
   vanilla recipes use separate cache paths; never rely on an environment

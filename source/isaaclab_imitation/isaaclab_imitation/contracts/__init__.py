@@ -32,6 +32,7 @@ from .command_publisher import (
     renewal_env_ids,
 )
 from .planner_publish_schedule import planner_renew_env_ids
+from .tracking_metrics import mpjpe_local_global
 
 __all__ = [
     "ACTOR_TERM_NAME",
@@ -47,5 +48,6 @@ __all__ = [
     "build_causal_planner_frame",
     "causal_planner_observation_spec",
     "planner_renew_env_ids",
+    "mpjpe_local_global",
     "renewal_env_ids",
 ]

@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -356,64 +355,10 @@ def test_skynet_launcher_rejects_changed_paper_budgets() -> None:
     assert "fixes SAMPLE_BUDGETS" in result.stderr
 
 
-def test_phase4_submitter_records_array_job_and_workspace(tmp_path: Path) -> None:
-    source = REPO_ROOT / "docker/cluster/submit_job_slurm_phase4.sh"
-    workspace = tmp_path / "workspace"
-    cluster_dir = workspace / "docker/cluster"
-    cluster_dir.mkdir(parents=True)
-    shutil.copy2(source, cluster_dir / source.name)
-    generic = cluster_dir / "submit_job_slurm.sh"
-    generic.write_text(
-        "#!/usr/bin/env bash\necho 'Submitted batch job 777'\n",
-        encoding="utf-8",
-    )
-    generic.chmod(0o755)
-    (workspace / "workspace.tar.gz.sha256").write_text(
-        f"{'a' * 64}  workspace.tar.gz\n", encoding="utf-8"
-    )
-    (workspace / "repo_sync_manifest.tsv").write_text(
-        "phase4 snapshot\n", encoding="utf-8"
-    )
-    record_root = tmp_path / "persistent_output"
-    env = {
-        **os.environ,
-        "CLUSTER_SLURM_SUBMISSION_RECORD_ROOT": str(record_root),
-        "CLUSTER_SLURM_ARRAY": "0-119%4",
-    }
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(cluster_dir / source.name),
-            str(workspace),
-            "isaac-lab-base",
-            "--mode",
-            "phase4-no-language",
-            "--env",
-            "OUTPUT_ROOT=logs/interface_baselines/phase4_no_language_lafan1",
-            "--env",
-            "SEEDS=0 1 2",
-            "--env",
-            "SAMPLE_BUDGETS=1000 10000 50000",
-            "--env",
-            "EXPECTED_MOTION_COUNT=40",
-        ],
-        cwd=workspace,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
-    record = json.loads(
-        (record_root / "cluster_submission.json").read_text(encoding="utf-8")
-    )
-    assert record["job_id"] == 777
-    assert record["array"] == "0-119%4"
-    assert record["seeds"] == "0 1 2"
-    assert record["sample_budgets"] == "1000 10000 50000"
-    assert record["workspace_archive_sha256"] == "a" * 64
+# submit_job_slurm_phase4.sh's rendering test was removed when
+# docker/cluster/cluster_interface.sh and its helpers were retired 2026-08-15;
+# see test_cluster_legacy_deprecated.py for the replacement (asserts a loud
+# deprecation error instead of testing removed behavior).
 
 
 def test_focused_dry_run_routes_existing_vanilla_cache(tmp_path: Path) -> None:

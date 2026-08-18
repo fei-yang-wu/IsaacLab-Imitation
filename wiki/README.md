@@ -8,6 +8,10 @@ Start with:
 - [Project Live Status](current-status.md): the living source of truth for the
   current research direction, completed gates, active or failed jobs,
   preliminary evidence, and immediate work queue.
+- [Canonical Paper-Facing Metrics](canonical-paper-metrics.md): the frozen
+  definition of a paper row (success rate + success-only micro MPJPE-L +
+  MPJPE-G), the three boards, the deployable-clip rule, and which SONIC paper
+  number a result may be compared against.
 - [Context Management](context-management.md): how coding-agent context should
   be organized across this orchestration repo, dependency submodules, and
   future reusable agent workflows.
@@ -64,5 +68,12 @@ Start with:
   state-chunk-state to chunk-chunk-chunk with one encoder, and replacing the
   raw-target objective with JEPA plus SIGReg; prerequisites, gates, and
   sequencing. Nothing measured yet.
+- [Skill Encoder JEPA Related Work](skill-encoder-jepa-related-work.md):
+  method-level comparison of that plan against latent action models,
+  next-token trajectory-code models (TAP/H-GAP/PRISE/FAST), the JEPA family
+  and its anti-collapse toolbox, diffusion language models for actions,
+  concurrent humanoid deployed-latent systems (SONIC, ω-0), and the
+  state/skill unification lineage; includes what is and is not novel, and a
+  citation triage list.
 
 Index every `wiki/*.md` file here so future pages do not become orphaned.

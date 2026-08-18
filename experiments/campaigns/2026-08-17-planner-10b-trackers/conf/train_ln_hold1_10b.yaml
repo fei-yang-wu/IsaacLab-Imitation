@@ -1,0 +1,23 @@
+defaults:
+  - base_train
+  - _self_
+
+# The hold-1 continuous arm. Identical budget to the FSQ arm so the interface
+# is the only difference — but note the target it has to regress is far wider:
+# 30 slots x 256 dims = 7,680 values per call, against the FSQ arm's 3 x 64 =
+# 192. That asymmetry is inherent to the interfaces, not a knob, and it is the
+# main reason this arm could lose despite a 21% better tracker ceiling.
+output_dir: outputs/planner_10b/arms/ln_hold1_10b
+target: latent
+data:
+  table: outputs/planner_10b/tables/ln_hold1_10b_table.pt
+  state_field: oracle_rollout_state_history
+goal_features: outputs/planner_10b/goal_features/goal_features.pt
+pretrained_bundle: outputs/gr00t_language10/goal_features/action_head_trunk.pt
+model:
+  state_dropout_prob: 0
+run:
+  checkpoint_interval: 4000
+wandb:
+  name: planner_ln_hold1_10b
+  tags: [gr00t-head, planner-10b, cont-det-ln, hold1, target-latent, language30-v2]

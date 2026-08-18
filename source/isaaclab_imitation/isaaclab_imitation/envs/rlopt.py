@@ -98,6 +98,23 @@ class IsaacLabWrapper(GymWrapper):
         env = getattr(self, "_env", None)
         return getattr(env, "unwrapped", env)
 
+    def _reference_transition_metrics(self) -> dict[str, object]:
+        """Read imitation health scalars without affecting other task types."""
+
+        base_env = self._base_isaac_env()
+        reference = getattr(base_env, "reference_command", None)
+        reader = getattr(reference, "transition_metrics", None)
+        if not callable(reader):
+            return {}
+        return dict(reader())
+
+    def _log_payload(self, info: Mapping[str, object]) -> dict[str, object]:
+        """Copy reset logs and add live scalar views without per-step CUDA sync."""
+
+        payload = self._extract_log_info(dict(info))
+        payload.update(self._reference_transition_metrics())
+        return payload
+
     @property
     def imitation_interface(self):
         """The wrapped environment's imitation capability surface.
@@ -207,7 +224,7 @@ class IsaacLabWrapper(GymWrapper):
         #  in-place. We clone them here to make sure data doesn't inadvertently get modified.
         # The variable naming follows torchrl's convention here.
         observations, reward, terminated, truncated, info = step_outputs_tuple
-        self.log_infos.append(self._extract_log_info(info["log"]))
+        self.log_infos.append(self._log_payload(info["log"]))
 
         done = terminated | truncated
 
@@ -237,7 +254,7 @@ class IsaacLabWrapper(GymWrapper):
     def _reset_output_transform(self, reset_data):
         """Transform the output of the reset method."""
         observations, info = reset_data
-        self.log_infos.append(self._extract_log_info(info["log"]))
+        self.log_infos.append(self._log_payload(info["log"]))
         return (observations, {})
 
     @staticmethod
