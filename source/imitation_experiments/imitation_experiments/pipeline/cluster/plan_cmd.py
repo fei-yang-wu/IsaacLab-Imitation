@@ -26,7 +26,7 @@ from .planfile import (
     sealed_job_entry,
     write_plan,
 )
-from .preflight import CheckResult, run_preflight
+from .preflight import CheckResult, container_to_remote, run_preflight
 from .slurm import SlurmDirectives, render_batch_script
 
 _NAME_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -135,6 +135,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
         raise PipelineError(f"plan directory already exists: {plan_dir}")
     plan_dir.mkdir(parents=True)
 
+    # One id per (arm, seed) output tree, so a chain's resumes share a run.
+    wandb_run_id_state_file = (
+        container_to_remote(jobset.output_container_path, profile) + "/wandb_run_id"
+    )
+
     for stage, job, directives in zip(stages, jobs, stage_directives, strict=True):
         rendered[f"batch_{stage.name}.sh"] = render_batch_script(
             directives,
@@ -142,6 +147,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
             stage=stage.name,
             job_args=stage.args,
             job_tmpdir_root=profile.job_tmpdir_root,
+            wandb_run_id_state_file=wandb_run_id_state_file,
         )
         rendered[f"job_env.{stage.name}.resolved.sh"] = render_job_env(
             job["env"], plan_sha=plan_sha, stage=stage.name

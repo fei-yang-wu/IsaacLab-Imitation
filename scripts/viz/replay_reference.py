@@ -1363,10 +1363,23 @@ def main(env_cfg, agent_cfg):  # noqa: ARG001
             transition.set(("next", "done"), _to_cpu(done))
 
             # Overwrite next-obs for done envs with their true terminal obs.
-            # IsaacLab stores final_obs as np.ndarray(num_envs, dtype=object)
-            # where each element is None (not done) or a per-env obs dict.
+            # ImitationRLEnvV2 publishes final_obs batched:
+            # {"_env_ids": LongTensor[k], "obs": nested dict of [k, ...]
+            # tensors}; legacy envs publish np.ndarray(num_envs, dtype=object)
+            # with per-env dicts. Both are consumed here.
             final_obs_arr = extras.get("final_obs")
-            if final_obs_arr is not None:
+            if isinstance(final_obs_arr, dict):
+                env_ids = final_obs_arr["_env_ids"].cpu()
+                flat_final = _flatten_obs(final_obs_arr["obs"])
+                for key, val in flat_final.items():
+                    buf = transition.get(("next", key), default=None)
+                    if buf is None:
+                        continue
+                    if torch.is_tensor(val):
+                        buf[env_ids] = val.cpu()
+                    else:
+                        buf[env_ids] = torch.as_tensor(val)
+            elif final_obs_arr is not None:
                 done_ids = done.nonzero(as_tuple=False).squeeze(-1).tolist()
                 if isinstance(done_ids, int):
                     done_ids = [done_ids]

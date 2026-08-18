@@ -36,7 +36,6 @@ from collections.abc import Sequence
 from typing import Any
 
 import isaaclab.utils.math as math_utils
-import numpy as np
 import torch
 from isaaclab.assets import Articulation
 from isaaclab.envs.common import VecEnvStepReturn
@@ -1015,6 +1014,28 @@ class ImitationRLEnv(ManagerBasedRLEnv):
             self.extras,
         )
 
+    def _publish_terminal_obs(self, reset_env_ids: torch.Tensor) -> None:
+        """Publish batched terminal observations for the envs being reset.
+
+        ``extras["final_obs"]`` is ``{"_env_ids": LongTensor[k], "obs": nested
+        dict of [k, ...] tensors}`` gathered with one advanced index per
+        observation key. This replaces the Gymnasium-style object array whose
+        per-env ``_slice_obs`` clone loop issued thousands of tiny device
+        copies per step at training scale; ``IsaacLabTerminalObsReader`` and
+        ``replay_reference.py`` consume both formats.
+        """
+        ids = reset_env_ids.to(dtype=torch.long)
+
+        def _slice_obs_batch(obs: dict | torch.Tensor):
+            if isinstance(obs, dict):
+                return {k: _slice_obs_batch(v) for k, v in obs.items()}
+            return obs[ids].clone()
+
+        self.extras["final_obs"] = {
+            "_env_ids": ids,
+            "obs": _slice_obs_batch(self.obs_buf),
+        }
+
     def _step_core(self, action: torch.Tensor) -> None:
         """The base env step body without its mid-step observation compute.
 
@@ -1079,30 +1100,18 @@ class ImitationRLEnv(ManagerBasedRLEnv):
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1).int()
+        # Clear any stale terminal info from previous steps.
+        self.extras.pop("final_obs", None)
+        self.extras.pop("final_info", None)
         if len(reset_env_ids) > 0:
-            reset_env_ids_list = reset_env_ids.tolist()
-            # Populate Gymnasium-style terminal observation info for vector
-            # envs. final_obs/final_info are object arrays with None for
-            # non-reset envs.
-            final_obs = np.empty(self.num_envs, dtype=object)
-            final_obs[:] = None
-            final_info = np.empty(self.num_envs, dtype=object)
-            final_info[:] = None
+            self._publish_terminal_obs(reset_env_ids)
 
-            def _slice_obs(obs: dict | torch.Tensor, env_id: int):
-                if isinstance(obs, dict):
-                    return {k: _slice_obs(v, env_id) for k, v in obs.items()}
-                return obs[env_id].clone()
-
-            for env_id in reset_env_ids_list:
-                final_obs[env_id] = _slice_obs(self.obs_buf, env_id)
-                final_info[env_id] = {}
-
-            self.extras["final_obs"] = final_obs
-            self.extras["final_info"] = final_info
-
-            # trigger recorder terms for pre-reset calls
-            self.recorder_manager.record_pre_reset(reset_env_ids_list)
+            recorder_active = len(self.recorder_manager.active_terms) > 0
+            if recorder_active:
+                # The recorder API takes Python ids; the host sync in
+                # ``tolist()`` is paid only when a recorder is attached.
+                reset_env_ids_list = reset_env_ids.tolist()
+                self.recorder_manager.record_pre_reset(reset_env_ids_list)
 
             self._reset_idx(reset_env_ids)
 
@@ -1118,7 +1127,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     self.sim.render()
 
             # trigger recorder terms for post-reset calls
-            self.recorder_manager.record_post_reset(reset_env_ids_list)
+            if recorder_active:
+                self.recorder_manager.record_post_reset(reset_env_ids_list)
 
         # -- update command
         self.command_manager.compute(dt=self.step_dt)
@@ -1158,34 +1168,18 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         # Clear any stale terminal info from previous steps.
-        for key in ("final_obs", "final_info"):
-            if key in self.extras:
-                del self.extras[key]
+        self.extras.pop("final_obs", None)
+        self.extras.pop("final_info", None)
 
         if len(reset_env_ids) > 0:
-            reset_env_ids_list = reset_env_ids.tolist()
-            # Populate Gymnasium-style terminal observation info for vector
-            # envs. final_obs/final_info are object arrays with None for
-            # non-reset envs.
-            final_obs = np.empty(self.num_envs, dtype=object)
-            final_obs[:] = None
-            final_info = np.empty(self.num_envs, dtype=object)
-            final_info[:] = None
+            self._publish_terminal_obs(reset_env_ids)
 
-            def _slice_obs(obs: dict | torch.Tensor, env_id: int):
-                if isinstance(obs, dict):
-                    return {k: _slice_obs(v, env_id) for k, v in obs.items()}
-                return obs[env_id].clone()
-
-            for env_id in reset_env_ids_list:
-                final_obs[env_id] = _slice_obs(self.obs_buf, env_id)
-                final_info[env_id] = {}
-
-            self.extras["final_obs"] = final_obs
-            self.extras["final_info"] = final_info
-
-            # trigger recorder terms for pre-reset calls
-            self.recorder_manager.record_pre_reset(reset_env_ids_list)
+            recorder_active = len(self.recorder_manager.active_terms) > 0
+            if recorder_active:
+                # The recorder API takes Python ids; the host sync in
+                # ``tolist()`` is paid only when a recorder is attached.
+                reset_env_ids_list = reset_env_ids.tolist()
+                self.recorder_manager.record_pre_reset(reset_env_ids_list)
 
             self._reset_idx(reset_env_ids)
 
@@ -1196,7 +1190,8 @@ class ImitationRLEnv(ManagerBasedRLEnv):
                     self.sim.render()
 
             # trigger recorder terms for post-reset calls
-            self.recorder_manager.record_post_reset(reset_env_ids_list)
+            if recorder_active:
+                self.recorder_manager.record_post_reset(reset_env_ids_list)
 
         # -- update command
         self.command_manager.compute(dt=self.step_dt)

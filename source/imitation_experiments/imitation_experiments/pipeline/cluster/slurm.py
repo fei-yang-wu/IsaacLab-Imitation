@@ -124,6 +124,39 @@ def _directive_lines(d: SlurmDirectives) -> list[str]:
     return lines
 
 
+# W&B caps a run's tags at 64 characters and RLOpt adds a
+# `logdir:<19-char timestamp>_wandb-<run id>` tag, which leaves 31 characters
+# for the id itself. The random token and its separator take 7 of them.
+_WANDB_RUN_ID_MAX = 31
+_WANDB_RUN_ID_TOKEN_CHARS = 7
+
+
+def _render_run_id_block(state_file: str) -> str:
+    """Shell that pins one chain's W&B run id, creating it on first use."""
+    quoted_state = shlex.quote(state_file)
+    base_max = _WANDB_RUN_ID_MAX - _WANDB_RUN_ID_TOKEN_CHARS
+    return f"""
+# One W&B run per chain: generated once, then read by every resume.
+env_file="$extracted_workspace/docker/cluster/job_env.resolved.sh"
+declared_run_id="$(sed -n 's/^export WANDB_RUN_ID=//p' "$env_file" | tail -n 1)"
+if [ -n "$declared_run_id" ]; then
+    run_id_state={quoted_state}
+    if [ -s "$run_id_state" ]; then
+        resolved_run_id="$(tr -d '[:space:]' < "$run_id_state")"
+        echo "[INFO] W&B run id from $run_id_state: $resolved_run_id"
+    else
+        run_id_base="$(printf '%s' "$declared_run_id" | cut -c1-{base_max})"
+        resolved_run_id="${{run_id_base}}-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 6)"
+        mkdir -p "$(dirname "$run_id_state")"
+        printf '%s' "$resolved_run_id" > "$run_id_state"
+        echo "[INFO] W&B run id created: $resolved_run_id -> $run_id_state"
+    fi
+    # A later export wins; run_singularity.sh sources this file top to bottom.
+    printf 'export WANDB_RUN_ID=%s\\n' "$resolved_run_id" >> "$env_file"
+fi
+"""
+
+
 def render_batch_script(
     d: SlurmDirectives,
     *,
@@ -132,8 +165,19 @@ def render_batch_script(
     job_args: list[str] | tuple[str, ...],
     job_tmpdir_root: str,
     container_profile: str = "isaac-lab-base",
+    wandb_run_id_state_file: str | None = None,
 ) -> str:
-    """Deterministic batch script for one stage of a plan."""
+    """Deterministic batch script for one stage of a plan.
+
+    ``wandb_run_id_state_file`` is a host path inside the arm's own output
+    tree. When the stage env declares ``WANDB_RUN_ID``, the first job of a
+    chain appends a short random token to it and records the result there;
+    every later job (a walltime resume, a chained segment) reads the same
+    file, so the whole chain stays one W&B run and the evaluation sidecar
+    keeps attaching to it. W&B refuses a run id that was ever deleted
+    (``error 410``), which killed job 5580302 -- deleting this file is how a
+    chain is deliberately rotated onto a fresh id.
+    """
     validate_directives(d)
     if not remote_plan_dir.startswith("/"):
         raise PipelineError(
@@ -144,6 +188,9 @@ def render_batch_script(
     quoted_profile = shlex.quote(container_profile)
     quoted_args = " ".join(shlex.quote(str(a)) for a in job_args)
     quoted_tmp_root = shlex.quote(job_tmpdir_root)
+    run_id_block = (
+        _render_run_id_block(wandb_run_id_state_file) if wandb_run_id_state_file else ""
+    )
     body = f"""#!/bin/bash
 
 {chr(10).join(_directive_lines(d))}
@@ -166,6 +213,7 @@ mv "$bootstrap_root/workspace" "$extracted_workspace"
 
 # Frozen per-stage env: run_singularity.sh sources ONLY this file when present.
 cp {quoted_env_file} "$extracted_workspace/docker/cluster/job_env.resolved.sh"
+{run_id_block}
 sed 's/^/[ENV] /' "$extracted_workspace/docker/cluster/job_env.resolved.sh"
 
 # stdbuf line-buffers output so failures are not swallowed by block buffering.
