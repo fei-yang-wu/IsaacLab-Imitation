@@ -321,13 +321,19 @@ def test_vega_wuji_agent_uses_all_named_policy_observations() -> None:
 def test_virtual_object_control_angular_gains_stay_inertia_stable() -> None:
     """Keep the object controller's rotational loop inside its stability limit.
 
-    The angular gains act on an object inertia three orders of magnitude below
-    its mass, so the rotational loop reaches the discrete stability limit long
-    before the linear one. For a tracked scene object of about 0.00125 kg m^2
-    at the task's 20 Hz control rate, ``k dt^2 / I`` must stay under 4. A gain
-    that tumbles the object is not a cosmetic problem: the controller wrench is
-    body-frame, so a tumbling object misdirects its own gravity compensation
-    and is then flung out of the scene, which ends the episode in a few steps.
+    The angular gains act on an object inertia far below its mass, so the
+    rotational loop reaches the discrete stability limit before the linear one.
+    ``k dt^2 / I`` must stay under 4 and ``d dt / I`` under 2 at the task's
+    20 Hz control rate. A gain that tumbles the object is not a cosmetic
+    problem: the controller wrench is body-frame, so a tumbling object
+    misdirects its own gravity compensation and is then flung out of the scene.
+
+    The inertia here is measured from the live Newton model for the corn can
+    (2026-08-20): 0.01 on each diagonal, with a mass of 1.0 kg. An earlier
+    version of this test used 0.00125, which is eight times too small, and
+    concluded that the current gains sit on their stability boundary. They do
+    not. At 1.0 / 0.05 both ratios are 0.25, so the loop has a wide margin and
+    the earlier gain reduction cannot be explained by discrete instability.
     """
 
     from isaaclab_imitation.tasks.manager_based.dexmanip.newton_voc import (
@@ -336,17 +342,17 @@ def test_virtual_object_control_angular_gains_stay_inertia_stable() -> None:
 
     cfg = NewtonVirtualRigidObjectControlCfg()
     control_dt = 1.0 / 20.0
-    representative_inertia = 0.00125
-    stability_ratio = cfg.angular_stiffness * control_dt**2 / representative_inertia
+    measured_inertia = 0.01
+    stability_ratio = cfg.angular_stiffness * control_dt**2 / measured_inertia
     assert stability_ratio < 4.0, (
         f"angular_stiffness={cfg.angular_stiffness} gives k dt^2 / I = "
-        f"{stability_ratio:.1f}, at or past the discrete stability limit of 4"
+        f"{stability_ratio:.3f}, at or past the discrete stability limit of 4"
     )
-    # The damping ratio sits exactly on its own boundary at these gains. That
-    # is deliberate and measured, not slack to be spent: raising the gains from
-    # here shortened the episode in every trial.
-    damping_ratio = cfg.angular_damping * control_dt / representative_inertia
-    assert damping_ratio == pytest.approx(2.0) or damping_ratio < 2.0
+    damping_ratio = cfg.angular_damping * control_dt / measured_inertia
+    assert damping_ratio < 2.0, (
+        f"angular_damping={cfg.angular_damping} gives d dt / I = "
+        f"{damping_ratio:.3f}, at or past the discrete stability limit of 2"
+    )
     # The linear loop acts on mass, not inertia, and stays far from its limit.
     assert cfg.linear_stiffness * control_dt**2 / 1.0 < 4.0
     assert cfg.linear_damping * control_dt / 1.0 < 2.0
