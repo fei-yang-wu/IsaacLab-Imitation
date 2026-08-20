@@ -12,3 +12,4 @@
 [submodule "external/Embodied-Control"]
 	path = external/Embodied-Control
 	url = https://github.com/fei-yang-wu/Embodied-Control.git
+	branch = dev-dex
