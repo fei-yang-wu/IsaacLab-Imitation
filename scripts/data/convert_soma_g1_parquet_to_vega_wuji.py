@@ -1393,6 +1393,7 @@ def convert_soma_g1_parquet(
     filter_cutoff_hz: float = DEFAULT_FILTER_CUTOFF_HZ,
     filter_order: int = DEFAULT_FILTER_ORDER,
     contact_seeking: bool = False,
+    contact_settle_steps: int = 60,
     max_wrist_position_error: float = 0.05,
     max_wrist_orientation_error: float = math.pi,
     inspection_only: bool = False,
@@ -1765,7 +1766,7 @@ def convert_soma_g1_parquet(
             ],
             object_mocap_poses=combined_object_poses,
             object_mocap_body_names=["audit_can_body"],
-            config=ContactSettlingConfig(),
+            config=ContactSettlingConfig(settle_steps=int(contact_settle_steps)),
         )
         combined_qpos = settled_qpos
         settling_report = report.as_dict()
@@ -2158,6 +2159,16 @@ def build_parser() -> argparse.ArgumentParser:
             "with a small --palm-object-standoff-m."
         ),
     )
+    parser.add_argument(
+        "--contact-settle-steps",
+        type=int,
+        default=60,
+        help=(
+            "Physics steps for each frame of the contact-seeking settle. "
+            "Measured on the corn-can sequence: penetration converges by 60 "
+            "steps and deeper settling changes nothing."
+        ),
+    )
     parser.add_argument("--max-wrist-position-error", type=float, default=0.05)
     parser.add_argument("--max-wrist-orientation-error-deg", type=float, default=180.0)
     parser.add_argument(
@@ -2186,6 +2197,7 @@ def main() -> int:
         contact_dilation_frames=args.contact_dilation_frames,
         contact_blend_sigma_frames=args.contact_blend_sigma_frames,
         contact_seeking=args.contact_seeking,
+        contact_settle_steps=args.contact_settle_steps,
         palm_object_standoff_m=args.palm_object_standoff_m,
         palm_support_standoff_m=args.palm_support_standoff_m,
         geometry_clearance_m=args.geometry_clearance_m,
