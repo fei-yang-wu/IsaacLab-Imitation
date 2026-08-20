@@ -36,6 +36,7 @@ from ...curriculum import (
 )
 from ...newton_material import configure_wuji_hand_material
 from ...newton_scene_material import configure_scene_material
+from ...newton_scene_offsets import configure_scene_contact_offsets
 
 
 def _default_mjcf_path() -> str:
@@ -335,6 +336,19 @@ class VegaWujiEventsCfg:
     scene_material = EventTerm(
         func=configure_scene_material,
         mode="startup",
+    )
+    # Isaac Lab cannot reach an instanced collision prim, so the declared
+    # contact offsets never arrive through the spawner. Restate the zero-offset
+    # contract on the finalized Newton model.
+    scene_contact_offsets = EventTerm(
+        func=configure_scene_contact_offsets,
+        mode="startup",
+        params={
+            "object_contact_margin": 0.0,
+            "object_contact_gap": 0.0,
+            "support_contact_margin": 0.0,
+            "support_contact_gap": 0.0,
+        },
     )
 
 

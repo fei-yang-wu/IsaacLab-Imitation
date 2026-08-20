@@ -458,6 +458,10 @@ def build_scene_asset_configs(
             spawn=UsdFileCfg(
                 usd_path=item.asset_path,
                 scale=item.scale,
+                # The support stays a static collider. Isaac Lab warns that
+                # 'modify_rigid_body_properties' reached no prim, because a
+                # support USD carries no RigidBodyAPI. That warning is benign:
+                # the declaration keeps the static intent explicit.
                 rigid_props=RigidBodyBaseCfg(
                     rigid_body_enabled=False,
                     kinematic_enabled=False,
