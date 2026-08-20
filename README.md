@@ -16,6 +16,8 @@ RLOpt and RSL-RL.
 - `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test environment runners
 - `experiments/`: current-campaign navigation, reusable experiment tooling, and the staged paper-facing entrypoint
 - `RLOpt/`, `ImitationLearningTools/`: required submodule checkouts
+- `external/Embodied-Control/`: the deployment and MuJoCo reference checkout; this workspace uses its `dev-dex` branch
+- `source/isaaclab_imitation/isaaclab_imitation/assets/vega_wuji/`: vendored robot-only Vega/Wuji MJCF and meshes (Git LFS)
 - `source/isaaclab_imitation/isaaclab_imitation/assets/unitree`: vendored Unitree G1 URDF, meshes, and robot config
 - `docker/cluster`: cluster submission utilities
 
@@ -30,10 +32,11 @@ Registered task IDs currently include:
 | `Isaac-Imitation-G1-CVAE-v0` | latent, 256-D | current + 9 future |
 | `Isaac-Imitation-G1-PerStepVQ-v0` | latent, 64-D | current + 9 future |
 | `Isaac-Imitation-G1-Sonic-v0` | latent, 258-D | single frame, SONIC recipe |
+| `Isaac-Imitation-Vega-Wuji-v0` | 59-D actuator-order Reference residual | ILTools object/contact Reference |
 
-Each is one point in the same environment's configuration space, so an id is
-the citable name of a protocol rather than a distinct implementation, and the
-same selections are available directly:
+The G1 ids are points in the same environment's configuration space, so an id
+is the citable name of a protocol rather than a distinct implementation. The
+same G1 selections are available directly:
 
 ```bash
 --task Isaac-Imitation-G1-v2 \
@@ -48,6 +51,21 @@ SONIC failure distribution. Unlike SONIC's internal uniform-bin mixture, the
 random branch gives every trajectory equal probability.
 
 Register a new id when a protocol needs to be cited later; until then, override.
+
+`Isaac-Imitation-Vega-Wuji-v0` is an internal pre-release task. It uses the
+Newton backend, RLOpt PPO, the Vega plus two-Wuji MJCF, and rigid object scenes
+from the ILTools dexterous Reference contract. Its actor owns one residual for
+each of the 59 live actuators. The task adds the bounded, filtered residual to
+the action-aligned Reference joint position and clips the target to the live
+soft limits. See [data/README.md](data/README.md) for the required object,
+hand-frame, and contact arrays. The task has no placeholder Reference: set
+`env.reference_path` to your ILTools NPZ or hash-bound JSON Manifest.
+Training is stricter than inspection replay: it requires a hash-bound JSON
+Manifest whose motions carry typed scene physics, real contact geometry, and a
+passing collision/clearance qualification. The policy observes current and
+next desired robot and object dynamic state; the default one-object input is
+609-D. See [data/README.md](data/README.md) for the qualification and reset
+contract.
 
 `Isaac-Imitation-G1-v0`, `-v1`, `-Latent-v0`, `-Strict-v0`, and `-LafanTrack-v0`
 stay registered for reproducing recorded results and should not be cited for new
@@ -73,6 +91,20 @@ If you already cloned without submodules:
 git submodule sync --recursive
 git submodule update --init --recursive
 ```
+
+Create the Dexterous Manipulation work branch and select the Vega/Wuji
+simulation branch:
+
+```bash
+git switch -c dev/dexmanip
+git -C external/Embodied-Control fetch origin dev-dex
+git -C external/Embodied-Control switch -c dev-dex --track origin/dev-dex
+```
+
+The top-level `.gitmodules` records `dev-dex` for future submodule updates.
+The Vega/Wuji robot MJCF and meshes are vendored in this repository with Git
+LFS. The `Embodied-Control` checkout contains the simulator adapter and the
+asset provenance contract. Run `git lfs pull` after a fresh clone.
 
 This workspace expects `RLOpt` and `ImitationLearningTools` to live under this repo as submodules. G1 robot
 configuration and the required URDF/mesh assets are vendored in this repo under `source/isaaclab_imitation`, so

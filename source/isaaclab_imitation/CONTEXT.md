@@ -62,6 +62,25 @@ the repository root [`CONTEXT.md`](../../CONTEXT.md) first.
   `root_qpos` (380). Older v2 checkpoints need their original overrides;
   a wrong encoder pairing must fail loudly. Invoke the
   `g1-encoder-interface` skill before changing or pairing an encoder.
+- `Isaac-Imitation-Vega-Wuji-v0` is the internal dexterous-manipulation
+  surface for the Vega U plus two Wuji hands. Its recipe derives from the
+  released CHORD task (NVIDIA `video_to_data`); symbol names are repo-local
+  because the implementation diverges independently. ILTools owns its robot, wrist, fingertip, rigid-object,
+  support-surface, and padded contact Reference. The task uses Newton MJWarp
+  and RLOpt PPO only.
+- **Vega/Wuji Reference-residual action** — the 59-value actor output in live
+  actuator order. Each value is bounded with `tanh`, scaled by joint type,
+  filtered with an exponential moving average, added to the action-aligned
+  Reference joint position, and clipped to the live soft joint limits.
+- **Vega/Wuji transition state** — the actor receives live and action-aligned
+  desired `[q, qdot]`, plus live and desired per-object
+  `[XYZ, WXYZ, linear-XYZ, angular-XYZ]`. The default one-object policy vector
+  is 609 values.
+- **Vega/Wuji asset contract** — the vendored robot-only MJCF must expose 59
+  actuators, the `R_ee`/`L_ee` parents, the `r_mount`/`l_mount` runtime wrist
+  bodies, and no table or cube scene bodies. `right_palm` and `left_palm` must
+  be identity sites on `r_mount` and `l_mount`. Validate it before Isaac
+  startup.
 
 ## Invariants
 
@@ -70,10 +89,54 @@ the repository root [`CONTEXT.md`](../../CONTEXT.md) first.
 - Actor command terms and matching critic entries hold the same values;
   the critic may add privileged state. Command-side expert noise stays
   disabled.
-- Quaternion convention at the Isaac Lab 3.0 boundary: WXYZ inside Isaac
-  Lab, XYZW at external boundaries; convert at the edge only.
+- Quaternion convention: ILTools files and the dexmanip tensor math use
+  WXYZ. Isaac
+  Lab 3.0 live asset state uses XYZW. Convert only at this boundary.
 - Planner command publication is per-environment renewal. Global timestep
   modulo logic is invalid with asynchronous resets.
+- Vega/Wuji Reference joint names must contain the MJCF actuator joint set.
+  The environment reorders Reference columns to the MJCF actuator order and
+  checks the imported articulation for the same set. Newton can expose a
+  different live order, so the environment then reorders the tensors once to
+  that live order before reset or control.
+- Vega/Wuji Reference wrist poses are the world poses of the named MuJoCo palm
+  sites. They must declare `right_palm` and `left_palm`. The action, command,
+  observation, reward, and termination code use the identity-equivalent
+  `r_mount` and `l_mount` Newton bodies. They never use the rotated
+  `R_ee`/`L_ee` parent frames as wrists.
+- All motions in one Vega/Wuji manifest must use one fixed root, object list,
+  object asset list, positive object radii, support scene, hand-frame names,
+  and contact-link layout. Objects must be single rigid bodies.
+- A Vega/Wuji JSON Manifest must bind its data to the runtime robot MJCF with
+  `model_sha256`. Training additionally requires typed ILTools
+  `TrainingQualification` and `ScenePhysics` on every motion. Direct NPZ and
+  inspection-only inputs are state-lock replay inputs, never training inputs.
+- Training qualification v2 hash-binds URDF collision meshes in addition to
+  their wrapper file. Legacy dependency-unaware v1 qualification remains
+  inspectable but is rejected for training. Self-contained ASCII USDA is
+  accepted; uninspectable/external-reference USD fails closed without pxr.
+- The task-specific Manifest writer compiles the MJCF and rejects missing joint
+  limits, out-of-range/non-finite qpos, implausible qvel, or qvel inconsistent
+  with the 20 Hz position trajectory. Collision evidence may declare at most
+  1 mm penetration tolerance.
+- Reset synchronizes the robot and all objects to one Reference frame. Object
+  twists are world-frame root-origin twists in ILTools and are converted to
+  Isaac COM velocity only at the simulator write boundary. Evaluation requires
+  virtual object control to be exactly zero from frame zero.
+- Robot-support contact force is an explicit negative reward and hard safety
+  termination. Whole-robot and object pose/twist tracking provide the positive
+  ReconBody-style objective alongside the hand/contact terms.
+- Startup material events write Wuji hand friction and typed object/support
+  dynamic friction plus restitution directly into Newton's live shape arrays.
+  Full-path replicated-shape matching and readback are fail-closed; this is the
+  authoritative path when USD material binding is blocked by instancing.
+- Isaac Lab's Newton contact sensor does not publish contact points. The task
+  reads Newton 1.2.1's public post-step contact buffer and aggregates exact
+  object-side points and forces by object and hand link. The contact sensor
+  stays active because it enables Newton's optional force buffer.
+- The Vega/Wuji asset contract is checked by
+  `scripts/data/validate_vega_wuji_asset.py` and again by the environment
+  before Isaac startup; a failing audit is not a valid Isaac input.
 
 ## Validation
 
