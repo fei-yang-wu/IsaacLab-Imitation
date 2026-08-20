@@ -925,7 +925,6 @@ class VegaWujiReferenceCommand(CommandTerm):
 
     def _update_command(self) -> None:
         self.steps_since_last_reset += 1
-        warm = self.steps_since_last_reset < int(self.cfg.warmup_steps)
         self.virtual_object_controller_scale[:] = (
             mdp.virtual_object_controller_scale_schedule(
                 self.steps_since_last_reset,
@@ -934,8 +933,12 @@ class VegaWujiReferenceCommand(CommandTerm):
                 force_unassisted=bool(self.cfg.force_unassisted_object_control),
             )
         )
+        # The Reference frame advances from the first step. The warmup only
+        # ramps the virtual-object-controller scale. Holding the frame through
+        # the warmup froze the whole episode, because an episode ends well
+        # before ``warmup_steps``, so the task never tracked a trajectory.
         horizon = self._reference_lengths[self.motion_index]
-        advance = ~warm & (self.timestep_counter < horizon - 1)
+        advance = self.timestep_counter < horizon - 1
         self.timestep_counter[advance] += 1
         self._support_cache_step = -1
         self._live_contact_cache_step = -1

@@ -98,8 +98,9 @@ def virtual_object_controller_scale_schedule(
     """Return a smooth reset-time virtual-object-controller scale.
 
     During a positive-length reset warmup, the scale linearly decays from one
-    to the curriculum value while the Reference frame is held.  This avoids a
-    discontinuous controller drop at the first moving frame.  Evaluation can
+    to the curriculum value.  This avoids a discontinuous controller drop just
+    after a reset.  The Reference frame advances from the first step and is
+    not held, because holding it froze the whole episode.  Evaluation can
     explicitly force zero assistance from reset frame zero.
     """
 
