@@ -76,4 +76,10 @@ Start with:
   state/skill unification lineage; includes what is and is not novel, and a
   citation triage list.
 
+- [Vega-Wuji Contact Retargeting](vega-wuji-contact-retargeting.md): why the
+  dexterous Reference had no hand-object contact, the frame audit that found
+  the cause, the measured A/B between soft replay and unscaling the motion, the
+  arm-reach blocker that now caps recovery at 6 of 28 contact frames, and the
+  sequenced plan with gates.
+
 Index every `wiki/*.md` file here so future pages do not become orphaned.
