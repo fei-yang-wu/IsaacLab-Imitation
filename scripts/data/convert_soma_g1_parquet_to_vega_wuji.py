@@ -1073,6 +1073,7 @@ class _SceneCollisionAuditor:
         joint_names: Sequence[str],
         required_clearance_m: float,
         include_visual_geometry: bool = False,
+        gate_scenes: Sequence[str] | None = None,
     ) -> None:
         if not np.isfinite(required_clearance_m) or required_clearance_m <= 0.0:
             raise ValueError("Geometry clearance must be finite and positive.")
@@ -1126,6 +1127,17 @@ class _SceneCollisionAuditor:
             "can": self.model.geom("audit_can_geom").id,
             "support": self.model.geom("audit_support_geom").id,
         }
+        # Which scenes make the audit fail. Contact-seeking retargeting keeps
+        # the support fail-closed while letting the hand approach the can,
+        # because a clearance gate on the can forbids the very thing the task
+        # needs. Every scene is still measured and reported either way.
+        if gate_scenes is None:
+            self._gate_scenes = tuple(self._scene_geom_ids)
+        else:
+            unknown = set(gate_scenes) - set(self._scene_geom_ids)
+            if unknown:
+                raise ValueError(f"Unknown audit gate scenes: {sorted(unknown)}.")
+            self._gate_scenes = tuple(gate_scenes)
         scene_ids = frozenset(self._scene_geom_ids.values())
         self._include_visual_geometry = bool(include_visual_geometry)
         self._robot_geom_ids = tuple(
@@ -1208,7 +1220,8 @@ class _SceneCollisionAuditor:
         for scene, record in records.items():
             frames = sorted(record["violation_frames"])
             geometries = sorted(record["violating_robot_geometries"])
-            qualified = qualified and not frames
+            if scene in self._gate_scenes:
+                qualified = qualified and not frames
             output_scenes[scene] = {
                 "minimum_clearance_lower_bound_m": (
                     self.required_clearance_m if not frames else None
@@ -1225,6 +1238,7 @@ class _SceneCollisionAuditor:
             }
         return {
             "qualified": qualified,
+            "gate_scenes": list(self._gate_scenes),
             "required_clearance_m": self.required_clearance_m,
             "frame_count": len(values),
             "robot_collision_geometry_count": len(self._robot_geom_ids),
@@ -1378,6 +1392,7 @@ def convert_soma_g1_parquet(
     fixed_root_pose_w: np.ndarray = DEFAULT_FIXED_ROOT_POSE_W,
     filter_cutoff_hz: float = DEFAULT_FILTER_CUTOFF_HZ,
     filter_order: int = DEFAULT_FILTER_ORDER,
+    contact_seeking: bool = False,
     max_wrist_position_error: float = 0.05,
     max_wrist_orientation_error: float = math.pi,
     inspection_only: bool = False,
@@ -1669,6 +1684,7 @@ def convert_soma_g1_parquet(
         support_height=PINNED_SUPPORT_HEIGHT_SOURCE * local_geometry_scale,
         joint_names=joint_names,
         required_clearance_m=geometry_clearance_m,
+        gate_scenes=() if contact_seeking else None,
     )
     rendered_geometry_auditor = _SceneCollisionAuditor(
         robot_model_path=model_file,
@@ -1680,6 +1696,7 @@ def convert_soma_g1_parquet(
         joint_names=joint_names,
         required_clearance_m=geometry_clearance_m,
         include_visual_geometry=True,
+        gate_scenes=() if contact_seeking else None,
     )
     source_dense_qpos, source_dense_object_poses = _densify_scene_trajectory(
         qpos_200hz,
@@ -1713,6 +1730,46 @@ def convert_soma_g1_parquet(
             auditor=collision_auditor,
         )
     )
+    settling_report: dict[str, Any] | None = None
+    if contact_seeking:
+        # DexMachina's functional retargeting: replay the retarget as soft
+        # position targets while the scene is held fixed, so contact pushes the
+        # hand onto the surface instead of a standoff pushing it away.
+        from iltools.retarget.contact_settling import (
+            ContactSettlingConfig,
+            settle_contact_trajectory,
+        )
+
+        settle_model = collision_auditor.model
+        settle_data = collision_auditor.data
+        # Only genuinely named geoms; _geom_label synthesises a label for
+        # unnamed ones, which is not resolvable. This list only drives the
+        # penetration report. MuJoCo resolves every contact during the step
+        # regardless of what is listed here.
+        robot_geom_names = [
+            name
+            for name in (
+                settle_model.geom(geom_id).name
+                for geom_id in collision_auditor._robot_geom_ids
+            )
+            if name
+        ]
+        settled_qpos, report = settle_contact_trajectory(
+            settle_model,
+            settle_data,
+            qpos=combined_qpos,
+            joint_names=joint_names,
+            object_geom_names=["audit_can_geom"],
+            robot_geom_names=[
+                name for name in robot_geom_names if not name.endswith(":geom_-1")
+            ],
+            object_mocap_poses=combined_object_poses,
+            object_mocap_body_names=["audit_can_body"],
+            config=ContactSettlingConfig(),
+        )
+        combined_qpos = settled_qpos
+        settling_report = report.as_dict()
+
     qpos_200hz = combined_qpos[: len(qpos_200hz)]
     emitted_start = len(qpos_200hz)
     source_dense_start = emitted_start + len(qpos)
@@ -1795,6 +1852,7 @@ def convert_soma_g1_parquet(
             "source_fps": TARGET_FPS,
             **can_support_emitted_dense,
         },
+        "contact_settling": settling_report,
         "finger_projection_search": projection_search_audit,
     }
     if not collision_audit["qualified"]:
@@ -2089,6 +2147,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--filter-cutoff-hz", type=float, default=DEFAULT_FILTER_CUTOFF_HZ
     )
     parser.add_argument("--filter-order", type=int, default=DEFAULT_FILTER_ORDER)
+    parser.add_argument(
+        "--contact-seeking",
+        action="store_true",
+        default=False,
+        help=(
+            "Let the hands reach the object. The support surface stays "
+            "fail-closed, but the can is measured and reported instead of "
+            "gated, because a clearance gate on the can forbids contact. Pair "
+            "with a small --palm-object-standoff-m."
+        ),
+    )
     parser.add_argument("--max-wrist-position-error", type=float, default=0.05)
     parser.add_argument("--max-wrist-orientation-error-deg", type=float, default=180.0)
     parser.add_argument(
@@ -2116,6 +2185,7 @@ def main() -> int:
         local_geometry_scale=args.local_geometry_scale,
         contact_dilation_frames=args.contact_dilation_frames,
         contact_blend_sigma_frames=args.contact_blend_sigma_frames,
+        contact_seeking=args.contact_seeking,
         palm_object_standoff_m=args.palm_object_standoff_m,
         palm_support_standoff_m=args.palm_support_standoff_m,
         geometry_clearance_m=args.geometry_clearance_m,
