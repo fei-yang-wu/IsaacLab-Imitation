@@ -15,7 +15,8 @@ test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_ipmd_l2t.p
 test-runtime-bootstrap = "pytest -q source/isaaclab_imitation/tests/test_rlopt_runtime_bootstrap.py"
 test-experiments = "pytest -q source/imitation_experiments/tests"
 test-scripts = "pytest -q scripts/audit/test_audit_bones_seed_phase5.py scripts/audit/test_compare_bones_seed_exports.py scripts/data/test_prepare_bones_seed_phase5.py scripts/data/test_retarget_egodex.py scripts/data/test_validate_vega_wuji_asset.py scripts/data/test_smooth_vega_wuji_reference.py scripts/rlopt/test_resolve_checkpoint_path.py scripts/rlopt/test_recipe_scaling.py"
-test-default = { depends-on = ["test-rlopt", "test-runtime-bootstrap", "test-experiments", "test-scripts"] }
+test-dexmanip = "pytest -q source/isaaclab_imitation/tests/test_dexmanip_mdp_math.py source/isaaclab_imitation/tests/test_dexmanip_voc_math.py source/isaaclab_imitation/tests/test_dexmanip_newton_material.py source/isaaclab_imitation/tests/test_dexmanip_newton_scene_material.py source/isaaclab_imitation/tests/test_dexmanip_newton_scene_offsets.py source/isaaclab_imitation/tests/test_dexmanip_scene_contract.py"
+test-default = { depends-on = ["test-rlopt", "test-runtime-bootstrap", "test-experiments", "test-scripts", "test-dexmanip"] }
 
 [dependencies]
 python = "3.12.*"
