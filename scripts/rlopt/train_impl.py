@@ -325,6 +325,106 @@ def _apply_termination_window_args(
     )
 
 
+def _reference_rollout_batch(agent_cfg, per_env_horizon: int) -> int | None:
+    """Return the rollout batch the frame-sized agent fields were written for.
+
+    An agent config states its rollout split and checkpoint cadence in frames.
+    A config that also declares ``reference_num_envs`` records the environment
+    count those frame counts assume, which is what makes the counts restatable
+    at another environment count. Configs without the declaration return None
+    and keep the frame-sized values they were given.
+    """
+
+    reference_num_envs = int(getattr(agent_cfg, "reference_num_envs", 0) or 0)
+    if reference_num_envs <= 0 or per_env_horizon <= 0:
+        return None
+    return reference_num_envs * per_env_horizon
+
+
+def _declared_mini_batch_size(
+    agent_cfg,
+    *,
+    configured_mini_batch: int,
+    per_env_horizon: int,
+    scaled_frames_per_batch: int,
+) -> int | None:
+    """Restate a declared minibatch count at the live environment count.
+
+    The released recipe splits one rollout into a fixed number of minibatches
+    at every environment count. Sizing that split in frames only reproduces the
+    intended count at ``reference_num_envs``; below it the whole rollout
+    collapses into a single minibatch. Return None when the config declares no
+    count, or when its minibatch size is no longer the reference-scale value,
+    which means a caller set it explicitly and owns it.
+    """
+
+    mini_batches = int(getattr(agent_cfg, "mini_batches_per_rollout", 0) or 0)
+    reference_batch = _reference_rollout_batch(agent_cfg, per_env_horizon)
+    if mini_batches <= 0 or reference_batch is None:
+        return None
+    if configured_mini_batch != max(1, reference_batch // mini_batches):
+        return None
+    return max(1, scaled_frames_per_batch // mini_batches)
+
+
+def _restated_frame_interval(
+    *,
+    declared_iterations: int,
+    reference_batch: int | None,
+    current_frames: int,
+    scaled_frames_per_batch: int,
+) -> int | None:
+    """Restate one iteration-declared cadence in frames.
+
+    A cadence counted in frames only lands where its author intended at
+    ``reference_num_envs``. Below it the interval spans far more iterations than
+    declared. Return None when nothing is declared, or when the field no longer
+    holds its reference-scale value, which means a caller set it explicitly.
+    """
+
+    if declared_iterations <= 0 or reference_batch is None:
+        return None
+    if current_frames != declared_iterations * reference_batch:
+        return None
+    return declared_iterations * scaled_frames_per_batch
+
+
+def _restate_declared_intervals(
+    agent_cfg, *, per_env_horizon: int, scaled_frames_per_batch: int
+) -> None:
+    """Restate the declared checkpoint and logging cadences in frames.
+
+    Both ``save_interval`` and ``trainer.log_interval`` count frames. A recipe
+    that declares them in iterations keeps that cadence at every environment
+    count once they are restated here; without it a small run checkpoints and
+    logs so rarely that a short qualification run shows neither.
+    """
+
+    reference_batch = _reference_rollout_batch(agent_cfg, per_env_horizon)
+    trainer_cfg = getattr(agent_cfg, "trainer", None)
+    for owner, attr, declared_attr, label in (
+        (agent_cfg, "save_interval", "save_interval_iterations", "save_interval"),
+        (trainer_cfg, "log_interval", "log_interval_iterations", "log_interval"),
+    ):
+        if owner is None:
+            continue
+        restated = _restated_frame_interval(
+            declared_iterations=int(getattr(agent_cfg, declared_attr, 0) or 0),
+            reference_batch=reference_batch,
+            current_frames=int(getattr(owner, attr, 0) or 0),
+            scaled_frames_per_batch=scaled_frames_per_batch,
+        )
+        if restated is None or restated == int(getattr(owner, attr)):
+            continue
+        logger.warning(
+            "Restating %s %d -> %d frames to keep its declared iteration cadence.",
+            label,
+            int(getattr(owner, attr)),
+            restated,
+        )
+        setattr(owner, attr, restated)
+
+
 def _resolve_checkpoint_path(checkpoint: str) -> str:
     """Resolve ``--checkpoint`` to a file, accepting a directory.
 
@@ -405,6 +505,7 @@ def train(
         agent_cfg.trainer.log_interval = max(1, int(args_cli.log_interval))
     if args_cli.profile_iterations:
         agent_cfg.trainer.profile_iterations = True
+    per_env_horizon = int(agent_cfg.collector.frames_per_batch)
     agent_cfg.collector.frames_per_batch *= env_cfg.scene.num_envs
     # Keep the on-policy rollout buffer and minibatching consistent when num_envs
     # or the per-env horizon (collector.frames_per_batch) differ from the config
@@ -436,9 +537,31 @@ def train(
             replay_buffer_cfg.size = scaled_frames_per_batch
         loss_cfg = getattr(agent_cfg, "loss", None)
         if loss_cfg is not None and getattr(loss_cfg, "mini_batch_size", 0):
-            loss_cfg.mini_batch_size = min(
-                int(loss_cfg.mini_batch_size), scaled_frames_per_batch
+            resolved_mini_batch = _declared_mini_batch_size(
+                agent_cfg,
+                configured_mini_batch=int(loss_cfg.mini_batch_size),
+                per_env_horizon=per_env_horizon,
+                scaled_frames_per_batch=scaled_frames_per_batch,
             )
+            if resolved_mini_batch is None:
+                resolved_mini_batch = min(
+                    int(loss_cfg.mini_batch_size), scaled_frames_per_batch
+                )
+            elif resolved_mini_batch != int(loss_cfg.mini_batch_size):
+                logger.warning(
+                    "Restating mini_batch_size %d -> %d to keep %d minibatches "
+                    "per rollout at num_envs=%d.",
+                    int(loss_cfg.mini_batch_size),
+                    resolved_mini_batch,
+                    int(agent_cfg.mini_batches_per_rollout),
+                    int(env_cfg.scene.num_envs),
+                )
+            loss_cfg.mini_batch_size = resolved_mini_batch
+        _restate_declared_intervals(
+            agent_cfg,
+            per_env_horizon=per_env_horizon,
+            scaled_frames_per_batch=scaled_frames_per_batch,
+        )
     # max_iterations is expressed in rollout iterations, so override total_frames
     # after scaling frames_per_batch to the actual number of simulated envs.
     if args_cli.max_iterations is not None:
