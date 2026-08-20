@@ -47,6 +47,14 @@ parser.add_argument(
     "--output-dir", type=Path, default=Path("logs/reference_replay/vega_wuji")
 )
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument(
+    "--debug-vis",
+    action="store_true",
+    default=False,
+    help="Draw command markers: live and commanded wrist, object, and "
+    "fingertip frames. Contact markers appear only when the Reference "
+    "carries active contact geometry.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -226,6 +234,7 @@ class _ReferenceStateLock(gym.Wrapper):
 def main(env_cfg, agent_cfg):  # noqa: ARG001
     env_cfg.scene.num_envs = 1
     env_cfg.seed = args_cli.seed
+    env_cfg.commands.motion.debug_vis = args_cli.debug_vis
     env_cfg.episode_length_s = 1.0e9
     env_cfg.sim.device = (
         args_cli.device if args_cli.device is not None else env_cfg.sim.device

@@ -943,6 +943,175 @@ class VegaWujiReferenceCommand(CommandTerm):
         self._support_cache_step = -1
         self._live_contact_cache_step = -1
 
+    # ------------------------------------------------------------------
+    # Debug visualization
+    # ------------------------------------------------------------------
+    def _frame_marker(self, name: str, scale: float) -> Any:
+        from isaaclab.markers import VisualizationMarkers
+        from isaaclab.markers.config import FRAME_MARKER_CFG
+
+        marker_cfg = FRAME_MARKER_CFG.copy()
+        marker_cfg.prim_path = f"/Visuals/VegaWujiCommand/{name}"
+        marker_cfg.markers["frame"].scale = (scale, scale, scale)
+        marker = VisualizationMarkers(marker_cfg)
+        marker.set_visibility(True)
+        return marker
+
+    def _point_marker(self, name: str, radius: float, color: tuple) -> Any:
+        import isaaclab.sim as sim_utils
+        from isaaclab.markers import VisualizationMarkers
+        from isaaclab.markers.visualization_markers import VisualizationMarkersCfg
+
+        marker_cfg = VisualizationMarkersCfg(
+            prim_path=f"/Visuals/VegaWujiCommand/{name}",
+            markers={
+                "point": sim_utils.SphereCfg(
+                    radius=radius,
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=color),
+                )
+            },
+        )
+        marker = VisualizationMarkers(marker_cfg)
+        marker.set_visibility(True)
+        return marker
+
+    def _set_debug_vis_impl(self, debug_vis: bool) -> None:
+        """Create or hide the command markers.
+
+        The commanded frames are drawn larger than the live frames, so the two
+        stay apart when tracking is good. Contact markers appear only when the
+        Reference carries active contact geometry; an inspection-only Reference
+        has inactive slots with zero geometry, and drawing those would put
+        markers at the environment origin and read as a tracking failure.
+        """
+
+        self._debug_vis_requested = bool(debug_vis)
+        if not debug_vis:
+            for marker in getattr(self, "_debug_markers", {}).values():
+                marker.set_visibility(False)
+            return
+        if getattr(self, "_debug_markers", None):
+            for marker in self._debug_markers.values():
+                marker.set_visibility(True)
+
+    def _build_debug_markers(self) -> None:
+        """Create the markers once the Reference state is available.
+
+        ``CommandTerm.__init__`` calls ``set_debug_vis`` before this term has
+        loaded its Reference, so the markers cannot be built there. They are
+        built on the first visualization callback instead.
+        """
+
+        markers: dict[str, Any] = {
+            "right_wrist_live": self._frame_marker("right_wrist_live", 0.05),
+            "left_wrist_live": self._frame_marker("left_wrist_live", 0.05),
+            "right_wrist_command": self._frame_marker("right_wrist_command", 0.09),
+            "left_wrist_command": self._frame_marker("left_wrist_command", 0.09),
+            "object_live": self._frame_marker("object_live", 0.07),
+            "object_command": self._frame_marker("object_command", 0.11),
+            "fingertip_live": self._point_marker(
+                "fingertip_live", 0.006, (0.1, 0.6, 1.0)
+            ),
+            "fingertip_command": self._point_marker(
+                "fingertip_command", 0.009, (1.0, 0.8, 0.1)
+            ),
+        }
+        if self._has_active_contact_geometry():
+            markers["contact_command"] = self._point_marker(
+                "contact_command", 0.008, (1.0, 0.2, 0.2)
+            )
+        self._debug_markers = markers
+
+    def _has_active_contact_geometry(self) -> bool:
+        """Return whether any Reference frame declares an active contact."""
+
+        for side in ("right", "left"):
+            active = self._reference_contacts[side]["active"]
+            if bool(torch.as_tensor(active).any()):
+                return True
+        return False
+
+    def _debug_vis_callback(self, event: Any) -> None:
+        del event  # unused
+        if not getattr(self, "_debug_vis_requested", False):
+            return
+        if not getattr(self, "_debug_markers", None):
+            self._build_debug_markers()
+        markers = self._debug_markers
+        origins = self._env.scene.env_origins
+
+        markers["right_wrist_live"].visualize(
+            translations=self.right_hand_wrist_position_w,
+            orientations=self.right_hand_wrist_wxyz_e,
+        )
+        markers["left_wrist_live"].visualize(
+            translations=self.left_hand_wrist_position_w,
+            orientations=self.left_hand_wrist_wxyz_e,
+        )
+        right_command = self.right_hand_wrist_pose_command_e
+        markers["right_wrist_command"].visualize(
+            translations=right_command[:, :3] + origins,
+            orientations=right_command[:, 3:7],
+        )
+        left_command = self.left_hand_wrist_pose_command_e
+        markers["left_wrist_command"].visualize(
+            translations=left_command[:, :3] + origins,
+            orientations=left_command[:, 3:7],
+        )
+
+        # One marker instance for each environment and tracked object.
+        markers["object_live"].visualize(
+            translations=self.object_position_w.reshape(-1, 3),
+            orientations=self.object_orientation_e.reshape(-1, 4),
+        )
+        markers["object_command"].visualize(
+            translations=(
+                self.object_body_position_command_e + origins.unsqueeze(1)
+            ).reshape(-1, 3),
+            orientations=self.object_body_wxyz_command_e.reshape(-1, 4),
+        )
+
+        live_tips = torch.cat(
+            (self.right_hand_fingertip_position_e, self.left_hand_fingertip_position_e),
+            dim=1,
+        )
+        command_tips = torch.cat(
+            (
+                self.right_hand_fingertip_position_command_e,
+                self.left_hand_fingertip_position_command_e,
+            ),
+            dim=1,
+        )
+        markers["fingertip_live"].visualize(
+            translations=(live_tips + origins.unsqueeze(1)).reshape(-1, 3)
+        )
+        markers["fingertip_command"].visualize(
+            translations=(command_tips + origins.unsqueeze(1)).reshape(-1, 3)
+        )
+
+        contact_marker = markers.get("contact_command")
+        if contact_marker is not None:
+            positions = torch.cat(
+                (
+                    self.right_hand_object_contact_positions_w,
+                    self.left_hand_object_contact_positions_w,
+                ),
+                dim=1,
+            )
+            active = torch.cat(
+                (
+                    self.right_hand_object_contact_active,
+                    self.left_hand_object_contact_active,
+                ),
+                dim=1,
+            )
+            selected = positions[active]
+            if selected.numel():
+                contact_marker.set_visibility(True)
+                contact_marker.visualize(translations=selected.reshape(-1, 3))
+            else:
+                contact_marker.set_visibility(False)
+
 
 @configclass
 class VegaWujiReferenceCommandCfg(CommandTermCfg):

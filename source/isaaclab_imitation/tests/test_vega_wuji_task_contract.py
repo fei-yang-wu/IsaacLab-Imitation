@@ -822,3 +822,49 @@ def test_termination_penalty_uses_only_non_timeout_termination_mask() -> None:
         termination_manager=SimpleNamespace(terminated=torch.tensor([True, False]))
     )
     torch.testing.assert_close(mdp.termination_penalty(env), torch.tensor([1.0, 0.0]))
+
+
+def test_command_debug_visualization_is_deferred_until_the_reference_loads() -> None:
+    """``set_debug_vis`` must not touch Reference state.
+
+    ``CommandTerm.__init__`` calls ``set_debug_vis`` before this term loads its
+    Reference, so building markers there raises ``AttributeError`` on
+    ``_reference_contacts``. Marker construction belongs in the first
+    visualization callback instead.
+    """
+
+    from isaaclab_imitation.tasks.manager_based.dexmanip.command import (
+        VegaWujiReferenceCommand,
+    )
+
+    for name in (
+        "_set_debug_vis_impl",
+        "_build_debug_markers",
+        "_debug_vis_callback",
+        "_has_active_contact_geometry",
+    ):
+        assert callable(getattr(VegaWujiReferenceCommand, name, None)), (
+            f"the command term must define {name}"
+        )
+
+    # A bare instance stands in for the term mid-construction: no Reference
+    # arrays, no scene. Both entry points must stay quiet on it.
+    bare = object.__new__(VegaWujiReferenceCommand)
+    VegaWujiReferenceCommand._set_debug_vis_impl(bare, True)
+    assert bare._debug_vis_requested is True
+    assert not getattr(bare, "_debug_markers", None), (
+        "markers must not be built before the Reference is available"
+    )
+    VegaWujiReferenceCommand._set_debug_vis_impl(bare, False)
+    assert bare._debug_vis_requested is False
+
+    # With visualization off, the callback must return before it reads state.
+    VegaWujiReferenceCommand._debug_vis_callback(bare, None)
+
+
+def test_command_debug_visualization_defaults_to_off() -> None:
+    from isaaclab_imitation.tasks.manager_based.dexmanip.command import (
+        VegaWujiReferenceCommandCfg,
+    )
+
+    assert VegaWujiReferenceCommandCfg().debug_vis is False

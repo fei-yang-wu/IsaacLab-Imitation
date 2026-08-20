@@ -38,6 +38,14 @@ parser.add_argument(
     "--output-dir", type=Path, default=Path("logs/vega_wuji_policy_eval")
 )
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument(
+    "--debug-vis",
+    action="store_true",
+    default=False,
+    help="Draw command markers: live and commanded wrist, object, and "
+    "fingertip frames. Contact markers appear only when the Reference "
+    "carries active contact geometry.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -144,6 +152,7 @@ def main(env_cfg, agent_cfg) -> None:
     agent_cfg.env.env_name = args_cli.task
     agent_cfg.seed = args_cli.seed
     env_cfg.seed = args_cli.seed
+    env_cfg.commands.motion.debug_vis = args_cli.debug_vis
     env_cfg.sim.device = (
         args_cli.device if args_cli.device is not None else env_cfg.sim.device
     )
