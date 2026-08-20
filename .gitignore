@@ -79,6 +79,12 @@ data/*
 !data/README.md
 !data/unitree
 
+# Small, tracked Vega-Wuji dataset manifests. The referenced NPZ/HDF5 files
+# remain local or are stored separately with Git LFS.
+!data/dexmanip/
+!data/dexmanip/manifests/
+!data/dexmanip/manifests/*.json
+
 .omc/
 
 # Generated motion label and rollout artifacts
