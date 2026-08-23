@@ -60,7 +60,30 @@ The frozen v0/v1 surfaces keep the old raw `RewardInputCfg`
 #     --plan <plan_dir> --confirm <PLAN_SHA>
 ```
 
+## Results
+
+4,096-motion scoreboard (sonic pass, ranks 12288-16383, frame-0 starts, mode
+actions, no_push, Newton/MJWarp — `eval_scoreboard4096.sh`):
+
+| row | frames | net | SR | MPJPE (mm) | survival |
+| --- | --- | --- | --- | --- | --- |
+| `irl_explicit_root_qpos` (this campaign) | 4.0B (mid-run) | scaled 6-layer | 0.9346 | 20.44 | 345.6 |
+| `root_qpos_explicit` baseline (08-05, no IRL) | 7.6B | tuned [1024,1024,512] | 0.9358 | 20.11 | 346.4 |
+
+Preliminary, one seed, frames NOT matched (4.0B vs 7.6B) and the network
+differs (scaled vs tuned cells). Within those confounds the rows are level —
+the differences (0.0012 SR, 0.33 mm) are far below evaluation noise, so at
+minimum the reward-estimation stack does not hurt tracking. A frame-matched
+comparison needs either the IRL checkpoint near 7.5B (lands as the run
+passes it) or is impossible against this exact baseline below 7.6B (its
+earlier checkpoints were not kept).
+
 ## Status
 
-- 2026-08-22: campaign created; local qualification passed; first submission
-  pending.
+- 2026-08-22: campaign created; local qualification passed.
+- 2026-08-23: submitted to ICE as chain 5588194 -> 5588195 -> 5588196;
+  training healthy (~128k fps). Mid-run 4.0B checkpoint scored on the 4,096
+  board (table above). Estimator output saturated at the tanh rails
+  (reward_diff -2.0, exp_r 1.0) throughout — vanilla zero-regularizer
+  contract; follow-up arm with logit-reg/grad-penalty needed for a
+  non-degenerate estimate.
