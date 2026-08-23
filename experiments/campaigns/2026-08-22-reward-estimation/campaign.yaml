@@ -69,11 +69,17 @@ vars:
   # Squared pre-activation (logit) magnitude penalty; directly opposes rail
   # saturation. 0.0 everywhere except the hp arms.
   logit_reg: 0.0
+  # Goal-conditioned (paired) estimator input: adds the commanded reference
+  # joints to the policy-side reward_input (the expert side pairs its own
+  # joints with themselves), so the estimator learns a tracking metric
+  # r(s, g). false reproduces every pre-pairing arm byte-for-byte.
+  pair_input: "false"
   reward_args:
     - env.enable_reward_input_observations=true
     - agent.reward_estimation=true
     - agent.reward_estimation_grad_penalty_coeff=${vars.grad_penalty}
     - agent.reward_estimation_logit_reg_coeff=${vars.logit_reg}
+    - agent.reward_estimation_pair_input=${vars.pair_input}
   # The explicit single-frame root_qpos command (the 08-05 explicit recipe).
   explicit_interface:
     - env.command_interface.actor=explicit
@@ -288,6 +294,34 @@ arms:
       wandb_group_name: irl-hp-10b
       grad_penalty: 5.0
       logit_reg: 0.01
+      interface_args: ${vars.ln_hold1_interface}
+      macro_args: ${vars.ln_hold1_macro}
+      prefetch_mode: next
+    stages: *irl_stages
+
+  # Goal-conditioned (paired) estimator arms (2026-08-23, user-approved
+  # design): the estimator input pairs the robot's achieved joints with the
+  # commanded reference joints (67-wide), learning a tracking metric r(s, g)
+  # instead of bare expert-likeness. Expert information reaches only the
+  # reward_input group; the actor's expert view stays the command interface.
+  # Harsh regularizers carried over — pairing makes discrimination easier,
+  # so saturation pressure is higher, not lower.
+  irl_pair_explicit_root_qpos:
+    vars:
+      wandb_id: irl-pr-expl
+      wandb_group_name: irl-pair-10b
+      grad_penalty: 5.0
+      logit_reg: 0.01
+      pair_input: "true"
+    stages: *irl_stages
+
+  irl_pair_latent_ln_hold1:
+    vars:
+      wandb_id: irl-pr-ln1
+      wandb_group_name: irl-pair-10b
+      grad_penalty: 5.0
+      logit_reg: 0.01
+      pair_input: "true"
       interface_args: ${vars.ln_hold1_interface}
       macro_args: ${vars.ln_hold1_macro}
       prefetch_mode: next

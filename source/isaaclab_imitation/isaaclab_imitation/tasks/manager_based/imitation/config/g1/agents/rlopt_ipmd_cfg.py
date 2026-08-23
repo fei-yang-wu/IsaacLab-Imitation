@@ -263,6 +263,16 @@ REWARD_INPUT_KEYS: list[tuple[str, str]] = [
     ("reward_input", "expert_anchor_ori_b"),
 ]
 
+# The goal-conditioned (paired) variant: adds the commanded reference joints
+# so the estimator scores tracking (r(s, g)), not just expert-likeness. On
+# the expert minibatch the desired block duplicates the expert joints
+# (perfect-tracking pairs). Selected by `reward_estimation_pair_input=true`;
+# the un-paired list stays the default so pre-pairing chains resume cleanly.
+PAIRED_REWARD_INPUT_KEYS: list[tuple[str, str]] = [
+    *REWARD_INPUT_KEYS,
+    ("reward_input", "expert_desired_joint_pos"),
+]
+
 
 def apply_reward_estimation_switch(
     agent_cfg, reward_input_keys: list[tuple[str, str]] = REWARD_INPUT_KEYS
@@ -295,6 +305,8 @@ def apply_reward_estimation_switch(
         getattr(agent_cfg, "reward_estimation_grad_penalty_coeff", 0.0)
     )
     logit_reg = float(getattr(agent_cfg, "reward_estimation_logit_reg_coeff", 0.0))
+    if bool(getattr(agent_cfg, "reward_estimation_pair_input", False)):
+        reward_input_keys = PAIRED_REWARD_INPUT_KEYS
     ipmd = agent_cfg.ipmd
     ipmd.reward_input_keys = list(reward_input_keys) if reward_estimation else None
     ipmd.reward_loss_coeff = 1.0 if reward_estimation else 0.0
@@ -369,6 +381,11 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
     # grad penalty is the R1-style squared input-gradient norm.
     reward_estimation_grad_penalty_coeff: float = 0.0
     reward_estimation_logit_reg_coeff: float = 0.0
+    # Goal-conditioned estimator input: adds the commanded reference joints
+    # to the reward_input keys (PAIRED_REWARD_INPUT_KEYS), so the estimator
+    # learns a tracking metric r(s, g). Default off: pre-pairing chains keep
+    # their 38-wide estimator and resume cleanly from this tree.
+    reward_estimation_pair_input: bool = False
 
     def _policy_proprio_keys(self) -> list[tuple[str, str]]:
         """Proprioception the actor reads, after its one command source."""

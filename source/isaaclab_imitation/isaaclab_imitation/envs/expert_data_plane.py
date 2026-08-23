@@ -3162,7 +3162,10 @@ class ExpertDataPlane:
                 "agent.reward_estimation=true."
             )
         device = self._env.device
-        if term_name == "expert_motion":
+        if term_name in ("expert_motion", "expert_desired_joint_pos"):
+            # The expert is its own command: the desired block duplicates the
+            # achieved block, forming the perfect-tracking pair the paired
+            # (goal-conditioned) estimator input is trained against.
             normalized = self._reward_input_normalized_motion()
             idx = global_indices.to(device=normalized.device, dtype=torch.int64)
             return normalized.index_select(0, idx)
