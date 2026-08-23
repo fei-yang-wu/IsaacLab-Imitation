@@ -2,10 +2,12 @@
 
 Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
 
-Last verified: 2026-08-06. New latent/interface work uses
+Last verified: 2026-08-18. New latent/interface work uses
 `Isaac-Imitation-G1-v2`; frozen v0/v1 aliases remain only for reproducing the
-historical runs recorded below. The newest active decisions are the 129k H200
-recipe and the selected-ten trajectory-first language planner protocol.
+historical runs recorded below. The current contract for what goes in the paper
+is [final-paper-experiment-design.md](final-paper-experiment-design.md).
+Sections are newest first; a section is a record of its date, not a standing
+instruction, unless it says so.
 
 This is the living memory for the active research project. Read it first when
 returning to the project or starting a new agent session. It answers **where we
@@ -14,10 +16,9 @@ phase documents.
 
 Human-facing launcher navigation now starts at
 [`experiments/README.md`](../experiments/README.md). It marks the
-2026-07-22 latent-learning ablation as the primary current campaign, keeps the
-BONES h10 scale screen as its supporting campaign, and reserves
-`experiments/paper/` for the eventual stable release entrypoint. Dated
-campaign folders index canonical scripts rather than copying their
+2026-08-18 BONES-SEED latent-design ablation as the primary prepared campaign
+and reserves `experiments/paper/` for the eventual stable release entrypoint.
+Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
 Update this page after a meaningful code decision, qualification result,
@@ -25,6 +26,954 @@ cluster submission, job failure, or paper result. Verify changing external
 state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
+
+## IPMD reward estimation (IRL): normalized input fixed, 10B run submitted (2026-08-22)
+
+The parked IPMD direct-reward-estimation stack is live again with a fixed
+input. On the v2 surface the `reward_input` group is now `RewardInputUnitCfg`:
+29 joint positions normalized per joint by the soft limits, the relative root
+(anchor) position mapped from [-1 m, +1 m] (perfect tracking = 0.5), and the
+relative root orientation as rot6d mapped from [-1, 1] — every feature in
+[0, 1], shared helpers in `isaaclab_imitation.envs.reward_input_normalization`.
+The composed env's data plane serves the expert side through the same helpers
+and the same pinned joint order (lazily — the articulation does not exist at
+cache-build time); the frozen v0/v1 surfaces and `ImitationRLEnvLegacy` keep
+the raw 58-wide pairing. The old policy-side/expert-side joint-order and
+width mismatch (robot pos+vel vs reference order) is gone with it.
+
+Local qualification (workstation): 2-iteration smoke and a 30-iteration
+1,024-env explicit run — estimator updates end-to-end, `reward_diff`
+-0.92 -> -2.0, `exp_r` -> 1.0, no NaN. Note: the declared vanilla
+coefficients (pure diff loss, zero regularizers) saturate the tanh output
+early; a non-saturated estimate needs a logit-reg or grad-penalty follow-up
+arm. Contract tests pass (16).
+
+Campaign `2026-08-22-reward-estimation`: tuned explicit root_qpos tracker at
+10B frames with `agent.reward_estimation=true`, PPO still on the task reward
+(`use_estimated_rewards_for_ppo=false`). Submitted to ICE 2026-08-23 UTC as
+jobs 5588194 -> 5588195 -> 5588196 (afterany chain); W&B project
+`g1-reward-estimation`, group `irl-explicit-10b`, run id `irl-expl-s0`.
+
+## Dyn arms scored at last; tracker pareto program opened (2026-08-22)
+
+The three online-finetune (`dyn`) arms of `2026-08-15-latent-bottleneck-10b`
+were scored on the 4,096 board for the first time — they had been excluded on
+the mismatched-encoder premise retired 2026-08-20. Frame-matched at 10B, one
+seed, `--skill_encoder_source checkpoint` (provenance 0.0 divergence in every
+row): `cont_det_hold1_dyn` cuts MPJPE-G 17.9% (181.90 -> 149.41 mm) at level
+SR/L; dyn on top of the reset ramp adds nothing (150.61 -> 148.56); dyn on
+`fsq64_hold10` is directionally worse everywhere. Reading: dyn and
+failure-driven resets are substitutes for global drift, and dyn helps only the
+continuous hold-1 interface. Rows in `logs/bottleneck_10b_4096/`; the
+scoreboard script now carries the dyn rows.
+
+New plan of record: [Tracker Pareto Program](tracker-pareto-program.md) —
+lever evidence for SR/L/G, the designed-but-not-submitted
+`2026-08-22-pareto-stack` campaign, the graded feature menu (unscreened
+reward terms, symmetry augmentation, L2T distillation, asymmetric critic),
+and the push-termination attribution thread with its two protocol-neutral
+measurements (pushed diagnostic row + steps-since-push histogram, now wired
+into `evaluate_checkpoint` behind `--randomization all`).
+
+## 20B SONIC-reset leaders scored; interface-combos screen COMPLETE; 30B chase running (2026-08-21)
+
+Both `2026-08-18-sonic-reset-20b` chains completed at exactly 20,000,145,408
+frames and were scored on the frozen 4,096 scoreboard:
+**`ln_hold1_sonicreset` 0.9558 SR / 22.15 mm** (base `cont_det_ln_hold1` at
+10B: 0.9368 / 22.86) and **`fsq64_hold10_sonicreset` 0.9468 / 24.57 mm** (base
+0.9197 / 24.93). One seed; the gain confounds the reset sampler with the
+second 10B of frames by design (continuation, no 20B random80 control).
+`ee_body_pos` failures drop ~30-40% on both interfaces. Full table and
+qualification in the campaign README.
+
+Same day, user directive to chase SONIC's SR (0.9937): both arms continue
+20B -> 30B under the identical regime, budget the only change —
+`experiments/campaigns/2026-08-21-sonic-reset-30b/`, ln jobs 5587505-07,
+fsq 5587509-11, appending to the same W&B `-r1` runs (run-id state files
+hand-seeded on ICE before submission; the 20B chain predates the per-chain
+id mechanism). If the SR curve is flat by ~25B, cancel the tail segments.
+
+New campaign `experiments/campaigns/2026-08-21-interface-combos/` (W&B group
+`interface-combos-2b`, confirmed): five combination/follow-up cells of the
+interface design study at the byte-identical 2B screen, seed 0 —
+`jepa_ebm_hold1_256d`, `jepa_ebm_hold1_fsq64`, `recon_endpoint`,
+`recon_full_window`, `hold1_live_phase`. Supporting RLOpt changes:
+`reconstruction_target` (`input_window`/`endpoint`/`full_window`) on the
+skill-encoder config, and `command_phase_source=episode` +
+`command_phase_period` for a live hold-1 phase clock (hl_skill sampler only).
+Tests in `RLOpt/tests/test_hl_skill_recon_phase.py`. Note recorded in the
+campaign README: `sigreg_ebm` already IS endpoint DiffSR + chunk NTP + SIGReg,
+so the "endpoint plus JEPA auxiliary" cell needs no separate arm. The
+chunk-triplet machinery (`--jepa_context_chunks 1`,
+`--jepa_target_encoder_mode online`, copy-baseline gate metrics) is
+implemented and tested but untrained; phase 0 (robot-pose recording) turned
+out to already exist as the achieved-pose ring in `expert_data_plane.py`.
+
+**Screen results, same day (all five at exactly 2B, one seed, clean board):**
+no combination beats the star's `ctrl` on SR — no 10B promotion earned.
+`recon_endpoint` 0.8992 / 24.16 mm / 373.1 mm partially repairs `obj_recon`'s
+drift (was 446.3 mm) while `recon_full_window` repairs none of it (453.0 mm).
+`hold1_live_phase` is a null against `use_hold1` on every axis — the phase
+channel matters only at long holds. The JEPA x hold-1 cells post the two best
+MPJPE-G in the program (142.0 mm continuous, 129.6 mm fsq64) without moving
+SR. Full table + milestone curves in the campaign README and
+`logs/interface_combos_eval/`.
+
+## EC deployment tier: the async plan protocol, and where it stops (2026-08-20)
+
+User directive: prepare for hardware deployment and build the asynchronous
+path in Embodied-Control. EC is the last test before the robot, and its
+sim2sim dynamics gap from the training environment is the POINT of the tier,
+not a defect to close.
+
+**What now exists (EC submodule, `native/ec_native` plus its Python wrappers).**
+
+- **Multi-slot latent plans.** One planner reply may carry `plan_slots`
+  consecutive latents, each held `hold_steps` control ticks; the controller
+  walks the plan without calling the planner again, and the lead time counts
+  down to PLAN exhaustion instead of hold expiry. Before this, one reply served
+  exactly one hold and `lead_ticks < hold_steps` was enforced, so the leading
+  Isaac row (hold 1, whole 30-slot plan) could not be expressed on the
+  deployment runtime at all. New response tag 4, `plan_slots = 1` reproduces the
+  old behaviour, `MAX_VALUES` raised 4,096 -> 16,384 to fit 30 x 256.
+- **Plan-aware staleness.** A plan is not stale inside the horizon it was
+  predicted for; the watchdog counts only the time past that horizon, so a
+  planner that stops replying still trips `command_stale_ms`.
+- **The hold-1 scheduling trap.** At hold 1 the countdown steps 1 -> 0, so an
+  equality test on the lead never fires again once a plan is exhausted: the
+  controller starved after its first plan and damped. Fixed to `<=` plus a
+  guard against re-asking while a reply is already in hand. Regression test:
+  `test_native_latent_plan_keeps_requesting_at_hold_one`.
+- **Sensor noise where the hardware has it.** The DDS plant now serves SONIC's
+  noise ON THE WIRE (joint pos/vel, gyro, plus an IMU tilt that stands in for
+  SONIC's additive projected-gravity term), and the in-process MuJoCo backend
+  perturbs the controller's view only. Metrics read the clean state in both.
+- **Ground truth for the wire tier.** The plant logs its own true state,
+  because the G1 wire protocol carries no root pose: MPJPE on that tier cannot
+  come from the controller.
+- **Rig plumbing:** optional DDS domain (0 stays the robot), a gantry that
+  holds the reference start pose until the first controller command, an init
+  ramp that can hold the current pose instead of the default stance, a
+  skippable motion-switcher handshake (a simulated plant has no motion service,
+  and its 5 s CheckMode timeout starved the controller), and latched
+  state-fault reason bits.
+
+**Verified.** With the same native controller, the same async plan protocol and
+the real `ln_hold1_10b` head in its own process, an in-process paced MuJoCo
+episode tracks a full 400-tick motion: 0 deadline misses, 0 damp ticks, 16 head
+calls for 397 control ticks, planner round trip about 51 ms, control tick max
+0.79 ms, wake late max 0.30 ms, base height 0.75-0.77 m. The async plan cadence
+therefore holds at 50 Hz real time with a GPU planner off-process.
+
+**Open, and isolated.** The same configuration through the DDS plant falls
+within about 0.7 s of arming. The isolation chain: (1) the same bundle, motion
+and MJCF track at 17.24 mm through the Python lockstep sidecar; (2) the same
+planner drives 400 lockstep steps without falling through `ec lowlevel run`;
+(3) the same controller and planner survive the full episode on in-process
+paced MuJoCo; (4) only the DDS wire tier falls. The controller's view of the
+joints was verified bit-exact against the plant's true state, so it is not a
+state-ordering bug, and the fall reproduces with sensor noise off and with the
+plant timestep matched to the bundle. Remaining suspects, in order: loop delay
+added by the writer/plant round trip, the plant's servo law against the
+backend's, and the command-direction joint mapping. This is the next thing to
+settle before any hardware conversation.
+
+**The board: 28 motions x 5 episodes, one seed, all preliminary.** Same bundle
+(`cont_det_ln_hold1_seed0` at 10.0B), same head (`ln_hold1_10b` update 12k,
+30-slot plan, hold 1), same reference start frame, SONIC observation noise on.
+Scored from the clean simulator state; MPJPE-L is the episode mean.
+
+| row | fall-free | MPJPE-L all | MPJPE-L upright |
+|---|---:|---:|---:|
+| EC oracle, reference in the loop (ceiling) | 0.643 | 26.27 mm | 16.45 mm |
+| EC planner, lockstep (sync) | 0.764 | 45.26 mm | 39.56 mm |
+| EC planner, paced native async (lead 5) | 0.664 | 127.97 mm | 43.13 mm |
+| Isaac oracle (for scale) | 1.000 | 17.19 mm | 17.19 mm |
+| Isaac planner, sync / async (for scale) | 1.000 | 38.41 / 38.78 mm | same |
+
+MPJPE-L "all" is not comparable across the EC rows: the lockstep runner ends an
+episode at its safety damp while the paced row keeps logging on the floor, so
+the async row's 128 mm is dominated by post-fall frames. The upright column is
+the comparable one, and there asynchrony costs about 3.6 mm (39.56 -> 43.13),
+the same order as the Isaac pair (38.41 -> 38.78).
+
+**The finding: the deployment bottleneck is the tracker, not the planner.** On
+this board the tracker falls on 36% of episodes WITH THE REFERENCE IN THE LOOP,
+against 0% in Isaac. Per motion, six clips fall in every row including the
+oracle (`jump_around`, `rock_out`, `exercise_3`, both `big_heavy`/`big_light`
+lifts, `feeding_birds`); the planner rows inherit those falls and add almost
+nothing. Two clips are genuinely async-attributable: `cellphone_typing`
+(oracle 20%, sync 20%, async 100%) and `triumph` (oracle 80%, sync 0%, async
+100%). Three clips go the other way, where the planner survives what the oracle
+does not (`talking_with_adult` 60% -> 0%, `injured_R_leg` 60% -> 0%,
+`big_heavy_high_to_low` 80% -> 0% in the sync row).
+
+Asynchrony itself is cheap at this scale: 44 late plans out of 2,830 head calls
+across 140 paced episodes (1.6%), no faults, no damp ticks.
+
+Artifacts: `logs/ec_dds_board/{async,sync}_ln_hold1_28x5/score.json` and
+`logs/ec_dds_board/oracle_ln_hold1_28x5.json`.
+
+**Also recorded (corrected 2026-08-21):** the bundle carries Isaac's SOFT joint
+limits, uniformly about 0.27-0.29 rad tighter than the MJCF's hard ranges on all
+29 joints, so the plant can legitimately reach a pose the controller's hardware
+guard rejects. (An earlier note here read the MJCF's `actuatorfrcrange` -
+motor torque in N.m - as a joint range and claimed a "-139 deg" limit; that was
+a misread.) Fix: the guard should use the robot's hard limits plus its margin,
+or the plant should clamp to the soft limits.
+
+**SONIC parity check (2026-08-21).** Our tracker's PD constants ARE SONIC's
+deployment constants, verified numerically against
+`gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include/policy_parameters.hpp`:
+stiffness = armature x (2 pi 10 Hz)^2, damping = 2 x 2 x armature x (2 pi 10
+Hz), action_scale = 0.25 x effort / stiffness, including the 2x doubling on the
+ankles. All five motor classes match to four decimals, as do armature and
+effort limits. SONIC's own sim path (`deploy.sh sim`) is the same architecture
+as our plant: the deployment controller talking DDS on loopback to a MuJoCo
+bridge. Three setup deltas remain, and they are alignment, not research:
+
+1. Torque law form. They compute `tau = tau_ff + kp (q_des - q) + kd (dq_des -
+   dq)` and clip the TOTAL to the motor effort limit, applied through motor
+   actuators (`mj_data.ctrl`). Our plant uses position-servo actuators plus a
+   separate `qfrc_applied` term, so the effort clamp covers only part of the
+   torque and the total can exceed the motor limit.
+2. Sim rate. Theirs is `sim_frequency = 200` (dt 0.005); our plant defaults to
+   0.002.
+3. Their deploy MJCF still carries the old hip-roll torque limit (88 N.m) while
+   their policy constants use the newer 7520_22 (139 N.m), which is what our
+   asset has.
+
+They also document a sim-to-real gain delta of their own: waist pitch KD is
+reduced by 10 on the real robot because it is over-damped in sim
+(`gear_sonic/utils/mujoco_sim/configs.py:102-105`). Treat the residual gap as
+physics, not as something to engineer away.
+
+## Posterior interface submitted: learning the code through the policy (2026-08-20)
+
+`experiments/campaigns/2026-08-20-posterior-interface/`, W&B group
+`posterior-interface`. **9 arms training on ICE**, jobs `5584268`-`5584276`
+plus `5584278`, every arm `drift=0`.
+
+The counterpart to the 2026-08-19 star: there the skill encoder is pretrained
+offline for 50,000 updates and frozen, here it is learned during RL through
+`command_source=posterior`. A separate campaign on purpose — it differs from
+that study's `ctrl` in the whole command-generation path, so `ctrl` is a
+cross-campaign reference row rather than a one-field control.
+
+A 3 x 3: the learning signal that shapes the code x the latent space it passes
+through.
+
+| | AE (`identity`, 256-D) | FSQ (64-D) | VQ (`vq_ema`, K=512) |
+|---|---|---|---|
+| reconstruction only | `post_recon_ae` | `post_recon_fsq` | `post_recon_vq` |
+| policy gradient only | `post_pg_ae` | `post_pg_fsq` | `post_pg_vq` |
+| both | `post_pgrecon_ae` | `post_pgrecon_fsq` | `post_pgrecon_vq` |
+
+Hold 10, 2B frames, seed 0 — the star's own settings, so the route is the
+variable. **No pretrain stage**, which is the property under test rather than a
+caveat: a policy-gradient route does not get a 50,000-update head start, and
+what that costs is the result.
+
+`post_*_vq` is the direct test of whether `bn_vq_ema`'s 0-of-4096 collapse was
+the quantizer or the offline path that hosted it: the posterior quantizer is a
+different implementation, so the star's bottleneck ordering is a hypothesis
+here, not a result.
+
+### The input view is aligned with the control, and the knob was not obvious
+
+These arms encode the **same 38-value `root_qpos` frame** `ctrl` does. The knob
+is `env.command_interface.encoder.components`:
+
+```
+env.command_interface.encoder.components=[joint_qpos,root_pos,root_ori]
+```
+
+`EncoderViewCfg.components` defaults to the full-body trio — that is where the
+reference joint velocity enters — and for a LATENT actor that view is the ONLY
+source of expert terms in the policy group, because
+`policy_command_terms() = actor terms + encoder-view terms` and a latent actor
+contributes none. So that one field decides what the posterior can read.
+
+The agent half cannot be set from the CLI at all: `sync_input_keys` re-assigns
+`posterior_input_keys` during `__post_init__`, after Hydra applies overrides, so
+an override is silently discarded and the run trains against the default view
+while appearing to honour the flag. Hence the new
+`rlopt_ipmd_posterior_root_qpos_cfg_entry_point`. A contract test pins the two
+halves together; drift gives either `KeyError: 'expert_motion_qpos'` or a silent
+fall back to the wider view the star measured as WORSE.
+
+Ruled out empirically, recorded so nobody retries them:
+`env.command_observation_terms` (reaches the env and keeps the term, but the
+term has no producer — keeping BOTH `expert_motion` and `expert_motion_qpos`
+still raises `KeyError` on the qpos one, which isolates this to publication
+rather than pruning), and `reference.critic_components` (that is the critic's
+view).
+
+### Compile caches are now per job
+
+`post_recon_vq` died six minutes in with
+`InductorError: FileNotFoundError ... .tmp -> ....py` while its eight siblings
+ran: nine concurrent jobs racing on the shared `~/.cache/torchinductor` rename.
+`slurm.py` now exports `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR` under
+the job's own bootstrap root, which removes the shared name and is cleaned up
+with that root. The resubmitted arm (`5584278`) trains with zero InductorError.
+Regression test in `tests/test_cluster_run_id_block.py`.
+
+## Co-trained vs frozen skill encoder, frame-matched at 6.0B (2026-08-20)
+
+The first real measurement of SONIC's co-training choice in our recipe. It
+needed no new training: two `*_dyn` arms of `2026-08-15-latent-bottleneck-10b`
+already had 6.0B checkpoints, and both of their frozen controls have a 6.0B
+checkpoint too — 6,000,082,944 against 6,000,476,160 frames, 0.007% apart.
+Scored on the canonical testbed, clean and `no_push`, 8 runs, no failures.
+Artifacts in `logs/dyn_vs_frozen_6b/`.
+
+### The clean pair: FSQ 64x32, hold 10
+
+`fsq64_hold10` against `fsq64_hold10_dyn` differ in `dyn_args` and nothing
+else — neither sets `curriculum_args` — so this is a genuine one-variable
+comparison.
+
+| profile | encoder | SR | MPJPE-L | MPJPE-G |
+|---|---|---:|---:|---:|
+| clean | frozen | 0.8970 | 25.88 mm | 153.5 mm |
+| clean | co-trained | 0.8962 | 25.84 mm | **143.1 mm** |
+| `no_push` | frozen | 0.8843 | 28.24 mm | 249.7 mm |
+| `no_push` | co-trained | 0.8823 | 28.50 mm | **233.1 mm** |
+
+**Co-training changes essentially nothing on success rate or local error**
+(-0.0007 and -0.0020 SR; -0.2% and +0.9% MPJPE-L) and gives a **small
+consistent improvement in global error, -6.8% clean and -6.6% robust**. The
+sign agrees across two independent randomization profiles, which is mild
+corroboration, but ~7% is inside the ~15% band and this is one seed on one
+interface at 6.0B.
+
+Read against the 10M-era datum: `sonic_fsq_pg` versus `fsq_recon` suggested
+policy gradient into the encoder "did not help" (21.73 against 24.63 ep_len).
+At 6.0B on the deciding board the honest statement is narrower — it does not
+help success or local error, and may modestly help global drift.
+
+### The other pair is confounded — do not attribute it
+
+`cont_det_hold1_resetramp_dyn` scored 0.8806 against its control's 0.9041
+(-0.0234 SR, +6.4% MPJPE-L), but that difference **cannot be assigned to
+co-training**, for two independent reasons:
+
+1. The two arms differ in **two** fields, not one: the dyn arm sets both
+   `curriculum_args` and `curriculum_hold_args` while its control sets only
+   `curriculum_args`. `curriculum_hold_args` is the fix for the reset-schedule
+   re-sweep, so one arm has it and the other does not.
+2. This arm carries the documented contamination window: its 5.0B-7.0B history
+   was trained under a re-swept reset schedule, and **the 6.0B checkpoint sits
+   inside that window**.
+
+Recorded so the number is not later mistaken for a co-training effect.
+
+### What this changes about priorities
+
+Co-training looks like a small effect on the axis that matters least to the
+headline, not a structural difference. That lowers the value of the three
+deferred `use_cotrain_*` arms relative to the **posterior** route
+(`command_source=posterior`, `train_posterior_through_policy`, `recon_coeff`,
+`kl_coeff`), which learns the code THROUGH the policy rather than fine-tuning a
+pretrained one and remains genuinely untested since July.
+
+### Method note: the co-trained arms were always scoreable
+
+`IPMD.load_model` restores the fine-tuned encoder from
+`hl_skill_command_sampler_state_dict` (`ipmd.py:3036-3046`), and
+`agent.ipmd.hl_skill_checkpoint_path` only seeds the sampler at construction.
+Measured: the live encoder is **0.0 max abs** from the checkpoint's embedded
+encoder in every configuration tried, including one that passed a different
+arm's pretrained file and one that forced `--skill_encoder_source pretrained`.
+
+So the belief that a `*_dyn` arm "would score a mismatched pair", which kept
+both arms off every board, was never measured and is wrong.
+`evaluate_checkpoint.py` now takes `--skill_encoder_source
+{auto,checkpoint,pretrained}` and records the resolved source plus
+`live_vs_checkpoint_encoder_max_abs` in `summary.json` — provenance, not a
+behaviour change, so the question is settled by a logged number next time.
+
+## Interface design study: all 29 arms trained and scored (2026-08-20)
+
+**Complete.** 29/29 ICE jobs COMPLETED, 29 clean rows + 29 robust rows +
+232 milestone rows scored locally, zero evaluation failures. One seed per arm
+at a matched 2B frames, scored on `paper_testbed4096_v1`.
+
+| arm | axis | SR | dSR | MPJPE-L | MPJPE-G | `ee_body_pos` |
+|---|---|---:|---:|---:|---:|---:|
+| **`ctrl`** | control | 0.9023 | — | 24.49 mm | 212.3 mm | 313 |
+| `bn_cont128` | bottleneck | 0.9050 | +0.0027 | 24.27 mm | 212.7 mm | 319 |
+| `bn_cont64` | bottleneck | 0.9021 | -0.0002 | 24.15 mm | 216.9 mm | 300 |
+| `bn_no_ln` | bottleneck | 0.8984 | -0.0039 | 23.17 mm | 211.2 mm | 333 |
+| `bn_gaussian` | bottleneck | 0.8813 | -0.0210 | 28.49 mm | 214.0 mm | 407 |
+| `bn_sonic_fsq64` | bottleneck | 0.8701 | -0.0322 | 29.07 mm | 173.2 mm | 456 |
+| `bn_sonic_fsq32` | bottleneck | 0.8501 | -0.0522 | 32.21 mm | 205.0 mm | 528 |
+| `bn_sonic_fsq64_l8` | bottleneck | 0.8352 | -0.0671 | 33.81 mm | 191.4 mm | 571 |
+| `bn_sonic_fsq16` | bottleneck | 0.6716 | -0.2307 | 43.48 mm | 252.0 mm | 1247 |
+| `bn_gumbel_multicat` | bottleneck | 0.6660 | -0.2363 | 45.21 mm | 322.0 mm | 1229 |
+| `bn_categorical` | bottleneck | 0.5454 | -0.3569 | 55.35 mm | 640.8 mm | 1689 |
+| `bn_gumbel` | bottleneck | 0.3457 | -0.5566 | 69.06 mm | 1299.2 mm | 1973 |
+| `use_hold1` | code use | 0.8921 | -0.0103 | 26.44 mm | 150.4 mm | 352 |
+| `use_phase_none` | code use | 0.3679 | -0.5344 | 66.48 mm | 1281.6 mm | 2089 |
+| `in_window_full` | encoder input | 0.8989 | -0.0034 | 23.65 mm | 235.0 mm | 322 |
+| `in_anchor_robot` | encoder input | 0.8914 | -0.0110 | 25.15 mm | 219.2 mm | 381 |
+| `in_anchor_expert_heading` | encoder input | 0.8772 | -0.0251 | 32.57 mm | 410.9 mm | 374 |
+| `in_fullbody670` | encoder input | 0.8752 | -0.0271 | 27.29 mm | 232.2 mm | 441 |
+| `in_stride5` | encoder input | 0.6558 | -0.2466 | 44.22 mm | 406.4 mm | 1203 |
+| `ix_fsq64_hold1` | interaction | 0.8496 | -0.0527 | 30.45 mm | 136.9 mm | 532 |
+| `obj_recon` | objective | 0.8931 | -0.0093 | 27.50 mm | 446.3 mm | 384 |
+| `obj_phi_bilinear` | objective | 0.8906 | -0.0117 | 26.71 mm | 200.1 mm | 380 |
+| `obj_jepa_sigreg_ebm` | objective | 0.8875 | -0.0149 | 27.70 mm | 212.8 mm | 391 |
+| `obj_state_occupancy` | objective | 0.8826 | -0.0198 | 25.78 mm | 183.8 mm | 393 |
+| `obj_semimarkov` | objective | 0.8621 | -0.0403 | 28.12 mm | 184.5 mm | 482 |
+| `obj_jepa_infonce` | objective | 0.8542 | -0.0481 | 30.33 mm | 211.0 mm | 466 |
+| `obj_jepa_ntp` | objective | 0.8218 | -0.0806 | 36.77 mm | 177.8 mm | 629 |
+| `obj_endpoint_delta` | objective | 0.8123 | -0.0901 | 39.52 mm | 238.8 mm | 675 |
+| `bn_vq_ema` | bottleneck | **0.0000** | -0.9023 | n/a | n/a | 4078 |
+
+Read every row as **directional**: one seed, and the campaign's own repeat
+floor is not measured. Differences of a few thousandths of SR between the top
+arms are ties.
+
+### Paper framing (decided 2026-08-20)
+
+**Main story: the 26 hold-10 arms, led by success-only MPJPE-L**, with success
+rate alongside. On that set the two agree at Spearman **+0.957**, so leading on
+MPJPE-L tells the same story as leading on success — which is what makes the
+choice safe. The hold-10 set is also the internally consistent one: 27 of 29
+active arms share the hold-10 control, so the main figure has one cadence and
+one hub.
+
+Ranked by MPJPE-L, four arms sit nominally ahead of `ctrl` — `bn_no_ln`
+(-5.4%), `in_window_full` (-3.4%), `bn_cont64` (-1.4%), `bn_cont128` (-0.9%) —
+and all four are inside the ~15% band. The claim is therefore "**the control is
+at the top of a five-way tie**", not "nothing beats the control".
+
+**Cadence moves to the ablation** (width x hold 2x2). Report it honestly: hold
+10 and hold 1 tie on success and local error, and hold 1 is decisively better
+on global error at both widths (-29% at 256-D, -21% at 64-D). "Hold 10 is
+better" is not supported.
+
+**MPJPE-G remains a column in every table**, per the frozen
+`canonical-paper-metrics.md` rule that none of the three may be published
+alone. Leading the narrative on MPJPE-L is a framing choice and is compatible
+with that rule; dropping G would not be, and would hide the drift failure mode
+this very campaign exposed (`obj_recon` +12.3% on L against +110% on G). Within
+the main set L and G still disagree (+0.430), and that disagreement is
+ablation and discussion material.
+
+**Consistency trap for the write-up:** the planner section's best row
+(38.41 mm) runs on a hold-1 tracker while Section 1 now leads on hold 10. Say
+so explicitly — cadence is reported separately and the deployed pair takes
+hold 1 for its global-drift advantage. Stated it is a finding; unstated it is
+something a reviewer will catch.
+
+### What the study found
+
+**The control configuration is the design.** No arm beats `ctrl` on success
+rate by more than noise. The three that come closest are its own near-ties:
+`bn_cont128` (+0.0027), `bn_cont64` (-0.0002) and `bn_no_ln` (-0.0039, and
+5.4% BETTER on MPJPE-L). Continuous code width barely matters between 64 and
+256 — so the width is free to choose on other grounds, such as what a planner
+can emit.
+
+**Discrete costs about 0.03 SR and 19% MPJPE-L at this budget.** The best
+quantized arm, `bn_sonic_fsq64` — SONIC's own 64x32 token space — reaches
+0.8701 / 29.07 mm against the continuous 0.9021-0.9050 / ~24.2 mm. Within FSQ
+the bit budget orders cleanly at fixed levels (320 bits 0.8701 > 160 bits
+0.8501 > 80 bits 0.6716), and levels matter separately (64x8 = 192 bits scores
+0.8352, below 64x32 = 320 bits).
+
+**Learned codebooks are worse than the fixed FSQ lattice at equal bits.**
+`bn_gumbel_multicat` and `bn_categorical` sit at 64x32 — FSQ-64's exact 320-bit
+budget — and score 0.6660 and 0.5454 against FSQ's 0.8701. The single-codebook
+arms are worse still: `bn_gumbel` (9 bits) 0.3457, and **`bn_vq_ema` collapses
+completely — 0 successes in 4,096 clips, 5.7-step survival, 99.6% of episodes
+ending on `ee_body_pos`.** That matches the 2026-07-22 10M gate, where single
+`vq` was one of two near-flat arms; it is now confirmed at 2B on the canonical
+board.
+
+**Endpoint DiffSR beats every other objective — but read WHERE it wins.**
+`obj_endpoint_delta` is the worst objective outright (-0.0901, +61.4%).
+Reconstruction is the interesting case and must not be summarised as simply
+"worse":
+
+| | `ctrl` (endpoint) | `obj_recon` |
+| --- | ---: | ---: |
+| SR | 0.9023 | 0.8931 (-0.0093) |
+| MPJPE-L | 24.49 mm | 27.50 mm (+12.3%) |
+| MPJPE-G | 212.3 mm | **446.3 mm (+110%)** |
+
+On success rate the two are effectively tied and reconstruction is the **best
+of all eight alternative objectives**. Its +12.3% on local error sits inside
+the ~15% unresolved band at one seed and is mid-pack among objectives. The one
+resolved difference is **global error, where it is the worst objective by a
+wide margin** — the next worst is `endpoint_delta` at 238.8 mm and every other
+objective is within +/-16% of the control. The `no_push` partner says the same
+more starkly: reconstruction edges the control on success (0.8835 against
+0.8828) at 604.7 mm global error against 332.4.
+
+Not an unconverged artifact: its curve improves 598.7 -> ~400 mm and flattens,
+never approaching 212.
+
+So the defect is specific — **the reconstruction latent yields a policy that
+gets the pose right and ends up in the wrong place.** That is precisely the
+drift case MPJPE-L flatters and `canonical-paper-metrics.md` made MPJPE-G
+mandatory to expose, now produced by an objective choice of ours rather than by
+an external checkpoint. A plausible mechanism: reconstructing the encoder's own
+input window is a purely local objective with nothing tying the code to where
+the robot ends up, while endpoint DiffSR predicts the successor state, which is
+where translation lives.
+
+This indicts THAT reconstruction target, not reconstruction in general. The
+study carries one reconstruction cell (continuous 256; there is no recon x FSQ
+arm in the star), and its decoder targets the exact input window only. A
+future-window or endpoint target is the obvious follow-up and would test the
+mechanism directly.
+
+**The phase channel is not optional.** `use_phase_none` — the control with the
+2-wide `sin_cos` slot clock removed — falls to 0.3679 / 66.48 mm. At hold 10
+the tracker needs the "where am I inside the chunk" signal.
+
+**Two 2026-08-09 findings reproduce on the current recipe.** `in_stride5`
+collapses to 0.6558, as stride 5 did under every latent mode then; and adding
+joint velocities to the encoder input (`in_fullbody670`) HURTS (-0.0271,
++11.4%), so the 380-value `root_qpos` frame is the better input.
+
+**The 64-D hold-1 "dead zone" is not dead at 2B.** `ix_fsq64_hold1`, the
+interaction probe, trains to 0.8496 / 30.45 mm. It is worse than FSQ-64 at
+hold 10 (0.8701) but nowhere near the collapse the 100M grid implied. What the
+100M grid measured was a budget artifact, not a dead cell.
+
+**MPJPE-G reorders the board again, and both hold-1 arms win it.**
+`ix_fsq64_hold1` has the best global error in the whole study at 136.9 mm and
+`use_hold1` the second best at 150.4 mm, while both are mid-table on local
+error. Publishing at 50 Hz costs a little success rate and buys a large
+reduction in global drift.
+
+### The budget axis earned its place
+
+Ranking the 28 healthy arms by success rate at 1.0B and again at 2.0B agrees at
+Spearman **+0.847**. The disagreement is concentrated among the top arms, whose
+SR spread is only 0.8906-0.9023 — near-ties reshuffling, not real reordering.
+
+**Nine arms had not converged at 2B**, still gaining more than 0.01 SR over
+their last 0.5B: `obj_endpoint_delta` (+0.0469), `bn_sonic_fsq64_l8` (+0.0391),
+`bn_sonic_fsq32` (+0.0234), `in_stride5` (+0.0234), `in_fullbody670` (+0.0195),
+`bn_sonic_fsq16` (+0.0156), `in_window_full` (+0.0156), `bn_categorical`
+(+0.0117), `use_hold1` (+0.0117). **The quantized arms dominate that list while
+the continuous arms have flattened**, so the discrete-versus-continuous gap
+above is an upper bound on the gap at convergence and must be reported as
+"at 2B", never as a property of the interface.
+
+### Provenance
+
+Jobs `5583773`-`5583802` (low-level) on the encoders from `5583651`-`5583738`.
+Mirror `logs/interface_design_study_mirror/`, rows
+`logs/interface_design_study_eval/`. Reproduce with the campaign's
+`mirror.sh` then `eval.sh`.
+
+## Low-level section reframed as a design study; MPJPE-G reorders the board (2026-08-19)
+
+**Decision: the paper's low-level section is a DESIGN STUDY of learned command
+interfaces — the ablation is the contribution, not support for the planner.**
+`final-paper-experiment-design.md` records a 2026-08-17 discussion and is not a
+binding contract; its 2x2 objective x bottleneck grid is one cell block inside
+a much wider space, and its headline "lock" is not one.
+
+Scope set with the user: all four encoder-objective families (successor,
+reconstruction, JEPA, co-trained); reconstruction keeps **one** target, the
+exact encoder input window, so no new decoder code is needed; every arm trains
+to a matched **2B** frames; and **no arm is promoted to a longer budget** —
+promoting winners selects on the outcome and leaves rows of mixed budgets.
+**Budget is an axis instead**, read off training curves and checkpoint
+milestones.
+
+Campaign: `experiments/campaigns/2026-08-19-interface-design-study/`. A **star**
+of 34 arms — `ctrl` is the hub and every other arm changes exactly ONE field —
+over four axes plus one width-x-hold interaction probe.
+
+**SUBMITTED to ICE on 2026-08-19**, W&B group `interface-design-study`. The
+first submission (87 jobs, `5583651`-`5583738`) lost every low-level stage to a
+control-plane bug; the encoders survived and the low-level stages were
+re-submitted alone. **All 29 arms are now training** (`5583773`-`5583802`), the
+control arm verified at iteration 128/5087 and 50.3M of 2.00B frames.
+
+### The bug: every low-level job died at zero seconds
+
+21 of 21 `lowlevel1` jobs failed with **exit 141 at 00:00:00 and no error
+message**, while all 29 pretrains completed normally. Exit 141 is 128+13 =
+SIGPIPE. The cause was in the W&B run-id block that
+`pipeline/cluster/slurm.py` renders into every batch script:
+
+```bash
+resolved_run_id="${run_id_base}-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 6)"
+```
+
+`head -c 6` closes the pipe after six bytes while `tr` is still streaming an
+endless source, so `tr` takes SIGPIPE, `set -o pipefail` surfaces 141, and
+`set -e` kills the job before it prints anything. It fires only on a stage that
+declares `WANDB_RUN_ID` — every low-level stage, no pretrain — which is exactly
+what made it look like a per-stage configuration problem rather than a shared
+bug. It has been latent since the 2026-08-18 run-id pinning and would break any
+campaign whose chain has no `wandb_run_id` state file yet.
+
+Fixed by generating the token from a bounded read, `od -An -tx1 -N3
+/dev/urandom | tr -d ' \n'`, which cannot leave a writer on a closed pipe.
+`source/imitation_experiments/tests/test_cluster_run_id_block.py` executes the
+rendered block under `set -euo pipefail` rather than pattern-matching it, and
+was confirmed to fail with `assert 141 == 0` against the old form.
+
+Diagnosis notes worth keeping: the archive extracted fine (`gzip -t` clean,
+`tar` verified by hand on the very node that failed, 28 TB free on its `/tmp`),
+and the pretrain that preceded the first failure wrote a real 416 MB encoder in
+27:55 — so neither the workspace nor the encoder was ever at fault.
+
+### Recovery
+
+`plan --only-stage lowlevel1` re-submitted the low-level stage alone against
+the encoders already on disk, so no pretrain was repeated. No `wandb_run_id`
+state file existed anywhere — the block died before writing one — so every
+chain minted a fresh id on the fixed path. `lowlevel2` was not re-submitted: a
+2B run at ~104k fps is about 5.3 h against a 15:59 walltime, so the insurance
+segment is not needed and can be added later if an arm runs long.
+
+Follow with
+`python -m imitation_experiments.pipeline.cluster status --campaign interface-design-study`.
+
+29 arms are active, **every one passed its wiring smoke**, and every plan
+resolved offline with ICE preflight passing. 101 contract tests hold the star
+property, the `latent_dim == code_latent_dim + phase_dim` width contract, the
+`sonic_fsq` level-list contract, W&B id uniqueness, the deferred set, the
+one-seed rule, and the no-duplicate-cell rule. The W&B group
+`interface-design-study` is confirmed.
+
+**One seed per arm** (user decision). No arm carries a repeat, so a single-arm
+difference inside the roughly 15% evaluation band is directional and not
+resolved — for tier 1 exactly as much as for tier 2. The budget axis partly
+compensates: each arm is scored at five checkpoints, so a gap that holds across
+the whole curve is stronger evidence than the same gap at one endpoint. Five
+points on one run are not five seeds; any conclusion the paper leans on wants a
+second seed before publication.
+
+Five arms are **deferred to tier 4** by user decision and are never planned:
+the three co-trained arms, which wait on an encoder-from-checkpoint eval path,
+and `use_phi` / `use_z_phi`. They stay defined so the design is intact and
+re-enabling is a one-field change. `plan_all.sh` refuses tier 4.
+
+### What the wiring gate caught
+
+Three findings that would each have cost real GPU time:
+
+1. **A duplicated cell.** `obj_jepa_ntp` omitted `--jepa_loss` and a separate
+   `obj_jepa_sigreg` passed it explicitly — but sigreg is the parser default,
+   so the two arms measured loss 0.26313257217407227 apiece, to every digit.
+   They were the same cell. A star with a duplicate spends a full budget twice
+   and reports it as two independent measurements. The duplicate is removed,
+   the surviving arm names its energy explicitly, and a contract test now
+   resolves parser defaults before comparing arms.
+2. **The smoke batch changed the answer.** At batch 256 a 512-entry VQ codebook
+   cannot hit enough codes and reports a fully collapsed code; at the
+   production batch of 8,192 it never does. A 400-update probe watched it
+   recover from `z_dim_std_mean` 0.134 to 1.365 as the loss fell 39.2 to 4.7.
+   The smoke now runs at the production batch so batch is not a confound
+   between the gate and the run it qualifies.
+3. **`z_effective_rank` cannot detect a collapse on its own.** On the fully
+   collapsed VQ code it reported 11.57 rather than 1, because the covariance is
+   degenerate. The gate judges a quantized arm on the trainer's own
+   `code_perplexity` (1.0 = a single code) and a continuous arm on the MEAN
+   per-dimension spread — never the minimum, since a discrete codebook has dead
+   dimensions this early (`bn_gumbel_multicat` measured `z_dim_std_min` 0.0 at a
+   healthy `z_dim_std_mean` 0.317).
+
+### The eight 10B arms, re-scored on the canonical testbed
+
+Every prior row in this repo sat on the retired `bones_scoreboard4096_v1` block
+under `no_push`, and **no row anywhere carried MPJPE-G**. All eight scorable
+arms of `2026-08-15-latent-bottleneck-10b` are now on
+`paper_testbed4096_v1` (clean) and `paper_testbed4096_robust_v1` (`no_push`),
+16 rows, no failures, about 1.4 minutes per row.
+
+| arm | frames | SR | MPJPE-L | MPJPE-G | `ee_body_pos` |
+|---|---:|---:|---:|---:|---:|
+| `jepa_sigreg_ebm_hold10_256d` | 10.00B | 0.9146 | **22.60 mm** | 151.77 mm | 280 |
+| `cont_det_hold1` | 10.00B | 0.9187 | 23.37 mm | 107.10 mm | 279 |
+| `cont_det_ln_hold1` | 10.00B | **0.9226** | 24.19 mm | 119.42 mm | 274 |
+| `cont_det_hold1_resetramp` | 10.00B | 0.9192 | 24.96 mm | 107.84 mm | 285 |
+| `fsq64_hold10` | 10.00B | 0.9062 | 25.99 mm | 146.53 mm | 324 |
+| `jepa_sigreg_ebm_hold10_fsq64` | 10.00B | 0.9004 | 26.48 mm | 123.15 mm | 358 |
+| `jepa_ntp_hold10_256d` | 8.50B | 0.8884 | 26.54 mm | 161.76 mm | 391 |
+| `jepa_pure_256d_hold1` | 10.00B | 0.8865 | 28.98 mm | **86.52 mm** | 406 |
+| released SONIC (reference) | - | 0.9912 | 28.75 mm | 135.73 mm | - |
+
+**The local and global metrics do not rank the same arms.** Over these eight,
+Spearman is **-0.071** between MPJPE-L and MPJPE-G, against +0.786 between
+MPJPE-L and success rate. `jepa_pure_256d_hold1` is LAST on local error and
+FIRST on global error by 20 mm; `jepa_sigreg_ebm_hold10_256d` is the exact
+inverse. This is the drift-versus-pose split
+`canonical-paper-metrics.md` made MPJPE-G mandatory for, now measured on our
+own arms rather than only on the released SONIC checkpoint. Every leaderboard
+in this repo before today ranked on the local metric alone.
+
+Read with care: eight arms is a small rank sample, MPJPE-G repeats only to
+about 2% run-to-run, and success-only figures at different success rates carry
+a selection bias. What the numbers support is "the two metrics disagree", not a
+new winner. The `ctrl` hub of the design study is unaffected — it is chosen
+from proven configurations, not from this ordering.
+
+LayerNorm is still not established: `cont_det_hold1` (LN off) beats
+`cont_det_ln_hold1` on both error metrics (23.37 vs 24.19 mm local, 107.10 vs
+119.42 global) and loses 0.0039 of success rate. The design study carries
+`bn_no_ln` with two seeds to settle it.
+
+**Run-to-run repeat, measured here.** Two arms were scored twice on the
+identical protocol, because their first rows predated the per-environment
+acceleration fix. The repeat moved success rate by 0.0010 and 0.0014, MPJPE-L
+by 0.04 and 0.01 mm, and MPJPE-G by 0.45 and 0.67 mm (0.4%). That is looser
+than the ~0.01 mm / ~0.0003 floor `canonical-paper-metrics.md` records for the
+released SONIC checkpoint, and it is the right floor to use for OUR arms: it
+puts the whole `cont_det_*` cluster inside noise of each other on success
+rate.
+
+### Supporting changes
+
+- **`paper_milestone_testbed256_v1`**, a new profile: 256 clips drawn stride-16
+  from `TESTBED4096_RANKS`, the same population and the same
+  `sonic_sr_clean_v1` protocol as the headline board, for scoring intermediate
+  checkpoints. `bones_milestone256_v1` could not serve this — it is a strided
+  draw from the RETIRED legacy block, so a curve on it cannot be read against a
+  testbed row.
+- **Acceleration distance now accumulates per environment**
+  (`lowlevel/evaluate_checkpoint.py`). It previously existed only as a
+  board-wide, all-transition mean, so a success-only acceleration row was not
+  computable — SONIC publishes velocity AND acceleration distance, and the
+  success-only reduction is what every other paper metric uses.
+- **`summarize_paper_boards` rows** now carry MPJPE-G, velocity, acceleration,
+  per-termination counts and true env frames (recovered from `f<frames>`
+  checkpoint tree names when metadata omits them). A metric a result file
+  predates stays `None` rather than silently reporting the all-transition mean
+  in a success-only column.
+- **Online MPJPE needed no work**: `TrainHealth/mpjpe_{l,g}_mm_transition_ewma`
+  already reaches the trainer through `mdp/commands/reference.py:628-642` and
+  `envs/rlopt.py:101-116`.
+- **Disk**: `outputs/gr00t_language30` (97 G) and `outputs/gr00t_language10`
+  (41 G) moved to `/mnt/storage` behind symlinks after a file-count and
+  byte-count verification. `/mnt/hsstorage` went from 20 G free (a collection
+  had already died mid-write) to 157 G. `outputs/planner_10b` stayed on NVMe
+  because the planner campaign still reads it.
+
+## Planner cadence, the ceiling decomposition, and the SONIC row (2026-08-19)
+
+One seed, DR off, no ensembling, 28 motions; sweep arms are 140 episodes and
+rows of record are 560. Campaign:
+`experiments/campaigns/2026-08-17-planner-10b-trackers/`.
+
+**The tracker is not what limits the hold-1 planner.** The oracle latent row
+on the identical protocol is 17.19 mm (fall-free 1.000, every episode passes
+the SONIC threshold) against the planner's 42.83 mm, so the planner owns
+about 60% of the error.
+
+**Consuming the whole plan beats re-planning often.** Sweeping how many of the
+head's 30 slots are consumed before the next head call: 50.76 mm (1 slot),
+47.61 (3), 44.18 (10, the shipped setting), **38.73 mm (30)** — with 36 head
+calls instead of 106. Confirmed at 560 episodes: **38.41 mm** against the
+shipped 42.83, fall-free 1.000 — 4.41 mm paired per motion, 95% interval 1.1
+to 9.0 mm, p = 0.043, better on 19 of 28 motions. The ordering is the reverse of per-publication accuracy
+(z cosine 0.517 at 30 slots against 0.661 at 10): a fresh head call draws
+fresh flow noise, so frequent re-planning jitters the command stream, while
+one draw's slots are mutually consistent. Confirmation at 560 episodes is
+running. Null results measured the same way: 16 ODE steps (43.65 vs 44.18)
+and clean observations (44.62 vs 42.83, slightly worse clean).
+
+**Why the head is the limit.** Open-loop per-slot cosine decays only from
+0.777 to 0.760 across the consumed window, but the closed-loop published
+cosine is 0.661 — a 15% covariate-shift gap, because the collection was
+recorded with the oracle driving and the planner drives at evaluation. The
+fix is a planner-driven (DAgger) collection; it is blocked on disk, not on
+code. The workstation disk hit 100% on 2026-08-19 and a lookahead-bearing
+hold-1 collection failed mid-write.
+
+**SONIC, on this protocol at last.** `eval_sonic_row.sh` runs the released
+v1.1 decoder on the same 28 motions, 20 episodes, fall-only, unperturbed:
+
+| system | tracker ceiling | planner row (560 ep) | planner-induced |
+|---|---:|---:|---:|
+| ours, 10B `cont_det_ln_hold1` | **17.19 mm** | 42.83 mm (10 slots) | +25.6 mm |
+| ours, same, 30 slots | 17.19 mm | 38.41 mm | +21.2 mm |
+| ours, 30 slots, clean observations | 17.19 mm | **37.60 mm** | +20.4 mm |
+| SONIC release v1.1 | 22.70 mm | 38.49 mm | **+15.8 mm** |
+
+Our tracker is 24% better. At the shipped cadence SONIC won end to end; at 30
+slots the two are level (37.60 vs 38.49 on the same clean-observation
+contract). The residual difference is in the planner-induced column: SONIC's
+latent space absorbs planner error better.
+
+On SONIC's OWN success criterion the two are not level at all: episodes that
+never violate its thresholds are 0.9143 for us against 0.6232 for the SONIC
+row (same semantics both sides), and SONIC's failures are almost entirely
+wrist height (`ee_body_pos` 185 of 560). Both oracles pass 100%, so it is the
+planner violating thresholds rather than the tracker. SONIC's MPJPE measured
+under its own terminating contract (34.13 mm) is survivor-biased — violating
+episodes truncate at 402 steps against 496 — so the comparable number stays
+38.49 mm. All three rows
+share the GR00T head recipe and budget and differ in the (encoder, tracker)
+pair, but SONIC's decoder is its own tracker in its own evaluator binary, so
+this compares systems, not interfaces.
+
+**Explicit-vs-latent: the first reading was confounded.** The explicit head
+trained on the fsq64 collection and was first scored driving the HOLD-1
+tracker, states it had never seen; that mismatch, not the interface, produced
+its 2.2x deficit. Paired with the tracker that produced its training states,
+the explicit route wins: 44.75 mm against the latent arm's 52.30 on the fsq64
+tracker (better on 21/28 motions), both 12k updates, 560 episodes. The likely
+mechanism is that encoding a predicted explicit window projects it onto the
+manifold of valid latents, a guardrail the latent head does not have. The
+matched explicit row on the hold-1 tracker still does not exist: it needs a
+lookahead-bearing hold-1 collection, which the full disk refused.
+
+## Planner 10B heads: DR-on rows, ensembling split, first live async run (2026-08-18)
+
+Local evaluation of both `planner_10b` heads (update 12k), 28 motions x 20
+episodes, seed 0, one seed each — all preliminary. Full summaries under
+`logs/planner_10b/isaac_eval/`.
+
+| arm | protocol | fall-free | MPJPE-L ep-mean | success-only micro | thresh pass |
+|---|---|---:|---:|---:|---:|
+| `fsq64_10b` | DR=on, exp ens (46.95 protocol) | 0.9893 | 50.48 mm | 53.15 mm | 0.9089 |
+| `ln_hold1_10b` | DR=on, exp ens | 1.000 | 52.90 mm | 55.44 mm | 0.8732 |
+| `fsq64_10b` | DR=off, no ens, sync | 1.000 | 52.30 mm | 56.30 mm | 0.8768 |
+| `ln_hold1_10b` | DR=off, no ens, sync | 1.000 | 42.83 mm | 44.89 mm | 0.9107 |
+| `fsq64_10b` | DR=off, no ens, async lead 5 | 0.9982 | 69.40 mm | 69.89 mm | 0.7946 |
+| `ln_hold1_10b` | DR=off, no ens, async lead 5 | 1.000 | 41.45 mm | 43.64 mm | 0.9125 |
+
+Findings, all one-seed:
+
+- **DR=on (the 46.95 mm protocol)**: `fsq64_10b` 50.48 mm against the
+  2026-08-13 arm's 46.95 mm (7.5%, inside evaluation noise, unresolved), and
+  the two 10B arms are level with each other (4.8% apart).
+- **Temporal ensembling splits by interface**: it helps `fsq64_10b`
+  (45.49 with, 52.30 without, DR off) and hurts `ln_hold1_10b`
+  (46.62 with, 42.83 without, ~8%, inside the noise band). A per-step
+  head appears to prefer its raw chunk. Repeats would settle it.
+- **First live D1 async run** (relaxed gate: labelled, next to the sync
+  companion, never pooled). `ln_hold1_10b` async is level with its sync
+  companion (41.45 vs 42.83 mm; 2,380 deadline misses ~8.5% of renewals).
+  `fsq64_10b` async degrades hard: 69.40 vs 52.30 mm (33%), 8,517 misses
+  (~30% of renewals), service round-trip p50 163 ms against a 10-control-step
+  renewal. Caveat: the deadline is counted in sim control steps while the
+  service round-trip is wall-clock, and the evaluator and service share one
+  GPU — so miss rates are execution-mode-shaped, not a real-time 50 Hz
+  certificate. The hold-1 arm's 30-slot horizon (20-step consumable tail)
+  absorbs latency; the FSQ arm's 3-slot horizon does not.
+
+## BONES-SEED latent-design ablation prepared and qualified (2026-08-18)
+
+The paper method ablation is now the controlled 2 x 2 grid from the prior
+design discussion: endpoint DiffSR versus exact encoder-window reconstruction,
+crossed with a continuous 256-D bottleneck versus the SONIC FSQ 64 x 32
+bottleneck. All four arms fix `root_qpos`, horizon 10 with the endpoint hidden,
+hold 10, `robot_heading`, the same encoder trunk, 50,000 offline updates, a
+frozen encoder, and a 10B low-level frame target. This replaces the old
+autoencoder comparison, which also changed online training, input width,
+bottleneck, and completion state.
+
+The new offline reconstruction objective and checkpoint resume path passed 62
+focused RLOpt tests. The continuous and FSQ reconstruction arms each completed
+one real Isaac/Newton pretrain update and one 128-frame frozen-encoder IPMD
+iteration with the correct 258-D and 66-D command widths. These are wiring
+qualifications, not results. All four seed-0 control-plane plans resolve with
+one pretrain plus four full-target `afterany` low-level segments. No ICE job was
+submitted. The proposed W&B group is `latent-design-ablation`; it must be
+confirmed before submit. Campaign front door:
+`experiments/campaigns/2026-08-18-bones129k-latent-design-ablation/`.
+
+## Training throughput: collection rebuilt, 20k-env leader on ICE (2026-08-18)
+
+Profiling with the opt-in phase timers (`agent.trainer.profile_iterations=true`)
+found collection dominated by Python plumbing rather than physics. Measured on
+the tuned latent recipe at 8,192 envs on the local RTX PRO 6000, medians over
+iterations 21-80 of matched runs on an exclusive GPU:
+
+| phase | before | after |
+| --- | ---: | ---: |
+| collect | 2413 ms | 945 ms |
+| learn | 1153 ms | 1158 ms |
+| iteration total | 3566 ms | 2107 ms |
+
+What changed, all value-identical: terminal observations are published as one
+batched `{_env_ids, obs}` dict instead of a per-environment object array whose
+clone loop issued thousands of small device copies per step; the wrapper's
+terminal-obs reader no longer runs a 16,384-iteration Python fill per key on
+every step, including steps with no reset; the env log payload is detached
+instead of `.cpu().item()`-ed per scalar per step; recorder hooks are gated on
+active recorder terms. Same-seed curves match at iteration 80 (ep_len 34.92 vs
+35.14, r_ep 3.808 vs 3.798).
+
+Two measured non-results, recorded so they are not retried blindly:
+
+- **`torch.compile` does not help the PPO update here.** Compiling the loss
+  module and GAE gives `update/ppo_terms` 867 -> 855 ms; `max-autotune` ties
+  `default` (854 ms) and its CUDA-graphs variant crashes on latent-sampler
+  tensor reuse. The step is GEMM-bound at roughly 45% of TF32 peak. Compile
+  stays opt-in and off. The only reproducible win was GAE, 80 -> 57 ms.
+- **The reference data plane never waits.** Sequential rows are gathered on a
+  worker and copied H2D while physics runs (`wait_ms` about 0.01). Reference
+  streaming is about 1.3 ms of a 36.8 ms step. Switching
+  `reference_prefetch_mode` to `next_and_reset` also overlaps the reset-row
+  gather: step 36.8 -> 34.5 ms, at the cost of reset draws seeing sampler
+  failure weights one control step stale.
+
+Per-step split after the change (8,192 envs, n=600): physics 16.7 ms,
+`_reset_idx` 5.0, `write_data` 3.3, reward 2.4, command 1.5, obs 1.3,
+termination 1.2, reference streaming 1.3. What remains is upstream
+Newton/MJWarp and Isaac Lab manager code.
+
+**ICE job 5580308** (`cont_det_ln_hold1_fullbody_env20k`, seed 0) carries this
+into production: 20,480 envs x 24 = 491,520 frames per batch, 20,346
+iterations = 10.0B frames, `next_and_reset`. First readings are about 131.5k
+fps against roughly 104k fps for the 16,384-env 10B leaders, which projects
+10B in about 21 h instead of 27 h. That comparison is not frame-matched or
+batch-matched: the batch is 1.25x larger and the code differs, so it is
+"this configuration sustains 131.5k fps", not "the optimizations bought 26%".
+Attribution needs a 16,384-env run on current code.
+
+An earlier attempt (5580302) died before its first iteration: W&B refuses a run
+id that was ever deleted (`error 410`). Run ids are now generated once per
+`(arm, seed)` output tree and recorded in `<output_root>/wandb_run_id`.
+
+## Final paper experiment design locked (2026-08-17)
+
+The three-section paper design is codified in
+[final-paper-experiment-design.md](final-paper-experiment-design.md). Headline
+pipeline: the 10B `fsq64_hold10` tracker plus the GR00T language planner with
+temporal ensembling, pending one parity re-run of the planner against the 10B
+checkpoint. The approved claim against SONIC is pipeline-level parity, not a
+tracker win. The direct 50 Hz ceiling row is dropped, the explicit planner row
+is the 38-D single-frame `root_qpos` command, and no explicit 10B re-run will
+be made (frame counts are printed per row instead). That page supersedes the
+two-row main-grid decision in `causal-interface-paper-plan.md` where they
+disagree.
+
+## Continuation: SONIC resets, 10B -> 20B, both interfaces (2026-08-18)
+
+`experiments/campaigns/2026-08-18-sonic-reset-20b/`: the two leading trackers
+resume from their 10B final checkpoints and train a second 10B with exactly one
+change — `selection` moves from `random80_adaptive20` to `sonic`
+(`random_trajectory_sampling_ratio` 0.8 -> 0.0, so every reset comes from the
+SONIC joint rank+frame failure sampler), with a landing ramp
+`adaptive_uniform_ratio` 0.5 -> 0.1 inside segment 5 and 0.1 pinned after.
+`ln_hold1_sonicreset` (continuous leader) is ICE jobs 5580042-5580045;
+`fsq64_hold10_sonicreset` (SONIC token space, the planner-facing interface) is
+5580046-5580049. Submitted 2026-08-18, W&B group `sonic-reset-20b`. The earlier
+`cont_det_hold1_resetramp` arm never touched the branch ratio — its ramp moved
+the failure-weighted share 4% -> 16% only, which is why it read inconclusive.
+
+W&B note: this chain was created in shared mode and keeps it to its end.
+Shared mode discards `wandb.log(step=...)`, so it and the 08-17 `*_dyn` runs
+plot on a log-call index; read the `env_frames` metric RLOpt declares as the
+x-axis, not `_step`. Shared mode is retired for new runs (see below), but a
+chain never changes mode mid-flight.
 
 ## Low-level leaderboard: the latent interface catches the explicit baseline (2026-08-17)
 
@@ -93,18 +1042,40 @@ weighted success in MuJoCo under sensor noise against 0.92 in Isaac, the largest
 per-arm gap in the set. Use the new board as the screen; the 4,096 Isaac board
 stays the deciding board until that backend gap is explained.
 
-## GR00T language planner — best result to date (2026-08-13)
+## GR00T language planner — best result to date (2026-08-19)
 
-`fsq64_scaled28` with exponential temporal ensembling: **46.95 mm MPJPE-L /
-0.998 fall-free** over 28 motions x 20 episodes, fall-only + Newton +
-2000-step cap. Level with the released NVIDIA SONIC v1.1 planner on its own
-tracker (46.33 / 1.000); the 0.6 mm gap is inside evaluation noise.
+**`ln_hold1_10b` on the 10B continuous 256-D hold-1 tracker, consuming its
+whole 30-slot plan: 38.41 mm MPJPE-L, 1.000 fall-free, 0.9143 SONIC-threshold
+success** over 28 motions x 20 episodes (560), DR off, fall-only, Newton,
+2000-step cap, seed 0. Clean-observation twin 37.60 mm; service-backed async
+twin 38.78 mm at 0.9464 threshold success.
 
-This is the current baseline for planner iteration. Recipe, the refuted
-alternatives (hold 1, single-motion training, sample averaging), the two
-tracker-limited motions excluded from the set, and the blocked SONIC-data
-cross are recorded in
-[`progress-report.md`](progress-report.md) section 2 and in
+Against the released NVIDIA SONIC v1.1 on the SAME protocol and motion set:
+MPJPE is level (38.49 mm theirs) but SONIC's own threshold criterion is not —
+**0.9143 ours against 0.6232 theirs**, their failures almost all wrist height
+(`ee_body_pos`, 185 of 560). Tracker ceilings: 17.19 mm ours, 22.70 mm
+SONIC's; both oracles pass every episode, so the threshold gap is planner
+behaviour, not decoder quality.
+
+How solid the cadence gain is: it beats the shipped 10-slot row (42.83 mm) by
+4.41 mm, or 10.3%. Paired per motion across the 28 motions — the right unit,
+because between-motion spread (29 mm) dwarfs within-motion spread (8 mm) —
+that difference has a 95% bootstrap interval of 1.1 to 9.0 mm and a two-sided
+p of 0.043, with 30 slots ahead on 19 of 28 motions. So the improvement is
+supported by the data in hand, not merely directional. Both rows are single
+runs; repeating each would double the paired sample and is worth doing before
+the number goes in a paper. Two same-configuration re-measurements put
+run-to-run drift near 1% (94.42 vs 95.68, 38.41 vs 38.73), small next to the
+effect.
+
+These are DR-OFF numbers and are not comparable with the 2026-08-13 headline
+(46.95 mm, DR on); that row's DR-on successor is 50.48 mm (`fsq64_10b`).
+
+Full rows, the cadence sweep, the ceiling decomposition and the SONIC
+comparison:
+`experiments/campaigns/2026-08-17-planner-10b-trackers/README.md`. The older
+recipe and its refuted alternatives remain in
+[`progress-report.md`](progress-report.md) section 2 and
 `experiments/campaigns/2026-08-12-gr00t-language30-compositionality/PLAN.md`.
 
 ## Default BONES-129k H200 training recipe (2026-08-05)
