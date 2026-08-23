@@ -1,16 +1,36 @@
-# IPMD direct reward estimation (IRL) on the explicit root_qpos tracker.
+# IPMD direct reward estimation (IRL) on the v2 trackers.
 #
-# One arm. The tracker recipe is the tuned v2 explicit row (single-frame
-# 38-D root_qpos command, renewed every control step); the one addition is
-# the reward-estimation stack: `env.enable_reward_input_observations=true`
+# Arms (each adds the reward-estimation stack to a known tracker recipe;
+# PPO always trains on the task reward, use_estimated_rewards_for_ppo=false,
+# so every tracker row stays comparable to its non-IRL counterpart):
+#
+#   irl_explicit_root_qpos   tuned explicit 38-D root_qpos tracker, vanilla
+#                            estimator coefficients (no regularizer). The
+#                            2026-08-22 first submission; kept byte-stable
+#                            for resumes.
+#   irl_gp_explicit_root_qpos  same tracker, estimator trained with the
+#                            R1-style input-gradient penalty (the anti-
+#                            saturation follow-up: the vanilla arm railed
+#                            its tanh output within 30 iterations).
+#   irl_gp_latent_ln_hold1   the current latent HEADLINE tracker recipe
+#                            (cont_det_ln_hold1 from
+#                            2026-08-15-latent-bottleneck-10b: 256-D
+#                            continuous deterministic encoder + LayerNorm,
+#                            hold 1, root_qpos macro state), reusing that
+#                            arm's exact pretrained encoder from ICE, plus
+#                            the grad-penalty estimator. Differs from the
+#                            headline row ONLY in the reward-estimation
+#                            stack.
+#
+# The reward-estimation stack: `env.enable_reward_input_observations=true`
 # opts the v2 surface into the normalized [0, 1] reward_input group (joint
 # positions by soft limits, relative anchor position, relative anchor rot6d
-# -- see `isaaclab_imitation.envs.reward_input_normalization`) and
-# `agent.reward_estimation=true` trains the estimator with the vanilla
-# coefficients (reward_loss_coeff=1.0, every regularizer 0.0). The estimator
-# is r(s) on the normalized state; PPO still trains on the task reward
-# (use_estimated_rewards_for_ppo=false), so the tracker row itself stays
-# comparable to the non-IRL explicit baseline.
+# -- see `isaaclab_imitation.envs.reward_input_normalization`);
+# `agent.reward_estimation=true` trains the estimator (r(s), tanh output).
+# The grad penalty rides the declarative
+# `agent.reward_estimation_grad_penalty_coeff` field: a direct
+# `agent.ipmd.reward_grad_penalty_coeff` override would be zeroed by the
+# reward-estimation switch, which runs after Hydra overrides.
 #
 # W&B goes to its own project (g1-reward-estimation), per user directive
 # 2026-08-22.
@@ -25,6 +45,7 @@ vars:
   # RLOpt adds a `logdir:<19-char timestamp>_wandb-<run id>` tag; W&B caps a
   # tag at 64 chars, so the run id must stay <= 31 chars.
   wandb_id: irl-expl
+  wandb_group_name: irl-explicit-10b
   train_num_envs: 16384
   rollout_steps: 24
   frame_cap: 10000000000
@@ -34,6 +55,55 @@ vars:
   ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
   persist_id: bones_seed_sonic_full_129785@e714bbff
   output_root: /data/reward_estimation/${vars.arm}_seed${vars.seed}
+  # The headline arm's pretrained encoder (bit-identical reuse, dyn-arm
+  # style); consumed only by the latent arm.
+  ln_hold1_encoder: /data/bottleneck_10b/cont_det_ln_hold1_seed0/encoder/checkpoints/latest.pt
+
+  # ---- Per-arm axes ----
+  # R1-style squared input-gradient penalty on the estimator. 0.0 reproduces
+  # the vanilla arm; the gp arms use RLOpt's historical default 0.5.
+  grad_penalty: 0.0
+  reward_args:
+    - env.enable_reward_input_observations=true
+    - agent.reward_estimation=true
+    - agent.reward_estimation_grad_penalty_coeff=${vars.grad_penalty}
+  # The explicit single-frame root_qpos command (the 08-05 explicit recipe).
+  explicit_interface:
+    - env.command_interface.actor=explicit
+    - "env.command_interface.actor.components=[joint_qpos,root_pos,root_ori]"
+    - agent.ipmd.use_latent_command=false
+    - agent.command_space=root_qpos
+    - "agent.command_components=[joint_qpos,root_pos,root_ori]"
+    - agent.ipmd.command_source=random
+    - agent.ipmd.hl_skill_checkpoint_path=null
+  # The headline latent interface (cont_det_ln_hold1): 258-D command from the
+  # frozen pretrained encoder, hold 1.
+  ln_hold1_interface:
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=258
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=258
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.ln_hold1_encoder}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - agent.ipmd.latent_steps_min=1
+    - agent.ipmd.latent_steps_max=1
+    - agent.ipmd.latent_learning.code_period=1
+    - agent.ipmd.latent_learning.command_phase_mode=sin_cos
+    - agent.ipmd.latent_learning.code_latent_dim=256
+  interface_args: ${vars.explicit_interface}
+  # The latent arm needs the DiffSR macro state (root_qpos trio, SONIC v1.1
+  # anchor frame), exactly as the headline campaign declared it.
+  macro_args: []
+  ln_hold1_macro:
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=1
+    - env.expert_macro_anchor_mode=robot_heading
+  # The explicit arms keep next_and_reset (their 08-22 submission state); the
+  # headline latent recipe trained with `next` -- reproduce it exactly.
+  prefetch_mode: next_and_reset
 
   data_overrides:
     - physics=newton_mjwarp
@@ -43,6 +113,7 @@ vars:
     - env.data.reference_arrays_resident=true
     - env.data.reference_arrays_warm_workers=16
     - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
     - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
 
   lowlevel_head:
@@ -64,19 +135,8 @@ vars:
     - agent.logger.backend=wandb
     - agent.logger.video=false
     - agent.logger.project_name=g1-reward-estimation
-    - agent.logger.group_name=irl-explicit-10b
+    - agent.logger.group_name=${vars.wandb_group_name}
     - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
-    # Explicit single-frame root_qpos command (the 08-05 explicit-arm recipe).
-    - env.command_interface.actor=explicit
-    - "env.command_interface.actor.components=[joint_qpos,root_pos,root_ori]"
-    - agent.ipmd.use_latent_command=false
-    - agent.command_space=root_qpos
-    - "agent.command_components=[joint_qpos,root_pos,root_ori]"
-    - agent.ipmd.command_source=random
-    - agent.ipmd.hl_skill_checkpoint_path=null
-    # The reward-estimation stack (the campaign's one variable).
-    - env.enable_reward_input_observations=true
-    - agent.reward_estimation=true
 
   tuned_lowlevel:
     - env.rewards.action_rate_l2.weight=0.0
@@ -85,7 +145,7 @@ vars:
     - env.termination_curriculum_start_frames=5000000
     - env.termination_curriculum_end_frames=30000000
     - env.command_interface.reference.selection=random80_adaptive20
-    - env.data.reference_prefetch_mode=next_and_reset
+    - env.data.reference_prefetch_mode=${vars.prefetch_mode}
 
   lowlevel_tail:
     - agent.collector.frames_per_batch=${vars.rollout_steps}
@@ -114,32 +174,32 @@ shared_env:
 preflight:
   require_container_paths:
     - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+    - /data/bottleneck_10b/cont_det_ln_hold1_seed0/encoder/checkpoints/latest.pt
   output_container_path: /data/reward_estimation/${vars.arm}_seed${vars.seed}
 
 arms:
   irl_explicit_root_qpos:
     vars: {}
-    stages:
+    stages: &irl_stages
       # Segment 1: fresh start, curriculum on. Full 10B target; the 16h
       # walltime ends it early and the SIGTERM/periodic checkpoint carries
       # `cumulative_env_frames` into the next segment. Never shrink
       # max_iterations to fit the walltime.
       - name: lowlevel
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.reward_args},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.macro_args},${vars.seg1_args}}
         time_limit: "15:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: reward-estimation,irl,explicit,root-qpos,${vars.arm},seed${vars.seed},lowlevel
+          CLUSTER_WANDB_TAGS: reward-estimation,irl,${vars.arm},seed${vars.seed},lowlevel
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
-      # Insurance continuation in the same plan; exits immediately if the
-      # budget is already met.
+      # Chained continuations; each exits immediately if the budget is met.
       - name: lowlevel2
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.resume_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.reward_args},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.macro_args},${vars.resume_args}}
         depends_on: lowlevel
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -147,23 +207,58 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: reward-estimation,irl,explicit,root-qpos,${vars.arm},seed${vars.seed},lowlevel,segment2
+          CLUSTER_WANDB_TAGS: reward-estimation,irl,${vars.arm},seed${vars.seed},lowlevel,segment2
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
-      # Third chained segment: at ~100k fps the 10B budget needs ~27 h, so
-      # segments 1+2 normally finish it and this one exits immediately. For a
-      # later manual relaunch (chain died, budget not met), re-plan with
-      # `--only-stage lowlevel_resume`, which drops the dependency.
-      - name: lowlevel_resume
+      - name: lowlevel3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.reward_args},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.macro_args},${vars.resume_args}}
         depends_on: lowlevel2
         dependency_kind: afterany
-        executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.resume_args}}
         time_limit: "15:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: reward-estimation,irl,explicit,root-qpos,${vars.arm},seed${vars.seed},lowlevel,resume
+          CLUSTER_WANDB_TAGS: reward-estimation,irl,${vars.arm},seed${vars.seed},lowlevel,segment3
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
+      # Manual relaunch until cumulative_env_frames reaches 10B: re-plan with
+      # `--only-stage lowlevel_resume` (dropping the dependency is automatic).
+      - name: lowlevel_resume
+        depends_on: lowlevel3
+        dependency_kind: afterany
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.reward_args},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.macro_args},${vars.resume_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: reward-estimation,irl,${vars.arm},seed${vars.seed},lowlevel,resume
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # Grad-penalty estimator on the explicit tracker. One variable against
+  # irl_explicit_root_qpos: the R1 input-gradient penalty (0.0 -> 0.5).
+  irl_gp_explicit_root_qpos:
+    vars:
+      wandb_id: irl-gp-expl
+      wandb_group_name: irl-gp-10b
+      grad_penalty: 0.5
+    stages: *irl_stages
+
+  # Grad-penalty estimator on the current latent HEADLINE tracker recipe
+  # (cont_det_ln_hold1), reusing the headline arm's exact pretrained encoder.
+  # Against the headline 10B row the arm differs only in the
+  # reward-estimation stack; against irl_gp_explicit_root_qpos it differs
+  # only in the command interface.
+  irl_gp_latent_ln_hold1:
+    vars:
+      wandb_id: irl-gp-ln1
+      wandb_group_name: irl-gp-10b
+      grad_penalty: 0.5
+      interface_args: ${vars.ln_hold1_interface}
+      macro_args: ${vars.ln_hold1_macro}
+      prefetch_mode: next
+    stages: *irl_stages

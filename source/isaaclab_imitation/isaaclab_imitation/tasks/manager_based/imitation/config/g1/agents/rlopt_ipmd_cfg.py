@@ -277,8 +277,13 @@ def apply_reward_estimation_switch(
     ``-G1-v2`` env default drops it). ``reward_estimation=True`` declares that
     the run trains the estimator: it selects ``reward_input_keys`` (so the env
     must expose the group; set ``env.enable_reward_input_observations=True``
-    on tasks that default it off) and restores the historical vanilla
-    coefficients (``reward_loss_coeff=1.0``, every regularizer 0.0).
+    on tasks that default it off) and restores the vanilla loss
+    (``reward_loss_coeff=1.0``) plus whatever regularization the declarative
+    ``reward_estimation_grad_penalty_coeff`` / ``reward_estimation_logit_reg_coeff``
+    fields request (both default 0.0, the historical vanilla state). The
+    regularizers are declarative fields rather than direct ``agent.ipmd.*``
+    overrides because this switch runs after Hydra overrides and would
+    silently zero them.
 
     Called at the end of each IPMD-family ``sync_input_keys`` and
     ``__post_init__`` so it wins over every earlier branch (including the
@@ -286,12 +291,16 @@ def apply_reward_estimation_switch(
     (the train entrypoint re-runs ``sync_input_keys`` after applying them).
     """
     reward_estimation = bool(agent_cfg.reward_estimation)
+    grad_penalty = float(
+        getattr(agent_cfg, "reward_estimation_grad_penalty_coeff", 0.0)
+    )
+    logit_reg = float(getattr(agent_cfg, "reward_estimation_logit_reg_coeff", 0.0))
     ipmd = agent_cfg.ipmd
     ipmd.reward_input_keys = list(reward_input_keys) if reward_estimation else None
     ipmd.reward_loss_coeff = 1.0 if reward_estimation else 0.0
     ipmd.reward_l2_coeff = 0.0
-    ipmd.reward_grad_penalty_coeff = 0.0
-    ipmd.reward_logit_reg_coeff = 0.0
+    ipmd.reward_grad_penalty_coeff = grad_penalty if reward_estimation else 0.0
+    ipmd.reward_logit_reg_coeff = logit_reg if reward_estimation else 0.0
     ipmd.reward_param_weight_decay_coeff = 0.0
 
 
@@ -354,6 +363,12 @@ class _G1ImitationRLOptIPMDBaseConfig(IPMDRLOptConfig):
     # therefore requires the env's reward_input observation group. False (the
     # default) parks the stack: see `apply_reward_estimation_switch`.
     reward_estimation: bool = False
+    # Estimator regularization, applied only while `reward_estimation` is on.
+    # Declarative fields (not direct `agent.ipmd.*` overrides) because the
+    # switch runs after Hydra overrides and would zero them silently. The
+    # grad penalty is the R1-style squared input-gradient norm.
+    reward_estimation_grad_penalty_coeff: float = 0.0
+    reward_estimation_logit_reg_coeff: float = 0.0
 
     def _policy_proprio_keys(self) -> list[tuple[str, str]]:
         """Proprioception the actor reads, after its one command source."""
