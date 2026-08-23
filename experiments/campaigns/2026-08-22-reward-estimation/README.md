@@ -96,6 +96,26 @@ the reward-estimation switch. `irl_gp_latent_ln_hold1` differs from the
 headline 10B row only in the reward-estimation stack, and from
 `irl_gp_explicit_root_qpos` only in the command interface.
 
+## Matched 1.0B comparison (2026-08-23, one seed, preliminary)
+
+All six rows: 4,096 board, sonic pass, model_step_1000341504 per arm; the
+latent comparator is the real headline `cont_det_ln_hold1` segment-1 1B
+checkpoint with the same encoder file. No non-IRL explicit checkpoint
+exists below 7.6B.
+
+| interface | estimator | SR | MPJPE (mm) | survival |
+| --- | --- | --- | --- | --- |
+| explicit | vanilla IRL | 0.9172 | 22.43 | 341.4 |
+| explicit | GP 0.5 | 0.9189 | 22.05 | 342.1 |
+| explicit | GP 5.0 + LR 0.01 | 0.9167 | 21.85 | 340.9 |
+| latent ln_hold1 | none (headline) | 0.8943 | 28.36 | 336.9 |
+| latent ln_hold1 | GP 0.5 | 0.8882 | 28.32 | 333.3 |
+| latent ln_hold1 | GP 5.0 + LR 0.01 | 0.8887 | 27.81 | 334.8 |
+
+Every within-family difference is inside evaluation noise: the
+reward-estimation stack does not affect tracking at matched budget, on
+either interface, at any regularizer strength tried.
+
 ## Status
 
 - 2026-08-22: campaign created; local qualification passed.
