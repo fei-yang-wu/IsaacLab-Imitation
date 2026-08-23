@@ -87,6 +87,17 @@ earlier checkpoints were not kept).
 | `irl_gp_latent_ln_hold1` | headline `cont_det_ln_hold1` recipe, its exact pretrained encoder reused | + R1 grad penalty 0.5 | 5588412-15 |
 | `irl_hp_explicit_root_qpos` | tuned explicit root_qpos | grad penalty 5.0 + logit reg 0.01 | 5588546-49 |
 | `irl_hp_latent_ln_hold1` | headline recipe, same encoder reuse | grad penalty 5.0 + logit reg 0.01 | 5588550-53 |
+| `irl_pair_explicit_root_qpos` | tuned explicit root_qpos | paired r(s, g) input + harsh regularizers | 5588661-66 |
+| `irl_pair_latent_ln_hold1` | headline recipe, same encoder reuse | paired r(s, g) input + harsh regularizers | 5588671-74 |
+
+The pair arms (2026-08-23) train the goal-conditioned estimator: the
+reward_input gains `expert_desired_joint_pos` (the commanded reference
+joints, 67-wide total), so the estimator learns a tracking metric r(s, g);
+the expert minibatch pairs its own joints with themselves. Gated by
+`agent.reward_estimation_pair_input` (default off — pre-pairing chains
+resume cleanly). Expert information stays estimator-only: no actor or
+critic reads the reward_input group; the actor's expert view remains the
+command interface.
 
 The grad penalty rides the declarative
 `agent.reward_estimation_grad_penalty_coeff` field (a
