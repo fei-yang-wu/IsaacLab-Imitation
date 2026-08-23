@@ -18,6 +18,12 @@
 #
 #   CHECKPOINT=logs/reward_estimation_4096/irl_explicit_root_qpos/model_step_4000186368.pt \
 #     ./eval_scoreboard4096.sh
+#
+# INTERFACE=explicit (default) or ln_hold1 (the headline latent recipe:
+# 258-D command from the frozen pretrained encoder, hold 1, root_qpos macro).
+# REWARD=on (default; required for any checkpoint trained with
+# agent.reward_estimation=true, or the estimator state dict fails restore)
+# or off (a non-IRL comparator row, e.g. the headline cont_det_ln_hold1).
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel)"
@@ -36,9 +42,53 @@ SCALED_CELLS="[2048,2048,1024,1024,512,512]"
 RUNTIME_BODY_NAMES="[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
 
 ARM="${ARM:-irl_explicit_root_qpos}"
+INTERFACE="${INTERFACE:-explicit}"
+REWARD="${REWARD:-on}"
+LN_HOLD1_ENCODER="${LN_HOLD1_ENCODER:-${REPO_ROOT}/logs/bottleneck_10b_mirror/cont_det_ln_hold1_seed0/encoder/checkpoints/latest.pt}"
 FRAMES="$(basename "${CHECKPOINT}" | sed -E 's/^model_step_([0-9]+)\.pt$/\1/')"
 OUT="${OUTPUT_ROOT}/${ARM}_f${FRAMES}.json"
 mkdir -p "${OUTPUT_ROOT}"
+
+interface_args=()
+if [[ "${INTERFACE}" == "explicit" ]]; then
+    interface_args+=(
+        env.command_interface.actor=explicit
+        "env.command_interface.actor.components=[joint_qpos,root_pos,root_ori]"
+        agent.ipmd.use_latent_command=false
+        agent.command_space=root_qpos
+        "agent.command_components=[joint_qpos,root_pos,root_ori]"
+        agent.ipmd.command_source=random
+        agent.ipmd.hl_skill_checkpoint_path=null
+    )
+elif [[ "${INTERFACE}" == "ln_hold1" ]]; then
+    interface_args+=(
+        env.command_interface.actor=latent
+        env.command_interface.actor.dim=258
+        env.command_interface.encoder=single
+        agent.ipmd.latent_dim=258
+        agent.ipmd.command_source=hl_skill
+        "agent.ipmd.hl_skill_checkpoint_path=${LN_HOLD1_ENCODER}"
+        agent.ipmd.hl_skill_horizon_steps=10
+        agent.ipmd.hl_skill_command_mode=z
+        agent.ipmd.hl_skill_finetune_enabled=false
+        agent.ipmd.latent_steps_min=1
+        agent.ipmd.latent_steps_max=1
+        agent.ipmd.latent_learning.code_period=1
+        agent.ipmd.latent_learning.command_phase_mode=sin_cos
+        agent.ipmd.latent_learning.code_latent_dim=256
+        env.expert_macro_anchor_mode=robot_heading
+    )
+else
+    echo "[FATAL] INTERFACE must be explicit or ln_hold1, got ${INTERFACE}" >&2
+    exit 2
+fi
+reward_args=()
+if [[ "${REWARD}" == "on" ]]; then
+    reward_args+=(
+        env.enable_reward_input_observations=true
+        agent.reward_estimation=true
+    )
+fi
 
 ranks=()
 for ((r = RANK_START; r <= RANK_END; r++)); do ranks+=("${r}"); done
@@ -69,15 +119,8 @@ env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 \
     env.data.reference_prefetch_mode=off \
     env.data.macro_cache_device=cuda:0 \
     "env.data.runtime_cache_body_names=${RUNTIME_BODY_NAMES}" \
-    env.command_interface.actor=explicit \
-    "env.command_interface.actor.components=[joint_qpos,root_pos,root_ori]" \
-    agent.ipmd.use_latent_command=false \
-    agent.command_space=root_qpos \
-    "agent.command_components=[joint_qpos,root_pos,root_ori]" \
-    agent.ipmd.command_source=random \
-    agent.ipmd.hl_skill_checkpoint_path=null \
-    env.enable_reward_input_observations=true \
-    agent.reward_estimation=true \
+    "${interface_args[@]}" \
+    "${reward_args[@]}" \
     env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b] \
     env.expert_macro_frame_stride=1 \
     env.terminations.anchor_pos.params.threshold=0.25 \
