@@ -150,9 +150,13 @@ arms:
           CLUSTER_WANDB_TAGS: reward-estimation,irl,explicit,root-qpos,${vars.arm},seed${vars.seed},lowlevel,segment2
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
-      # Manual relaunch until cumulative_env_frames reaches 10B. Submit with
-      # --only-stage lowlevel_resume; never in the same plan as `lowlevel`.
+      # Third chained segment: at ~100k fps the 10B budget needs ~27 h, so
+      # segments 1+2 normally finish it and this one exits immediately. For a
+      # later manual relaunch (chain died, budget not met), re-plan with
+      # `--only-stage lowlevel_resume`, which drops the dependency.
       - name: lowlevel_resume
+        depends_on: lowlevel2
+        dependency_kind: afterany
         executable: scripts/rlopt/train.py
         args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.resume_args}}
         time_limit: "15:59:00"
