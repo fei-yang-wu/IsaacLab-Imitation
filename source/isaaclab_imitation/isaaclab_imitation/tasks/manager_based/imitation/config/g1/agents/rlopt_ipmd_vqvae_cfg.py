@@ -81,6 +81,10 @@ class _G1ImitationRLOptIPMDVQVAEBaseConfig(IPMDRLOptConfig):
     # therefore requires the env's reward_input observation group. False (the
     # default) parks the stack: see `apply_reward_estimation_switch`.
     reward_estimation: bool = False
+    # Estimator regularization while `reward_estimation` is on; see the
+    # explanation on `_G1ImitationRLOptIPMDBaseConfig`.
+    reward_estimation_grad_penalty_coeff: float = 0.0
+    reward_estimation_logit_reg_coeff: float = 0.0
 
     def sync_input_keys(self) -> None:
         use_latent_command = bool(self.ipmd.use_latent_command)

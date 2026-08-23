@@ -450,6 +450,18 @@ def test_reward_estimation_agent_switch_defaults_parked() -> None:
         assert float(agent_cfg.ipmd.reward_loss_coeff) == 1.0, cls.__name__
         for name in coeff_names[1:]:
             assert float(getattr(agent_cfg.ipmd, name)) == 0.0, (cls.__name__, name)
+        # The declarative regularizer knobs survive the post-override sync
+        # (a direct agent.ipmd.* override would be zeroed by the switch) and
+        # park again with the stack.
+        agent_cfg.reward_estimation_grad_penalty_coeff = 0.5
+        agent_cfg.reward_estimation_logit_reg_coeff = 0.01
+        agent_cfg.sync_input_keys()
+        assert float(agent_cfg.ipmd.reward_grad_penalty_coeff) == 0.5, cls.__name__
+        assert float(agent_cfg.ipmd.reward_logit_reg_coeff) == 0.01, cls.__name__
+        agent_cfg.reward_estimation = False
+        agent_cfg.sync_input_keys()
+        assert float(agent_cfg.ipmd.reward_grad_penalty_coeff) == 0.0, cls.__name__
+        assert float(agent_cfg.ipmd.reward_logit_reg_coeff) == 0.0, cls.__name__
 
 
 def test_expert_window_whitelist_must_cover_macro_state_terms() -> None:
