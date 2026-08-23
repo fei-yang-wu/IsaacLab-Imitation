@@ -1,0 +1,165 @@
+# IPMD direct reward estimation (IRL) on the explicit root_qpos tracker.
+#
+# One arm. The tracker recipe is the tuned v2 explicit row (single-frame
+# 38-D root_qpos command, renewed every control step); the one addition is
+# the reward-estimation stack: `env.enable_reward_input_observations=true`
+# opts the v2 surface into the normalized [0, 1] reward_input group (joint
+# positions by soft limits, relative anchor position, relative anchor rot6d
+# -- see `isaaclab_imitation.envs.reward_input_normalization`) and
+# `agent.reward_estimation=true` trains the estimator with the vanilla
+# coefficients (reward_loss_coeff=1.0, every regularizer 0.0). The estimator
+# is r(s) on the normalized state; PPO still trains on the task reward
+# (use_estimated_rewards_for_ppo=false), so the tracker row itself stays
+# comparable to the non-IRL explicit baseline.
+#
+# W&B goes to its own project (g1-reward-estimation), per user directive
+# 2026-08-22.
+name: reward-estimation
+profile: ice
+wandb_project: g1-reward-estimation
+wandb_group: irl-explicit-10b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  # RLOpt adds a `logdir:<19-char timestamp>_wandb-<run id>` tag; W&B caps a
+  # tag at 64 chars, so the run id must stay <= 31 chars.
+  wandb_id: irl-expl
+  train_num_envs: 16384
+  rollout_steps: 24
+  frame_cap: 10000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/reward_estimation/${vars.arm}_seed${vars.seed}
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-reward-estimation
+    - agent.logger.group_name=irl-explicit-10b
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    # Explicit single-frame root_qpos command (the 08-05 explicit-arm recipe).
+    - env.command_interface.actor=explicit
+    - "env.command_interface.actor.components=[joint_qpos,root_pos,root_ori]"
+    - agent.ipmd.use_latent_command=false
+    - agent.command_space=root_qpos
+    - "agent.command_components=[joint_qpos,root_pos,root_ori]"
+    - agent.ipmd.command_source=random
+    - agent.ipmd.hl_skill_checkpoint_path=null
+    # The reward-estimation stack (the campaign's one variable).
+    - env.enable_reward_input_observations=true
+    - agent.reward_estimation=true
+
+  tuned_lowlevel:
+    - env.rewards.action_rate_l2.weight=0.0
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.data.reference_prefetch_mode=next_and_reset
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  seg1_args: []
+  resume_args:
+    # The termination curriculum (5M -> 30M) completes inside segment 1; a
+    # resume pins the strict post-anneal terminations.
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  output_container_path: /data/reward_estimation/${vars.arm}_seed${vars.seed}
+
+arms:
+  irl_explicit_root_qpos:
+    vars: {}
+    stages:
+      # Segment 1: fresh start, curriculum on. Full 10B target; the 16h
+      # walltime ends it early and the SIGTERM/periodic checkpoint carries
+      # `cumulative_env_frames` into the next segment. Never shrink
+      # max_iterations to fit the walltime.
+      - name: lowlevel
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: reward-estimation,irl,explicit,root-qpos,${vars.arm},seed${vars.seed},lowlevel
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      # Insurance continuation in the same plan; exits immediately if the
+      # budget is already met.
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.resume_args}}
+        depends_on: lowlevel
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: reward-estimation,irl,explicit,root-qpos,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      # Manual relaunch until cumulative_env_frames reaches 10B. Submit with
+      # --only-stage lowlevel_resume; never in the same plan as `lowlevel`.
+      - name: lowlevel_resume
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.lowlevel_tail},${vars.data_overrides},${vars.resume_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: reward-estimation,irl,explicit,root-qpos,${vars.arm},seed${vars.seed},lowlevel,resume
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow

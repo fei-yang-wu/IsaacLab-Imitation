@@ -285,6 +285,24 @@ def _reward_input_anchor_ori_term() -> ObsTerm:
     return ObsTerm(func=mdp.expert_anchor_ori_b, params=_g1_expert_anchor_obs_params())
 
 
+def _reward_input_unit_motion_term() -> ObsTerm:
+    return ObsTerm(
+        func=mdp.reward_robot_joint_pos, params=_g1_expert_motion_obs_params()
+    )
+
+
+def _reward_input_unit_anchor_pos_term() -> ObsTerm:
+    return ObsTerm(
+        func=mdp.reward_expert_anchor_pos_b, params=_g1_expert_anchor_obs_params()
+    )
+
+
+def _reward_input_unit_anchor_ori_term() -> ObsTerm:
+    return ObsTerm(
+        func=mdp.reward_expert_anchor_ori_b, params=_g1_expert_anchor_obs_params()
+    )
+
+
 def _command_component_term(
     component: str,
     *,
@@ -439,14 +457,40 @@ class ExpertGoalCfg(ObsGroup):
 class RewardInputCfg(ObsGroup):
     """Inputs consumed by discriminator / reward estimator networks.
 
-    On rollout, terms are computed from the robot's actual state; on the
-    expert minibatch the env's expert-observation mapper returns the
-    idealized-expert counterpart (reference motion, zero anchor error).
+    The frozen v0/v1 shape, served by ``ImitationRLEnvLegacy``'s expert-side
+    cache: raw robot motion (joint_pos + joint_vel) plus raw anchor error. On
+    rollout, terms are computed from the robot's actual state; on the expert
+    minibatch the env's expert-observation mapper returns the idealized-expert
+    counterpart (reference motion, zero anchor error). The v2 surface uses
+    :class:`RewardInputUnitCfg` instead.
     """
 
     expert_motion = _reward_input_motion_term()
     expert_anchor_pos_b = _reward_input_anchor_pos_term()
     expert_anchor_ori_b = _reward_input_anchor_ori_term()
+
+    def __post_init__(self):
+        self.concatenate_terms = False
+
+
+@configclass
+class RewardInputUnitCfg(ObsGroup):
+    """v2 IPMD reward-estimator inputs, all normalized into [0, 1].
+
+    Three blocks: joint positions (soft-limit normalized), the relative root
+    (anchor) position, and the relative root orientation as rot6d — see
+    ``isaaclab_imitation.envs.reward_input_normalization``. On rollout, terms
+    are computed from the robot's actual state; on the expert minibatch the
+    composed env's data plane returns the idealized-expert counterpart
+    (normalized reference joint positions, 0.5 anchor error, normalized
+    identity rot6d) through the same helpers. The term names are the frozen
+    key contract (`REWARD_INPUT_KEYS`), kept even though `expert_motion` here
+    carries joint positions only.
+    """
+
+    expert_motion = _reward_input_unit_motion_term()
+    expert_anchor_pos_b = _reward_input_unit_anchor_pos_term()
+    expert_anchor_ori_b = _reward_input_unit_anchor_ori_term()
 
     def __post_init__(self):
         self.concatenate_terms = False
@@ -776,7 +820,7 @@ class G1V2ObservationCfg:
 
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
-    reward_input: RewardInputCfg = RewardInputCfg()
+    reward_input: RewardInputUnitCfg = RewardInputUnitCfg()
 
 
 # ---------------------------------------------------------------------------

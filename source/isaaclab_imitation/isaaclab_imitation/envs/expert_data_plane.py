@@ -47,6 +47,11 @@ from iltools.datasets.manager import ParallelTrajectoryManager, ResetSchedule
 from iltools.datasets.utils import make_rb_from
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
 from isaaclab_imitation.assets.robots import UNITREE_G1_WBT_29DOF_DATASET_JOINT_NAMES
+from isaaclab_imitation.envs.reward_input_normalization import (
+    identity_rot6d_unit,
+    normalize_anchor_pos_unit,
+    normalize_joint_pos_unit,
+)
 from isaaclab_imitation.envs.reference_arrays import (
     MACRO_FIELDS,
     RUNTIME_FIELDS,
@@ -3061,20 +3066,25 @@ class ExpertDataPlane:
     def _build_reward_input_cache(self, *, device: torch.device) -> None:
         """Pre-materialize expert-side values for the `reward_input` obs group.
 
-        Stores a flat [total_transitions, 2 * num_ref_joints] tensor for the
-        expert_motion term (joint_pos + joint_vel concatenated), plus two
-        broadcast buffers for the anchor-error terms that are zero / identity
-        on the expert side by construction.
+        Stores a flat [total_transitions, num_ref_joints] raw joint-position
+        tensor for the expert_motion term. Normalization into [0, 1] and the
+        canonical joint reordering need the live articulation (soft limits and
+        pinned joint ids), which does not exist yet when this first runs, so
+        both are applied lazily in `_reward_input_normalized_motion`. The
+        anchor-error terms are constant on the expert side by construction
+        (0.5 position error, normalized identity rot6d) and are materialized
+        lazily for the same reason.
 
         No-op when the active observation config has no `reward_input` group
         (cfg.enable_reward_input_observations=False, the -G1-v2 default): the
         cache buffers stay None and `_reward_input_expert_terms` fails loudly
         if anything still requests expert-side reward_input values.
         """
+        self._reward_input_normalized_motion_cache = None
+        self._reward_input_zero_anchor_pos = None
+        self._reward_input_identity_rot6d = None
         if not self._reward_input_group_present:
             self._reward_input_motion_cache = None
-            self._reward_input_zero_anchor_pos = None
-            self._reward_input_identity_rot6d = None
             return
         tm = self.trajectory_manager
         total = int(tm.end.max().item())
@@ -3091,20 +3101,54 @@ class ExpertDataPlane:
             reference = reference.to(tm.device)
         reference = tm.attach_reference_fields(reference, use_buffers=False)
         joint_pos = reference.get("joint_pos")
-        joint_vel = reference.get("joint_vel")
-        if joint_pos is None or joint_vel is None:
+        if joint_pos is None:
             raise RuntimeError(
                 "reward_input cache build failed: trajectory manager did not "
-                "produce joint_pos/joint_vel."
+                "produce joint_pos."
             )
-        self._reward_input_motion_cache = torch.cat([joint_pos, joint_vel], dim=-1).to(
-            device=device
+        self._reward_input_motion_cache = joint_pos.to(device=device)
+
+    def _reward_input_normalized_motion(self) -> torch.Tensor:
+        """Normalized [0, 1] expert joint positions in the pinned policy order.
+
+        Built once from the raw cache on first use, after the articulation
+        exists. Uses the same helpers and the same joint selection as the
+        policy-side `reward_robot_joint_pos` term, so both sides of the reward
+        estimator see one feature map.
+        """
+        normalized = self._reward_input_normalized_motion_cache
+        if normalized is not None:
+            return normalized
+        raw = self._reward_input_motion_cache
+        assert raw is not None
+        robot = self._env.robot
+        term = getattr(
+            getattr(self._env.cfg.observations, "reward_input", None),
+            "expert_motion",
+            None,
         )
-        self._reward_input_zero_anchor_pos = torch.zeros(3, device=device)
-        identity = torch.zeros(6, device=device)
-        identity[0] = 1.0
-        identity[4] = 1.0
-        self._reward_input_identity_rot6d = identity
+        asset_cfg = term.params.get("asset_cfg") if term is not None else None
+        joint_names = getattr(asset_cfg, "joint_names", None)
+        if joint_names:
+            joint_ids_list, _ = robot.find_joints(
+                list(joint_names), preserve_order=True
+            )
+            joint_ids = torch.as_tensor(
+                joint_ids_list, device=raw.device, dtype=torch.int64
+            )
+            selected = raw.index_select(-1, joint_ids)
+        else:
+            joint_ids = None
+            selected = raw
+        limits = robot.data.soft_joint_pos_limits.torch[0].to(device=raw.device)
+        lower = limits[:, 0]
+        upper = limits[:, 1]
+        if joint_ids is not None:
+            lower = lower.index_select(0, joint_ids)
+            upper = upper.index_select(0, joint_ids)
+        normalized = normalize_joint_pos_unit(selected, lower, upper)
+        self._reward_input_normalized_motion_cache = normalized
+        return normalized
 
     def _reward_input_expert_terms(
         self,
@@ -3114,9 +3158,7 @@ class ExpertDataPlane:
     ) -> torch.Tensor | None:
         """Return expert-side reward_input term values from the precomputed cache."""
         motion_cache = self._reward_input_motion_cache
-        zero_anchor_pos = self._reward_input_zero_anchor_pos
-        identity_rot6d = self._reward_input_identity_rot6d
-        if motion_cache is None or zero_anchor_pos is None or identity_rot6d is None:
+        if motion_cache is None:
             raise RuntimeError(
                 "Expert-side reward_input values were requested, but this task "
                 "has no reward_input observation group "
@@ -3126,11 +3168,22 @@ class ExpertDataPlane:
                 "agent.reward_estimation=true."
             )
         if term_name == "expert_motion":
-            idx = global_indices.to(device=motion_cache.device, dtype=torch.int64)
-            return motion_cache.index_select(0, idx)
+            normalized = self._reward_input_normalized_motion()
+            idx = global_indices.to(device=normalized.device, dtype=torch.int64)
+            return normalized.index_select(0, idx)
         if term_name == "expert_anchor_pos_b":
+            zero_anchor_pos = self._reward_input_zero_anchor_pos
+            if zero_anchor_pos is None:
+                zero_anchor_pos = normalize_anchor_pos_unit(
+                    torch.zeros(3, device=motion_cache.device)
+                )
+                self._reward_input_zero_anchor_pos = zero_anchor_pos
             return zero_anchor_pos.expand(batch_size, 3)
         if term_name == "expert_anchor_ori_b":
+            identity_rot6d = self._reward_input_identity_rot6d
+            if identity_rot6d is None:
+                identity_rot6d = identity_rot6d_unit(motion_cache.device)
+                self._reward_input_identity_rot6d = identity_rot6d
             return identity_rot6d.expand(batch_size, 6)
         return None
 

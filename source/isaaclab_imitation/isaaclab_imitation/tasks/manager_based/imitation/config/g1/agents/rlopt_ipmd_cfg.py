@@ -191,6 +191,19 @@ LATENT_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
 
 LATENT_PRIOR_INPUT_KEYS: list[tuple[str, str]] = []
 
+# The posterior read in the SAME view the frozen study's control encodes from:
+# the 38-value `root_qpos` frame, not the 67-value `full_body` one. The default
+# `LATENT_POSTERIOR_INPUT_KEYS` uses `expert_motion` (joint_qpos_qvel), and the
+# 2026-08-19 study measured that wider view as WORSE on the frozen route
+# (`in_fullbody670`: -0.0271 success rate, +11.4% MPJPE-L). Using it for the
+# posterior arms would hand the online route a handicap the comparison is not
+# trying to measure.
+ROOT_QPOS_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
+    ("policy", "expert_motion_qpos"),
+    ("policy", "expert_anchor_pos_b"),
+    ("policy", "expert_anchor_ori_b"),
+]
+
 FUTURE_CVAE_POSTERIOR_INPUT_KEYS: list[tuple[str, str]] = [
     ("policy", "expert_motion"),
     ("policy", "expert_anchor_pos_b"),
@@ -240,6 +253,10 @@ SONIC_LATENT_CRITIC_INPUT_KEYS: list[tuple[str, str]] = [
     ("critic", "last_action"),
 ]
 
+# The key names are the frozen contract; the v2 surface serves them
+# normalized into [0, 1] (joint positions by soft limits, anchor error and
+# rot6d affinely) with `expert_motion` carrying joint positions only. See
+# `RewardInputUnitCfg` and `isaaclab_imitation.envs.reward_input_normalization`.
 REWARD_INPUT_KEYS: list[tuple[str, str]] = [
     ("reward_input", "expert_motion"),
     ("reward_input", "expert_anchor_pos_b"),
@@ -960,4 +977,39 @@ class G1ImitationLatentSonicOfficialFSQRLOptIPMDConfig(
         self.ipmd.latent_learning.train_posterior_through_policy = True
         self.ipmd.latent_learning.recon_coeff = 0.01
         self.ipmd.latent_learning.action_recon_coeff = 0.0
+        self.sync_input_keys()
+
+
+@configclass
+class G1ImitationPosteriorRootQposRLOptIPMDConfig(G1ImitationTunedRLOptIPMDConfig):
+    """Tuned recipe with the code learned THROUGH the policy, reading root_qpos.
+
+    The counterpart to the frozen skill-encoder route: `command_source`
+    is the in-loop posterior rather than a pretrained DiffSR checkpoint, so
+    there is no offline pretrain and no frozen encoder.
+
+    This exists as a class rather than as CLI overrides because
+    `posterior_input_keys` CANNOT be set from the command line --
+    `sync_input_keys` re-assigns it during `__post_init__`, after Hydra has
+    applied its overrides, so a CLI attempt is silently discarded and the run
+    trains against the default view while appearing to honour the flag.
+
+    Everything else the posterior route needs -- `recon_coeff`, `kl_coeff`,
+    `train_posterior_through_policy`, `quantizer`, widths and cadence -- IS
+    CLI-settable and is deliberately left to the campaign, so one entry point
+    serves every arm.
+    """
+
+    def sync_input_keys(self) -> None:
+        super().sync_input_keys()
+        self.ipmd.latent_learning.posterior_input_keys = list(
+            ROOT_QPOS_POSTERIOR_INPUT_KEYS
+        )
+        self.ipmd.latent_learning.prior_input_keys = []
+
+    def __post_init__(self):
+        super().__post_init__()
+        # The base latent config defaults to command_source="hl_skill", which
+        # demands a skill-encoder checkpoint at validation.
+        self.ipmd.command_source = "posterior"
         self.sync_input_keys()
