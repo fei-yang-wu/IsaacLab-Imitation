@@ -364,6 +364,63 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
 
+def test_v2_reward_input_terms_are_normalized_and_legacy_stay_raw() -> None:
+    """The v2 reward_input group is the normalized [0, 1] feature map.
+
+    v2 serves joint positions (soft-limit normalized), the relative anchor
+    position, and the relative anchor rot6d through the shared normalization
+    helpers; the byte-frozen v0/v1 surfaces keep the raw robot-motion terms
+    that pair with `ImitationRLEnvLegacy`'s expert-side cache.
+    """
+    from isaaclab_imitation.tasks.manager_based.imitation import mdp
+
+    entry = gym.spec("Isaac-Imitation-G1-v2").kwargs["env_cfg_entry_point"]
+    module_name, class_name = entry.split(":")
+    cfg = getattr(importlib.import_module(module_name), class_name)()
+    cfg.enable_reward_input_observations = True
+    cfg.resolve()
+    group = cfg.observations.reward_input
+    assert group.expert_motion.func is mdp.reward_robot_joint_pos
+    assert group.expert_anchor_pos_b.func is mdp.reward_expert_anchor_pos_b
+    assert group.expert_anchor_ori_b.func is mdp.reward_expert_anchor_ori_b
+
+    v1_group = _load_env_cfg("Isaac-Imitation-G1-v1").observations.reward_input
+    assert v1_group.expert_motion.func is mdp.robot_motion
+    assert v1_group.expert_anchor_pos_b.func is mdp.expert_anchor_pos_b
+    assert v1_group.expert_anchor_ori_b.func is mdp.expert_anchor_ori_b
+
+
+def test_reward_input_normalization_helpers() -> None:
+    """The shared [0, 1] feature map both reward-estimator sides import."""
+    import torch
+
+    from isaaclab_imitation.envs.reward_input_normalization import (
+        identity_rot6d_unit,
+        normalize_anchor_pos_unit,
+        normalize_joint_pos_unit,
+        normalize_rot6d_unit,
+    )
+
+    lower = torch.tensor([-1.0, 0.0])
+    upper = torch.tensor([1.0, 2.0])
+    q = torch.tensor([[-1.0, 0.0], [1.0, 2.0], [0.0, 1.0], [-3.0, 5.0]])
+    normalized = normalize_joint_pos_unit(q, lower, upper)
+    expected = torch.tensor([[0.0, 0.0], [1.0, 1.0], [0.5, 0.5], [0.0, 1.0]])
+    assert torch.allclose(normalized, expected)
+
+    zero_error = normalize_anchor_pos_unit(torch.zeros(3))
+    assert torch.allclose(zero_error, torch.full((3,), 0.5))
+    saturated = normalize_anchor_pos_unit(torch.tensor([2.0, -2.0, 0.5]))
+    assert torch.allclose(saturated, torch.tensor([1.0, 0.0, 0.75]))
+
+    identity = identity_rot6d_unit(torch.device("cpu"))
+    assert torch.allclose(identity, torch.tensor([1.0, 0.5, 0.5, 0.5, 1.0, 0.5]))
+    assert torch.allclose(
+        normalize_rot6d_unit(torch.tensor([-1.0, 1.0, 0.0])),
+        torch.tensor([0.0, 1.0, 0.5]),
+    )
+
+
 def test_reward_estimation_agent_switch_defaults_parked() -> None:
     """The declarative agent switch mirrors the env knob: parked by default."""
     from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (  # noqa: E501

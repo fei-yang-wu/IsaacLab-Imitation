@@ -4,6 +4,11 @@ import torch
 
 from isaaclab.managers import SceneEntityCfg
 from isaaclab_imitation.envs import ImitationRLEnv
+from isaaclab_imitation.envs.reward_input_normalization import (
+    normalize_anchor_pos_unit,
+    normalize_joint_pos_unit,
+    normalize_rot6d_unit,
+)
 
 from ._compiled import body_pose_in_anchor_frame, quat_to_rot6d_flat
 
@@ -95,6 +100,48 @@ def robot_motion(
     joint_pos = _select_last_dim(env.robot.data.joint_pos.torch, joint_ids)
     joint_vel = _select_last_dim(env.robot.data.joint_vel.torch, joint_ids)
     return torch.cat([joint_pos, joint_vel], dim=-1)
+
+
+def reward_robot_joint_pos(
+    env: ImitationRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Robot joint positions normalized into [0, 1] for the reward estimator.
+
+    The expert-side counterpart is served by the data plane's reward_input
+    cache through the same normalization helpers; keep them paired.
+
+    Reads the articulation through the scene: the observation manager probes
+    term dims during ``load_managers``, before the env assigns ``self.robot``.
+    """
+    robot = env.scene[asset_cfg.name]
+    joint_ids = env._get_joint_ids_tensor_fast(asset_cfg.joint_ids)
+    joint_pos = _select_last_dim(robot.data.joint_pos.torch, joint_ids)
+    limits = robot.data.soft_joint_pos_limits.torch
+    lower = _select_last_dim(limits[..., 0], joint_ids)
+    upper = _select_last_dim(limits[..., 1], joint_ids)
+    return normalize_joint_pos_unit(joint_pos, lower, upper)
+
+
+def reward_expert_anchor_pos_b(
+    env: ImitationRLEnv,
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Relative root (anchor) position, normalized into [0, 1]; 0.5 = exact."""
+    return normalize_anchor_pos_unit(
+        expert_anchor_pos_b(env, anchor_body_name=anchor_body_name, asset_cfg=asset_cfg)
+    )
+
+
+def reward_expert_anchor_ori_b(
+    env: ImitationRLEnv,
+    anchor_body_name: str = "torso_link",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Relative root (anchor) rot6d orientation, normalized into [0, 1]."""
+    return normalize_rot6d_unit(
+        expert_anchor_ori_b(env, anchor_body_name=anchor_body_name, asset_cfg=asset_cfg)
+    )
 
 
 def agent_latent_command(
