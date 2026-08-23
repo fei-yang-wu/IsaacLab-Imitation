@@ -85,6 +85,8 @@ earlier checkpoints were not kept).
 | `irl_explicit_root_qpos` | tuned explicit root_qpos | vanilla (no regularizer) | 5588194-96 |
 | `irl_gp_explicit_root_qpos` | same | + R1 grad penalty 0.5 | 5588408-11 |
 | `irl_gp_latent_ln_hold1` | headline `cont_det_ln_hold1` recipe, its exact pretrained encoder reused | + R1 grad penalty 0.5 | 5588412-15 |
+| `irl_hp_explicit_root_qpos` | tuned explicit root_qpos | grad penalty 5.0 + logit reg 0.01 | 5588546-49 |
+| `irl_hp_latent_ln_hold1` | headline recipe, same encoder reuse | grad penalty 5.0 + logit reg 0.01 | 5588550-53 |
 
 The grad penalty rides the declarative
 `agent.reward_estimation_grad_penalty_coeff` field (a
@@ -107,3 +109,9 @@ headline 10B row only in the reward-estimation stack, and from
   and `irl_gp_latent_ln_hold1` smoked locally (5 iters, reward_diff
   -0.31/-0.32 vs -0.92 vanilla at the same point — the penalty visibly slows
   rail saturation) and submitted as chains 5588408-11 / 5588412-15.
+- 2026-08-23 (evening): both gp arms MEASURED railed by ~1B frames
+  (reward_diff -2.0, exp_r 1.0) — R1 has no force at the rails. Harsh
+  arms submitted per user directive (kept the gp arms running): grad
+  penalty 5.0 + logit reg 0.01, chains 5588546-49 (explicit) and
+  5588550-53 (latent headline). Local 8-iter smoke: reward_diff -0.048,
+  exp_r 0.28, no NaN.
