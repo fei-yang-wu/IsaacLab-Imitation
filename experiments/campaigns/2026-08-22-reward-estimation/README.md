@@ -78,6 +78,22 @@ comparison needs either the IRL checkpoint near 7.5B (lands as the run
 passes it) or is impossible against this exact baseline below 7.6B (its
 earlier checkpoints were not kept).
 
+## Arms
+
+| arm | tracker | estimator | ICE chain |
+| --- | --- | --- | --- |
+| `irl_explicit_root_qpos` | tuned explicit root_qpos | vanilla (no regularizer) | 5588194-96 |
+| `irl_gp_explicit_root_qpos` | same | + R1 grad penalty 0.5 | 5588408-11 |
+| `irl_gp_latent_ln_hold1` | headline `cont_det_ln_hold1` recipe, its exact pretrained encoder reused | + R1 grad penalty 0.5 | 5588412-15 |
+
+The grad penalty rides the declarative
+`agent.reward_estimation_grad_penalty_coeff` field (a
+`agent.reward_estimation_logit_reg_coeff` sibling exists, unused so far); a
+direct `agent.ipmd.reward_grad_penalty_coeff` override would be zeroed by
+the reward-estimation switch. `irl_gp_latent_ln_hold1` differs from the
+headline 10B row only in the reward-estimation stack, and from
+`irl_gp_explicit_root_qpos` only in the command interface.
+
 ## Status
 
 - 2026-08-22: campaign created; local qualification passed.
@@ -87,3 +103,7 @@ earlier checkpoints were not kept).
   (reward_diff -2.0, exp_r 1.0) throughout — vanilla zero-regularizer
   contract; follow-up arm with logit-reg/grad-penalty needed for a
   non-degenerate estimate.
+- 2026-08-23 (later): grad-penalty knob added; `irl_gp_explicit_root_qpos`
+  and `irl_gp_latent_ln_hold1` smoked locally (5 iters, reward_diff
+  -0.31/-0.32 vs -0.92 vanilla at the same point — the penalty visibly slows
+  rail saturation) and submitted as chains 5588408-11 / 5588412-15.
