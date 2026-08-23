@@ -291,6 +291,13 @@ def _reward_input_unit_motion_term() -> ObsTerm:
     )
 
 
+def _reward_input_unit_desired_joint_pos_term() -> ObsTerm:
+    return ObsTerm(
+        func=mdp.reward_expert_desired_joint_pos,
+        params=_g1_expert_motion_obs_params(),
+    )
+
+
 def _reward_input_unit_anchor_pos_term() -> ObsTerm:
     return ObsTerm(
         func=mdp.reward_expert_anchor_pos_b, params=_g1_expert_anchor_obs_params()
@@ -491,6 +498,14 @@ class RewardInputUnitCfg(ObsGroup):
     expert_motion = _reward_input_unit_motion_term()
     expert_anchor_pos_b = _reward_input_unit_anchor_pos_term()
     expert_anchor_ori_b = _reward_input_unit_anchor_ori_term()
+    # Goal conditioning (2026-08-23): the commanded reference joints, so the
+    # estimator can learn r(s, g) — a tracking metric, not just
+    # expert-likeness. REWARD-ESTIMATOR ONLY: expert information reaches the
+    # actor exclusively through the command interface, never through this
+    # group, which no actor or critic reads. Consumed only when the agent
+    # declares `reward_estimation_pair_input=true`; otherwise computed and
+    # ignored, keeping pre-pairing checkpoints resumable from this tree.
+    expert_desired_joint_pos = _reward_input_unit_desired_joint_pos_term()
 
     def __post_init__(self):
         self.concatenate_terms = False

@@ -122,6 +122,28 @@ def reward_robot_joint_pos(
     return normalize_joint_pos_unit(joint_pos, lower, upper)
 
 
+def reward_expert_desired_joint_pos(
+    env: ImitationRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """The commanded (reference) joint positions, normalized into [0, 1].
+
+    REWARD-ESTIMATOR ONLY: this term pairs the robot's achieved joints with
+    the currently desired expert joints so the estimated reward is
+    goal-conditioned (r(s, g), a learned tracking metric). It reads the
+    reference channel's current frame directly — privileged information that
+    must never appear in an actor group, whose only expert view is the
+    command interface. On the expert minibatch the data plane serves the
+    same normalized reference joints twice (perfect-tracking pairs).
+    """
+    robot = env.scene[asset_cfg.name]
+    joint_ids = env._get_joint_ids_tensor_fast(asset_cfg.joint_ids)
+    joint_pos = _select_last_dim(env.current_expert_frame["joint_pos"], joint_ids)
+    limits = robot.data.soft_joint_pos_limits.torch
+    lower = _select_last_dim(limits[..., 0], joint_ids)
+    upper = _select_last_dim(limits[..., 1], joint_ids)
+    return normalize_joint_pos_unit(joint_pos, lower, upper)
+
+
 def reward_expert_anchor_pos_b(
     env: ImitationRLEnv,
     anchor_body_name: str = "torso_link",

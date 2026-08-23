@@ -243,6 +243,10 @@ _CURRENT_V2_IPMD_TUNED_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationTunedRLOptIPMDConfig"
 )
 
+_CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT = (
+    f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationPosteriorRootQposRLOptIPMDConfig"
+)
+
 _CURRENT_V2_IPMD_L2T_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_l2t_cfg:G1ImitationRLOptIPMDL2TConfig"
 )
@@ -282,6 +286,9 @@ gym.register(
         ),
         "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
         "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
+        "rlopt_ipmd_posterior_root_qpos_cfg_entry_point": (
+            _CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT
+        ),
     },
 )
 

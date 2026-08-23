@@ -325,6 +325,9 @@ def test_expert_window_and_goal_observation_pruning_knobs() -> None:
 
 
 REWARD_INPUT_TERMS = ["expert_motion", "expert_anchor_pos_b", "expert_anchor_ori_b"]
+# The v2 normalized group adds the goal-conditioning block (2026-08-23):
+# the commanded reference joints, reward-estimator only.
+V2_REWARD_INPUT_TERMS = [*REWARD_INPUT_TERMS, "expert_desired_joint_pos"]
 
 
 def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
@@ -333,8 +336,9 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     The reward_input group feeds only the IPMD reward estimator, so the
     single v2 env defaults `enable_reward_input_observations=False` and the
     env-construction resolution drops the group; v0/v1 keep it (pinned by the
-    recorded-default test). The opt-in knob keeps the exact v0/v1 term list
-    when enabled before construction.
+    recorded-default test). The opt-in knob restores the v2 declaration
+    (the v0/v1 trio plus the goal-conditioning block) when enabled before
+    construction.
     """
     v2_cfg = _load_env_cfg("Isaac-Imitation-G1-v2")
     assert v2_cfg.enable_reward_input_observations is False
@@ -347,21 +351,21 @@ def test_v2_parks_reward_input_group_with_opt_in_knob() -> None:
     assert _group_terms(v0_cfg.observations.reward_input) == REWARD_INPUT_TERMS
 
     # The single v2 env keeps the v1 opt-in semantics: resolution drops the
-    # group at the default (parked) toggle and keeps the exact v0/v1 term list
-    # when the knob is enabled beforehand -- which is the only order that can
-    # work, because resolution only ever removes from the declared surface.
+    # group at the default (parked) toggle and keeps the declared v2 term
+    # list when the knob is enabled beforehand -- which is the only order
+    # that can work, because resolution only ever removes from the surface.
     entry = gym.spec("Isaac-Imitation-G1-v2").kwargs["env_cfg_entry_point"]
     module_name, class_name = entry.split(":")
     cfg = getattr(importlib.import_module(module_name), class_name)()
     cfg.enable_reward_input_observations = True
     cfg.resolve()
-    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    assert _group_terms(cfg.observations.reward_input) == V2_REWARD_INPUT_TERMS
     for name in ("expert_anchor_pos_b", "expert_anchor_ori_b"):
         term = getattr(cfg.observations.reward_input, name)
         assert term.params["anchor_body_name"] == _anchor_body(cfg)
     # Resolution stays a fixed point.
     cfg.resolve()
-    assert _group_terms(cfg.observations.reward_input) == REWARD_INPUT_TERMS
+    assert _group_terms(cfg.observations.reward_input) == V2_REWARD_INPUT_TERMS
 
 
 def test_v2_reward_input_terms_are_normalized_and_legacy_stay_raw() -> None:
@@ -383,6 +387,7 @@ def test_v2_reward_input_terms_are_normalized_and_legacy_stay_raw() -> None:
     assert group.expert_motion.func is mdp.reward_robot_joint_pos
     assert group.expert_anchor_pos_b.func is mdp.reward_expert_anchor_pos_b
     assert group.expert_anchor_ori_b.func is mdp.reward_expert_anchor_ori_b
+    assert group.expert_desired_joint_pos.func is mdp.reward_expert_desired_joint_pos
 
     v1_group = _load_env_cfg("Isaac-Imitation-G1-v1").observations.reward_input
     assert v1_group.expert_motion.func is mdp.robot_motion
@@ -424,6 +429,7 @@ def test_reward_input_normalization_helpers() -> None:
 def test_reward_estimation_agent_switch_defaults_parked() -> None:
     """The declarative agent switch mirrors the env knob: parked by default."""
     from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (  # noqa: E501
+        PAIRED_REWARD_INPUT_KEYS,
         REWARD_INPUT_KEYS,
         G1ImitationLatentSonicRLOptIPMDConfig,
         G1ImitationRLOptIPMDConfig,
@@ -458,6 +464,14 @@ def test_reward_estimation_agent_switch_defaults_parked() -> None:
         agent_cfg.sync_input_keys()
         assert float(agent_cfg.ipmd.reward_grad_penalty_coeff) == 0.5, cls.__name__
         assert float(agent_cfg.ipmd.reward_logit_reg_coeff) == 0.01, cls.__name__
+        # The paired (goal-conditioned) input knob appends the desired-joints
+        # key; off keeps the frozen trio.
+        agent_cfg.reward_estimation_pair_input = True
+        agent_cfg.sync_input_keys()
+        assert agent_cfg.ipmd.reward_input_keys == list(PAIRED_REWARD_INPUT_KEYS)
+        agent_cfg.reward_estimation_pair_input = False
+        agent_cfg.sync_input_keys()
+        assert agent_cfg.ipmd.reward_input_keys == list(REWARD_INPUT_KEYS)
         agent_cfg.reward_estimation = False
         agent_cfg.sync_input_keys()
         assert float(agent_cfg.ipmd.reward_grad_penalty_coeff) == 0.0, cls.__name__

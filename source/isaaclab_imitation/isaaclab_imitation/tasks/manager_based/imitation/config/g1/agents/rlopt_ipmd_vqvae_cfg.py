@@ -85,6 +85,7 @@ class _G1ImitationRLOptIPMDVQVAEBaseConfig(IPMDRLOptConfig):
     # explanation on `_G1ImitationRLOptIPMDBaseConfig`.
     reward_estimation_grad_penalty_coeff: float = 0.0
     reward_estimation_logit_reg_coeff: float = 0.0
+    reward_estimation_pair_input: bool = False
 
     def sync_input_keys(self) -> None:
         use_latent_command = bool(self.ipmd.use_latent_command)

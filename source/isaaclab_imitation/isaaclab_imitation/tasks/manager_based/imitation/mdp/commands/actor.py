@@ -468,6 +468,31 @@ class ChunkActorCommand(PublishedCommandTerm):
         per_step_dim = window.shape[1] // self.window_steps
         return window.reshape(-1, self.window_steps, per_step_dim)[:, 0, :]
 
+    def pin_anchor_pose(
+        self, env_ids: torch.Tensor, pos_w: torch.Tensor, quat_w: torch.Tensor
+    ) -> None:
+        """Overwrite the stored anchor frame for a just-published packet.
+
+        ``publish`` captures the CURRENT robot anchor, which is correct only
+        when the packet was predicted in the same control step. An
+        asynchronous publisher delivers a packet predicted earlier, expressed
+        in the anchor frame of its request instant; it must pin that frame
+        here immediately after ``publish`` so the per-step re-expression
+        starts from the frame the coordinates actually live in.
+        """
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+        if self._anchor_pose is None:
+            current_pos, current_quat = self._robot_anchor_state_w()
+            self._anchor_pose = (current_pos.clone(), current_quat.clone())
+        self._external_anchor_owner = True
+        stored_pos, stored_quat = self._anchor_pose
+        stored_pos.index_copy_(
+            0, env_ids, pos_w.to(stored_pos.device, stored_pos.dtype)
+        )
+        stored_quat.index_copy_(
+            0, env_ids, quat_w.to(stored_quat.device, stored_quat.dtype)
+        )
+
     def set_publisher(self, provider: Any) -> None:
         """Register a callback producing packets in-step.
 
