@@ -127,6 +127,15 @@ Every within-family difference is inside evaluation noise: the
 reward-estimation stack does not affect tracking at matched budget, on
 either interface, at any regularizer strength tried.
 
+## Final 10B row (vanilla arm, 2026-08-24)
+
+`irl_explicit_root_qpos` completed its 10B budget (segment 2). 4,096 board,
+sonic pass: **SR 0.9558 / MPJPE 17.66 mm / survival 350.6** — the strongest
+explicit tracker row on this board to date; beats the frame-matched headline
+latent 10B row (0.9368 / 23.61) and the 7.6B small-net explicit baseline
+(0.9358 / 20.11; that comparison is confounded by network size and frames).
+One seed.
+
 ## Status
 
 - 2026-08-22: campaign created; local qualification passed.
@@ -140,6 +149,14 @@ either interface, at any regularizer strength tried.
   and `irl_gp_latent_ln_hold1` smoked locally (5 iters, reward_diff
   -0.31/-0.32 vs -0.92 vanilla at the same point — the penalty visibly slows
   rail saturation) and submitted as chains 5588408-11 / 5588412-15.
+- 2026-08-24: ICE user quota hit 300/300 GB and killed every checkpoint
+  save: gp chains died at the 6.0B save (last good 5.5B), hp at 4.5B (last
+  good 4.0B), pair-explicit at 3.0B (last good 2.5B); follow-on segments
+  crashed instantly on `Disk quota exceeded`. Corrupt checkpoint files
+  deleted; `interface_design_study` outputs purged from ICE per user
+  approval (75G freed); all five dead chains resumed as
+  lowlevel3+lowlevel_resume pairs (jobs 5588914/16/18/20/22). The vanilla
+  arm finished 10B before the quota filled.
 - 2026-08-23 (evening): both gp arms MEASURED railed by ~1B frames
   (reward_diff -2.0, exp_r 1.0) — R1 has no force at the rails. Harsh
   arms submitted per user directive (kept the gp arms running): grad
