@@ -1,4 +1,9 @@
-# 2026-08-22 — reward estimation (IPMD direct IRL)
+# 2026-08-22 — reward estimation (IPMD direct IRL) — PARKED 2026-08-25
+
+**Status: parked, future work needed.** Eight arms trained; the tracker is
+unaffected by the reward-estimation stack (a clean null at 10B), and the
+estimator itself saturates in every configuration tried. See
+"PARKED — future work needed" below before reviving this.
 
 Trains the IPMD reward estimator (direct reward estimation, not a
 discriminator) alongside the tuned explicit root_qpos tracker, with the fixed
@@ -181,6 +186,57 @@ logit-reg ceiling (reward_diff -1.9548, exactly constant for thousands of
 iterations before the blowup). A rerun would settle whether it is
 reproducible or a one-off numeric event.
 
+## PARKED — future work needed (2026-08-25)
+
+User decision: the reward estimator in its current form is **not useful**,
+and the reason is **saturation**. The campaign stops here; the tracker rows
+stand as a completed null result.
+
+What the campaign established:
+
+- The stack is correct and safe. Normalized [0, 1] inputs, matched
+  policy/expert feature maps, goal-conditioned pairing, and four regularizer
+  settings all train end to end at 10B without disturbing the tracker
+  (every row inside noise of its no-reward-estimation counterpart).
+- The estimator itself is degenerate in every configuration tried. The pure
+  diff objective (`E_pi[r] - E_exp[r]`) has no interior optimum: it is
+  minimized by driving policy and expert outputs as far apart as the output
+  activation allows. Without regularization it pins at the tanh rails
+  (-1.0 / +1.0 exactly). With the R1 grad penalty it still rails, because
+  input gradients vanish at the rails, which is exactly where the penalty
+  needs force. With logit regularization it holds a soft ceiling instead
+  (reward_diff -1.958, exp_r 0.977) — a *lower* rail, not a shaped reward.
+  Goal-conditioned pairing makes it worse, not better: the expert side has
+  identically zero tracking error, so separation becomes trivial.
+- Consequence: `use_estimated_rewards_for_ppo=true` was never worth trying.
+  A reward that is constant on each side carries no gradient for the policy.
+
+What future work would have to change (none of this is implemented):
+
+1. **A bounded objective with an interior optimum.** The diff loss needs
+   either a Wasserstein-style constraint that actually binds (a gradient
+   penalty evaluated on interpolates between policy and expert samples, as
+   in WGAN-GP, rather than the current per-side R1), or replacement with a
+   proper density-ratio / logistic objective whose optimum is a finite
+   log-ratio rather than a saturating separation.
+2. **Harder negatives.** While the tracker is imperfect, policy and expert
+   state distributions barely overlap, so any estimator separates them
+   trivially. Candidates: sample negatives from near-expert perturbations,
+   or condition the estimator on the tracking error magnitude so it must
+   rank *degrees* of failure instead of classifying two obvious classes.
+3. **A calibration target.** Nothing currently asks the estimated reward to
+   agree with anything measurable. Regressing it against the hand-designed
+   tracking reward (or against MPJPE) on held-out states would turn
+   "expert vs not" into a usable learned metric, and gives a diagnostic
+   that reports saturation immediately instead of after 10B frames.
+4. **A stability fix for the paired latent route** before reusing that
+   combination — see the divergence note above.
+
+The machinery stays in the tree and is off by default
+(`agent.reward_estimation=false`, `env.enable_reward_input_observations`
+false on `-G1-v2`), so nothing in the paper path is affected. Re-enabling is
+a two-flag change plus whichever objective replaces the diff loss.
+
 ## Status
 
 - 2026-08-22: campaign created; local qualification passed.
@@ -202,6 +258,9 @@ reproducible or a one-off numeric event.
   approval (75G freed); all five dead chains resumed as
   lowlevel3+lowlevel_resume pairs (jobs 5588914/16/18/20/22). The vanilla
   arm finished 10B before the quota filled.
+- 2026-08-25 (later): feature PARKED by user decision — saturation makes the
+  current estimator useless. The queued `irl_hp_latent_ln_hold1` segments
+  (5591490 -> 5591491) are left to run out; no further submissions.
 - 2026-08-25: six of seven arms reached the full 10B budget and were scored
   (table above). `irl_hp_latent_ln_hold1` ran out of chained segments at
   8.5B and was continued as jobs 5591490 -> 5591491.
