@@ -1,0 +1,248 @@
+# Smoothness arms for the CONTINUOUS leader: restore the action-rate penalty.
+#
+# Motivation (2026-08-26): on `sonic_capability124_v1` the 46.5B leader beats
+# public `sonic_v1_1` on SR and both MPJPE columns but reads 4.67 m/s^2
+# acceleration distance against SONIC's 2.89 -- visible joint shiver in every
+# video. The recipe trains with `env.rewards.action_rate_l2.weight=0.0`
+# (zeroed by the 2026-08-02 HP search for training speed); SONIC v1.1 trains
+# with -0.1. `anti_shake_ang_vel` is already active at -5.0e-3.
+#
+# Three finetune arms resume the PINNED 46.5B checkpoint (the scored one; the
+# live 50B chain keeps writing newer files, so the file path is exact, never
+# the tracker directory) and train +2B under the chain's exact reset regime
+# (sonic selection, uniform 0.05 static), changing ONLY the smoothness axis:
+#   ar003       action_rate_l2 -0.03
+#   ar01        action_rate_l2 -0.1   (SONIC's value)
+#   ar01shake4  action_rate_l2 -0.1 AND anti_shake_ang_vel -0.02 (4x)
+# One from-scratch arm carries the full-budget answer:
+#   ar01scratch action_rate_l2 -0.1 from zero, 10B, the base leader schedule.
+#
+# Gate for promotion: acceleration distance on `sonic_capability124_v1` drops
+# toward SONIC's scale while SR / MPJPE-L on `bones_testbed4096_v1` stay
+# inside noise. Every finetuned checkpoint is a NEW arm and is rescored.
+name: smooth-finetune
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: smooth-finetune
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  stride: 1
+  z_dim: 256
+  command_dim: 258
+  phase_mode: sin_cos
+  anchor_mode: robot_heading
+  hold: 1
+  train_num_envs: 16384
+  rollout_steps: 24
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  # Finetune: +2B on top of the pinned 46.5B checkpoint (cumulative cap).
+  frame_cap: 48500000000
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/smooth_finetune/${vars.arm}_seed${vars.seed}
+  # The SCORED 46.5B checkpoint, pinned by file. Resuming the tracker
+  # directory would race the still-running 50B chain onto a newer file.
+  resume_checkpoint: /data/sonic_reset_50b/ln_hold1_sonicreset_seed0/tracker/2026-08-25_16-56-40_wandb-ln-hold1-sonicreset-s0-r1/models/model_step_46500151296.pt
+  encoder_root: /data/bottleneck_10b/cont_det_ln_hold1_seed0
+
+  # The smoothness axis; every arm overrides `smooth_args`.
+  smooth_args: []
+
+  # Finetune arms keep the 50B chain's exact reset regime so the reward axis
+  # is the only change against the 46.5B parent.
+  reset_hold_args:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.05
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+    - env.enable_termination_curriculum=false
+
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - --checkpoint
+    - ${vars.resume_checkpoint}
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=smooth-finetune
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_root}/encoder/checkpoints/latest.pt
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.z_dim}
+
+  # The leader recipe WITHOUT the action_rate zero: each arm's `smooth_args`
+  # sets the smoothness weights explicitly instead.
+  tuned_lowlevel:
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  dyn_args: [agent.ipmd.hl_skill_finetune_enabled=false]
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+    - /data/sonic_reset_50b/ln_hold1_sonicreset_seed0/tracker/2026-08-25_16-56-40_wandb-ln-hold1-sonicreset-s0-r1/models/model_step_46500151296.pt
+    - /data/bottleneck_10b/cont_det_ln_hold1_seed0/encoder/checkpoints/latest.pt
+  output_container_path: /data/smooth_finetune/${vars.arm}_seed${vars.seed}
+
+arms:
+  # SONIC's action-rate weight.
+  ar01:
+    vars:
+      smooth_args: [env.rewards.action_rate_l2.weight=-0.1]
+    stages: &finetune_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.smooth_args},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,smooth-finetune,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: sf-${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.smooth_args},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,smooth-finetune,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: sf-${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # Milder rate penalty: is -0.1 more than needed?
+  ar003:
+    vars:
+      smooth_args: [env.rewards.action_rate_l2.weight=-0.03]
+    stages: *finetune_stages
+
+  # SONIC's rate weight plus a 4x anti-shake (wrists + torso, threshold 1.5).
+  ar01shake4:
+    vars:
+      smooth_args:
+        - env.rewards.action_rate_l2.weight=-0.1
+        - env.rewards.anti_shake_ang_vel.weight=-0.02
+    stages: *finetune_stages
+
+  # The full-budget answer: the leader's base 10B schedule from zero with the
+  # rate penalty in from the start (random80_adaptive20 + termination
+  # curriculum, the bottleneck-10b recipe).
+  ar01scratch:
+    vars:
+      frame_cap: 10000000000
+      smooth_args: [env.rewards.action_rate_l2.weight=-0.1]
+      reset_hold_args:
+        - env.command_interface.reference.selection=random80_adaptive20
+        - env.enable_termination_curriculum=true
+        - env.termination_curriculum_start_frames=5000000
+        - env.termination_curriculum_end_frames=30000000
+      seg1_args:
+        - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    stages:
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.smooth_args},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,smooth-finetune,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: sf-${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.smooth_args},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,smooth-finetune,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: sf-${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.smooth_args},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel2
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,smooth-finetune,${vars.arm},seed${vars.seed},lowlevel,segment3
+          WANDB_RUN_ID: sf-${vars.wandb_arm}-s${vars.seed}
+          WANDB_RESUME: allow

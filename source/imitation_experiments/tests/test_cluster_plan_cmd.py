@@ -188,3 +188,49 @@ def test_only_stage_drops_external_dependency(
     jobs = record["sealed"]["jobs"]
     assert [j["stage"] for j in jobs] == ["lowlevel"]
     assert jobs[0]["depends_on"] is None
+
+
+def test_only_stage_keeps_external_job_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An insurance segment chains onto a job that is already running.
+
+    Its predecessor is a live Slurm job, not a sibling stage, so the
+    ``job:<id>`` dependency must survive ``--only-stage`` selection. Dropping
+    it would start the segment beside the running one, on the same tree.
+    """
+    import contextlib
+    import io
+
+    _install_fakes(tmp_path, monkeypatch)
+    profile = _write_profile(tmp_path)
+    campaign = tmp_path / "campaign_external.yaml"
+    campaign.write_text(
+        CAMPAIGN_YAML.format(profile=profile).replace(
+            "depends_on: pretrain", 'depends_on: "job:5590010"'
+        )
+    )
+    out_root = tmp_path / "out_external"
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rc = main(
+            [
+                "plan",
+                "--campaign",
+                str(campaign),
+                "--arm",
+                "a1",
+                "--seed",
+                "0",
+                "--out-root",
+                str(out_root),
+                "--skip-preflight",
+                "--only-stage",
+                "lowlevel",
+            ]
+        )
+    assert rc == 0, buffer.getvalue()
+    record = json.loads(next((out_root / "demo").glob("*/plan.json")).read_text())
+    jobs = record["sealed"]["jobs"]
+    assert [j["stage"] for j in jobs] == ["lowlevel"]
+    assert jobs[0]["depends_on"] == "job:5590010"

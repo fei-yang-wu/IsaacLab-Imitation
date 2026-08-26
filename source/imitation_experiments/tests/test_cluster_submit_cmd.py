@@ -225,3 +225,41 @@ def test_run_singularity_prefers_resolved_env(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().endswith("frozen")
+
+
+def test_submit_chains_onto_a_running_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`depends_on: job:<id>` queues an insurance segment behind a live job."""
+    campaign, sbatch_log = _setup(tmp_path, monkeypatch)
+    campaign.write_text(
+        campaign.read_text().replace(
+            "depends_on: pretrain",
+            'depends_on: "job:5590010"\n        dependency_kind: afterany',
+        )
+    )
+    rc, stdout = _run(
+        [
+            "plan",
+            "--campaign",
+            str(campaign),
+            "--arm",
+            "a1",
+            "--seed",
+            "0",
+            "--out-root",
+            str(tmp_path / "control_out"),
+            "--only-stage",
+            "lowlevel",
+        ]
+    )
+    assert rc == 0, stdout
+    sha = stdout.rsplit("PLAN_SHA=", 1)[1].strip()
+    plan_dir = next((tmp_path / "control_out/demo").iterdir())
+
+    rc, stdout = _run(["submit", "--plan", str(plan_dir), "--confirm", sha])
+    assert rc == 0, stdout
+    assert "--dependency=afterany:5590010" in sbatch_log.read_text()
+    submission = json.loads(next(plan_dir.glob("submission-*.json")).read_text())
+    assert [j["stage"] for j in submission["jobs"]] == ["lowlevel"]
+    assert submission["jobs"][0]["dependency"] == "afterany:5590010"

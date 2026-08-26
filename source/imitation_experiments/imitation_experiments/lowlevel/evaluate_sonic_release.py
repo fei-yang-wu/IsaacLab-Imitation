@@ -269,6 +269,7 @@ from imitation_experiments.data.planner_sample_schema import (
     PlannerSampleWriter,
     build_planner_sample,
 )
+from imitation_experiments.evaluation.protocol import G1_TRACKED_BODY_NAMES
 from imitation_experiments.lowlevel.sonic_release_actor import (
     ENCODER_FRAMES,
     heading_relative_rot6d_from_full_relative,
@@ -485,9 +486,12 @@ def _require_reportable_release(summary: dict[str, Any]) -> None:
     problems = []
     if summary.get("stop_reason") != "all_envs_done":
         problems.append(f"stop_reason={summary.get('stop_reason')!r}")
-    if float(aggregate.get("done_rate", 0.0)) != 1.0:
+    # Tolerances, not exact equality: these rates are ratios of counts, and an
+    # older artifact may carry a float32 tensor mean. One environment of 4,096
+    # is 2.4e-4, so 1e-6 cannot hide a genuinely unfinished environment.
+    if float(aggregate.get("done_rate", 0.0)) < 1.0 - 1e-6:
         problems.append(f"done_rate={aggregate.get('done_rate')!r}")
-    if float(aggregate.get("time_out_rate", 1.0)) != 0.0:
+    if float(aggregate.get("time_out_rate", 1.0)) > 1e-6:
         problems.append(f"time_out_rate={aggregate.get('time_out_rate')!r}")
     if problems:
         raise RuntimeError(
@@ -844,6 +848,26 @@ def _proprioception(
     return torch.cat(parts, dim=-1)
 
 
+def _tracked_body_lin_vel_pair(
+    base_env: Any, names: tuple[str, ...]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """World-frame linear velocities of the tracked bodies, robot and reference.
+
+    The same 14 links MPJPE uses, so `tracking_velocity_distance_mps` and
+    `tracking_acceleration_distance_mps2` here are the identical quantities
+    `evaluate_checkpoint` reports, and SONIC-paper velocity/acceleration
+    distance rows read against ours on one definition.
+    """
+    body_ids = [int(base_env._get_robot_anchor_body_id_fast(name)) for name in names]
+    _, actual_lin_vel = base_env._get_robot_body_velocity_w_fast(body_ids)
+    _, ref_lin_vel = base_env._get_reference_body_velocity_w_fast(tuple(names))
+    if hasattr(actual_lin_vel, "torch"):
+        actual_lin_vel = actual_lin_vel.torch
+    if hasattr(ref_lin_vel, "torch"):
+        ref_lin_vel = ref_lin_vel.torch
+    return actual_lin_vel, ref_lin_vel
+
+
 def _episode_metrics(base_env: Any) -> dict[str, torch.Tensor]:
     """Snapshot the reference channel's running metrics as ordinary tensors.
 
@@ -1141,6 +1165,23 @@ def main(env_cfg, agent_cfg):
     steps_run = 0
     _previous_slot0: torch.Tensor | None = None
 
+    # Per-step velocity/acceleration distance over the tracked links. The
+    # command term does not accumulate these, so they are measured here the way
+    # `evaluate_checkpoint` measures them: a running per-environment mean over
+    # active pre-termination steps. The post-`step` state of a finishing
+    # environment is already reset, so a step that ends an episode is excluded
+    # -- reading it would score reset placement, not tracking.
+    velocity_body_names = tuple(G1_TRACKED_BODY_NAMES)
+    velocity_error_sum = torch.zeros(base_env.num_envs, device=device)
+    velocity_error_steps = torch.zeros(base_env.num_envs, device=device)
+    acceleration_error_sum = torch.zeros(base_env.num_envs, device=device)
+    acceleration_error_steps = torch.zeros(base_env.num_envs, device=device)
+    previous_lin_vel_pair: tuple[torch.Tensor, torch.Tensor] | None = None
+    previous_lin_vel_valid = torch.zeros(
+        base_env.num_envs, dtype=torch.bool, device=device
+    )
+    velocity_step_dt = float(base_env.step_dt)
+
     # ``no_grad`` rather than ``inference_mode``: the metric accumulators are
     # written across the loop boundary, which inference tensors forbid.
     with torch.no_grad():
@@ -1321,6 +1362,32 @@ def main(env_cfg, agent_cfg):
                 planner.gr00t_reset(done.nonzero(as_tuple=False).reshape(-1))
             survived += (~done_once).long()
 
+            metric_active = (~done) & (~done_once)
+            actual_lin_vel, ref_lin_vel = _tracked_body_lin_vel_pair(
+                base_env, velocity_body_names
+            )
+            velocity_distance = torch.linalg.vector_norm(
+                actual_lin_vel - ref_lin_vel, dim=-1
+            ).mean(dim=-1)
+            metric_active_f = metric_active.float()
+            velocity_error_sum += velocity_distance * metric_active_f
+            velocity_error_steps += metric_active_f
+            if previous_lin_vel_pair is not None and velocity_step_dt > 0.0:
+                prev_actual, prev_ref = previous_lin_vel_pair
+                acceleration_distance = torch.linalg.vector_norm(
+                    ((actual_lin_vel - prev_actual) - (ref_lin_vel - prev_ref))
+                    / velocity_step_dt,
+                    dim=-1,
+                ).mean(dim=-1)
+                acceleration_mask = (metric_active & previous_lin_vel_valid).float()
+                acceleration_error_sum += acceleration_distance * acceleration_mask
+                acceleration_error_steps += acceleration_mask
+            previous_lin_vel_pair = (
+                actual_lin_vel.detach().clone(),
+                ref_lin_vel.detach().clone(),
+            )
+            previous_lin_vel_valid = metric_active.clone()
+
             newly_done = done & ~done_once
             # Isaac Lab resets a finished environment *inside* ``step``, and the
             # command manager then recomputes its metrics on the fresh post-reset
@@ -1372,6 +1439,13 @@ def main(env_cfg, agent_cfg):
     unfinished = (~done_once).cpu()
     for name, value in carried_metrics.items():
         final_metrics[name][unfinished] = value[unfinished]
+
+    final_metrics["tracking_velocity_distance_mps"] = (
+        velocity_error_sum / velocity_error_steps.clamp(min=1.0)
+    ).cpu()
+    final_metrics["tracking_acceleration_distance_mps2"] = (
+        acceleration_error_sum / acceleration_error_steps.clamp(min=1.0)
+    ).cpu()
 
     failures = int(failed.sum().item())
     success_rate = 1.0 - failures / float(base_env.num_envs)
@@ -1513,7 +1587,11 @@ def main(env_cfg, agent_cfg):
             "completed_env_count": completed_count,
             "failed_env_count": failures,
             "num_evaluated_envs": int(base_env.num_envs),
-            "done_rate": float(done_once.float().mean().item()),
+            # Counted in Python, not as a float32 tensor mean: at a
+            # non-power-of-two `num_envs` that mean rounds to 0.99999994 for a
+            # fully finished run, which the reportability guard reads as an
+            # incomplete evaluation.
+            "done_rate": int(done_once.sum().item()) / float(base_env.num_envs),
             "time_out_rate": time_out_count / float(base_env.num_envs),
             "termination_cause_env_counts": termination_causes,
             "survival_steps_mean": float(survived.float().mean().item()),

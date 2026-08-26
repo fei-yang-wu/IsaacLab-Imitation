@@ -1,0 +1,271 @@
+# Continue the CONTINUOUS leader from 30B to 50B with a HARDER failure focus.
+#
+# 30B state (canonical 4,096 board, no_push, one seed):
+#   ln_hold1_sonicreset 30B: 0.9707 SR / 21.75 mm L / 154.64 mm G
+#   (20B: 0.9558 / 22.15 / 168.15; released SONIC: 0.9937 / 28.65 / --)
+# The SR curve is still climbing (+0.0149 over the last 10B), so the user
+# directed another 20B AND one regime change: the SONIC adaptive sampler's
+# uniform share drops 0.1 -> 0.05, so 95% of resets (up from 90%) draw from
+# the learned failure distribution -- more starts at the trajectory points the
+# tracker still fails. THIS BREAKS THE BUDGET-ONLY AXIS: 30B -> 50B confounds
+# budget with the sharper reset focus, by explicit user decision (2026-08-23).
+# Read 20B -> 30B for the clean budget effect.
+#
+# Resume: segment 12 loads the newest checkpoint in the 30B tree (carries
+# cumulative_env_frames; global frame_cap=50B ends the chain). 20B more at the
+# chain's ~129k fps is ~43 h: segments 12-14 cover it, segment 15 is
+# insurance and normally exits at zero iterations.
+#
+# W&B: appends to the SAME run as the whole chain
+# (`ln-hold1-sonicreset-s0-r1`, group sonic-reset-20b). Seed
+# <output_root>/wandb_run_id with that verbatim id BEFORE the first job or the
+# control plane mints a suffixed id and splits the curve. The run was created
+# in shared mode and a chain never changes mode mid-flight, so the shared-mode
+# env block stays (grandfathered; do not copy it into NEW runs). Read
+# `env_frames` as the x-axis, never `_step`.
+name: sonic-reset-50b
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: sonic-reset-20b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  stride: 1
+  z_dim: 256
+  command_dim: ${vars.z_dim}
+  phase_mode: sin_cos
+  anchor_mode: robot_heading
+  hold: 1
+  train_num_envs: 16384
+  rollout_steps: 24
+  # The GLOBAL budget: another 20B on top of the 30B already trained.
+  frame_cap: 50000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  # New tree; the 30B tree stays read-only so its scoreboard rows remain
+  # reproducible.
+  output_root: /data/sonic_reset_50b/${vars.arm}_seed${vars.seed}
+  # The finished 20B arm this one continues, and the ORIGINAL 10B base arm
+  # whose frozen encoder both chains share (binding unchanged end to end).
+  base_arm: ${vars.arm}
+  prev_root: /data/sonic_reset_30b/${vars.arm}_seed${vars.seed}
+  encoder_root: /data/bottleneck_10b/${vars.base_arm}_seed${vars.seed}
+
+  # REGIME CHANGE (user, 2026-08-23): uniform share 0.1 -> 0.05, i.e. 95% of
+  # resets draw from the learned failure distribution. Static, no ramp.
+  reset_hold_args:
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.05
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+
+  seg12_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.prev_root}/tracker
+  seg13_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+  seg14_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+  seg15_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  seg16_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  # Segment 16 is SECOND insurance, added 2026-08-26 after node contention cut
+  # the chain's throughput from ~129k to ~46k fps: segment 15 reaches the cap
+  # only at the high rate, and it was the last declared segment. Normally
+  # `lowlevel15`; override with a live Slurm job id when the predecessor is
+  # already running and has no sibling stage in the plan, for example
+  # `--only-stage lowlevel16 --set vars.chain_after=job:5590010`.
+  chain_after: lowlevel15
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=sonic-reset-20b
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_root}/encoder/checkpoints/latest.pt
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.z_dim}
+
+  # Byte-identical to the 20B campaign's recipe, selection included.
+  tuned_lowlevel:
+    - env.rewards.action_rate_l2.weight=0.0
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.command_interface.reference.selection=sonic
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  dyn_args: [agent.ipmd.hl_skill_finetune_enabled=false]
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+    # Fails loudly if the 30B artifacts or the shared frozen encoder are
+    # missing rather than silently restarting from an older checkpoint.
+    - /data/sonic_reset_30b/${vars.arm}_seed${vars.seed}/tracker
+    - /data/bottleneck_10b/${vars.base_arm}_seed${vars.seed}/encoder/checkpoints/latest.pt
+  output_container_path: /data/sonic_reset_50b/${vars.arm}_seed${vars.seed}
+
+arms:
+  # CONTINUOUS leader. 20B: 0.9558 SR / 22.15 mm.
+  ln_hold1_sonicreset:
+    vars:
+      base_arm: cont_det_ln_hold1
+      z_dim: 256
+      command_dim: 258
+      hold: 1
+    stages: &continuation_stages
+      - name: lowlevel12
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg12_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-50b,${vars.arm},seed${vars.seed},lowlevel,segment12
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel13
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg13_args}}
+        depends_on: lowlevel12
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-50b,${vars.arm},seed${vars.seed},lowlevel,segment13
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel14
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg14_args}}
+        depends_on: lowlevel13
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-50b,${vars.arm},seed${vars.seed},lowlevel,segment14
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel15
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg15_args}}
+        depends_on: lowlevel14
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-50b,${vars.arm},seed${vars.seed},lowlevel,segment15
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel16
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg16_args}}
+        depends_on: ${vars.chain_after}
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-50b,${vars.arm},seed${vars.seed},lowlevel,segment16
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
