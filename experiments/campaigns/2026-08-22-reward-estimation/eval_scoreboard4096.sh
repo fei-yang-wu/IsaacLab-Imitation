@@ -87,6 +87,10 @@ if [[ "${REWARD}" == "on" ]]; then
     reward_args+=(
         env.enable_reward_input_observations=true
         agent.reward_estimation=true
+        # PAIR=on for a checkpoint trained with the goal-conditioned
+        # (67-wide) estimator input; its state dict will not restore under
+        # the 38-wide key list.
+        "agent.reward_estimation_pair_input=${PAIR:-false}"
     )
 fi
 
