@@ -136,6 +136,51 @@ latent 10B row (0.9368 / 23.61) and the 7.6B small-net explicit baseline
 (0.9358 / 20.11; that comparison is confounded by network size and frames).
 One seed.
 
+## Full 10B table (2026-08-25, one seed)
+
+4,096 board, sonic pass. The latent comparator is the real headline
+`cont_det_ln_hold1` 10B row (same encoder file, same recipe, no IRL stack).
+
+| interface | estimator | frames | SR | MPJPE (mm) | survival |
+| --- | --- | --- | --- | --- | --- |
+| explicit | vanilla IRL | 10B | 0.9558 | 17.66 | 350.6 |
+| explicit | GP 0.5 | 10B | 0.9583 | 17.92 | 351.1 |
+| explicit | GP 5.0 + LR 0.01 | 10B | **0.9604** | **17.47** | 351.9 |
+| explicit | paired r(s, g) + harsh | 10B | 0.9578 | 17.64 | 351.5 |
+| latent ln_hold1 | none (headline) | 10B | 0.9368 | 23.61 | 347.3 |
+| latent ln_hold1 | GP 0.5 | 10B | 0.9373 | 23.65 | 347.3 |
+| latent ln_hold1 | paired r(s, g) + harsh | 9.0B | 0.9377 | 24.23 | 347.1 |
+| latent ln_hold1 | GP 5.0 + LR 0.01 | 8.5B, still training | - | - | - |
+
+Reading: the IRL stack remains a NULL on tracking at 10B — every explicit
+row sits at 0.956-0.960 SR / 17.5-17.9 mm and every latent row at
+0.937 SR / 23.6-24.2 mm, all inside evaluation noise of their
+no-reward-estimation counterpart. Reward estimation neither helps nor hurts
+the tracker, on either interface, at any regularizer strength tried. That
+is the expected result while PPO trains on the task reward
+(`use_estimated_rewards_for_ppo=false`); the estimator is along for the
+ride.
+
+### Divergence: `irl_pair_latent_ln_hold1` (2026-08-25)
+
+The paired latent arm trained healthily to ~9.33B frames (ep_len ~200) and
+then blew up inside a single 25-iteration window: ep_len 164 at iter 16073,
+then `pi_loss`, `reward_diff`, `exp_r` and `r_step` all NaN at iter 16099,
+never recovering. Its 10B checkpoint is therefore dead (SR 0.000, survival
+2.3 steps); the row above is its last pre-divergence checkpoint (9.0B),
+which is healthy and level with the other latent rows. The eval itself is
+sound - encoder binding reports 0.0 divergence.
+
+Not yet attributed. The same pairing on the explicit interface reached 10B
+cleanly, and GP 0.5 on the latent interface reached 10B cleanly, so the
+suspect is the interaction of the goal-conditioned input with the harsh
+(GP 5.0) penalty on the latent route: the grad penalty builds a
+second-order graph through the estimator input, and the paired input makes
+policy/expert trivially separable, so the estimator sits pinned at its
+logit-reg ceiling (reward_diff -1.9548, exactly constant for thousands of
+iterations before the blowup). A rerun would settle whether it is
+reproducible or a one-off numeric event.
+
 ## Status
 
 - 2026-08-22: campaign created; local qualification passed.
@@ -157,6 +202,10 @@ One seed.
   approval (75G freed); all five dead chains resumed as
   lowlevel3+lowlevel_resume pairs (jobs 5588914/16/18/20/22). The vanilla
   arm finished 10B before the quota filled.
+- 2026-08-25: six of seven arms reached the full 10B budget and were scored
+  (table above). `irl_hp_latent_ln_hold1` ran out of chained segments at
+  8.5B and was continued as jobs 5591490 -> 5591491.
+  `irl_pair_latent_ln_hold1` diverged at ~9.33B (see above); scored at 9.0B.
 - 2026-08-23 (evening): both gp arms MEASURED railed by ~1B frames
   (reward_diff -2.0, exp_r 1.0) — R1 has no force at the rails. Harsh
   arms submitted per user directive (kept the gp arms running): grad
