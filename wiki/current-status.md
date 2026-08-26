@@ -27,6 +27,18 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Smoothness arms submitted (2026-08-26)
+
+The acceleration-distance gap (ours 4.67 vs SONIC 2.89 m/s^2 on the new
+common eval subset) traces to `env.rewards.action_rate_l2.weight=0.0` in the
+tuned recipe; SONIC v1.1 trains with -0.1. `2026-08-26-smooth-finetune`
+submits three +2B finetune arms off the pinned 46.5B leader checkpoint
+(`ar01` -0.1, `ar003` -0.03, `ar01shake4` -0.1 plus 4x anti-shake) and one
+10B from-scratch arm (`ar01scratch`), jobs 5592178-86, W&B group
+`smooth-finetune`. Gate: acceleration distance falls on
+`sonic_capability124_v1` while SR/MPJPE-L hold on `bones_testbed4096_v1`.
+Nothing measured.
+
 ## 50B leader chain: mid-chain progress row at 46.5B (2026-08-26)
 
 `ln_hold1_sonicreset`'s 50B chain is **not finished**: it stands at 46.67B of
