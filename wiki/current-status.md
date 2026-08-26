@@ -2,7 +2,7 @@
 
 Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
 
-Last verified: 2026-08-18. New latent/interface work uses
+Last verified: 2026-08-25. New latent/interface work uses
 `Isaac-Imitation-G1-v2`; frozen v0/v1 aliases remain only for reproducing the
 historical runs recorded below. The current contract for what goes in the paper
 is [final-paper-experiment-design.md](final-paper-experiment-design.md).
@@ -26,6 +26,122 @@ cluster submission, job failure, or paper result. Verify changing external
 state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
+
+## The released SONIC checkpoint is the paper's 16M model (2026-08-25)
+
+Goal was an evaluation population on which the public SONIC checkpoint
+reproduces a SONIC paper number, so the paper's baseline rows can be cited as a
+faithful proxy. The population turned out not to be the lever.
+
+**The public `sonic_release/last.pt` is not the paper's 42M flagship — but
+`sonic_v1_1/last.pt` is.** Both are on HF; their `config.yaml` files settle it
+(`sonic_release` `g1_dyn` `[2048,2048,1024,1024,512,512]`, `sonic_v1_1` and
+`low_latency` `[4096,4096,2048,2048,1024,1024,512,512]` = Table S1). An earlier
+line here said the 42M weights were unreleased; that was wrong.
+
+**`sonic_release/last.pt` is not the paper's 42M flagship.** Its action decoder is
+`[2048, 2048, 1024, 1024, 512, 512]` (release `config.yaml:152`) where Table S1
+specifies `[4096, 4096, 2048, 2048, 1024, 1024, 512, 512]` — 14.4M parameters
+on the tracking path against 41.6M. It is the paper's 16M rung, at 100k
+iterations against the paper's 50k. So its comparable rows are Table 4(a),
+test-repetition 99.6% / 25.5 mm, **not** Table 4(c)'s 99.8% / 22.5 mm, the
+Figure 2 MuJoCo 98.7% / 23.2 mm, or the 123-clip deployment 100% / 22.3 mm.
+
+Measured on the new `sonic_proxy_testrep4096_v1` board, clean protocol:
+`sonic_release` **0.9924 / 25.63 mm / 150.94 mm** against Table 4(a)'s
+0.996 / 25.5 mm (0.13 mm), and `sonic_v1_1` **0.9932 / 24.35 mm / 206.00 mm**
+against Table 4(c)'s 0.998 / 22.5 mm (1.85 mm). The harness reproduces the
+paper's own rows at the sub-2 mm level for both public checkpoints.
+
+v1.1 is **not** a strict improvement on the release: on the 4,057 clips both
+complete it is 1.3 mm better on MPJPE-L (24.29 vs 25.60) and 56 mm WORSE on
+MPJPE-G (206.20 vs 150.39), at level completion. The bigger decoder buys local
+precision and spends global anchoring.
+
+Also settled, both from SONIC's released source: their `mpjpe_l` is
+`smpl_sim` `compute_metrics_lite`, root translation only, and their 14
+`body_names` are ours verbatim — the metric was never the gap. A reference
+time-base hypothesis (their stride converter at 120 to 50 fps) was raised and
+dropped: the load-time resampler is a proper time-based lerp/slerp and the
+production converter is not public.
+
+Clip selection moves the number by 0.1-0.4 mm. Reaching 23.8 mm by pruning
+requires deleting Dance, Advanced Locomotion, Sports, Stunts and Unusual
+Locomotion — the ease-selection error of 2026-08-17, still not to be rebuilt.
+SONIC's own deployability filter is the 40-keyword list we already apply.
+
+**Our best on the same board.** `ln_hold1_sonicreset` @30B, clean protocol:
+**0.9722 SR / 20.09 mm / 104.08 mm**. On the clips both complete the tracking
+gap survives against both public checkpoints — 20.03 vs 23.93 mm against
+`sonic_v1_1` (3,972 clips; MPJPE-G 103.84 vs 185.41) and 20.03 vs 25.32 mm
+against `sonic_release` (3,968 clips) — so it is not a subset artifact. v1.1
+completes 96 clips we fail; we complete 10 it fails. They trade — tracking precision to us, robustness to them — which is
+the same shape as the 2026-08-07 reading, now at a 5.3 mm margin instead of
+3 mm and with MPJPE-G moving to our side for the first time. One seed. The
+50B chain (`sonic-reset-50b`, resubmitted 2026-08-24) has no local mirror yet.
+
+**22.3 mm is not reachable honestly, twice over.** A 123-clip board built from
+the ten motion families SONIC names as deployed scores `sonic_v1_1` at
+36.76 mm, `sonic_release` at 42.72 and our 30B arm at 38.49 — selecting
+deployable motions makes a board HARDER, since crawl, crouch, kneel and dance
+are the worst families. And a search for any other matching subset found that
+2.2% of random 123-clip draws and 13.1% of a 512-rule grid already hit 22.3 mm,
+with the closest rule ("short and slow") dropping all but 12 of the 123
+deployment-family clips. New guard `evaluation.subset_sensitivity` measures
+this for any future "population P reproduces X" claim.
+
+**New common eval subset, preliminary.** The frozen artifact ID
+`sonic_capability124_v1` identifies this transparent, policy-conditioned
+population; it is not a held-out board. The direct clean `sonic_v1_1` run completed
+124/124 clips at **1.0000 SR / 23.79 mm MPJPE-L / 173.92 mm MPJPE-G**. The
+30B `ln_hold1_sonicreset` seed-0 tracker completed 123/124 at **0.9919 /
+19.44 / 108.58 mm**, one evaluation. On the 123 shared successes, SONIC is
+23.43 / 148.37 mm and ours is 19.44 / 108.58 mm. The ordered-rank hash matches
+and the 18-tensor encoder binding audit passes. Motion-name review of all 124
+clips and full-horizon videos of the nine ambiguous names passed; the ranks did
+not change. Repeats are still open. Do not use this result as an unbiased
+tracker ranking.
+
+New: `evaluation.sonic_paper_proxy`, board `sonic_proxy_testrep4096_v1` and
+profiles `paper_sonic_proxy_testrep4096_v1` / `_robust_v1`, campaign
+`experiments/campaigns/2026-08-25-sonic-paper-proxy/`. It is a calibration
+board; our own arms still score on `bones_testbed4096_v1`.
+[canonical-paper-metrics.md](canonical-paper-metrics.md) and
+[sonic-release-checkpoint-tier2.md](sonic-release-checkpoint-tier2.md) are
+updated.
+
+## IPMD reward estimation (IRL): PARKED, future work needed (2026-08-25)
+
+The reward-estimation campaign is complete and parked by user decision. Two
+findings, both one seed on the 4,096 board:
+
+1. **The stack is a null on tracking.** At a matched 10B budget every
+   explicit row lands at 0.9558-0.9604 SR / 17.47-17.92 mm and every latent
+   row at 0.9368-0.9377 SR / 23.61-24.23 mm — each inside evaluation noise
+   of its no-reward-estimation counterpart (headline `cont_det_ln_hold1`
+   0.9368 / 23.61). Reward estimation neither helps nor hurts the tracker,
+   on either interface, at four regularizer settings. Expected, since PPO
+   trains on the task reward; the useful part is that the machinery is
+   proven safe to carry.
+2. **The estimator itself is degenerate, and saturation is why.** The pure
+   diff objective has no interior optimum: it is minimized by separating
+   policy and expert as far as the output activation permits. Unregularized
+   it pins at the tanh rails; with the R1 grad penalty it still rails
+   (input gradients vanish exactly at the rails); with logit regularization
+   it holds a soft ceiling (reward_diff -1.958) rather than a shaped
+   reward. Goal-conditioned pairing makes separation *easier*, not harder,
+   because the expert side has identically zero tracking error.
+   `use_estimated_rewards_for_ppo=true` was therefore never worth trying.
+
+Reviving this needs a different objective (a binding WGAN-GP-style
+interpolate penalty or a density-ratio/logistic loss), harder negatives, and
+a calibration target that reports saturation early instead of after 10B
+frames — see the campaign README's "PARKED — future work needed" section.
+Also open: `irl_pair_latent_ln_hold1` diverged to NaN inside one
+25-iteration window at ~9.33B (scored at its 9.0B pre-divergence
+checkpoint); unattributed, suspect pairing x harsh grad penalty x latent
+route. Everything stays off by default, so no paper-path row is affected.
+Campaign: `experiments/campaigns/2026-08-22-reward-estimation/`.
 
 ## IPMD reward estimation (IRL): normalized input fixed, 10B run submitted (2026-08-22)
 
