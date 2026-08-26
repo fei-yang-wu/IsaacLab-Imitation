@@ -19,6 +19,7 @@ from imitation_experiments.paper.common import PipelineError
 
 _ARRAY_RE = re.compile(r"^([0-9]+)-([0-9]+)(%[1-9][0-9]*)?$")
 _DEPENDENCY_RE = re.compile(r"^(afterok|afterany):[0-9]+(:[0-9]+)*$")
+_EXTERNAL_DEP_RE = re.compile(r"^job:([0-9]+)$")
 _TIME_RE = re.compile(r"^([0-9]+-)?[0-9]{1,2}:[0-9]{2}:[0-9]{2}$")
 _MEM_RE = re.compile(r"^[0-9]+[KMGT]?$")
 _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -77,6 +78,20 @@ def validate_directives(d: SlurmDirectives) -> None:
     if d.cpus_per_task < 1 or d.nodes < 1 or d.ntasks < 1:
         raise PipelineError("cpus_per_task, nodes, and ntasks must be >= 1")
     normalize_gres(d.gres)
+
+
+def external_dependency_job_id(depends_on: str) -> str | None:
+    """Return the Slurm job id of a ``job:<id>`` dependency, else ``None``.
+
+    A stage normally depends on another stage of the same plan, whose job id
+    exists only after ``submit`` runs. An insurance segment appended to a chain
+    that is ALREADY running has no such sibling: its predecessor is a live job
+    id. ``depends_on: "job:5590010"`` names that id directly, so the successor
+    queues behind the running segment instead of starting beside it and
+    training the same output tree twice.
+    """
+    match = _EXTERNAL_DEP_RE.match(depends_on)
+    return match.group(1) if match else None
 
 
 def validate_dependency(spec: str) -> None:
@@ -146,7 +161,15 @@ if [ -n "$declared_run_id" ]; then
         echo "[INFO] W&B run id from $run_id_state: $resolved_run_id"
     else
         run_id_base="$(printf '%s' "$declared_run_id" | cut -c1-{base_max})"
-        resolved_run_id="${{run_id_base}}-$(tr -dc 'a-z0-9' < /dev/urandom | head -c 6)"
+        # `od` reads a fixed 3 bytes and exits, so nothing is left writing into
+        # a closed pipe. The previous form, `tr -dc 'a-z0-9' < /dev/urandom |
+        # head -c 6`, made `head` close the pipe while `tr` streamed an endless
+        # source: `tr` took SIGPIPE, `pipefail` surfaced 141, and `set -e`
+        # killed the job at zero seconds with no error message. It fired on
+        # every stage that declares a run id -- which is every low-level stage
+        # and no pretrain -- and cost 21 arms of the interface design study on
+        # 2026-08-19.
+        resolved_run_id="${{run_id_base}}-$(od -An -tx1 -N3 /dev/urandom | tr -d ' \n')"
         mkdir -p "$(dirname "$run_id_state")"
         printf '%s' "$resolved_run_id" > "$run_id_state"
         echo "[INFO] W&B run id created: $resolved_run_id -> $run_id_state"
@@ -206,6 +229,16 @@ nvidia-smi || true
 bootstrap_root={quoted_tmp_root}/isaaclab-bootstrap-${{SLURM_JOB_ID:-$$}}
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
+# Per-job compile caches. The default `~/.cache/torchinductor` is shared, and
+# concurrent jobs of one campaign race on its `.tmp` -> `.py` rename: the
+# 2026-08-20 posterior campaign lost `post_recon_vq` to
+# `InductorError: FileNotFoundError ... .tmp -> ....py` six minutes in, while
+# its eight siblings ran. Scoping the cache to the job's own bootstrap root
+# removes the shared name, and it is cleaned up with that root.
+export TORCHINDUCTOR_CACHE_DIR="$bootstrap_root/torchinductor"
+export TRITON_CACHE_DIR="$bootstrap_root/triton"
+mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
+
 echo "[INFO] Extracting workspace archive into compute-local storage."
 tar -xzf {quoted_plan_dir}/workspace.tar.gz -C "$bootstrap_root"
 extracted_workspace="$bootstrap_root/isaaclab-submission-${{SLURM_JOB_ID:-$$}}"

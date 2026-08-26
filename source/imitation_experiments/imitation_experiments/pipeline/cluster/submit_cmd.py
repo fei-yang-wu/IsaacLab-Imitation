@@ -23,7 +23,7 @@ from .remote import (
     ssh_upload,
     sync_workspace_archive,
 )
-from .slurm import validate_dependency
+from .slurm import external_dependency_job_id, validate_dependency
 
 
 def _scancel(login: str, job_ids: list[str]) -> None:
@@ -100,7 +100,9 @@ def cmd_submit(args: argparse.Namespace) -> int:
         dependency = None
         if job["depends_on"]:
             kind = str(job.get("dependency_kind", "afterok"))
-            dependency = f"{kind}:{ids_by_stage[job['depends_on']]}"
+            target = str(job["depends_on"])
+            predecessor = external_dependency_job_id(target) or ids_by_stage[target]
+            dependency = f"{kind}:{predecessor}"
             validate_dependency(dependency)
         try:
             job_id = sbatch_parsable(

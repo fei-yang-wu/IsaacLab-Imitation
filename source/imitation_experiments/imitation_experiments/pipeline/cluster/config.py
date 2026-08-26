@@ -16,6 +16,8 @@ from omegaconf.errors import OmegaConfBaseException
 
 from imitation_experiments.paper.common import PipelineError
 
+from .slurm import external_dependency_job_id
+
 # Campaign specs need small derived values (frames-per-batch arithmetic) and
 # argv-list composition (shared blocks + per-arm blocks). Registered once,
 # replace=True keeps re-imports idempotent.
@@ -244,9 +246,15 @@ def load_campaign(
             f"arm '{arm}' in {path} has duplicate stage names: {stage_names}"
         )
     for stage in stages:
-        if stage.depends_on is not None and stage.depends_on not in stage_names:
+        if (
+            stage.depends_on is not None
+            and stage.depends_on not in stage_names
+            and external_dependency_job_id(stage.depends_on) is None
+        ):
             raise PipelineError(
-                f"stage '{stage.name}' depends on unknown stage '{stage.depends_on}'"
+                f"stage '{stage.name}' depends on unknown stage "
+                f"'{stage.depends_on}' (a live Slurm job takes the form "
+                f"'job:<id>')"
             )
     return ResolvedJobSet(
         campaign_name=campaign.name,

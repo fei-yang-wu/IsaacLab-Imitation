@@ -27,7 +27,11 @@ from .planfile import (
     write_plan,
 )
 from .preflight import CheckResult, container_to_remote, run_preflight
-from .slurm import SlurmDirectives, render_batch_script
+from .slurm import (
+    SlurmDirectives,
+    external_dependency_job_id,
+    render_batch_script,
+)
 
 _NAME_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -76,9 +80,18 @@ def _select_stages(
     kept = {s.name for s in selected}
     # A dependency on a stage that is not part of this plan cannot become an
     # afterok, so it is dropped (e.g. resubmitting lowlevel against an encoder
-    # already on disk).
+    # already on disk). A `job:<id>` dependency names a live Slurm job instead
+    # of a sibling stage, so it survives selection.
     return tuple(
-        replace(s, depends_on=s.depends_on if s.depends_on in kept else None)
+        replace(
+            s,
+            depends_on=(
+                s.depends_on
+                if s.depends_on in kept
+                or (s.depends_on and external_dependency_job_id(s.depends_on))
+                else None
+            ),
+        )
         for s in selected
     )
 
@@ -187,11 +200,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
     print(f"[PLAN] local dir:  {plan_dir}")
     print(f"[PLAN] remote dir: {remote_plan_dir}")
     for job in jobs:
-        dep = (
-            f" {job.get('dependency_kind', 'afterok')}:{job['depends_on']}"
-            if job["depends_on"]
-            else ""
-        )
+        depends_on = job["depends_on"]
+        if depends_on:
+            kind = job.get("dependency_kind", "afterok")
+            predecessor = external_dependency_job_id(depends_on) or depends_on
+            dep = f" {kind}:{predecessor}"
+        else:
+            dep = ""
         print(f"[PLAN] stage {job['stage']}: {job['job_name']}{dep}")
     for check in checks:
         marker = "OK  " if check.ok else "FAIL"

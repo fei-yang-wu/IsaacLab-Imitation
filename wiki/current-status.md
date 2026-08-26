@@ -27,6 +27,61 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## 50B leader chain: mid-chain progress row at 46.5B (2026-08-26)
+
+`ln_hold1_sonicreset`'s 50B chain is **not finished**: it stands at 46.67B of
+50B. Segment `lowlevel14` (job 5590009) hit its 15:59 walltime at 46.60B and
+`lowlevel15` (5590010) resumed from it. Node `atl1-1-03-017-16-0` carries five
+jobs, so the chain now logs 43-50k fps instead of its usual ~129k; at that rate
+segment 15 reaches only ~49.1B, and it was the last declared segment. Segment
+`lowlevel16` was declared and planned as second insurance, but the user held
+the submission on 2026-08-26, so nothing is queued behind 5590010 yet.
+
+The newest checkpoint, `model_step_46500151296.pt`, was scored on the new
+common eval subset `sonic_capability124_v1`, clean protocol, seed 0, one
+evaluation. This is a PROGRESS read, not the 50B promotion row.
+
+| row | clips | SR | MPJPE-L | MPJPE-G |
+| --- | ---: | ---: | ---: | ---: |
+| public `sonic_v1_1` | 124 / 124 | 1.0000 | 23.79 mm | 173.92 mm |
+| ours @30B | 123 / 124 | 0.9919 | 19.44 mm | 108.58 mm |
+| ours @46.5B | 124 / 124 | 1.0000 | 19.44 mm | 122.08 mm |
+
+Success-only errors above use each row's own successful clips. On the 123 clips
+all three complete: SONIC 23.43 / 148.37 mm, ours @30B 19.44 / 108.58 mm, ours
+@46.5B **18.99 / 97.56 mm**.
+
+Read the matched pair carefully. 30B to 46.5B moves MPJPE-L by 2.3% and
+MPJPE-G by 10.1%, both inside the unresolved band for one seed and one
+evaluation; the only firm change is that rank 6364 `kneeling_loop_003_A244`,
+the 30B row's single `anchor_pos` failure, now completes. The subset was
+selected by reading public SONIC's own results, so it favors that anchor;
+never call it held out or unbiased.
+
+Velocity/acceleration distance (added 2026-08-26): `evaluate_sonic_release`
+now accumulates `tracking_velocity_distance_mps` and
+`tracking_acceleration_distance_mps2` per step over the same 14 links, the
+`evaluate_checkpoint` definition. On the 124 clips (all rows complete all
+clips): SONIC 0.165 m/s / 2.89 m/s^2, ours @46.5B 0.175 m/s / 4.67 m/s^2 —
+velocity distance near-equal (6%, unresolved), acceleration distance clearly
+higher for ours (rollout less smooth at the link level), while we lead on both
+MPJPE columns. The SONIC re-run doubles as the board's first repeat: 23.89 vs
+23.79 mm L, so repeat noise is ~0.1 mm.
+
+Artifacts: `logs/sonic_capability124_v1/ln_hold1_sonicreset_46b5_clean.json`
+and its `_encoder_binding.json` (18 of 18 encoder tensors identical to the
+selected encoder). The launcher is
+`experiments/campaigns/2026-08-25-sonic-paper-proxy/score_arms_capability124.sh`,
+which verifies the frozen rank-list SHA-256 before it evaluates anything.
+
+**Control plane: a stage may now depend on a live Slurm job.** `depends_on:
+"job:<id>"` resolves to `afterany:<id>` at submit time and survives
+`--only-stage` selection, so an insurance segment appended to a chain that is
+already running queues behind it instead of starting beside it and training the
+same output tree twice. `sonic-reset-50b` gained `lowlevel16` with
+`depends_on: ${vars.chain_after}`, default `lowlevel15`. The stage is planned,
+not submitted.
+
 ## The released SONIC checkpoint is the paper's 16M model (2026-08-25)
 
 Goal was an evaluation population on which the public SONIC checkpoint
