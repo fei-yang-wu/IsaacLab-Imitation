@@ -58,24 +58,28 @@ arm_config() {
     done
 }
 
-# The 2026-08-17 motion set (`bones_seed_language30_v2`): the 2026-08-13
-# thirty, minus `walk_big_dog_ff_225_stop` (tracker-limited on both 10B
-# trackers) and `looking_in_the_mirror` (least discriminating, and Object
-# Interaction was over-represented), plus `walk_ff_loop_360` ("walk
-# backwards") and `reaching_up` ("reaching up"). Ranks are this dataset's
-# own 0..29 and do NOT match the v1 dataset's.
-DATA_ROOT="${REPO_ROOT}/data/bones_seed_language30_v2"
-MANIFEST_LANG="${DATA_ROOT}/manifests/g1_bones_seed_language30_v2_manifest_language.json"
+# The ORIGINAL 28-motion set (user directive 2026-08-17): the language30
+# dataset with ranks 22 (`panic_run_away_180`) and 28
+# (`walk_big_dog_ff_225_stop`) excluded — exactly the set behind the 46.95 mm
+# row, so these arms are directly comparable with it.
+#
+# A 30-motion successor (`data/bones_seed_language30_v2`, two swaps: out
+# `walk_big_dog` and `looking_in_the_mirror`, in "walk backwards" and
+# "reaching up") is built and screened but NOT used here; switching to it means
+# rebuilding the GR00T goal features, which needs Hugging Face access to the
+# gated Cosmos backbone.
+DATA_ROOT="${REPO_ROOT}/data/bones_seed_language30_compositionality_v1"
+MANIFEST_LANG="${DATA_ROOT}/manifests/g1_bones_seed_language30_compositionality_v1_manifest_language.json"
 REFERENCE_ARRAYS="${DATA_ROOT}/reference_arrays/root_qpos_v1"
-PERSIST_ID="bones_seed_language30_v2@7a6d5c49"
-GOAL_FEATURES="${REPO_ROOT}/outputs/planner_10b/goal_features/goal_features.pt"
-LANGUAGE_EMBEDDINGS="${DATA_ROOT}/language/g1_bones_seed_language30_v2_minilm_goal_embeddings.pt"
+PERSIST_ID="bones_seed_language30_compositionality_v1@f31fd755"
+GOAL_FEATURES="${REPO_ROOT}/outputs/gr00t_language30/goal_features/goal_features.pt"
+LANGUAGE_EMBEDDINGS="${DATA_ROOT}/language/g1_bones_seed_language30_compositionality_v1_minilm_goal_embeddings.pt"
 RUNTIME_BODY_NAMES='env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]'
 
-# Every motion in this dataset is trainable on both trackers: the one that
-# was not (`walk_big_dog_ff_225_stop`) is already absent from it, so nothing
-# is excluded at run time. EXCLUDE_RANKS stays as an escape hatch.
-EXCLUDE_RANKS="${EXCLUDE_RANKS:-}"
+# Both excluded motions are tracker-limited on the 4.5B tracker the 46.95 mm
+# arm used. On these 10B trackers rank 22 is no longer (oracle falls 0/5 and
+# 1/5) but it stays out so the motion set matches the row we compare against.
+EXCLUDE_RANKS="${EXCLUDE_RANKS:-22 28}"
 
 load_motions() {
     readarray -t ALL_MOTIONS < <(

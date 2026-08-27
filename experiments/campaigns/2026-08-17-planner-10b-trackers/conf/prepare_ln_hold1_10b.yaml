@@ -9,7 +9,7 @@ defaults:
 # `source: stored` — the collector already saved the published per-step z, and
 # it is exactly what the planner must reproduce. No re-encoding, so the rows
 # carry no expert lookahead and `chunk` stays off.
-collection_dir: logs/planner_10b/ln_hold1_10b/collection_merged
+collection_dir: logs/planner_10b/ln_hold1_10b/collection_seed0
 output: outputs/planner_10b/tables/ln_hold1_10b_table.pt
 latent:
   slots: 30

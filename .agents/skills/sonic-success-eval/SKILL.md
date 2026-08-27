@@ -121,29 +121,45 @@ Report:
 
 `python -m imitation_experiments.evaluation.summarize_paper_boards <json>`
 prints the three-number row and refuses to print an incomplete one. Add
-`--subset deployable` for the 123-clip hardware-plausible board.
+`--ranks_json` to restrict a row to an explicit rank subset of a larger run.
 
 Do not report `aggregate.tracking_success_rate` as SR unless every evaluated
 environment finished. It intentionally exposes survivor status and can count
 unfinished clips under a short cap. A clip that reaches `reference_finished`
 on the same step as a failure remains a failure.
 
+## Score on the canonical testbed
+
+New work goes on `bones_testbed4096_v1` (`paper_testbed4096_v1` clean,
+`paper_testbed4096_robust_v1` for the robustness partner). Ranks come from
+`imitation_experiments.evaluation.protocol.TESTBED4096_RANKS`, never from a
+copied literal.
+
+The legacy block (ranks 12288-16383) stays registered only so pre-2026-08-17
+rows remain interpretable. Never put a legacy row and a testbed row in one
+table column: they are different populations, and the testbed is about 2.85 mm
+harder at matched randomization.
+
+Released-SONIC calibration on the testbed: clean **SR 0.9912 / 28.75 mm /
+MPJPE-G 135.73 mm**; `no_push` **0.9905 / 31.06 mm / 192.93 mm**.
+
 ## Say which SONIC number the row may be compared against
 
 SONIC's headline **22.3 mm at 100% success is its 123-clip hardware deployment
-set scored in simulation**, not a large benchmark. Its large-set rows are
-test-content **98.7% / 23.2 mm**, test-repetition 99.6%, PHUMA 97.0%.
+set scored in simulation**. That set is never enumerated (Figure S2 has no
+names or IDs), and SONIC's project page shows it deploying squatting,
+kneeling, hand crawling and elbow crawling on real hardware. **Do not compare
+anything in this repo against 22.3 mm**, and do not build a board that excludes
+crouch or ground motion in order to approach it — a 2026-08-17 attempt to do
+exactly that was deleted, because the filter selected for ease, not
+deployability.
 
-- A 4,096-clip block row compares against **23.2 mm**.
-- The `bones_deployable123_v1` board compares against **22.3 mm**.
+Compare a 4,096-clip row against SONIC's large held-out rows instead:
+test-content **98.7% / 23.2 mm**, test-repetition 99.6%, PHUMA 97.0%. State in
+the same sentence that the populations differ.
 
-Comparing a 4,096-clip block against 22.3 mm understates the tracker by about
-3.7 mm, because the block contains deep-crouch and ground clips no hardware set
-has. On the canonical block the minimum reference pelvis height alone has
-Spearman -0.61 against per-clip MPJPE-L.
-
-State that the result is criterion-compatible but not directly comparable to
-SONIC's paper number when the motion dataset or split differs.
+No board in this repo is held out from training: every tracker trains on the
+full 129,785-clip tree with no rank filter. Never call a board "held out".
 
 ## Preserve the other evaluation passes
 

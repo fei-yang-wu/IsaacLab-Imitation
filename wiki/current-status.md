@@ -2,7 +2,7 @@
 
 Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
 
-Last verified: 2026-08-25. New latent/interface work uses
+Last verified: 2026-08-27. New latent/interface work uses
 `Isaac-Imitation-G1-v2`; frozen v0/v1 aliases remain only for reproducing the
 historical runs recorded below. The current contract for what goes in the paper
 is [final-paper-experiment-design.md](final-paper-experiment-design.md).
@@ -26,6 +26,255 @@ cluster submission, job failure, or paper result. Verify changing external
 state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
+
+## Budget-axis curves for the whole interface study (2026-08-27)
+
+Every ablation axis the study measures now has a metric-against-frames curve,
+not only an endpoint: success rate, success-only micro MPJPE-L, and
+success-only MPJPE-G at eight budgets from 250M to 2B frames, all on
+`bones_milestone_testbed256_v1`.
+
+**576 points, 72 arms, five campaigns.** `interface-design-study` (29 arms) and
+`interface-combos` (5) were already scored. The 2026-08-26 sweep added
+`pareto-stack` (27 arms, 216 cells) and `posterior-interface` (9 arms, 72
+cells) locally in 3h45m. `bn_vq_ema` is the one collapsed arm: 0 successes at
+every budget, so it carries a success rate and no MPJPE.
+
+`python -m imitation_experiments.reporting.curve_table <eval dirs> --row
+milestone --csv <out>` reduces the scored cells to one tidy table. The setup and
+every arm's single changed field are in
+[interface-ablation-study.md](interface-ablation-study.md); the publication-facing
+reading of the numbers is [results-interface-ablations.md](results-interface-ablations.md).
+The interactive board is published at
+https://claude.ai/code/artifact/4b4a4e86-0d51-4571-be54-685ddafba264 . It keeps a
+collapsed arm with an empty success-only MPJPE rather than dropping the row,
+because a dropped row makes a collapse look like missing data.
+
+The curve board is 256 clips and the paper row is `bones_testbed4096_v1`. A
+curve is internally consistent; anchor its endpoint against the 4096-clip clean
+row instead of putting both scales on one axis.
+
+**The posterior campaign gained a budget axis.** Only its 2B checkpoint had
+been mirrored; ICE still held all eight per arm.
+`2026-08-20-posterior-interface/eval.sh` now takes `ROWS=milestone` and has a
+`mirror.sh`.
+
+**Scoring a tree in one process.** `scripts/rlopt/eval_checkpoint_tree.py`
+keeps a single Isaac Sim start and swaps the policy weights across a tree's
+milestones, planning the cells with
+`imitation_experiments.evaluation.score_tree`. An arm fixes the interface, so
+only the weights change. On `hold1_seed1`: 30.9 s/cell against 47.4 s/cell,
+and on the cluster it also collapses eight container starts into one. The rows
+agree within Isaac's nondeterminism -- mean success-rate difference +0.0010,
+largest 0.0156; MPJPE-L +0.06% mean; MPJPE-G -1.30% mean, scattered in sign.
+
+Two traps this cost:
+
+- The rollout steps inside `torch.inference_mode()`, so the expert data plane's
+  reference-row buffers are allocated as inference tensors during the first
+  cell. A later cell's reset writes them with `index_copy_`, which torch
+  refuses outside inference mode. Later cells now reset inside inference mode;
+  the first cell keeps the single-cell path untouched.
+- `run_singularity.sh` sent every non-`train*.py` entrypoint to Kit's Python,
+  which has no torch, and appended `--assert-kitless`, which only the train
+  entrypoints define. `scripts/rlopt/eval*.py` now resolves its backend the
+  same way training does and does not get the training-only flag.
+
+## Hold 5 fills the middle of the hold axis (2026-08-27)
+
+The study had hold 10 and hold 1 and nothing between, at either code width.
+`use_hold5` (256-D) and `ix_fsq64_hold5` (64-D SONIC FSQ) joined
+`2026-08-19-interface-design-study` as one-field changes from their hubs and
+went to ICE at the full 2B budget: jobs 5592720-22 and 5592723-25, pretrain
+then two chained lowlevel segments. The star is now 18 core + 11 supporting +
+2 interaction probes.
+
+Both chains finished the full 2B in one lowlevel segment (the second segment
+exited in six minutes on the met budget), and `2026-08-27-hold5-curve-eval`
+scored both budget axes on ICE, one job per arm, about 16 minutes each for
+eight cells: jobs 5593234 and 5593236. The 29 star arms stay on the local
+mirror -- their ICE trees were cleaned under the 300 GB quota.
+
+At 2B, monotone in MPJPE-G at both code widths, and the SR cost of hold 1 only
+appears at 64-D:
+
+| width | hold 10 | hold 5 | hold 1 |
+|---|---|---|---|
+| 256-D | 0.9102 / 23.44 / 199.87 | 0.9102 / 24.79 / 146.92 | 0.9180 / 25.76 / 140.94 |
+| 64-D FSQ | 0.9023 / 28.86 / 177.70 | 0.9023 / 28.52 / 141.36 | 0.8789 / 30.65 / 134.10 |
+
+SR / MPJPE-L / MPJPE-G, `bones_milestone_testbed256_v1`, one seed. A 256-clip
+board and one seed: read the hold-5 rows as filling in the shape of the axis,
+not as separating arms whose ends already sit this close.
+
+**What the ICE evaluation path cost.** Four failed submissions, each a wrong
+assumption about the cluster, all fixed:
+
+- `score_tree` read only the mirror's `f<frames>` layout. On ICE the trainer
+  layout stands, so the frame count comes from the file name -- valid only for
+  a tree that ran as ONE segment. A tree whose checkpoints span several run
+  directories is now refused, not guessed.
+- The CU130 runtime Python has no Kit extension cache: `AppLauncher` dies on a
+  missing `EXP_PATH`. The evaluators construct `AppLauncher` at import, so they
+  need Kit AND torch, which only Kit's Python with the CU130 site-packages
+  gives -- the PhysX training branch's interpreter.
+- That interpreter needs `configure_cu130_bridge` before any torch import, the
+  same call `train_physx.py` makes.
+- Two eval jobs started eleven minutes apart both hit the shared Isaac Sim
+  cache; the second crashed inside Kit startup. Re-run alone it passed. Serialize
+  eval jobs, or give each its own `CLUSTER_ISAAC_SIM_CACHE_DIR`, until this is
+  understood.
+
+## Stroboscopic motion-sequence figures (2026-08-26)
+
+`--shot sequence` on `scripts/viz/render_paper_policy_video.py` produces the
+graphics-paper motion composite: one image, one scene, the robot at several
+poses along the path it walked. It runs the clip twice — once unrendered to
+learn the travel path and auto-frame a locked camera to it, then again to
+capture poses — cuts each pose out by differencing against a background plate
+rendered with the robot hidden, and layers them. `--sequence_poses` (default 6),
+`--sequence_alpha_min`, `--sequence_threshold`.
+
+Findings worth keeping, each of which cost a render cycle to establish:
+
+- **A chase camera cannot make this figure.** It holds the robot in the middle
+  of every frame, so the poses stack in one place. The locked camera is the
+  whole feature; the palette needed no change.
+- **Order poses by distance travelled, not by time.** Even time spacing bunches
+  poses wherever the robot slows down, which is exactly the interesting part.
+- **Layer along the shadow direction, not chronologically.** Shadows all run
+  downwind of the key light, so the pose a shadow falls ON must be drawn AFTER
+  the pose it comes FROM or that shadow eats its feet. Sorting by projection
+  onto the shadow direction is correct whichever way the robot walks.
+- **Re-apply the style after locking the camera.** The three-point rig is placed
+  relative to the camera azimuth, and the sequence shot moves the camera after
+  the style was applied.
+- **Difference keying alone fails on this robot.** Its white shell sits within a
+  few levels of the backdrop, so differencing finds the outline and the dark
+  joints but drops the middle of a limb. Filling external contours fixes it, and
+  over-filling is safe because frame and plate are identical outside the robot.
+- **Pitch must exceed half the vertical field of view** or the horizon enters
+  the frame; the wide lens a sequence needs makes this bite where `hero_low`
+  never did. Derived from the lens at runtime, not hard-coded.
+- **Do not median several renders to denoise a still frame.** This renderer
+  converges tile by tile, so a per-pixel median across successive renders bakes
+  tile seams in.
+
+### The horizontal banding was the floor slab (2026-08-26)
+
+Figures carried visible horizontal lines. **Cause: the studio floor slab's
+geometry.** Not the compositing, not the locked camera, not temporal AA. Both
+of its dimensions matter and both are now pinned with a comment in
+`_spawn_studio_rig` — do not "tidy" either:
+
+- **Extent.** The original 20 km slab spans a depth range wide enough that
+  depth quantisation prints as thin dark lines lying on the floor, crowding
+  toward the near field. Scored 24–130 on the seam metric for a grazing locked
+  camera against 0.67 for a chase shot; 400 m scores 0.33. Keep it past the
+  largest fog end (110 m) and no bigger.
+- **Thickness.** A thicker slab bands at *shallow* angles instead: 0.5 m took
+  `hero_low` from 0.4 to 100. 2 cm is clean everywhere.
+
+Now 9 of 10 style×shot combinations score under 1.0, the tenth
+(`studio_dark`/`ground_high`, 3.67) being a smooth lighting falloff rather than
+a seam.
+
+**How the diagnosis went wrong first, which is the transferable part.** Three
+successive "fixes" were built on a metric that could not see the defect: it
+averaged columns over a strip the robot walks through, so it scored the robot,
+not the banding. That produced a confident and wrong story (temporal
+accumulation on a static camera), a settle-and-retry loop that gamed the blind
+spot by optimising a region while the rest of the frame got worse, and a
+row-debanding post-process that treated the symptom. Two rules earned the hard
+way: **a metric that does not cover the whole artifact is worse than no metric**,
+because it licenses fixes that make things worse, and **amplify and look at the
+image before theorising** — one ×12 view of the residual showed lines lying on
+the ground plane and pointed straight at the floor geometry.
+
+Also measured along the way, all now moot but worth not repeating:
+`RenderCfg.samples_per_pixel` is a **no-op** under RT2 (that is the RT1
+`/rtx/directLighting/...` path; RT2 uses `rtx.rtpt.*`), and
+`ManagerBasedRLEnv.render(recompute=True)` **skips** `sim.render()` rather than
+forcing it.
+
+## Paper figure renders: `studio_light` + `hero_low` is the chosen look (2026-08-26)
+
+**Decision: paper figures and clips use `--style studio_light --shot hero_low`.**
+The user picked it off the contact sheet on 2026-08-26 and both are now the
+script defaults; the contact sheet marks that cell RECOMMENDED. It is a
+seamless near-white cyclorama with the robot at eye level on a 35 lens: no
+horizon to crop around, and it sits on a white page without a visible frame
+edge. Use it unless a figure needs something else on purpose.
+
+`scripts/viz/render_paper_policy_video.py` no longer hard-codes one look.
+`--style {light,dark,studio_light,studio_dark,photoreal}` picks the palette and
+`--shot {ground_high,hero_low,orbit_hero}` picks the framing; `--preview`
+renders the whole style-by-shot matrix from one frozen pose in a single Isaac
+launch and writes a labelled contact sheet, so a look is chosen before any clip
+is rendered. `--stills_every` / `--stills_steps` write lossless PNG, which
+figures should use instead of extracting frames from the CRF-23 MP4.
+`--style light --shot ground_high` reproduces what the script rendered before
+the presets existed, so earlier renders stay reproducible.
+
+Four defects were found and fixed while calibrating, and each is a trap for the
+next person touching this file:
+
+- `safe_set_attribute_on_usd_prim(..., camel_case=True)` lowercases the whole
+  name, so `inputs:diffuseColor` was written as `inputs:diffusecolor` and every
+  floor-color change was silently a no-op. Pass `camel_case=False`.
+- `/OmniverseKit_Persp` is authored in the stage's **session layer**. Lens
+  writes through the default edit target lose to it and read back unchanged;
+  they need `Usd.EditContext(stage, stage.GetSessionLayer())`.
+- The rendering `.kit` leaves `/rtx/sceneDb/ambientLightIntensity` at 1.0, a
+  flat term that puts a hard floor under every pixel. A dark studio is
+  unreachable while it stands, however far the lights are dimmed, so it is now
+  a per-style value.
+- `init_state.rot` is **(x, y, z, w)** in Isaac Lab 3.0 and a `DistantLight`
+  emits along -Z. The old key-light quaternion was a hand-tuned magic number;
+  lights are now specified as elevation/azimuth in degrees.
+
+The horizon seam that a low camera exposes is closed with RTX distance fog
+(`/rtx/fog/*`) tinted to the dome color, not with backdrop geometry. Fog
+`start` must sit well beyond the camera-to-subject distance or it hazes the
+robot itself. Light budgets were calibrated against a measured reference
+(original rig: floor at about sRGB 200 near, 180 far, no clipped pixels)
+rather than by eye; the light presets sit on the tonemap shoulder, where large
+intensity cuts move the output very little.
+
+## Paper boards frozen at two, smoothness arms not promoted (2026-08-26)
+
+**Paper-facing decision (user).** The paper reports two evaluation
+populations and no others: `bones_testbed4096_v1`, the deciding board, and
+`sonic_capability124_v1`, the SONIC-facing calibration board. Success-only
+errors reduce to the clips every row of a given table completes; that
+intersection is a property of the TABLE and must be frozen and named per
+table. The smoothness table's is
+`experiments/campaigns/2026-08-17-paper-metric-canon/matched3932_smoothness_2026-08-26.json`,
+3,932 ranks, SHA-256 `c5b8c3c8…`.
+
+**`ln_hold1_sonicreset` stays the headline tracker row.** On the deciding
+board, matched 3,932, one seed, one evaluation:
+
+| row | SR (of 4,096) | MPJPE-L | MPJPE-G | vel m/s | acc m/s^2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| public `sonic_v1_1` | 0.9888 | 26.25 mm | 177.41 mm | 0.193 | 3.34 |
+| ours @46.5B | 0.9773 | 21.95 mm | 92.31 mm | 0.205 | 5.45 |
+
+SONIC leads success rate and smoothness; we lead local and global accuracy by
+a wide margin. Cite both directions together.
+
+**The smoothness campaign is a NULL on the deciding board.** Every
+`action_rate_l2` arm trades SR and accuracy for its acceleration gain and none
+reaches SONIC's 3.34 m/s^2 — see the campaign README for the table and the
+`ar003` non-finite incident, which `IPMD._abort_on_nonfinite` caught cleanly
+(its first real save).
+
+**Two caveats attached to the headline row.** 46.5B is a MID-CHAIN checkpoint
+of the 50B run, chosen because it was the newest file when scoring started;
+the chain will stop near 49.0B (no insurance segment, by user decision), so
+the final paper row should be re-scored from that last checkpoint. And a
+6th row added to the table changes the matched population, hence every
+success-only number in it.
 
 ## Smoothness arms submitted (2026-08-26)
 

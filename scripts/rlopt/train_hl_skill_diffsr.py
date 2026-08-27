@@ -26,7 +26,7 @@ if strict_kitless:
 from isaaclab_tasks.utils import add_launcher_args
 
 parser = argparse.ArgumentParser(
-    description="Train an offline high-level skill encoder with DiffSR."
+    description="Train an offline high-level skill encoder."
 )
 parser.add_argument(
     "--task",
@@ -75,6 +75,7 @@ parser.add_argument(
         "semimarkov_chain",
         "endpoint_delta",
         "jepa_ntp",
+        "reconstruction",
     ),
     help=(
         "DiffSR skill factorization. 'endpoint' predicts s[t+H] from (s[t], z); "
@@ -82,7 +83,20 @@ parser.add_argument(
         "'semimarkov_chain' predicts each checkpoint from the preceding checkpoint "
         "under one held z; 'endpoint_delta' predicts s[t+H]-s[t]; 'jepa_ntp' is "
         "chunk-wise next-token prediction against an EMA target encoder with a "
-        "bilinear (spectral) energy head trained by symmetric InfoNCE."
+        "bilinear (spectral) energy head trained by symmetric InfoNCE; "
+        "'reconstruction' decodes the exact encoder input window from z."
+    ),
+)
+parser.add_argument(
+    "--reconstruction_target",
+    type=str,
+    default="input_window",
+    choices=("input_window", "endpoint", "full_window"),
+    help=(
+        "What the 'reconstruction' objective decodes from z: 'input_window' "
+        "reproduces the exact encoder input (purely local); 'endpoint' regresses "
+        "the macro state one horizon later; 'full_window' decodes the state plus "
+        "every future slot including the endpoint the encoder never sees."
     ),
 )
 parser.add_argument(
@@ -97,7 +111,54 @@ parser.add_argument(
     ),
 )
 parser.add_argument("--jepa_sigreg_coeff", type=float, default=1.0)
+parser.add_argument("--jepa_ntp_coeff", type=float, default=1.0)
+parser.add_argument(
+    "--jepa_ntp_chunk_anchor",
+    type=str,
+    default="executed",
+    choices=("executed", "next"),
+    help=(
+        "Heading frame of the diff_chunk target: 'executed' keeps the next "
+        "chunk in the executed chunk's slot-0 frame (drift in the target); "
+        "'next' re-anchors onto s_{t+H}'s own frame (drift erased)."
+    ),
+)
+parser.add_argument(
+    "--jepa_ntp_head",
+    type=str,
+    default="mlp",
+    choices=("mlp", "diff_token", "diff_chunk", "diff_pair"),
+    help=(
+        "Next-chunk prediction estimator for sigreg_ebm: 'mlp' is the "
+        "deterministic MSE predictor; 'diff_token' models p(z_next|s_t,z_t) "
+        "with a second DiffSR diffusion head; 'diff_chunk' models the next "
+        "chunk's H raw frames p(x_{t+H+1:t+2H}|s_t,z_t) in the executed "
+        "chunk's heading frame."
+    ),
+)
 parser.add_argument("--jepa_sigreg_sketches", type=int, default=64)
+parser.add_argument(
+    "--jepa_context_chunks",
+    type=int,
+    default=0,
+    choices=(0, 1),
+    help=(
+        "0 = chunk pair (predict the next chunk token from the current one); "
+        "1 = chunk triplet (the predictor also reads the PRECEDING chunk's "
+        "token, wiki/skill-encoder-jepa-plan.md phase 2)."
+    ),
+)
+parser.add_argument(
+    "--jepa_target_encoder_mode",
+    type=str,
+    default="ema",
+    choices=("ema", "online", "stopgrad"),
+    help=(
+        "Where the next chunk's target token comes from: 'ema' (momentum copy "
+        "of the encoder) or 'online' (the ONE encoder on both sides, no "
+        "stop-gradient -- the LeJEPA shape; SIGReg alone prevents collapse)."
+    ),
+)
 parser.add_argument(
     "--transition_offsets",
     type=int,
@@ -509,9 +570,15 @@ def _build_trainer_config(
         macro_anchor_mode=macro_anchor_mode,
         encoder_window_mode=args_cli.encoder_window_mode,
         transition_objective=args_cli.transition_objective,
+        reconstruction_target=args_cli.reconstruction_target,
         jepa_loss=args_cli.jepa_loss,
         jepa_sigreg_coeff=args_cli.jepa_sigreg_coeff,
+        jepa_ntp_coeff=args_cli.jepa_ntp_coeff,
+        jepa_ntp_head=args_cli.jepa_ntp_head,
+        jepa_ntp_chunk_anchor=args_cli.jepa_ntp_chunk_anchor,
         jepa_sigreg_sketches=args_cli.jepa_sigreg_sketches,
+        jepa_context_chunks=args_cli.jepa_context_chunks,
+        jepa_target_encoder_mode=args_cli.jepa_target_encoder_mode,
         transition_offsets=tuple(args_cli.transition_offsets or ()),
         z_dim=args_cli.z_dim,
         latent_mode=args_cli.latent_mode,

@@ -305,6 +305,18 @@ The manual review must not remove a clip because it raises MPJPE-L. The
 
 ## Paper use
 
+**This is the calibration board, not the deciding one (2026-08-26).** The
+headline tracker comparison against SONIC belongs on `bones_testbed4096_v1`;
+its rows are Tables A and B in
+`experiments/campaigns/2026-08-17-paper-metric-canon/README.md`. On that
+deciding board public `sonic_v1_1` reads 0.9888 SR / 26.25 mm L / 177.41 mm G
+and our `ln_hold1_sonicreset` @46.5B reads 0.9773 / 21.95 / 92.31, matched
+over 3,932 clips — a different and less favorable picture than the 124-clip
+rows above, which is expected because this subset was selected by reading
+SONIC's own results.
+
+### Naming and phrasing
+
 Always call this population the **new common eval subset**. Do not call it held
 out, unbiased, SONIC's validation split, or SONIC's unpublished evaluation
 set. Keep `sonic_capability124_v1` as its machine-readable artifact ID.

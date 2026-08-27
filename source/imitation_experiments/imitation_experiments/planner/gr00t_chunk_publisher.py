@@ -73,11 +73,17 @@ class Gr00tChunkPublisher(Gr00tSkillCommandSampler):
         num_envs: int,
         device: torch.device | str = "cuda",
         components: tuple[tuple[str, int], ...] = ROOT_QPOS_COMPONENT_WIDTHS,
+        pin_anchor_state_fn: Callable[[], tuple[Tensor, Tensor]] | None = None,
     ) -> None:
         self._chunk_term = chunk_term
         self._causal_observation_fn = causal_observation_fn
         self._causal_history_steps = int(state_history_steps)
         self._components = tuple(components)
+        # When the head's training frame is NOT the full anchor pose (a
+        # robot_heading collection driving a robot-frame tracker), the term's
+        # publish-time anchor capture is wrong for this packet: re-pin the
+        # frame the prediction actually lives in, fetched at publish time.
+        self._pin_anchor_state_fn = pin_anchor_state_fn
         self.provenance = self.configure_gr00t(
             checkpoint_path=gr00t_checkpoint,
             goal_features_path=goal_features_path,
@@ -133,6 +139,17 @@ class Gr00tChunkPublisher(Gr00tSkillCommandSampler):
             payload[name] = block.reshape(int(env_ids.numel()), -1).contiguous()
             cursor += width
         self._chunk_term.publish(env_ids.to(prediction.device), payload)
+        # getattr, not attribute access: existing tests build this publisher
+        # through __new__ and set only the fields publish() needs.
+        pin_fn = getattr(self, "_pin_anchor_state_fn", None)
+        if pin_fn is not None:
+            pin_pos, pin_quat = pin_fn()
+            index = env_ids.to(pin_pos.device)
+            self._chunk_term.pin_anchor_pose(
+                env_ids,
+                pin_pos.index_select(0, index),
+                pin_quat.index_select(0, index),
+            )
         self.publications += 1
 
     def report(self) -> dict[str, Any]:
@@ -223,6 +240,10 @@ class Gr00tPacketPlanner(torch.nn.Module):
         return torch.cat(blocks, dim=-1).to(
             device=causal_state.device, dtype=causal_state.dtype
         )
+
+    def report(self) -> dict[str, Any]:
+        """Provenance counter block merged into the summary's gr00t_planner."""
+        return {"packet_execution": "per_publication"}
 
 
 __all__ = [

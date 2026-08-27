@@ -1,5 +1,13 @@
 # Causal High-Level Interface Paper Plan
 
+> **2026-08-17:** the final paper section structure, headline lock, and planner
+> row set are now codified in
+> [final-paper-experiment-design.md](final-paper-experiment-design.md). That
+> page supersedes the "Current Decision" grid below where the two disagree
+> (headline `fsq64_hold10`, 38-D single-frame explicit row, direct 50 Hz
+> ceiling dropped). This page remains the authority for the gates, provenance
+> rules, and evaluation machinery it defines.
+
 This page is the paper-facing contract for comparing learned latent skills with
 an explicit whole-body command interface. It intentionally keeps the main grid
 small. The question is whether a learned latent makes high-level planning

@@ -80,6 +80,10 @@ class StageSpec:
     gres: str | None = None
     mem: str | None = None
     cpus_per_task: int | None = None
+    # Comma-separated node list handed to `sbatch --exclude`. Use it to keep a
+    # chain off a node that is delivering degraded throughput; record why in
+    # the campaign README, because it changes which hardware a row ran on.
+    exclude: str | None = None
     depends_on: str | None = None
     # "afterok" (default) runs only after a clean predecessor; "afterany" also
     # runs after TIMEOUT/FAILED, which is what a walltime-segmented resume
@@ -121,6 +125,7 @@ class ResolvedStage:
     gres: str | None
     mem: str | None
     cpus_per_task: int | None
+    exclude: str | None
     depends_on: str | None
     dependency_kind: str
 
@@ -233,6 +238,7 @@ def load_campaign(
             gres=stage.gres,
             mem=stage.mem,
             cpus_per_task=stage.cpus_per_task,
+            exclude=getattr(stage, "exclude", None),
             depends_on=stage.depends_on,
             dependency_kind=str(getattr(stage, "dependency_kind", "afterok")),
         )

@@ -1,0 +1,25 @@
+defaults:
+  - base_prepare
+  - _self_
+
+# The hold-1 collection re-run WITH the 30-frame expert root_qpos lookahead,
+# so an explicit (chunk-target) head can train on the SAME rollout states its
+# latent counterpart trained on. Without this the only explicit table came
+# from the fsq64 collection, which changes the tracker that generated the
+# states as well as the planner's output space.
+#
+# Both targets are built from one table: `latent_target` is the stored
+# per-step z (identical join to `prepare_ln_hold1_10b`), `chunk_target` is
+# the lookahead. That makes the latent and explicit heads differ in exactly
+# one thing.
+collection_dir: logs/planner_10b/ln_hold1_10b/collection_rootqpos_seed0
+output: outputs/planner_10b/tables/ln_hold1_10b_chunk_table.pt
+latent:
+  slots: 30
+  hold_steps: 1
+  source: stored
+chunk:
+  enabled: true
+  horizon: 30
+state_fields:
+  - oracle_rollout_state_history

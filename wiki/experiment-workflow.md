@@ -145,9 +145,12 @@ debugging only until it is explicitly fixed and revalidated.
 
 The exploratory bilinear pretrain, action-label, and update-count launchers were pruned on 2026-07-23 because they were not part of a current campaign or paper dependency. The generic command above remains useful for bounded development, but a new comparison requires a new dated campaign and qualification record. See `experiments/PRUNED_SCRIPTS.md` for the historical paths.
 
-Cluster jobs append the default full G1 manifest unless the submitted command
-already includes `env.lafan1_manifest_path=...`. The default is controlled by
-`docker/cluster/.env.cluster`.
+A control-plane job takes its whole environment from the frozen per-stage file
+the plan renders (`job_env.<stage>.resolved.sh`); `run_singularity.sh` sources
+ONLY that file when it is present, so editing `docker/cluster/.env.cluster` has
+no effect on it. Declare manifests and data paths in the campaign's
+`data_overrides` instead. `.env.cluster` still applies when
+`run_singularity.sh` is invoked by hand.
 
 For Dance102 or other single-manifest debugging, pass the manifest explicitly:
 
@@ -162,9 +165,10 @@ PACE ICE is the instructional Georgia Tech cluster. The
 an instructional cluster with Phoenix-like hardware/software, and public ICE
 [student-facing ICE guides](https://github.com/guru-desh/Intro-To-PACE-ICE)
 list SSH access through `login-ice.pace.gatech.edu`. PACE Slurm examples use
-explicit account, QOS, CPU, memory, and GPU GRES requests. The repo keeps this
-in `docker/cluster/submit_job_slurm_pace.sh` so the lab-local Slurm submitter
-does not inherit PACE assumptions.
+explicit account, QOS, CPU, memory, and GPU GRES requests. Those live in the
+ICE profile of the control plane
+(`imitation_experiments/pipeline/cluster/conf/profile_ice.yaml`);
+`docker/cluster/submit_job_slurm_pace.sh` is a retired deprecation shim.
 
 For a dry run of the high-level skill pipeline on ICE/PACE with video enabled
 and a 2B-frame low-level cap:
@@ -228,9 +232,10 @@ as a training cap, but do not assume ICE will grant a two-day walltime.
 
 ## RLOpt Submodule State
 
-Cluster jobs should use the pinned `RLOpt/` submodule state from
-`IsaacLab-Imitation` by default. If a task explicitly needs an unpinned local
-experiment outside this repo, enable an overlay path in
+Cluster jobs use the `RLOpt/` state in the working tree: `submit` packs the
+tree, not `git HEAD`, and records `drift=true` when it is dirty. Commit before
+submitting a run that must be reproducible from a SHA. For a manual
+`run_singularity.sh` invocation, an overlay path can be set in
 `docker/cluster/.env.cluster`:
 
 ```bash

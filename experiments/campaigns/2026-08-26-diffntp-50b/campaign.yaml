@@ -1,0 +1,350 @@
+# Promote the two best generative-NTP arms to 50B on the leader's exact
+# schedule, with the action-rate penalty restored.
+#
+# Arm `ema_h1_ee_wide` = the `jepa_h1_ee_wide` recipe under its post-terminology
+# name: DiffSR endpoint grounding + EMA token-prediction trick + SIGReg
+# (CONTEXT.md), hold-1, 256-D deterministic LN encoder, root_qpos macro state,
+# rewards = tuned set + motion_ee_pos 1.0 + motion_global_anchor_pos_wide 1.0.
+# Screen row (2B): 0.9060 / 26.98 / 103.6 clean, 0.8960 / 29.08 / 156.3 robust.
+#
+# Schedule mirrors `ln_hold1_sonicreset`'s history so the 20B rows read against
+# each other: 0-10B under random80_adaptive20 + termination curriculum
+# (segments 1-3, frame cap 10B), then SONIC selection with the 0.5 -> 0.1
+# landing ramp inside segment 4 (2.5B), pinned 0.1 through segments 5-6
+# (global cap 20B). Reference row: ln_hold1_sonicreset @20B
+# 0.9558 / 22.15 / 168.15.
+#
+# Encoder: the SAME pretrained file as the screen winner
+# (interface_combos/jepa_ebm_hold1_256d_seed0), frozen, binding unchanged.
+name: diffntp-50b
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: diffntp-50b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  stride: 1
+  z_dim: 256
+  command_dim: 258
+  phase_mode: sin_cos
+  anchor_mode: robot_heading
+  hold: 1
+  train_num_envs: 16384
+  rollout_steps: 24
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  cap_std: 10000000000
+  cap_mid: 30000000000
+  cap_full: 50000000000
+  iters_std: ${ceil_div:${vars.cap_std},${vars.frames_per_batch}}
+  iters_mid: ${ceil_div:${vars.cap_mid},${vars.frames_per_batch}}
+  iters_full: ${ceil_div:${vars.cap_full},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  iter_args_std: ["--max_iterations", "${vars.iters_std}"]
+  iter_args_mid: ["--max_iterations", "${vars.iters_mid}"]
+  iter_args_full: ["--max_iterations", "${vars.iters_full}"]
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/diffntp_50b/${vars.arm}_seed${vars.seed}
+  encoder_ckpt: /data/pareto_stack/${vars.encoder_arm}_seed${vars.seed}/encoder/checkpoints/latest.pt
+  encoder_arm: SET_PER_ARM
+
+  # Phase args. Standard = the screen recipe; sonic ramp/hold = the leaders'
+  # continuation recipe (ramp keys off common_step_counter, so it must finish
+  # inside segment 4 and later segments PIN the final value).
+  select_std:
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+  select_ramp:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.5
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.1
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=2500000000
+    - env.enable_termination_curriculum=false
+  select_focus:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.05
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+    - env.enable_termination_curriculum=false
+  select_hold:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.1
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+    - env.enable_termination_curriculum=false
+
+  # Which segment args the FIRST stage uses. Default fresh; an arm that is
+  # being resubmitted mid-flight overrides this to seg_resume so it picks up
+  # its own tree instead of restarting the budget.
+  seg_first: ${vars.seg_fresh}
+  # Nodes to keep this arm off (sbatch --exclude). Empty for a normal launch.
+  stage_exclude: null
+  seg_fresh:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+  seg_resume:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  # Anti-jerkiness. The 2026-08-26 smooth-finetune campaign measured this as
+  # a FINETUNE at 46.5B and refused promotion (every weight cost SR, L and G);
+  # `ar01scratch` measures the from-zero regime, which is what this campaign
+  # trains. Set to -0.03 by the user 2026-08-26: the efficient point of the finetune
+  # screen (-11% acceleration for +0.58 mm L), launched WITHOUT waiting for
+  # ar01scratch by explicit decision.
+  action_rate_weight: -0.03
+  reward_args:
+    - env.rewards.motion_ee_pos.weight=1.0
+    - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    - env.rewards.action_rate_l2.weight=${vars.action_rate_weight}
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=pareto-stack-2b
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.z_dim}
+    - agent.ipmd.hl_skill_finetune_enabled=false
+
+  tuned_core:
+    # action_rate_l2 is set in reward_args, not zeroed here.
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+    - /data/pareto_stack/${vars.encoder_arm}_seed${vars.seed}/encoder/checkpoints/latest.pt
+  output_container_path: /data/diffntp_50b/${vars.arm}_seed${vars.seed}
+
+arms:
+  diffntp_chunk_50b:
+    vars:
+      encoder_arm: diffntp_chunk_h1_ee_wide
+      wandb_id: d50-chunk
+      # Resubmitted 2026-08-27: the original chain drew atl1-1-03-017-2-0 and
+      # ran at 54.5k fps against its sibling's 127k on an otherwise identical
+      # stage, which would have left it ~16B short of the 50B cap. Resumes
+      # its own tree (1.5B already trained) and stays off that node.
+      seg_first: ${vars.seg_resume}
+      stage_exclude: atl1-1-03-017-2-0
+    stages: &fifty_stages
+      - name: std1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_first},${vars.iter_args_std}}
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},std1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: std2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_std}}
+        depends_on: std1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},std2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: std3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_std}}
+        depends_on: std2
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},std3
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: ramp1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_mid}}
+        depends_on: std3
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},ramp1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: hold1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_mid}}
+        depends_on: ramp1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},hold1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: hold2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_mid}}
+        depends_on: hold1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},hold2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: hold3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_mid}}
+        depends_on: hold2
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},hold3
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: focus1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_focus},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_full}}
+        depends_on: hold3
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},focus1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: focus2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_focus},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_full}}
+        depends_on: focus1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},focus2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: focus3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_focus},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_full}}
+        depends_on: focus2
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},focus3
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: focus4
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_focus},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg_resume},${vars.iter_args_full}}
+        depends_on: focus3
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        exclude: ${vars.stage_exclude}
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffntp-50b,${vars.arm},seed${vars.seed},focus4
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+  diffntp_pair_50b:
+    vars:
+      encoder_arm: diffntp_pair_h1_ee_wide
+      wandb_id: d50-pair
+      # Resubmitted 2026-08-27 after the ICE 300G quota filled mid-save: the
+      # truncated checkpoint made std2/std3 die on EOFError and the afterany
+      # chain advanced into ramp1/hold at 4.5B, i.e. the SONIC reset regime at
+      # a depth the schedule reserves for random80_adaptive20. Resume the 4.5B
+      # tree and redo the standard phase properly.
+      seg_first: ${vars.seg_resume}
+    stages: *fifty_stages

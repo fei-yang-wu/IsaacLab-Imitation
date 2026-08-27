@@ -12,13 +12,13 @@ job chronology, and incident history stay in
 documents. Update this page whenever a campaign produces or invalidates a
 result, and stamp the section with the verification date.
 
-Last updated: 2026-08-13.
+Last updated: 2026-08-25.
 
 ---
 
 ## 1. Latent encoder experiments and ablations
 
-Verified: 2026-07-29 (Stable-vs-Strict 500M inference diagnostic complete).
+Verified: 2026-08-25 (new common eval subset evaluations complete).
 
 ### Question
 
@@ -30,6 +30,40 @@ Design, capacity caveats, and launchers:
 [`latent-learning-ablation-plan.md`](latent-learning-ablation-plan.md);
 campaign front door:
 `experiments/campaigns/2026-07-22-latent-learning-ablation/`.
+
+### Current BONES-SEED ablation: prepared, no result yet
+
+The paper-facing method ablation is now a controlled 2 x 2 grid: endpoint
+DiffSR versus exact input-window reconstruction, crossed with continuous
+256-D versus SONIC FSQ 64 x 32. Every arm fixes `root_qpos`, horizon 10 with
+the endpoint hidden, hold 10, the encoder trunk, 50,000 offline updates,
+frozen rollout, and a 10B low-level frame target. The exact protocol and
+result table are in
+`experiments/campaigns/2026-08-18-bones129k-latent-design-ablation/README.md`.
+
+Qualification only, 2026-08-18: both reconstruction bottlenecks completed one
+real Isaac/Newton offline update, then their frozen checkpoints each completed
+one 128-frame IPMD iteration at the correct command width. The focused RLOpt
+suite passed 62 tests, the campaign contract passed 8 tests, and all four
+seed-0 plans resolved offline. No cluster job was submitted. These checks prove
+wiring only and do not support an objective or bottleneck conclusion.
+
+### Preliminary new common eval subset result
+
+The new common eval subset, with artifact ID `sonic_capability124_v1`, is a
+deliberately SONIC-calibrated in-distribution population, not a held-out or
+unbiased comparison board. One direct clean
+evaluation of public `sonic_v1_1` completed all 124 clips at **1.0000 SR /
+23.79 mm MPJPE-L / 173.92 mm MPJPE-G**. The 30B
+`ln_hold1_sonicreset` seed-0 tracker completed 123 clips at **0.9919 / 19.44 /
+108.58 mm**. On the 123 shared successes, SONIC is 23.43 / 148.37 mm and ours
+is 19.44 / 108.58 mm. The common rank hash and the 18-tensor encoder binding
+both pass. This result is preliminary because the new common eval subset was
+selected from SONIC's scores and neither repeated evaluations nor additional
+training seeds are complete. Motion-name review of all 124 clips and
+full-horizon videos of the nine ambiguous names passed without changing the
+ranks. See
+[`sonic-v1_1-subsets.md`](sonic-v1_1-subsets.md).
 
 ### Result: all twelve local 10M qualification arms passed
 

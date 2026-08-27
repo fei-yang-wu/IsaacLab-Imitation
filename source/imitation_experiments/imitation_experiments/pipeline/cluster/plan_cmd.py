@@ -57,6 +57,7 @@ def _stage_directives(
         partition=slurm.partition,
         nodes=slurm.nodes,
         ntasks=slurm.ntasks,
+        exclude=stage.exclude,
     )
 
 

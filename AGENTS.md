@@ -1,372 +1,289 @@
 # AGENTS.md
 
-This file defines how coding agents should work in the `IsaacLab-Imitation` workspace.
+This file defines how coding agents work in the `IsaacLab-Imitation` workspace.
 
-Always talk in ASD-STE100 Simplified Technical English. Always read CONTEXT.md files, and use their ubiquitous language
+Always talk in ASD-STE100 Simplified Technical English. Always read CONTEXT.md
+files, and use their ubiquitous language. Always follow Google Developer
+Documentation Style Guide for langauge style.
+
+Last refreshed 2026-08-18. A rule here is a live constraint. If a rule is only
+history, it belongs in `wiki/`, not in this file.
 
 ## Scope
 
-- This guidance is for the top-level `IsaacLab-Imitation` repo only.
-- Do not add or maintain agent guidance inside dependency submodules.
-- Treat `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/`, and `external/Isaac-GR00T/` as dependency submodules unless a task explicitly requires changes there. `external/` holds adjacent upstream code used verbatim, not hard workspace dependencies. `external/Isaac-GR00T/` is upstream NVIDIA code (pinned commit, own `gr00t` Pixi environment); never edit it — adapters live in `RLOpt` and `source/imitation_experiments/`.
-- For RLOpt or ImitationLearningTools work, use the in-repo submodules at `./RLOpt` and `./ImitationLearningTools`; do not route active work to sibling checkouts.
-- `unitree_rl_lab` is not required for normal training; G1 robot configuration and URDF/mesh assets are owned by this repo. `loco-mujoco` is optional and only needed when explicitly selecting the `loco_mujoco` dataset loader.
-- Prefer edits in files owned by this repo, especially:
-  - `source/isaaclab_imitation/`
-  - `scripts/`
-  - `docker/`
-  - `README.md`
-  - `REPO_SETUP.md`
-  - top-level config files such as `.pre-commit-config.yaml` and package config files such as `source/isaaclab_imitation/pyproject.toml`
+- This guidance is for the top-level `IsaacLab-Imitation` repo only. Do not add
+  agent guidance inside dependency submodules.
+- `IsaacLab/`, `RLOpt/`, `ImitationLearningTools/`, and `external/Isaac-GR00T/`
+  are dependency submodules. `external/` holds upstream code used verbatim.
+  Never edit `external/Isaac-GR00T/`; adapters live in `RLOpt` and
+  `source/imitation_experiments/`.
+- For RLOpt or ImitationLearningTools work, use the in-repo submodules at
+  `./RLOpt` and `./ImitationLearningTools`, not sibling checkouts.
+- `unitree_rl_lab` is not required for training; this repo owns the G1 robot
+  configuration and its URDF/mesh assets. `loco-mujoco` is optional and only
+  needed for the `loco_mujoco` dataset loader.
 
 ## Environment
 
-- Pixi is the repo-owned environment manager. Do not install repo dependencies
-  with `conda`, `pip`, or `uv`.
-- Use `pixi run ...` for default-environment commands and
-  `pixi run -e isaaclab ...` for Isaac Sim / Isaac Lab workflows.
-- The default Pixi environment contains Python 3.12, PyTorch, TensorDict,
-  TorchRL, editable `RLOpt`, and editable `ImitationLearningTools`.
-- The `isaaclab` Pixi environment adds
-  `isaaclab[isaacsim,all]==3.0.0b2.post1` (Isaac Sim 6.0.1) from NVIDIA's PyPI index plus editable
-  `source/isaaclab_imitation`.
-- RLOpt tests should run in the default environment so TorchRL does not import
-  IsaacLab or initialize Isaac Sim during lightweight testing.
-- If you need an interactive shell, use:
-
-```bash
-pixi shell
-pixi shell -e isaaclab
-```
-
-- The documented workspace installer is:
-
-```bash
-./scripts/install_workspace.sh
-PIXI_ENVIRONMENT=isaaclab ./scripts/install_workspace.sh
-```
-
-- The installer is a compatibility wrapper around `pixi install`. Prefer direct
-  `pixi install`, `pixi install -e isaaclab`, or `pixi install --all` when
-  possible.
-
-## Codex Worktrees
-
-- Codex-created worktrees should live under this repo's `.codex/worktrees/`
-  directory. Keep Claude-created worktrees under `.claude/` if that is the
-  active Claude workflow.
-- For Codex worktree commands, define a workspace-local `CODEX_HOME` from the
-  main checkout and use `${CODEX_HOME}/worktrees` as the worktree root:
-
-```bash
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-export CODEX_HOME="${CODEX_HOME:-${REPO_ROOT}/.codex}"
-mkdir -p "${CODEX_HOME}/worktrees"
-```
-
-- Create one worktree per task or agent run. Prefer descriptive branch and
-  directory names:
-
-```bash
-TASK_NAME="ipmd-reward-fix"
-git worktree add "${CODEX_HOME}/worktrees/${TASK_NAME}" -b "codex/${TASK_NAME}"
-cd "${CODEX_HOME}/worktrees/${TASK_NAME}"
-git submodule update --init --recursive
-```
-
-- Every new worktree must have its own Pixi environment prefix. Do not point a
-  worktree at another worktree's `.pixi/envs`, because editable installs would
-  resolve to the wrong branch's `RLOpt`, `ImitationLearningTools`, or
-  `source/isaaclab_imitation`.
-- Use the locked Pixi environments in each worktree. Pixi reuses the shared
-  package cache for heavy packages such as PyTorch, IsaacLab, and Isaac Sim, so
-  this creates a separate editable layer without redownloading the world:
-
-```bash
-pixi install --locked
-pixi run test-rlopt
-
-pixi install --locked -e isaaclab
-pixi run -e isaaclab smoke-ipmd
-```
-
-- If only local source changed, editable installs are picked up immediately. If
-  package metadata, entry points, compiled extensions, or local package wiring
-  changed, refresh only the affected editable packages:
-
-```bash
-pixi reinstall rlopt iltools
-pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation
-```
-
-- Do not commit `.codex/worktrees/`, `.pixi/envs/`, generated logs, caches, or
-  outputs from worktrees. Commit only the intended source changes from the
-  worktree branch.
+- Pixi owns the environment. Do not install repo dependencies with `conda`,
+  `pip`, or `uv`.
+- `pixi run ...` uses the default environment (Python 3.12, PyTorch,
+  TensorDict, TorchRL, editable `RLOpt` and `ImitationLearningTools`).
+  `pixi run -e isaaclab ...` adds Isaac Sim 6.0.1 / Isaac Lab 3.0.0b2.post1 and
+  editable `source/isaaclab_imitation`.
+- Run RLOpt tests in the default environment so TorchRL does not import Isaac
+  Lab or start Isaac Sim.
+- Interactive shells: `pixi shell`, `pixi shell -e isaaclab`.
+- `./scripts/install_workspace.sh` is a compatibility wrapper around
+  `pixi install`. Prefer `pixi install`, `pixi install -e isaaclab`, or
+  `pixi install --all`.
+- One Pixi environment prefix per git worktree. A worktree that points at
+  another worktree's `.pixi/envs` resolves editable installs to the wrong
+  branch. Keep agent worktrees under `.codex/worktrees/` (Codex) or `.claude/`
+  (Claude), install with `pixi install --locked`, and never commit them.
+  Refresh editable packages only when packaging metadata changes:
+  `pixi reinstall rlopt iltools`, or
+  `pixi reinstall -e isaaclab rlopt iltools isaaclab-imitation`.
 
 ## Repo Shape
 
-- `source/isaaclab_imitation/`: installable Isaac Lab extension package for imitation environments.
-- `source/imitation_experiments/`: installable, editable experiment library —
-  the shared planner, evaluation, audit, data, and provenance implementation,
-  organized as `imitation_experiments.{data,planner,lowlevel,evaluation,audit,
-  provenance,pipeline,capacity}` with its tests in
-  `source/imitation_experiments/tests/`. Launchers invoke it with
+- `source/isaaclab_imitation/`: the installable Isaac Lab extension package
+  (environments, command terms, MDP terms, task configs).
+- `source/imitation_experiments/`: the shared experiment library
+  (`data`, `planner`, `lowlevel`, `evaluation`, `audit`, `provenance`,
+  `pipeline`, `capacity`, `reporting`) with its tests. Launchers call
   `python -m imitation_experiments.<subpackage>.<module>`. New shared
   experiment Python goes here with a test, never into a campaign directory.
-- `scripts/rlopt/`: RLOpt train, test, and playback entrypoints.
-- `scripts/rsl_rl/`: RSL-RL training entrypoints.
-- `scripts/data/`, `scripts/audit/`, `scripts/viz/`, `scripts/bench/`:
-  standalone dataset-preparation, audit, visualization, and benchmark tools
-  (see `scripts/README.md`).
-- `scripts/zero_agent.py`, `scripts/random_agent.py`: smoke-test runners.
-- `docker/`: container and cluster-related workflows.
-- `experiments/README.md`: human-facing pointer to current, historical, and
-  paper-facing experiment surfaces.
-- `experiments/campaigns/YYYY-MM-DD-short-purpose/`: dated protocol/status
-  indexes plus the frozen shell launchers a collaborator invokes. Campaign
-  directories are thin: README, configs, and `.sh` wrappers that call the
-  library. They contain no Python implementation.
-- `experiments/paper/`: stable release-facing entrypoints only — `run.sh`, the
-  Phase-4 and Phase-5 submit plus aggregate scripts, the release-bundle
-  builder, and the reference-buffer workflow. Do not add exploratory launchers,
-  diagnostics, shared implementation, or tests there.
-- Every script in `experiments/paper/` must be **self-contained, current, and
-  runnable as-is**. Concretely:
-  - It runs from the repository root with no undocumented prerequisite step and
-    no hand-editing before use.
-  - Every configurable parameter lives either inside the script as an explicit
-    named constant, or in a config file next to it. Prefer Hydra: a
-    `@hydra.main` entrypoint with its YAML under `experiments/paper/conf/`, so
-    parameters are discoverable, overridable on the command line, and recorded
-    in the run directory. Do not leave required values to be supplied only by
-    environment variables or by editing the source.
-  - It stays updated when the code it drives changes. A stale script here is a
-    defect, not history — move superseded launchers out rather than leaving
-    them to rot.
-  - It fails loudly on a missing input or an unmet gate instead of silently
-    doing less work.
+- `scripts/rlopt/`, `scripts/rsl_rl/`: training, evaluation, and playback
+  entrypoints. `scripts/data/`, `scripts/audit/`, `scripts/viz/`,
+  `scripts/bench/`: standalone tools (see `scripts/README.md`).
+- `experiments/campaigns/YYYY-MM-DD-short-purpose/`: dated campaigns. A
+  campaign directory is thin: a README, configs, and launchers that call the
+  library. No Python implementation.
+- `experiments/paper/`: release-facing entrypoints only. Every script there
+  must run from the repository root as-is, keep its parameters in named
+  constants or in Hydra configs under `experiments/paper/conf/`, stay current
+  with the code it drives, and fail loudly on a missing input.
   `reference_buffer_workflow.py` plus `conf/reference_buffer.yaml` is the
-  reference implementation of this shape.
-- The shared planner modules live in the `imitation_experiments` package and
-  import each other absolutely (`from imitation_experiments.planner...`).
-  Never mutate `sys.path` under `experiments/` and never rely on a fixed
-  `parents[N]` depth to find the repository root: use `REPO_ROOT` and the
-  helpers in `source/imitation_experiments/imitation_experiments/paths.py`.
-- `logs/`, `outputs/`: generated run artifacts; do not treat them as source.
+  reference shape.
+- `logs/`, `outputs/`: generated artifacts. Not source.
+- Import shared modules absolutely (`from imitation_experiments.planner...`).
+  Never mutate `sys.path` under `experiments/`, and never find the repository
+  root by a fixed `parents[N]`; use `REPO_ROOT` and
+  `source/imitation_experiments/imitation_experiments/paths.py`.
 
-## Working Rules
+## Research Rigor
 
-- Read `README.md` first when changing setup, training, or execution workflows.
-- Read `wiki/context-management.md` before changing agent guidance, updating
-  submodule pointers, or deciding which repository owns an edit.
-- Keep changes aligned with the existing terminal-first workflow.
-- Prefer minimal, targeted edits over broad refactors.
-- Be rigorous. Do not treat a preliminary result as a fact. A preliminary
-  result is a sign that tells you where to look next. It is not a conclusion,
-  and it is not evidence for or against a research claim.
-- A result is preliminary until it meets all of these conditions:
-  - The protocol is the frozen one for that comparison.
-  - The compared arms differ in one variable only.
-  - The run is complete. A partial aggregate, an unfinished grid, a cancelled
-    job, or a missing cell keeps the result preliminary.
-  - The measured difference is larger than the known evaluation noise. Isaac
-    evaluation is not deterministic; treat a relative difference below about
-    15% in the high-error regime as unresolved.
-  - Repeated seeds support the difference.
-- Before you cite a stored result, find out how it was produced. Read its
-  campaign README, its aggregate manifest, and the status of the jobs that
-  made it. An artifact on disk is not proof that its protocol was complete.
-- State the qualification with the number, in the same sentence. Say
-  "preliminary", "one seed", "partial grid", or "frames not matched" where the
-  number appears, not in a later paragraph.
-- Do not build an argument, a recommendation, or a paper claim on a
-  preliminary result. Say what experiment would settle the question instead.
+- A preliminary result tells you where to look next. It is not a conclusion.
+- A result stays preliminary until all of these hold: the protocol is the
+  frozen one for that comparison; the arms differ in one variable; the run is
+  complete; the difference is larger than evaluation noise (Isaac evaluation is
+  not deterministic — treat a relative difference below about 15% in the
+  high-error regime as unresolved); repeated seeds support it.
+- Before citing a stored number, find out how it was produced: its campaign
+  README, its aggregate manifest, and the state of the jobs that made it. An
+  artifact on disk does not prove its protocol completed.
+- State the qualification in the same sentence as the number: "preliminary",
+  "one seed", "partial grid", "frames not matched".
+- Never build a recommendation or a paper claim on a preliminary result. Say
+  which experiment would settle it.
 - Ask the user when the status of a result is unclear. Invoke the
   `result-rigor` skill before citing a stored number, and the
   `experiment-campaign` skill when starting or extending a campaign.
-- Before using a newly coined project term, abbreviation, variant label,
-  metric shorthand, or overloaded word, define it in plain language first and
-  say exactly what changes relative to the baseline. Do not make the user infer
-  a term's meaning from code, configuration, or a results table.
-- When a coined term matters again in a later turn or conversation, briefly
-  restate its meaning before relying on the shorthand. Keep doing so until the
-  user has clearly adopted the term or explicitly asks to omit the reminder.
-- Avoid committing generated artifacts, caches, checkpoints, or log directories.
-- Use W&B tags to identify each run's environment or environments, primary
-  change, and other main features.
-- Organize W&B runs with concise, functional group names such as
-  `planner-ablation`, not names based on timestamps or incidental
-  implementation details. Ask the user to confirm the proposed group name
-  before launching the run.
-- `Isaac-Imitation-G1-v2` changed IN PLACE on 2026-08-04, by explicit decision:
-  its rewards are now `G1V2TunedRewardsCfg` (-37.3% MPJPE-G / -34.7% EE-G over
-  three seeds against two control seeds, ranges disjoint) and its DiffSR macro
-  state is the `root_qpos` frame (qpos + root pose, 380-wide encoder input)
-  instead of full-body (670). A v2 checkpoint from before that date needs
+- Define a new term, abbreviation, variant label, or metric shorthand in plain
+  language before using it, and say what changes against the baseline. Restate
+  it in later turns until the user adopts it.
+- Replace a vague verb with a precise clause, not with a paragraph. Words like
+  "runs", "uses", "handles", "involves", or "touches" hide what happened; the
+  fix is the specific short statement, not an expansion into file paths.
+  Not: "emastack-20b never runs that loss." (vague)
+  Not: three sentences naming every entrypoint and config field. (padded)
+  Yes: "That is emastack-20b's loss, but it reused the existing pretrained
+  encoder."
+- Name a setting by its override path when the setting is the subject of the
+  sentence, and give its semantics once. Not: "0.1 reset ratio". Yes:
+  "`adaptive_uniform_ratio=0.1` — 10% of reset starts are uniform, 90% are
+  drawn by per-bin failure rate." Read the code to confirm semantics; do not
+  paraphrase a campaign comment. Give the full path
+  (`env.command_interface.reference.selection.adaptive_uniform_ratio`) and the
+  consuming file the first time, then use the short field name.
+
+## Runs and Budgets
+
+- Unless the user sets another budget, a cluster training run targets about
+  10B environment frames.
+- Never shrink a run's frame budget or `max_iterations` to fit a walltime.
+  Submit every segment with the full frame target and let the walltime end it:
+  sbatch sends SIGTERM before the kill, the trainer writes a resume
+  checkpoint, and the next segment continues the same global budget through
+  `cumulative_env_frames`. ICE allows about 16 hours per GPU job, so a 10B run
+  is several chained segments. Write checkpoints to persistent storage, never
+  to node-local disk.
+- Prefer the cluster for long training and paper-scale batch evaluation. Prefer
+  the local workstation for inference, playback, metric inspection, and video
+  rendering, because a fresh Isaac Lab container is expensive per job.
+- Local runs are for qualification: stop once the code visibly does what the
+  protocol intends. Do not extend a local run only to show convergence. Use
+  the cluster for convergence, final verification, and paper numbers.
+- Keep resets, rewards, terminations, and other environment details on the
+  frozen protocol unless the user changes it explicitly.
+- Do not commit generated artifacts, caches, checkpoints, or log directories.
+
+## Cluster Submission
+
+- `python -m imitation_experiments.pipeline.cluster` is the control plane:
+  `plan` validates, preflights, and freezes a plan; `submit` uploads the
+  workspace archive and calls sbatch with the printed `PLAN_SHA`; `status`,
+  `logs`, and `cancel` follow the job. Invoke the `cluster-job-submission`
+  skill for the full sequence.
+- A campaign declares its whole job in `campaign.yaml`, including per-stage
+  environment variables. `run_singularity.sh` sources ONLY the frozen
+  per-stage env file when it is present, so editing `docker/cluster/.env.cluster`
+  does not affect a control-plane job. That file now applies only to manual
+  invocations of `run_singularity.sh`.
+- `docker/cluster/cluster_interface.sh` and every `submit_job_slurm_*.sh` are
+  deprecation shims since 2026-08-15. Do not revive them.
+- `submit` packs the working tree, not `git HEAD`. It warns and records
+  `drift=true` when the tree is dirty. Commit before submitting when the run
+  must be reproducible from a SHA.
+
+## Weights & Biases
+
+- Tag each run with its environment, its primary change, and its main
+  features. Use concise functional group names such as `planner-ablation`.
+  Ask the user to confirm a group name before launching.
+- The control plane pins one W&B run id per `(arm, seed)` output tree. The
+  first job of a chain appends a random token to the declared id and writes
+  `<output_root>/wandb_run_id`; every resume reads it, so a chained run stays
+  one W&B run. To move a chain onto a fresh id, delete that file. W&B refuses
+  a run id that was ever deleted, and the refusal kills the job.
+- A run id must stay at or below 31 characters. RLOpt adds a
+  `logdir:<19-char timestamp>_wandb-<run id>` tag and W&B caps a tag at 64.
+- The W&B run name carries the launch timestamp
+  (`<exp_name>-YYYY-MM-DD_HH-MM-SS`) so two launches of one arm are
+  distinguishable. The id does not.
+- Shared mode is retired (2026-08-18). The evaluation sidecar publishes to its
+  own companion run in the same group and repeats the trainer's `env_frames`
+  key so both runs share one x-axis. Do not reintroduce `WANDB_MODE=shared`,
+  `WANDB__PRIMARY`, or `WANDB__LABEL`: shared mode had to be set at run
+  creation, could never be added later, refused asynchronously (a sidecar
+  dropped every point while looking healthy), and made
+  `wandb.log(step=...)` a no-op.
+
+## Contracts You Must Not Silently "Fix"
+
+These look like defects and are not. Changing them changes results or
+performance.
+
+- **Terminal observations are batched.** `ImitationRLEnv` publishes
+  `extras["final_obs"]` as `{"_env_ids": LongTensor[k], "obs": nested [k, ...]
+  tensors}`. The per-environment object array is the legacy format, still
+  accepted on read. Restoring the per-environment clone loop costs about 60% of
+  collection throughput.
+- **The env log payload is detached, not converted.** `IsaacLabWrapper`
+  keeps device tensors and lets the trainer convert once per iteration.
+  A per-step `.cpu().item()` is a pipeline stall for values that are dropped.
+- **`env.data.reference_prefetch_mode`**: `next` overlaps the sequential rows
+  with physics and keeps SONIC's reset distribution exact. `next_and_reset`
+  also pre-stages reset rows, which makes a reset draw see sampler failure
+  weights that are one control step stale. Choose per campaign and record it.
+- **Encoder and tracker are one pair.** `Isaac-Imitation-G1-v2` changed in
+  place on 2026-08-04: its rewards are `G1V2TunedRewardsCfg` and its DiffSR
+  macro state is the `root_qpos` frame (380-wide encoder input) instead of
+  full body (670). A v2 checkpoint from before that date needs
   `env.expert_macro_state_terms=[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]`
-  plus its original reward overrides to reproduce; pairing an old encoder with
-  the new default fails loudly, never silently. Invoke the
-  `g1-encoder-interface` skill before changing or pairing an encoder.
-- G1 latent task versioning (2026-07-31 onward): "the default" is always the
-  highest-numbered `Isaac-Imitation-G1-vN` id. When the recipe's
-  config needs a breaking change, register a new `-G1-vN+1` with the new
-  kwargs instead of mutating the existing vN; once superseded, a vN stays
-  registered with its exact old kwargs forever (for reproducibility) and
-  simply stops being cited as the default. Update the versioning-convention
-  comment in `config/g1/__init__.py`'s "Current defaults" section and this
-  line when the default moves.
-- Unless the user specifies another budget, cluster training jobs should target
-  about 10B environment frames per task/run and a two-day SLURM walltime.
-- Never shrink a run's frame budget or `max_iterations` to fit a scheduler
-  walltime. Submit every segment of a chained run with the full frame target
-  and let the walltime end it: sbatch delivers SIGTERM before the kill, the
-  trainer writes a final resume checkpoint, and the next segment (chained
-  `afterany`, `--checkpoint <tracker tree>`) continues the same global budget
-  through the checkpoint's `cumulative_env_frames`. The chain stops at the
-  target no matter how the walltime divides it. Write checkpoints to
-  persistent storage, never node-local disk.
-- Prefer cluster for large training and paper-scale batch evaluation. Prefer the
-  local workstation for inference, playback, metric inspection, and video
-  rendering because a fresh Isaac Lab container is expensive to initialize on
-  each cluster job.
-- For simple G1 Dance102 cluster experiments, edit `docker/cluster/.env.cluster`
-  and set `CLUSTER_G1_MANIFEST_PATH` to the Dance102 manifest before submitting.
-  If that `CLUSTER_G1_MANIFEST_PATH` line is commented out, it means the job is
-  using the default 40 trajectories.
+  plus its original reward overrides. Invoke the `g1-encoder-interface` skill
+  before changing or pairing an encoder.
+- **G1 task versioning**: "the default" is the highest-numbered
+  `Isaac-Imitation-G1-vN`. A breaking recipe change registers `vN+1`; a
+  superseded `vN` keeps its exact old kwargs forever and simply stops being
+  cited. Update the versioning comment in `config/g1/__init__.py` and this line
+  when the default moves.
+- **DiffSR binding**: a qualification must prove the selected skill
+  checkpoint's `skill_encoder_state_dict` is tensor-identical to the encoder
+  inside the latent tracker checkpoint. Run
+  `validate_latent_skill_checkpoint_binding.py` before Isaac evaluation and
+  keep the record for planner gates. Invoke the `planner-submission-gate`
+  skill for the ordered gate sequence.
 
-## Focused Causal Interface Comparison
+## Paper Work
 
-- Before changing or running the paper-facing comparison, read
-  `wiki/current-status.md` for the living project state, then read
-  `wiki/causal-interface-paper-plan.md` and
-  `wiki/whole-body-vla-literature-review.md` so named SOTA methods,
-  literature-inspired diagnostics, and native reproductions stay distinct.
-  Then read
-  `wiki/lafan1-from-scratch-comparison.md`. Read
-  `wiki/bones-seed-phase5-data-preparation.md` before Phase 5. Keep job IDs
-  and chronology in the from-scratch page rather than in this file.
-- The direct vanilla tracker receiving a fresh expert command at 50 Hz is the
-  low-level ceiling, not a high-level planner row. EE chunks, alternative raw
-  command styles, Future-CVAE, and token variants are diagnostics or appendix
-  studies unless the user explicitly changes the paper scope. Do not start a
-  combinatorial command-style sweep.
-- The explicit packet is current plus nine future frames. Its term-major shape
-  is `expert_motion=10*58=580`, `anchor_pos=10*3=30`, and
-  `anchor_ori=10*6=60`: `[580, 30, 60]`, 670 values total. Re-express
-  anchors against the current robot anchor and consume slots 0 through 9 once
-  each before per-environment renewal.
-- The streamed and direct vanilla paths must use the exact same ordered actor
-  inputs and frozen tracker weights. Load only the policy state dict, require a
-  strict restore, freeze the module in evaluation mode, and record the
-  checkpoint SHA and input-key provenance. A phase-complete, asynchronous
-  equivalence certificate covering all actor inputs and actions is mandatory.
-- Direct actor command terms and the corresponding critic command entries have
-  the same numerical values. They are separate observation groups, and the
-  critic may contain additional privileged state. Keep command-side expert
-  noise disabled; do not describe command noise as an actor/critic difference.
-- Planner inference uses only the causal robot history and explicit task input:
-  nine past frames plus current, 93 values per frame, for a `10 x 93`
+- Read `wiki/final-paper-experiment-design.md` first: it is the current
+  paper-facing contract and it supersedes
+  `wiki/causal-interface-paper-plan.md` where they disagree. Then read
+  `wiki/current-status.md` for live state, and
+  `wiki/whole-body-vla-literature-review.md` so named SOTA methods, borrowed
+  diagnostics, and native reproductions stay distinct.
+  Read `wiki/bones-seed-phase5-data-preparation.md` before Phase 5.
+- Planner inference uses only causal robot history plus the explicit task
+  input: nine past frames plus current, 93 values per frame, a `10 x 93`
   observation. Future reference data is allowed only for oracle commands,
-  labels, and metrics. Never use
-  `current_achieved_macro_transition_batch` as a deployable planner input.
-- M3 planner collection and evaluation keep the normal 10-second, 500-control-
-  step episode and the frozen random reference-start range 0-200 for both
-  interfaces. Do not extend a planner episode to the outer sample-collection
-  budget. The outer collector may continue across resets until it has the exact
-  row count.
-- For definition of success rate, use the same termination as in SONIC.
-  No push, keep domain randomization on.
-- BONES-SEED oracle demonstrations may be collected in one balanced
-  multi-environment run per interface because motion identity is a supervised
-  label there. Planner-driven collection and evaluation must still receive an
-  explicit goal independent of the live reference rank. Do not choose or
-  change the language goal from a trajectory reassignment after reset.
+  labels, and metrics. `current_achieved_macro_transition_batch` is never a
+  deployable planner input.
 - Publish planner commands on a per-environment renewal schedule. Global
   timestep modulo logic is invalid when environments reset asynchronously.
-  Use the same planner backbone, training stages, exact positive sample budget,
-  optimizer budget, seed, evaluation starts, and low-level protocol for both
-  main rows.
-- Local smoke tests and 10M-frame blocks are qualification only. About 50M
-  total frames is the maximum useful serious local low-level check, not a
-  default target. Do not run a 100M local block. Stop earlier once the code is
-  visibly doing what the protocol intends, and do not keep extending local
-  training merely to demonstrate convergence. Keep resets,
-  rewards, terminations, and other environment details on the frozen protocol
-  unless the user explicitly changes it. Use clusters for long convergence,
-  final verification, and paper numbers.
-- A DiffSR qualification must prove that the selected skill checkpoint's
-  `skill_encoder_state_dict` is tensor-identical to the encoder embedded in
-  the latent low-level checkpoint. Run
-  `validate_latent_skill_checkpoint_binding.py` before Isaac evaluation and
-  require the binding record in later planner submission gates. Prefer the
-  exact skill checkpoint path recorded by low-level training even when another
-  checkpoint happens to contain identical runtime encoder weights. Invoke the
-  `planner-submission-gate` skill for the full ordered gate sequence.
+- Both main planner rows share the backbone, training stages, positive sample
+  budget, optimizer budget, seed, evaluation starts, and low-level protocol.
+- Planner collection and evaluation keep the 10-second, 500-control-step
+  episode and the frozen random reference-start range 0-200 for both
+  interfaces. The outer collector may continue across resets to reach an exact
+  row count.
+- Success rate uses SONIC's termination definition. No push, domain
+  randomization on.
+- BONES-SEED oracle demonstrations may be collected in one balanced
+  multi-environment run per interface. Planner-driven collection and
+  evaluation must still receive an explicit goal that does not depend on the
+  live reference rank.
+- A streamed and a direct path must use the same ordered actor inputs and the
+  same frozen tracker weights: load only the policy state dict, require a
+  strict restore, freeze in evaluation mode, and record the checkpoint SHA and
+  input-key provenance.
+- Do not start a combinatorial command-style sweep. EE chunks, alternative raw
+  command styles, Future-CVAE, and token variants are diagnostics or appendix
+  studies unless the user changes the paper scope.
 
 ## Validation
 
-Run the smallest relevant checks from the repo root through Pixi.
-
-General checks:
+Run the smallest relevant checks from the repository root.
 
 ```bash
 pixi run lint
 pixi run format-check
 pixi run typecheck
+pixi run test-rlopt        # RLOpt, default environment
+pixi run test-experiments  # source/imitation_experiments
+pixi run test-scripts      # standalone scripts
+pixi run -e isaaclab test-isaaclab   # tests that import Isaac Lab or pxr
 ```
 
-Run RLOpt pure-Python tests in the default environment, not the `isaaclab`
-environment:
+`test-rlopt` and `test-scripts` name their test files explicitly in
+`pixi.toml`. A new test file does not run until it is added there.
 
-```bash
-pixi run test-rlopt
-```
-
-Run the experiment-library and standalone-script tests in the default
-environment after touching `source/imitation_experiments/` or `scripts/`:
-
-```bash
-pixi run test-experiments
-pixi run test-scripts
-```
-
-Tests that import Isaac Lab or Omniverse modules need Isaac Sim's Python
-bootstrap before imports such as `pxr` are available. Run those tests through
-the `isaaclab` environment:
-
-```bash
-pixi run -e isaaclab test-isaaclab
-```
-
-If you changed formatting intentionally:
-
-```bash
-pixi run ruff format .
-```
-
-For workspace setup changes, verify the installer or README commands still match:
-
-```bash
-./scripts/install_workspace.sh
-```
-
-For environment or training-entry changes, prefer a targeted smoke test over broad execution:
+For environment or training-entry changes, prefer a targeted smoke test:
 
 ```bash
 pixi run -e isaaclab smoke-ipmd
 ```
 
-Use heavier training or playback commands only when the task requires them.
+If you changed formatting on purpose: `pixi run ruff format .`.
 
 ## Submodule Boundary
 
-- Do not “fix” code inside `external/*`, `RLOpt/`, or `ImitationLearningTools/` as part of routine top-level work.
-- If a task explicitly requires RLOpt or ImitationLearningTools changes, edit the in-repo submodule and update the top-level submodule pointer.
-- If a top-level change depends on submodule behavior, first see whether the issue can be solved from this repo through config, wrappers, scripts, or documentation.
-- If a submodule edit is truly required, call it out explicitly in your summary.
+- Do not fix code inside `external/*`, `RLOpt/`, or `ImitationLearningTools/`
+  as part of routine top-level work.
+- First check whether the top-level repo can solve the problem through config,
+  wrappers, scripts, or documentation.
+- If a submodule edit is truly required, edit the in-repo submodule, update the
+  top-level submodule pointer, and call the edit out in your summary.
 
-## When Updating Docs
+## Documentation
 
-- Keep `README.md` and command examples consistent with actual scripts in this repo.
-- Prefer absolute clarity about required submodules and optional local dependency checkouts such as `loco-mujoco`, and document the expected directory layout explicitly.
-- When mentioning execution commands, show them from the repository root.
+- Read `README.md` before changing setup, training, or execution workflows, and
+  keep its commands consistent with the actual scripts.
+- Read `wiki/context-management.md` before changing agent guidance, updating a
+  submodule pointer, or deciding which repository owns an edit.
+- Update `wiki/current-status.md` after a meaningful decision, qualification,
+  submission, failure, or paper result. Keep chronology in the phase-specific
+  pages so that file does not grow without bound.
+- Index every `wiki/*.md` page in `wiki/README.md`.
+- Show commands from the repository root.

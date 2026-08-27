@@ -104,12 +104,16 @@ Phase the work; each phase is independently verifiable:
 
 - **Phase D0 (correctness baseline, in-process).** Stub-import the head in
   the isaaclab env (DONE for import + forward), run the existing closed-loop
-  evaluator with synchronous inference. Slow but exact; this is the
-  reference that the async path must reproduce within eval noise (~12-15%).
+  evaluator with synchronous inference. Slow but exact; the reference the
+  async path is compared against.
 - **Phase D1 (service + async client, no EC).** The zmq service and the
-  batched async sampler, both launched by one wrapper script. Certificate:
-  same seeds, same goals — async metrics match D0 within noise; deadline
-  misses = 0 at 100 envs locally.
+  batched async sampler, both launched by one wrapper script. Gate (relaxed
+  2026-08-18 by user decision — the earlier match-within-eval-noise
+  certificate was judged too strong a requirement): a D0 comparison run on
+  the same seeds and goals is REPORTED next to the async numbers, with the
+  gap and the deadline-miss statistic stated, but no numeric equivalence
+  bound blocks D2 or an async row. An async row must always be labelled
+  async and cite its D0 companion; the two are never pooled.
 - **Phase D2 (EC delegated orchestration).** EC launches both runtimes and
   owns artifacts. Container images: `gr00t` env (service) and the existing
   Isaac image (sim). Skynet uses Apptainer + host networking, which EC

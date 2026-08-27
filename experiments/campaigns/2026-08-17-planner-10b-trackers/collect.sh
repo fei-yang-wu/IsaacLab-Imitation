@@ -10,9 +10,12 @@
 #
 #   ./collect.sh <fsq64_10b|ln_hold1_10b> [seed]
 #
-# Budget matches the 2026-08-13 winning arm (889,044 rows): 29 goals x 31
-# environments x 500 steps x 2 seeds is about 899k rows before early
-# reference ends.
+# ONE run per arm, not several merged: `prepare_gr00t_dataset` keys rows by
+# (env_id, episode_id, control_step) and every run numbers environments from
+# zero, so two collections of the same arm collide on that key and the prepare
+# step refuses them ("collection is not join-safe"). 30 goals x 93 environments
+# x 500 steps is about 1.11M rows before early reference ends, against the
+# 889,044 rows of the 2026-08-13 arm that reached 46.95 mm.
 set -euo pipefail
 CAMPAIGN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "${CAMPAIGN_DIR}" rev-parse --show-toplevel)"
@@ -24,7 +27,7 @@ SEED="${2:-0}"
 arm_config "${ARM}"
 load_motions
 
-PER_GOAL="${PER_GOAL:-31}"
+PER_GOAL="${PER_GOAL:-93}"
 NUM_ENVS=$(( NUM_GOALS * PER_GOAL ))
 MAX_STEPS="${MAX_STEPS:-500}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/logs/planner_10b/${ARM}/collection_seed${SEED}}"
@@ -40,7 +43,14 @@ echo "[COLLECT] hold ${HOLD}, code_period ${CODE_PERIOD}, actor dim ${ACTOR_DIM}
 # re-encoded from it (`latent.source: fsq_prequant`). On the hold-1 arm the
 # target is the stored per-step z, and a lookahead on every row would multiply
 # the collection's size for data the prepare step never reads.
+#
+# FORCE_ROOT_QPOS=1 stores it anyway. That is how the hold-1 arm gets a
+# collection an EXPLICIT head can train on: same rollout states as its latent
+# counterpart, plus the lookahead the chunk target needs.
 SAMPLE_ARGS=()
+if [ "${FORCE_ROOT_QPOS:-0}" = "1" ]; then
+    WITH_ROOT_QPOS=1
+fi
 if [ "${WITH_ROOT_QPOS}" = "1" ]; then
     SAMPLE_ARGS=(--require_root_qpos_samples --sample_future_window_frames 30)
 fi

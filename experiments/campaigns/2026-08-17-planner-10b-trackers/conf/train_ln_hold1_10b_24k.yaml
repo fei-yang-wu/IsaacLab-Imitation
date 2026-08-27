@@ -1,0 +1,32 @@
+defaults:
+  - base_train
+  - _self_
+
+# Double-budget hold-1 head. Checkpoint scoring on 2026-08-19 showed the 12k
+# head is UNDER-trained, not over-trained: 80.69 mm (4k), 56.57 (8k), 44.18
+# (12k) on the 140-episode sweep protocol, still falling steeply at the end of
+# the budget. This arm buys the next 12k updates.
+#
+# It is an IMPROVEMENT row, not an interface-comparison row: every
+# latent-vs-explicit comparison in this campaign holds the optimizer budget
+# fixed at 12k, so this head may only be compared against other 24k heads.
+#
+# checkpoint_interval equals num_updates because each checkpoint is 5 GB and
+# the workstation disk is nearly full — only the final one is written.
+output_dir: outputs/planner_10b/arms/ln_hold1_10b_24k
+target: latent
+data:
+  table: outputs/planner_10b/tables/ln_hold1_10b_table.pt
+  state_field: oracle_rollout_state_history
+goal_features: outputs/gr00t_language30/goal_features/goal_features.pt
+pretrained_bundle: outputs/gr00t_language10/goal_features/action_head_trunk.pt
+model:
+  state_dropout_prob: 0
+optim:
+  num_updates: 24000
+run:
+  checkpoint_interval: 24000
+wandb:
+  project: g1-bones-seed-tamp
+  name: planner_ln_hold1_10b_24k
+  tags: [gr00t-head, planner-10b, ln-hold1, target-latent, budget-24k]
