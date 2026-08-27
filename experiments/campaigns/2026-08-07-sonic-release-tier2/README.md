@@ -43,6 +43,10 @@ implementation of the same weights:
 The zero-input match is what pins the FSQ convention: the `eps = 1e-3` bound and
 the `/16` normalization are confirmed, not assumed.
 
+The v1.1 export matches the same torch adapter pattern after selecting the g1
+path with scalar `encoder_mode_4 = 0`: encoder max abs diff **0.0**, decoder max
+abs diff **4.77e-07**.
+
 ## The encoder input layout, and why it is a trap
 
 The 640 is **not** ten frames of `[qpos, qvel, ori]`. SONIC's flat
@@ -215,7 +219,17 @@ root-relative tracking error on this subset.
 | `sonic_release/last.pt`, matched selected-ten | 1.000 (100/100) | 23.53 mm | 99.94 mm | 0.0968 m |
 | `sonic_v1_1/last.pt`, seed-0 selected-ten | **1.000** (100/100) | **21.17 mm** | 100.99 mm | 0.0988 m |
 
-This is a selected-ten reproduction update only. 
+On the matched 4096-motion block, v1.1 also improves local tracking slightly
+and completes two more motions, but its global/root drift is larger:
+
+| checkpoint | SONIC SR | success-only MPJPE-L | success-only MPJPE-G | anchor position |
+| --- | ---: | ---: | ---: | ---: |
+| `sonic_release/last.pt` | 0.98999 (4055/4096) | 28.49 mm | 196.99 mm | 0.193 m |
+| `sonic_v1_1/last.pt` | **0.99048** (4057/4096) | **26.93 mm** | 228.82 mm | 0.226 m |
+
+The rank assignment is identical for the two public checkpoints. This update
+does not change the later comparison against our tracker, which uses the
+original release checkpoint.
 
 ### Matched comparison against our own tracker
 
