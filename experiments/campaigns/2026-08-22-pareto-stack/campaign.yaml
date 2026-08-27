@@ -1,0 +1,662 @@
+# Pareto stack -- can the G levers, the SR levers, and the screen protocol
+# meet in one recipe?
+#
+# Read `wiki/tracker-pareto-program.md` first: it is the plan of record and
+# carries the lever evidence this campaign acts on. Summary: SR failures are
+# wrist (`ee_body_pos`) terminations and G is root drift; the two respond to
+# DIFFERENT levers, and no measured lever moves both. This campaign trains
+# the combination cells: the online-dynamics finetune (dyn) on the hold-1
+# interfaces, and the two UNSCREENED reward terms on both the hub and the
+# best-G interface.
+#
+# Reference rows (2B screen, seed 0, `paper_testbed4096_v1` clean):
+#   ctrl                 0.9023 / 24.49 / 212.3
+#   use_hold1            0.8921 / 26.44 / 150.4
+#   jepa_ebm_hold1_256d  0.8918 / 27.50 / 142.0
+# Dyn evidence (10B, canonical board): cont_det_hold1_dyn G -17.9% at level
+# SR/L; dyn is a SUBSTITUTE for failure-driven resets, not additive.
+#
+# REWARD ARMS DO NOT READ AGAINST THE STAR TABLE. They change the reward set,
+# so their return column is not comparable; SR and both MPJPE columns are.
+#
+# Frozen across every arm, byte-identical to the design study: data, env,
+# agent entry point, terminations and their curriculum, reset selection,
+# 16,384 envs x 24, gamma 0.97, prefetch mode, network sizes, optimizer.
+name: pareto-stack
+profile: ice
+wandb_project: g1-bones-seed
+# Confirmed with the user on 2026-08-22.
+wandb_group: pareto-stack-2b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  wandb_id: ps-arm
+  # The seed this arm is MEANT to run at (plan_all.sh reads it). The screen is
+  # single-seed like the star; the two s1 arms are the seed axis on the dyn
+  # G-effect.
+  submit_seed: 0
+
+  # ---- The star's hub. An arm overrides only what it changes.
+  objective: endpoint
+  objective_args: []
+  latent_mode: deterministic
+  mode_args: []
+  z_dim: 256
+  command_dim: 258
+  code_latent_dim: 256
+  ln_args: ["--encoder_layer_norm"]
+  window_mode: intermediate
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  hold: 10
+  phase_mode: sin_cos
+  phase_source: hold
+  phase_period: 0
+  command_mode: z
+  # Replaced wholesale by the dyn arms (achieved-ring online finetune).
+  finetune_args: ["agent.ipmd.hl_skill_finetune_enabled=false"]
+  # Reward-screen overrides; empty for every non-reward arm.
+  reward_args: []
+  # Generic per-arm lowlevel overrides on another axis than rewards
+  # (asymmetric critic). Empty for every other arm.
+  extra_args: []
+  # Which encoder file the tracker binds. Arms that reuse a parent encoder
+  # point OUTSIDE their own output tree and carry no pretrain stage.
+  encoder_ckpt: ${vars.output_root}/encoder/checkpoints/latest.pt
+  # Provenance for eval.sh: dyn arms must score with
+  # `--skill_encoder_source checkpoint` (the encoder diverges during RL and
+  # lives inside the tracker checkpoint).
+  encoder_source: pretrained
+
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+  train_num_envs: 16384
+  rollout_steps: 24
+  frame_cap: 2000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/pareto_stack/${vars.arm}_seed${vars.seed}
+
+  # Parent encoders reused verbatim (verified on ICE 2026-08-22). Reward and
+  # dyn arms change nothing about the encoder, so pinning the parent's file
+  # removes encoder-initialization variance from those comparisons.
+  ctrl_encoder: /data/interface_design_study/ctrl_seed0/encoder/checkpoints/latest.pt
+  hold1_encoder: /data/interface_design_study/use_hold1_seed0/encoder/checkpoints/latest.pt
+  jepa_h1_encoder: /data/interface_combos/jepa_ebm_hold1_256d_seed0/encoder/checkpoints/latest.pt
+
+  # Online-dynamics finetune (obs-ring design; no policy gradient). Byte-copy
+  # of `2026-08-15-latent-bottleneck-10b` dyn_block.
+  dyn_block:
+    - env.achieved_ring_capacity=128
+    - agent.ipmd.hl_skill_finetune_enabled=true
+    - agent.ipmd.hl_skill_pg_coeff=0
+    - agent.ipmd.hl_skill_offline_diffsr_coeff=1.0
+    - agent.ipmd.hl_skill_achieved_coeff=1.0
+    - agent.ipmd.hl_skill_anchor_coeff=0.01
+
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=${vars.macro_terms}"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  pretrain_head:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bones-seed
+    - --wandb_group
+    - pareto-stack-2b
+    - --wandb_run_name
+    - ${vars.wandb_arm}-pretrain-s${vars.seed}
+    - --horizon_steps
+    - "10"
+    - --encoder_window_mode
+    - ${vars.window_mode}
+    - --transition_objective
+    - ${vars.objective}
+    - --latent_mode
+    - ${vars.latent_mode}
+    - --z_dim
+    - ${vars.z_dim}
+
+  pretrain_tail:
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=pareto-stack-2b
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.command_phase_source=${vars.phase_source}
+    - agent.ipmd.latent_learning.command_phase_period=${vars.phase_period}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+
+  tuned_lowlevel:
+    - env.rewards.action_rate_l2.weight=0.0
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=250000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+    - /data/interface_design_study/ctrl_seed0/encoder/checkpoints/latest.pt
+    - /data/interface_design_study/use_hold1_seed0/encoder/checkpoints/latest.pt
+    - /data/interface_combos/jepa_ebm_hold1_256d_seed0/encoder/checkpoints/latest.pt
+  output_container_path: /data/pareto_stack/${vars.arm}_seed${vars.seed}
+
+arms:
+  # ---- Q1: dyn on the hold-1 interfaces -------------------------------
+  # use_hold1 re-declared verbatim for SEED 1 ONLY (seed 0 is the star row).
+  # Its pretrained encoder is shared by hold1_dyn_s1, so the s1 pair differs
+  # by exactly the dyn block, like the s0 pair does.
+  hold1:
+    vars:
+      wandb_id: ps-hold1
+      submit_seed: 1
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+    stages: &full_stages
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.objective_args},${vars.mode_args},${vars.ln_args},${vars.pretrain_tail},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,pareto-stack,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,pareto-stack,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,pareto-stack,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # ---- Objective-mechanism square on the winning cell (added 2026-08-22
+  # ---- after the screen: hold-1 + ee 1.0 + wide 1.0 everywhere, and the
+  # ---- loss composition {DiffSR, NTP, SIGReg, EMA-vs-online} is the axis).
+  # ---- Parent/hub: jepa_h1_ee_wide (DiffSR+NTP+SIGReg, EMA) 0.9060/26.98/103.6.
+  # ---- Skipped with evidence: NTP+SIGReg+EMA no-DiffSR was the star's
+  # ---- obj_jepa_ntp, 0.8218/36.77 at hold-10.
+
+  # Plain endpoint DiffSR (ctrl's objective) on the winning interface+rewards:
+  # the interface-matched OBJECTIVE CONTROL the screen lacked (ctrl_ee_wide
+  # confounds objective with hold).
+  endpoint_h1_ee_wide:
+    vars:
+      wandb_id: ps-eph1eew
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: &eew_rewards
+        - env.rewards.motion_ee_pos.weight=1.0
+        - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    stages: *full_stages
+
+  # Chunk-wise NON-JEPA: DiffSR endpoint grounding + SIGReg on the token,
+  # predictor dropped from the loss (jepa_ntp_coeff=0, new RLOpt knob).
+  dsrsig_h1_ee_wide:
+    vars:
+      wandb_id: ps-dsrsig
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_ntp_coeff", "0"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # True LeJEPA: NTP MSE + SIGReg, ONE online encoder on both sides, no EMA,
+  # no stop-grad, no DiffSR term.
+  lejepa_h1_ee_wide:
+    vars:
+      wandb_id: ps-lejepa
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg", "--jepa_target_encoder_mode", "online"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # The full composite with ONLINE targets instead of EMA: is the EMA copy
+  # doing anything once SIGReg + DiffSR ground the token?
+  jepa_ol_h1_ee_wide:
+    vars:
+      wandb_id: ps-jepaol
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_target_encoder_mode", "online"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # SIGReg off: DiffSR + NTP + EMA. Collapse is detectable in the smoke's
+  # z_effective_rank before any GPU-day is spent.
+  jepa_nosig_h1_ee_wide:
+    vars:
+      wandb_id: ps-jepanosig
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_sigreg_coeff", "0"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # ---- Round 3 (2026-08-23): triplet NTP, qvel frames, and the
+  # ---- asymmetry-vs-lag decomposition of the EMA trick. All on the winning
+  # ---- hold-1 + ee 1.0 + wide 1.0 cell; own pretrains (objective/input
+  # ---- change). Terminology per CONTEXT.md: the production recipe is
+  # ---- "DiffSR + EMA trick + SIGReg"; JEPA = the online well-posed cell.
+
+  # Chunk TRIPLET: predictor reads cat(z[t-H], z[t]) over a 3H window — the
+  # option-view dynamics model. First trained use of --jepa_context_chunks 1.
+  trip_h1_ee_wide:
+    vars:
+      wandb_id: ps-trip
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_context_chunks", "1"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # Pair NTP on FULL-BODY frames (67/frame: qpos+qvel+anchor, 670 window) —
+  # the qvel control that completes the pair/triplet x qvel 2x2. Needs the
+  # 2026-08-23 RLOpt reanchor generalization.
+  qvel_h1_ee_wide:
+    vars:
+      wandb_id: ps-qvel
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm"]
+      macro_terms: "[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]"
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # Triplet + qvel: two past tokens AND in-frame velocities — the
+  # Euler-Lagrange-motivated cell (second-order state, user 2026-08-23).
+  trip_qvel_h1_ee_wide:
+    vars:
+      wandb_id: ps-tripqvel
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_context_chunks", "1"]
+      macro_terms: "[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]"
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # JEPA + stop-grad asymmetry (SimSiam cell): does breaking the
+  # co-adaptation shortcut WITHOUT the EMA lag rescue the well-posed loss?
+  # The lejepa diagnosis: pred/copy 1e-4 at rank 149 — shortcut, not collapse.
+  lejepa_sg_h1_ee_wide:
+    vars:
+      wandb_id: ps-lejepasg
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg", "--jepa_target_encoder_mode", "stopgrad"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # Production recipe with stopgrad instead of EMA: asymmetry-vs-lag inside
+  # the full DiffSR-grounded composite.
+  sg_h1_ee_wide:
+    vars:
+      wandb_id: ps-sg
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_target_encoder_mode", "stopgrad"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # The missing cell of the {loss} x {target} 2x2 (2026-08-24): LeJEPA loss
+  # with the EMA target. Completes: sigreg_ebm x {ema=hub, stopgrad=sg} and
+  # sigreg x {ema=THIS, stopgrad=lejepa_sg}. Answers whether the EMA-beats-
+  # stopgrad ordering measured WITH DiffSR grounding survives without it --
+  # mechanism argument says it might invert, because an unanchored lagged
+  # target has nothing pinning the token space.
+  lejepa_ema_h1_ee_wide:
+    vars:
+      wandb_id: ps-lejepaema
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg", "--jepa_target_encoder_mode", "ema"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # ---- Round 4 (2026-08-26): GENERATIVE next-chunk prediction. The hub's
+  # ---- prediction term is a conditional MEAN (MSE toward the EMA token);
+  # ---- chunk futures are multimodal, so these arms swap the estimator for a
+  # ---- second DiffSR diffusion head at the same jepa_ntp_coeff slot
+  # ---- (--jepa_ntp_head, RLOpt 2026-08-26). Conditioning is (s_t, z_t) —
+  # ---- one deliberate delta vs the mlp P, which saw z_t alone.
+
+  # p(z_next | s_t, z_t): generative next-TOKEN. Target still the EMA
+  # encoder's token; SIGReg quasi-pins the token marginal near N(0, I)
+  # (pretrain z_std_mean 0.99), so the head's target distribution is
+  # near-stationary despite the EMA drift.
+  diffntp_token_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntpt
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_ntp_head", "diff_token"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # p(x_{t+H+1:t+2H} | s_t, z_t): generative next-CHUNK in the executed
+  # chunk's heading frame (drift stays in the target). Every target is data:
+  # this loss carries NO self-target, so the EMA trick leaves the objective
+  # entirely — the fully well-posed generative cell.
+  diffntp_chunk_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntpc
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_ntp_head", "diff_chunk"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # diff_chunk with the target RE-ANCHORED onto s_{t+H}'s own heading frame —
+  # the frame the encoder itself uses one publication later. Erases the
+  # cross-chunk displacement: paired with diffntp_chunk (executed frame), it
+  # isolates whether the drift information in the target is load-bearing.
+  diffntp_chunkra_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntpcra
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_ntp_head", "diff_chunk", "--jepa_ntp_chunk_anchor", "next"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # Joint next (state, token): p(s_{t+H}, z_next | s_t, z_t) over the
+  # concatenated 38+256 target. The joint captures the correlation between
+  # where the robot lands and what the next command is.
+  diffntp_pair_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntppair
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm", "--jepa_ntp_head", "diff_pair"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # dyn on use_hold1, seed 0. Parent row: use_hold1 (0.8921/26.44/150.4).
+  # Settles whether the 10B dyn G-effect reproduces at the 2B screen.
+  hold1_dyn:
+    vars:
+      wandb_id: ps-hold1dyn
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      encoder_ckpt: ${vars.hold1_encoder}
+      finetune_args: ${vars.dyn_block}
+      encoder_source: checkpoint
+    stages: &lowlevel_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,pareto-stack,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,pareto-stack,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # dyn on use_hold1, seed 1, encoder from THIS campaign's `hold1` pretrain.
+  # SUBMIT ONLY AFTER `hold1` seed 1 pretrain completes (the preflight cannot
+  # see a file that does not exist yet; the path is intentionally absent from
+  # require_container_paths).
+  hold1_dyn_s1:
+    vars:
+      wandb_id: ps-hold1dyn
+      submit_seed: 1
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      encoder_ckpt: /data/pareto_stack/hold1_seed1/encoder/checkpoints/latest.pt
+      finetune_args: ${vars.dyn_block}
+      encoder_source: checkpoint
+    stages: *lowlevel_stages
+
+  # dyn on the best-G interface. Parent row: jepa_ebm_hold1_256d
+  # (0.8918/27.50/142.0). THE decisive cell: stack (sub-120 G) or saturate
+  # (~140, dyn dies at the screen).
+  jepa_h1_dyn:
+    vars:
+      wandb_id: ps-jepah1dyn
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      encoder_ckpt: ${vars.jepa_h1_encoder}
+      finetune_args: ${vars.dyn_block}
+      encoder_source: checkpoint
+    stages: *lowlevel_stages
+
+  # ---- Q2: the unscreened reward terms --------------------------------
+  # On the hub (isolates the reward effect; encoder pinned to ctrl's file).
+  ctrl_ee1:
+    vars:
+      wandb_id: ps-ctrlee1
+      encoder_ckpt: ${vars.ctrl_encoder}
+      reward_args: ["env.rewards.motion_ee_pos.weight=1.0"]
+    stages: *lowlevel_stages
+  ctrl_wide1:
+    vars:
+      wandb_id: ps-ctrlwide1
+      encoder_ckpt: ${vars.ctrl_encoder}
+      reward_args: ["env.rewards.motion_global_anchor_pos_wide.weight=1.0"]
+    stages: *lowlevel_stages
+  ctrl_ee_wide:
+    vars:
+      wandb_id: ps-ctrleewide
+      encoder_ckpt: ${vars.ctrl_encoder}
+      reward_args:
+        - env.rewards.motion_ee_pos.weight=1.0
+        - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    stages: *lowlevel_stages
+  # The literal MPJPE-G integrand (global body positions, std 0.1), inert
+  # since 2026-08-04. UNSCREENED until this row.
+  ctrl_bodyglobal:
+    vars:
+      wandb_id: ps-ctrlbodyg
+      encoder_ckpt: ${vars.ctrl_encoder}
+      reward_args: ["env.rewards.motion_body_pos_global.weight=0.5"]
+    stages: *lowlevel_stages
+
+  # Asymmetric critic: the latent-mode critic reads the FULL explicit
+  # reference component set (single-frame, noise-free) instead of the default
+  # latent contract (latent_command + expert_motion + anchors). Critic-only by
+  # construction -- `critic_components` never touches the policy group -- so
+  # the deployed actor is byte-identical to ctrl. Train-time value estimation
+  # is the only change. Config-only: the v2 interface already carries the
+  # knob (`command_interface.py:333`, test_critic_components_can_be_declared_explicitly).
+  ctrl_asymcritic:
+    vars:
+      wandb_id: ps-ctrlasymc
+      encoder_ckpt: ${vars.ctrl_encoder}
+      extra_args:
+        - "env.command_interface.reference.critic_components=[joint_qpos_qvel,keypoint_pos,keypoint_ori,ee_pos,ee_ori,root_pos,root_ori]"
+    stages: *lowlevel_stages
+
+  # On the best-G interface (measures the stack).
+  jepa_h1_ee1:
+    vars:
+      wandb_id: ps-jepah1ee1
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      encoder_ckpt: ${vars.jepa_h1_encoder}
+      reward_args: ["env.rewards.motion_ee_pos.weight=1.0"]
+    stages: *lowlevel_stages
+  jepa_h1_wide1:
+    vars:
+      wandb_id: ps-jepah1wide
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      encoder_ckpt: ${vars.jepa_h1_encoder}
+      reward_args: ["env.rewards.motion_global_anchor_pos_wide.weight=1.0"]
+    stages: *lowlevel_stages
+  jepa_h1_ee_wide:
+    vars:
+      wandb_id: ps-jepah1eew
+      objective: jepa_ntp
+      objective_args: ["--jepa_loss", "sigreg_ebm"]
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      encoder_ckpt: ${vars.jepa_h1_encoder}
+      reward_args:
+        - env.rewards.motion_ee_pos.weight=1.0
+        - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    stages: *lowlevel_stages

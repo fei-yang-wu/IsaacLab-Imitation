@@ -144,6 +144,12 @@ arms:
           CLUSTER_WANDB_TAGS: bones-seed,129785,qvel-fullbody,${vars.arm},seed${vars.seed},lowlevel
           WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}
           WANDB_RESUME: allow
+          # No WANDB_MODE=shared: the EC/MuJoCo sidecar publishes to its own
+          # companion run in this group (retired 2026-08-18). Shared mode had
+          # to be set at run creation, could never be added afterwards, and
+          # refused asynchronously -- a sidecar aimed at a non-shared run
+          # dropped every point while looking healthy (job 5580308). It also
+          # made the trainer's wandb.log(step=...) a no-op.
       # Manual relaunch until cumulative_env_frames reaches 10B. Submit with
       # --only-stage lowlevel_resume; never in the same plan as `lowlevel`.
       - name: lowlevel_resume

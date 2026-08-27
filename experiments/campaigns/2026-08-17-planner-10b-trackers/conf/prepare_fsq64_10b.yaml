@@ -6,7 +6,7 @@ defaults:
 # (46.95 mm): 3 latents, each held 10 control steps, target = the PRE-quantized
 # bounded vector, snapped onto the lattice at publication. Only the tracker and
 # its encoder changed (4.5B -> 10.0B, `robot` -> `robot_heading` frame).
-collection_dir: logs/planner_10b/fsq64_10b/collection_merged
+collection_dir: logs/planner_10b/fsq64_10b/collection_seed0
 output: outputs/planner_10b/tables/fsq64_10b_table.pt
 latent:
   slots: 3

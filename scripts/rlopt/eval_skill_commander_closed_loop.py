@@ -319,6 +319,49 @@ parser.add_argument(
 )
 parser.add_argument("--gr00t_temporal_ensemble_decay", type=float, default=0.5)
 parser.add_argument(
+    "--gr00t_service",
+    type=str,
+    default=None,
+    help=(
+        "ZeroMQ endpoint of a running gr00t_batch_service. When set, the "
+        "head runs in that separate process and the sampler follows the "
+        "asynchronous lead-time/deadline-miss protocol; the summary is "
+        "labelled planner_execution=async_service and is never poolable "
+        "with a sync row."
+    ),
+)
+parser.add_argument(
+    "--gr00t_lead_steps",
+    type=int,
+    default=5,
+    help="Control steps before a needed renewal at which the async request fires.",
+)
+parser.add_argument(
+    "--gr00t_packet_frame",
+    choices=("auto", "anchor", "heading"),
+    default="auto",
+    help=(
+        "Frame the chunk head's predictions live in: 'anchor' is the full "
+        "anchor pose, 'heading' the yaw-only anchor frame of a robot_heading "
+        "collection. 'auto' resolves from env.expert_macro_anchor_mode. The "
+        "native route pins this frame on the chunk term so a heading-frame "
+        "head can drive a robot-frame explicit tracker; the encoded route "
+        "re-expresses cached packet windows in it."
+    ),
+)
+parser.add_argument(
+    "--gr00t_packet_consume_frames",
+    type=int,
+    default=None,
+    help=(
+        "chunk_encoded only: re-plan the packet every N control steps and "
+        "serve the intermediate publications from the cached packet at its "
+        "current age (receding-horizon cursor), instead of re-running the "
+        "head at every publication. Matches the latent hold-1 arm's re-plan "
+        "cadence; required when chunk_encoded runs against --gr00t_service."
+    ),
+)
+parser.add_argument(
     "--gr00t_consume_slots",
     type=int,
     default=None,
@@ -2493,6 +2536,67 @@ def main(
             num_envs=int(env_cfg.scene.num_envs),
             device=agent._get_device(agent.config.device),
         )
+
+        # Shared accessors for the cursor/async execution modes: the anchor
+        # frame a prediction is expressed in, and the episode-local clock the
+        # deadline protocol counts in. 'auto' takes the frame from the env's
+        # macro anchor mode, which is the frame the training collection's
+        # chunk targets were expressed in.
+        gr00t_packet_frame = str(args_cli.gr00t_packet_frame)
+        if gr00t_packet_frame == "auto":
+            macro_mode = str(getattr(env_cfg, "expert_macro_anchor_mode", "robot"))
+            if macro_mode == "robot_heading":
+                gr00t_packet_frame = "heading"
+            elif macro_mode == "robot":
+                gr00t_packet_frame = "anchor"
+            else:
+                raise ValueError(
+                    "--gr00t_packet_frame auto cannot resolve "
+                    f"expert_macro_anchor_mode={macro_mode!r}; pass the frame "
+                    "explicitly."
+                )
+        print(f"[INFO] GR00T packet frame: {gr00t_packet_frame}")
+
+        def _chunk_anchor_state() -> tuple[Tensor, Tensor]:
+            name = str(getattr(raw_isaac_env, "_expert_anchor_body_name", "pelvis"))
+            pos_w, quat_w = raw_isaac_env._get_robot_anchor_state_w_fast(name)
+            pos_w = pos_w.reshape(-1, 3)
+            quat_w = quat_w.reshape(-1, 4)
+            if gr00t_packet_frame == "heading":
+                from isaaclab_imitation.tasks.manager_based.imitation.mdp._compiled import (  # noqa: PLC0415
+                    heading_anchor_frame,
+                )
+
+                return heading_anchor_frame(pos_w, quat_w)
+            return pos_w, quat_w
+
+        def _chunk_episode_steps() -> Tensor:
+            return raw_isaac_env.episode_length_buf
+
+        if args_cli.gr00t_route == "chunk_native" and gr00t_packet_frame == "heading":
+            # The term's publish-time capture assumes the packet lives in the
+            # full anchor pose; a heading-frame head needs its frame pinned on
+            # every publish, sync or async.
+            gr00t_chunk_publisher._pin_anchor_state_fn = _chunk_anchor_state
+        sync_chunk_publisher = gr00t_chunk_publisher
+        if (
+            args_cli.gr00t_route == "chunk_native"
+            and args_cli.gr00t_service is not None
+        ):
+            from imitation_experiments.planner.gr00t_async_chunk import (  # noqa: PLC0415
+                Gr00tAsyncChunkPublisher,
+            )
+
+            gr00t_chunk_publisher = Gr00tAsyncChunkPublisher(
+                publisher=sync_chunk_publisher,
+                chunk_term=chunk_term,
+                hold_steps=int(trainer.horizon_steps),
+                service_endpoint=str(args_cli.gr00t_service),
+                lead_steps=int(args_cli.gr00t_lead_steps),
+                anchor_state_fn=_chunk_anchor_state,
+                episode_step_fn=_chunk_episode_steps,
+                num_envs=int(env_cfg.scene.num_envs),
+            )
         if args_cli.gr00t_route == "chunk_encoded":
             # Tracker-matched row: the identical chunk head drives the SAME
             # latent tracker the latent arm uses, through the frozen encoder.
@@ -2530,19 +2634,70 @@ def main(
 
             gr00t_packet_layout = PacketLayout(
                 ROOT_QPOS_MACRO_TERMS,
-                packet_frames=int(gr00t_chunk_publisher._gr00t_horizon),
+                packet_frames=int(sync_chunk_publisher._gr00t_horizon),
             )
-            gr00t_packet_planner = Gr00tPacketPlanner(gr00t_chunk_publisher)
+            if args_cli.gr00t_packet_consume_frames is not None:
+                # Receding-horizon cursor: re-plan every N steps, serve the
+                # intermediate publications from the cached packet at its age.
+                # The installer's own ensembler assumes a fresh head call per
+                # publication, so the two modes are mutually exclusive.
+                if str(args_cli.gr00t_temporal_ensemble) != "none":
+                    raise ValueError(
+                        "--gr00t_packet_consume_frames requires "
+                        "--gr00t_temporal_ensemble none."
+                    )
+                assert oracle_sampler is not None  # checked above for this route
+                encoder_frames = int(oracle_sampler.skill_encoder.window_steps) + 1
+                if args_cli.gr00t_service is not None:
+                    from imitation_experiments.planner.gr00t_async_chunk import (  # noqa: PLC0415
+                        Gr00tAsyncPacketPlanner,
+                    )
+
+                    gr00t_packet_planner = Gr00tAsyncPacketPlanner(
+                        sync_chunk_publisher,
+                        service_endpoint=str(args_cli.gr00t_service),
+                        lead_steps=int(args_cli.gr00t_lead_steps),
+                        consume_frames=int(args_cli.gr00t_packet_consume_frames),
+                        encoder_frames=encoder_frames,
+                        anchor_state_fn=_chunk_anchor_state,
+                        episode_step_fn=_chunk_episode_steps,
+                        num_envs=int(env_cfg.scene.num_envs),
+                    )
+                else:
+                    from imitation_experiments.planner.gr00t_async_chunk import (  # noqa: PLC0415
+                        Gr00tCursorPacketPlanner,
+                    )
+
+                    gr00t_packet_planner = Gr00tCursorPacketPlanner(
+                        sync_chunk_publisher,
+                        consume_frames=int(args_cli.gr00t_packet_consume_frames),
+                        encoder_frames=encoder_frames,
+                        anchor_state_fn=_chunk_anchor_state,
+                        episode_step_fn=_chunk_episode_steps,
+                        num_envs=int(env_cfg.scene.num_envs),
+                    )
+            elif args_cli.gr00t_service is not None:
+                raise ValueError(
+                    "--gr00t_route=chunk_encoded with --gr00t_service needs "
+                    "--gr00t_packet_consume_frames: the async protocol is "
+                    "defined on the receding-horizon cursor."
+                )
+            else:
+                gr00t_packet_planner = Gr00tPacketPlanner(sync_chunk_publisher)
             packet_encoder_stats = install_packet_encoder_command_source(
                 oracle_sampler,
                 planner=gr00t_packet_planner,
                 causal_state_provider=_gr00t_causal_state,
                 env=raw_isaac_env,
                 packet_layout=gr00t_packet_layout,
-                packet_source="planner",
+                packet_source=str(args_cli.packet_source),
             )
             packet_encoder_provenance = {
-                "packet_source": "gr00t_chunk_head",
+                "packet_source": (
+                    "gr00t_chunk_head"
+                    if str(args_cli.packet_source) == "planner"
+                    else "expert_pin"
+                ),
                 "packet_planner_checkpoint": str(args_cli.gr00t_checkpoint),
                 "packet_interface": "root_qpos",
             }
@@ -2558,6 +2713,19 @@ def main(
         from imitation_experiments.planner.gr00t_latent_sampler import (  # noqa: PLC0415
             Gr00tLatentCommandSampler,
         )
+
+        gr00t_sampler_cls = Gr00tLatentCommandSampler
+        gr00t_async_kwargs: dict = {}
+        if args_cli.gr00t_service is not None:
+            from imitation_experiments.planner.gr00t_async_sampler import (  # noqa: PLC0415
+                Gr00tAsyncLatentCommandSampler,
+            )
+
+            gr00t_sampler_cls = Gr00tAsyncLatentCommandSampler
+            gr00t_async_kwargs = {
+                "service_endpoint": str(args_cli.gr00t_service),
+                "lead_steps": int(args_cli.gr00t_lead_steps),
+            }
 
         oracle_sampler = getattr(agent, "_hl_skill_command_sampler", None)
         if oracle_sampler is None:
@@ -2581,7 +2749,8 @@ def main(
                 "the environment exposes no current_causal_planner_observation; "
                 "the GR00T planner input is causal-only by contract."
             )
-        gr00t_sampler = Gr00tLatentCommandSampler(
+        gr00t_sampler = gr00t_sampler_cls(
+            **gr00t_async_kwargs,
             causal_observation_fn=causal_fn,
             state_history_steps=int(args_cli.state_history_steps),
             gr00t_checkpoint=args_cli.gr00t_checkpoint,
@@ -3056,6 +3225,12 @@ def main(
                         {
                             "route": str(args_cli.gr00t_route),
                             **gr00t_chunk_publisher.report(),
+                            **(
+                                gr00t_packet_planner.report()
+                                if gr00t_packet_planner is not None
+                                and hasattr(gr00t_packet_planner, "report")
+                                else {}
+                            ),
                         }
                         if gr00t_chunk_publisher is not None
                         else None
@@ -3167,6 +3342,12 @@ def main(
                 int(trainer.horizon_steps),
                 initial_publication=timestep == 0,
             )
+            if gr00t_chunk_publisher is not None and hasattr(
+                gr00t_chunk_publisher, "note_step"
+            ):
+                # Async native route: drain service replies and fire lead-time
+                # requests once per control step, renewal or not.
+                gr00t_chunk_publisher.note_step()
             if (
                 gr00t_chunk_publisher is not None
                 and str(args_cli.gr00t_route) == "chunk_native"
@@ -3314,10 +3495,10 @@ def main(
                         metric_row["tracking_mpjpe_mm"] = float(
                             mpjpe_mm[active_mask].mean()
                         )
-                # World-frame counterpart, which keeps the global drift the
-                # root-relative metric is blind to. Reported alongside rather
-                # than instead: an arm can track posture well while drifting,
-                # and the two numbers separate those failures.
+                    # World-frame counterpart, which keeps the global drift the
+                    # root-relative metric is blind to. Reported alongside rather
+                    # than instead: an arm can track posture well while drifting,
+                    # and the two numbers separate those failures.
                     active_mask = step_active.to(mpjpe_g_mm.device)
                     if bool(active_mask.any()):
                         metric_row["tracking_mpjpe_g_mm"] = float(
@@ -3636,6 +3817,12 @@ def main(
                     {
                         "route": str(args_cli.gr00t_route),
                         **gr00t_chunk_publisher.report(),
+                        **(
+                            gr00t_packet_planner.report()
+                            if gr00t_packet_planner is not None
+                            and hasattr(gr00t_packet_planner, "report")
+                            else {}
+                        ),
                     }
                     if gr00t_chunk_publisher is not None
                     else None

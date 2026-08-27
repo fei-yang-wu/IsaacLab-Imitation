@@ -43,6 +43,17 @@ RUNTIME_BODY_NAMES="[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_li
 ARMS_TABLE=(
 "ln_hold1_sonicreset_30b|ln_hold1_sonicreset|30000021504|256|258|1"
 "ln_hold1_sonicreset_46b5|ln_hold1_sonicreset|46500151296|256|258|1"
+# The emastack promotion arm; its encoder is the interface_combos
+# jepa_ebm_hold1_256d file, NOT the ln leader's, so its mirror carries its own.
+"ema_h1_ee_wide_8b5|ema_h1_ee_wide|8500150272|256|258|1"
+# Smoothness finetunes off the 46.5B parent, 1.0B of their 2.0B budget.
+"ar01_47b5|ar01|47500099584|256|258|1"
+"ar003_47b5|ar003|47500099584|256|258|1"
+"ar01shake4_47b5|ar01shake4|47500099584|256|258|1"
+# The same finetunes at their full 2.0B budget -- the rows the gate reads.
+"ar01_48b5|ar01|48500047872|256|258|1"
+"ar003_48b5|ar003|48500047872|256|258|1"
+"ar01shake4_48b5|ar01shake4|48500047872|256|258|1"
 )
 ARMS="${ARMS:-ln_hold1_sonicreset_46b5}"
 

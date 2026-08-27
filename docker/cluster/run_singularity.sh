@@ -400,12 +400,10 @@ fi
 # boundary as the tags above: a campaign that exports WANDB_RUN_ID in its stage
 # env gets an auto-generated run id anyway unless the variable is forwarded
 # here, which is silent -- the run appears, just not under the id that was
-# asked for. WANDB__PRIMARY / WANDB__LABEL (double underscore) are the env
-# spellings of wandb's x_primary / x_label settings, which together with
-# WANDB_MODE=shared let a second process (the evaluation sidecar) write
-# Eval/* into the training run.
-for _wandb_var in WANDB_RUN_ID WANDB_RESUME WANDB_RUN_GROUP WANDB_MODE \
-    WANDB__PRIMARY WANDB__LABEL; do
+# asked for. WANDB_MODE stays for `offline`; the shared-mode pair
+# (WANDB__PRIMARY / WANDB__LABEL) was dropped on 2026-08-18 when the
+# evaluation sidecar moved to its own companion run.
+for _wandb_var in WANDB_RUN_ID WANDB_RESUME WANDB_RUN_GROUP WANDB_MODE; do
     _wandb_value="$(printenv "${_wandb_var}" || true)"
     if [ -n "${_wandb_value}" ]; then
         export "SINGULARITYENV_${_wandb_var}=${_wandb_value}"
@@ -602,17 +600,41 @@ fi
 #
 # `rlopt_pipeline=1` means "this entrypoint runs its own stages, never rewrite
 # it"; only `train.py` is rewritten to `train_physx.py` under the PhysX backend.
+#
+# The rlopt EVALUATION entrypoints belong to the same class: they build the same
+# environment and load the same torch checkpoints, so they need the CU130
+# runtime Python too, and they resolve their backend from `physics=` the same
+# way. They are never rewritten -- there is no PhysX variant of an evaluator.
 rlopt_backend=""
 rlopt_pipeline=0
+rlopt_eval=0
 case "${CLUSTER_PYTHON_EXECUTABLE}" in
     scripts/rlopt/train.py) ;;
     scripts/rlopt/train*.py) rlopt_pipeline=1 ;;
+    scripts/rlopt/eval*.py) rlopt_pipeline=1; rlopt_eval=1 ;;
 esac
 case "${CLUSTER_PYTHON_EXECUTABLE}" in
-    scripts/rlopt/train*.py) rlopt_backend="$(resolve_rlopt_backend "${@:3}")" ;;
+    scripts/rlopt/train*.py|scripts/rlopt/eval*.py)
+        rlopt_backend="$(resolve_rlopt_backend "${@:3}")"
+        ;;
 esac
 
-if [ "$rlopt_backend" = "newton" ]; then
+if [ "$rlopt_eval" = "1" ]; then
+    # The evaluators construct `AppLauncher` at import, so they need Kit, and
+    # they need torch, so they need the CU130 runtime. Only one interpreter has
+    # both: Kit's Python with the CU130 site-packages injected -- the same
+    # configuration the PhysX training branch uses, and the same one a local
+    # `pixi run -e isaaclab` gives. The CU130 runtime Python alone has no Kit
+    # extension cache, and `AppLauncher` dies on a missing `EXP_PATH`
+    # (ICE job 5593231).
+    #
+    # `--assert-kitless` is a TRAINING flag: only the train entrypoints define
+    # it, and an evaluator would pass it through argparse into Hydra and die on
+    # an unknown override. There is no workload success marker either: that is
+    # the PhysX trainer's contract, not an evaluator's.
+    printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
+    workload_cmd='runtime_site=""; for candidate in "${ISAACLAB_CU130_RUNTIME_ROOT}"/lib/python*/site-packages /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime/lib/python*/site-packages; do if [ -d "$candidate/torch" ]; then runtime_site="$candidate"; break; fi; done; if [ -z "$runtime_site" ]; then echo "[ERROR] CU130 runtime site-packages not found." >&2; exit 1; fi; export ISAACLAB_CU130_SITE_PACKAGES="$runtime_site"; runtime_nvidia_libs="$(find "$runtime_site/nvidia" -mindepth 2 -maxdepth 3 -type d -name lib -print 2>/dev/null | paste -sd: -)"; if [ -n "$runtime_nvidia_libs" ]; then export LD_LIBRARY_PATH="$runtime_nvidia_libs:${LD_LIBRARY_PATH:-}"; fi; runtime_nccl="$runtime_site/nvidia/nccl/lib/libnccl.so.2"; if [ ! -f "$runtime_nccl" ]; then echo "[ERROR] CU130 runtime NCCL not found: $runtime_nccl" >&2; exit 1; fi; export LD_PRELOAD="$runtime_nccl${LD_PRELOAD:+:$LD_PRELOAD}"; /isaac-sim/python.sh '"${workload_args}"
+elif [ "$rlopt_backend" = "newton" ]; then
     printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}" --assert-kitless
     workload_cmd='runtime_python=""; for candidate in "${ISAACLAB_CU130_RUNTIME_ROOT}/bin/python" /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime/bin/python; do if [ -x "$candidate" ]; then runtime_python="$candidate"; break; fi; done; if [ -z "$runtime_python" ]; then echo "[ERROR] CU130 runtime Python not found." >&2; exit 1; fi; exec "$runtime_python" '"${workload_args}"
 elif [ "$rlopt_backend" = "physx" ]; then

@@ -20,6 +20,83 @@ Artifacts (public, ungated, HF `nvidia/GEAR-SONIC`), stored at
 The full `gear_sonic` source is checked out at `/tmp/sonic_main_check` (not
 ours; a reference read only).
 
+## Which SONIC model this is (2026-08-25)
+
+**`sonic_release/last.pt` is the paper's 16M model; `sonic_v1_1/last.pt` is its
+42M one.** Read this before comparing any number on this page to a SONIC paper
+row.
+
+The HF repo `nvidia/GEAR-SONIC` carries three checkpoints and their
+`config.yaml` files settle the question outright:
+
+| HF path | `decoders.g1_dyn` hidden dims | reading |
+| --- | --- | --- |
+| `sonic_release/` | `[2048, 2048, 1024, 1024, 512, 512]` | 16M rung |
+| `sonic_v1_1/` | `[4096, 4096, 2048, 2048, 1024, 1024, 512, 512]` | Table S1, 42M |
+| `low_latency/` | `[4096, 4096, 2048, 2048, 1024, 1024, 512, 512]` | Table S1, deployment variant |
+
+Scored on the paper-facing proxy board, clean protocol, one seed:
+`sonic_release` 0.9924 / 25.63 mm / 150.94 mm against Table 4(a)'s
+0.996 / 25.5 mm, and `sonic_v1_1` 0.9932 / 24.35 mm / 206.00 mm against Table
+4(c)'s 0.998 / 22.5 mm. On the 4,057 clips both complete, v1.1 is 1.3 mm better
+on MPJPE-L and 56 mm worse on MPJPE-G, at level completion — a trade, not an
+upgrade. See
+`experiments/campaigns/2026-08-25-sonic-paper-proxy/README.md`.
+
+SONIC's Table S1 gives the action decoder as
+`[4096, 4096, 2048, 2048, 1024, 1024, 512, 512]`. The release's own
+`config.yaml:152` gives `decoders.g1_dyn` as
+`[2048, 2048, 1024, 1024, 512, 512]` — six layers, top width 2048 — and the
+critic carries the same smaller stack. The three encoders do match Table S1 at
+`[2048, 1024, 512, 512]`.
+
+Parameters on the tracking path (g1 encoder plus action decoder, biases in):
+
+| | encoder | decoder | total |
+| --- | ---: | ---: | ---: |
+| paper Table S1 | 4.23 M | 37.39 M | **41.6 M** |
+| released `last.pt` | 4.23 M | 10.18 M | **14.4 M** |
+
+The paper scales "from 1.2M to 16M to 42M parameters", and Table S1's dims
+reproduce the 42M headline to three significant figures. The release is the
+16M rung. Its config also carries `num_learning_iterations: 100000` against the
+paper's 50k, so it is a different run as well as a different size.
+
+Consequence: `sonic_release`'s comparable paper rows are Table 4(a),
+test-repetition **99.6% / 25.5 mm** and test-content **99.3% / 26.6 mm**. Table
+4(c)'s 99.8% / 22.5 mm and 99.6% / 23.8 mm, the Figure 2 MuJoCo row
+98.7% / 23.2 mm, and the 123-clip deployment row 100% / 22.3 mm belong to the
+42M model — score `sonic_v1_1` against those, not `sonic_release`. **No
+evaluation population will make `sonic_release` produce them.** Every clean
+4,096-clip measurement of it sits at
+25.5-26.0 mm, which is where a 16M model belongs on the paper's own size ladder
+(1.2M at 27.7 mm, 42M at 23.8 mm on test-content).
+
+Two hypotheses for the gap were checked and dropped, both against SONIC's
+released source:
+
+- **Metric frame.** Their `mpjpe_l` is
+  `smpl_sim.smpllib.smpl_eval.compute_metrics_lite`
+  (`im_eval_callback.py:598`): `jpos - jpos[:, root_idx]` on both sides, root
+  translation only, no rotation cancelled. Identical to our
+  `contracts/tracking_metrics.py`. Their `body_names`
+  (`commands/terms/motion.yaml:52`) are our 14 links verbatim, `anchor_body` is
+  `pelvis`, `extend_config` is empty, and their rewards and terminations use a
+  heading-aligned root frame, matching our `reroot_body_positions`.
+- **Reference time base.** `convert_soma_csv_to_motion_lib.py` downsamples by
+  integer stride and `int(120/50) = 2` would leave 60 fps of samples stamped
+  50 fps. Dropped: `torch_humanoid_batch.py:342` `interploate_pose` is a proper
+  time-based lerp/slerp resample driven by the stored `fps`, the converter
+  defaults to `--fps 30` (an exact stride 4), and the production converter
+  `process_bones_to_motionlib.py` is not public, so the stored `fps` is not
+  observable. Source frame rate is confirmed at 120: `move_duration_frames`
+  over all 142,220 BONES-SEED rows totals 124,554,605 against a published 288
+  hours, i.e. 120.13 fps.
+
+See `experiments/campaigns/2026-08-25-sonic-paper-proxy/README.md` for the
+population built on the back of this and for why clip selection moves the
+number by only 0.1-0.4 mm.
+
 ## Result (2026-08-07, `evaluate_sonic_release.py`)
 
 The library evaluator

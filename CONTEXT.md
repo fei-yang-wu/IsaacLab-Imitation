@@ -73,6 +73,25 @@ ownership boundaries.
   Phase 5 is BONES-SEED language-conditioned.
 - **SONIC** — the upstream whole-body tracking formulation this project
   reproduces and extends (FSQ commands, tracking terminations).
+- **New common eval subset** — the frozen 124-rank in-distribution population
+  used to score every local tracker under one protocol and to anchor external
+  baseline context through SONIC. Its artifact ID is
+  `sonic_capability124_v1`. It was calibrated from SONIC results, so it is not
+  held out or unbiased.
+- **JEPA** — ONLY the LeWorldModel/LeJEPA-style well-posed objective:
+  deterministic transition modeling in token space with one online encoder on
+  both branches and SIGReg as the anti-collapse constraint. No EMA copy, no
+  stop-gradient. A prediction term whose target comes from an EMA encoder
+  copy is NOT JEPA (user decision, 2026-08-23).
+- **EMA trick** — the lagged self-target stabilization (momentum encoder +
+  stop-grad, BYOL family). An optimization-dynamics trick, not a well-posed
+  loss; categorize it with training tricks. The production `sigreg_ebm`
+  recipe reads: DiffSR endpoint grounding + EMA token-prediction trick +
+  SIGReg. Historical `jepa_*` arm and run names predate this convention and
+  keep their spelling.
+- **SIGReg** — LeJEPA's sketched isotropic-Gaussian regularizer
+  (Epps-Pulley): forces every 1-D projection of the token batch toward
+  standard normal, preventing collapse without negatives.
 - **IPMD** — the RLOpt policy-mirror-descent algorithm family used for
   low-level training.
 - **IPMD-L2T** — the IPMD learning-to-teach variant. On the latent G1 task, a

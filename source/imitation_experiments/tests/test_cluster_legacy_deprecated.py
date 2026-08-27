@@ -76,9 +76,10 @@ def test_wandb_controls_cross_the_container_boundary() -> None:
     """`--containall` drops host env, so each W&B control must be forwarded.
 
     A campaign that exports WANDB_RUN_ID and gets an auto-generated id instead
-    fails silently: the run exists, just not where anything expects it. The
-    same boundary is what a sidecar attaching to the training run depends on
-    (WANDB_MODE=shared + WANDB__PRIMARY).
+    fails silently: the run exists, just not where anything expects it.
+    WANDB_MODE still crosses for `offline`; the shared-mode pair
+    (WANDB__PRIMARY / WANDB__LABEL) was retired on 2026-08-18 with the
+    sidecar's attach path and must NOT come back by accident.
     """
     script = (REPO_ROOT / "docker/cluster/run_singularity.sh").read_text()
     forwarded = script.split("for _wandb_var in", 1)[1].split("do", 1)[0]
@@ -87,10 +88,10 @@ def test_wandb_controls_cross_the_container_boundary() -> None:
         "WANDB_RESUME",
         "WANDB_RUN_GROUP",
         "WANDB_MODE",
-        "WANDB__PRIMARY",
-        "WANDB__LABEL",
     ):
         assert variable in forwarded, f"{variable} never reaches the container"
+    for retired in ("WANDB__PRIMARY", "WANDB__LABEL"):
+        assert retired not in forwarded, f"{retired} is retired shared-mode plumbing"
     assert 'export "APPTAINERENV_${_wandb_var}=${_wandb_value}"' in script
     assert 'export "SINGULARITYENV_${_wandb_var}=${_wandb_value}"' in script
 
@@ -109,3 +110,38 @@ def test_pilot_run_sh_is_deprecation_shim() -> None:
     assert proc.returncode == 2
     assert "DEPRECATED" in proc.stderr
     assert "submit.sh" in proc.stderr
+
+
+def test_stage_exclude_reaches_the_sbatch_directives(tmp_path) -> None:
+    """A stage's `exclude` must become `#SBATCH --exclude=...`.
+
+    Added 2026-08-27 after `diffntp_chunk_50b` drew a node delivering 54.5k
+    fps against its sibling's 127k; the field existed in SlurmDirectives but
+    no campaign could set it.
+    """
+    from imitation_experiments.pipeline.cluster.slurm import (
+        SlurmDirectives,
+        _directive_lines,
+    )
+
+    directives = SlurmDirectives(
+        job_name="probe",
+        log_dir=str(tmp_path),
+        time_limit="15:59:00",
+        cpus_per_task=16,
+        gres="gpu:h200:1",
+        mem="160G",
+        exclude="atl1-1-03-017-2-0",
+    )
+    header = "\n".join(_directive_lines(directives))
+    assert "--exclude=atl1-1-03-017-2-0" in header
+
+    plain = SlurmDirectives(
+        job_name="probe",
+        log_dir=str(tmp_path),
+        time_limit="15:59:00",
+        cpus_per_task=16,
+        gres="gpu:h200:1",
+        mem="160G",
+    )
+    assert "--exclude" not in "\n".join(_directive_lines(plain))

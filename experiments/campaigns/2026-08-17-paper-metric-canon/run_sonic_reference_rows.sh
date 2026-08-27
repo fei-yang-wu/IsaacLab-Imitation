@@ -8,10 +8,8 @@ set -uo pipefail
 #   canonical_robust ranks 12288-16383, randomization no_push -> robustness partner
 #   heldout_clean    ranks 20480-24575, randomization none   -> falsification block
 #
-# The deployable-123 row is a SUBSET of `canonical_clean`, not a separate run:
-# score it with
-#   pixi run python -m imitation_experiments.evaluation.summarize_paper_boards \
-#       --subset deployable <canonical_clean json>
+# The canonical testbed row is scored by `run_testbed_rows.sh` beside this
+# script; these three calibrate the legacy block it replaces.
 #
 # About 12 minutes per run on one RTX PRO 6000. Existing outputs are kept.
 #
@@ -59,10 +57,6 @@ report() {
         out="$(row_output "${start}" "${end}" "${profile}")"
         [[ -s "${out}" ]] || { log "[MISSING] ${row}: ${out}"; continue; }
         pixi run python -m imitation_experiments.evaluation.summarize_paper_boards "${out}"
-        if [[ "${start}" == "12288" ]]; then
-            pixi run python -m imitation_experiments.evaluation.summarize_paper_boards \
-                --subset deployable "${out}"
-        fi
     done
 }
 

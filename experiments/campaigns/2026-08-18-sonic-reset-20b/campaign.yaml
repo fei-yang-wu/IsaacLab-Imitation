@@ -1,0 +1,322 @@
+# Continue the two leading 10B trackers to 20B on SONIC's own reset
+# distribution. Both arms RESUME from their 2026-08-15-latent-bottleneck-10b
+# final checkpoint (cumulative 10,000,269,312 frames) and change exactly one
+# thing about training: how a reset picks the trajectory and the start frame.
+#
+#   ln_hold1_sonicreset       <- cont_det_ln_hold1  (continuous 256-D, hold 1)
+#   fsq64_hold10_sonicreset   <- fsq64_hold10       (discrete 64-D FSQ, hold 10)
+#
+# The two are kept as a matched pair on purpose: the continuous interface leads
+# the 4,096 board (0.9368 SR / 22.86 mm against 0.9197 / 24.93 mm) while the
+# discrete one is the deployable token space a language planner emits into.
+#
+# WHAT CHANGES, exactly one axis:
+#   selection random80_adaptive20 -> sonic
+#     i.e. random_trajectory_sampling_ratio 0.8 -> 0.0. The explicit
+#     uniform-trajectory branch is removed and every reset comes from the SONIC
+#     joint rank+frame failure sampler. Nothing else differs between the two
+#     presets: both are full_trajectory with
+#     adaptive_failure_rate_max_over_mean 200.0 and bin size 50.
+#   plus a landing ramp INSIDE that sampler: adaptive_uniform_ratio 0.5 -> 0.1
+#     over segment 5's own 2.5B frames, then pinned at 0.1 (SONIC's release
+#     value) for segments 6-8. Failure-weighted share therefore moves
+#     50% -> 90% and stays there.
+#
+# WHY the ramp rather than a step to 0.1: the resume point is a converged 10B
+# tracker whose training distribution was 80% uniform. Dropping straight to 10%
+# uniform is a large one-step shift in the state distribution the critic was
+# fitted on. The ramp is only a landing, not the experiment.
+#
+# WHY this is not a repeat of `cont_det_hold1_resetramp`: that arm ramped
+# `adaptive_uniform_ratio` while leaving random_trajectory_sampling_ratio at
+# 0.8, so it only moved the failure-weighted share from 4% to 16% -- the
+# adaptive branch was 20% of resets the whole time. Its `start_mode=adaptive`
+# override was dead code: with full_trajectory=true the start-frame sampler is
+# never built (reference.py:702). This campaign changes the branch ratio
+# itself, which is the knob that was never touched.
+#
+#   ./submit.sh <arm> <seed>                          # plan (preflight, frozen artifacts)
+#   ... submit --plan <dir> --confirm <PLAN_SHA>      # printed by plan
+#
+# No pretrain stage: each arm reuses its base arm's encoder checkpoint
+# verbatim, which is also what makes the encoder binding trivially identical to
+# the checkpoint being resumed. Four chained lowlevel segments of ~2.5B, the
+# same shape as the campaign this continues, because 10B does not fit ICE's 16h
+# GPU walltime cap.
+name: sonic-reset-20b
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: sonic-reset-20b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  stride: 1
+  z_dim: 256
+  # command width = z_dim + phase channels; phase 'sin_cos' adds 2.
+  command_dim: ${vars.z_dim}
+  phase_mode: sin_cos
+  anchor_mode: robot_heading
+  hold: 1
+  train_num_envs: 16384
+  rollout_steps: 24
+  # The GLOBAL budget, given to EVERY segment. Segment 5 seeds the frame
+  # offset at resume_from_frames (see seg5_args -- the base checkpoint
+  # predates the cumulative_env_frames key); later segments restore it from
+  # their own checkpoints. So 20B here means "another 10B on top of the 10B
+  # already trained", and the chain stops at exactly 20B no matter how the
+  # walltime divides it.
+  frame_cap: 20000000000
+  resume_from_frames: 10000269312
+  segments: 4
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  # New tree. The base arm's tree stays read-only so the 10B artifacts and
+  # their scoreboard rows remain reproducible.
+  output_root: /data/sonic_reset_20b/${vars.arm}_seed${vars.seed}
+  # The finished 10B arm this one continues. Its `tracker` subtree is what
+  # segment 5 resumes; its `encoder` subtree supplies the frozen DiffSR
+  # encoder, unchanged, so the skill-checkpoint binding is identical to the
+  # one already embedded in the checkpoint being loaded.
+  base_arm: ${vars.arm}
+  base_root: /data/bottleneck_10b/${vars.base_arm}_seed${vars.seed}
+
+  # SONIC's reset distribution. `selection=sonic` must stay in `tuned_lowlevel`
+  # (it replaces the random80_adaptive20 line in the same argv position), so
+  # the preset is selected before these field overrides land on it.
+  #
+  # Segment 5 ramps; the ramp keys off common_step_counter, which restarts at
+  # zero every segment, so it must complete inside one segment and later
+  # segments must PIN the final value instead of re-sweeping it. Leaving the
+  # ramp enabled in segments 6-8 would re-run 0.5 -> 0.1 three more times --
+  # the exact trap `cont_det_hold1_resetramp_dyn` shipped with on 2026-08-17.
+  reset_ramp_args:
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.5
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.1
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=2500000000
+  reset_hold_args:
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.1
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+
+  # Resume plumbing. A checkpoint TREE is passed, not a file: train_impl
+  # resolves it to the newest model_step_<N>.pt by mtime, because step numbers
+  # restart per segment and resolving by step would walk the chain backwards.
+  # Segment 5 points at the BASE arm's tree (the 10B final checkpoint);
+  # segments 6-8 point at this arm's own tree.
+  #
+  # The termination curriculum (5M -> 30B) completed long ago inside the base
+  # arm's segment 1, so every segment here disables it, which leaves
+  # terminations at their strict SONIC values.
+  seg5_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    # The base arm's 10B checkpoint predates the cumulative_env_frames key
+    # (its campaign tarball froze pre-2026-08-16 RLOpt), so load_model cannot
+    # restore the global count and the launcher supplies it. Verified against
+    # the local mirror of the exact file being resumed. Segments 6-8 resume
+    # this arm's own checkpoints, which DO carry the key; a checkpoint value
+    # always wins over this config one.
+    - agent.collector.initial_frame_offset=${vars.resume_from_frames}
+    - --checkpoint
+    - ${vars.base_root}/tracker
+  seg6_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+  seg7_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+  seg8_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=sonic-reset-20b
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.base_root}/encoder/checkpoints/latest.pt
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.z_dim}
+
+  # Byte-identical to 2026-08-15-latent-bottleneck-10b's `tuned_lowlevel`
+  # EXCEPT the selection preset, which is the campaign's one variable. Keeping
+  # every other line here means the resumed optimizer, rewards, and
+  # terminations continue on the recipe the checkpoint was trained under.
+  tuned_lowlevel:
+    - env.rewards.action_rate_l2.weight=0.0
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.command_interface.reference.selection=sonic
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  # No online encoder finetune on either arm: the encoder stays the frozen
+  # pretrained one, so the reset distribution is the only moving part.
+  dyn_args: [agent.ipmd.hl_skill_finetune_enabled=false]
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+    # Fails loudly if the base arm's 10B artifacts are missing rather than
+    # silently starting a fresh 20B run from random weights.
+    - /data/bottleneck_10b/${vars.base_arm}_seed${vars.seed}/tracker
+    - /data/bottleneck_10b/${vars.base_arm}_seed${vars.seed}/encoder/checkpoints/latest.pt
+  output_container_path: /data/sonic_reset_20b/${vars.arm}_seed${vars.seed}
+
+arms:
+  # CONTINUOUS. Base: cont_det_ln_hold1, the 10B leader on both boards
+  # (4,096: 0.9368 SR / 22.86 mm success-only; EC strat: 14.77 mm).
+  # 256-D deterministic latent republished every control step.
+  ln_hold1_sonicreset:
+    vars:
+      base_arm: cont_det_ln_hold1
+      z_dim: 256
+      command_dim: 258
+      hold: 1
+    stages: &continuation_stages
+      - name: lowlevel5
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_ramp_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg5_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-20b,${vars.arm},seed${vars.seed},lowlevel,segment5
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          # Shared mode so the EC/MuJoCo sidecar can write Eval/* into this run
+          # while it trains. W&B refuses to enable it once a run has history,
+          # so it must be set at creation. Shared mode also DISCARDS
+          # wandb.log(step=...), which is why RLOpt now publishes the frame
+          # count as the `env_frames` metric and declares it the x-axis --
+          # without that this run would plot against a log-call index.
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel6
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg6_args}}
+        depends_on: lowlevel5
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-20b,${vars.arm},seed${vars.seed},lowlevel,segment6
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel7
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg7_args}}
+        depends_on: lowlevel6
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-20b,${vars.arm},seed${vars.seed},lowlevel,segment7
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+      - name: lowlevel8
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.dyn_args},${vars.reset_hold_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg8_args}}
+        depends_on: lowlevel7
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,sonic-reset-20b,${vars.arm},seed${vars.seed},lowlevel,segment8
+          WANDB_RUN_ID: ${vars.wandb_arm}-s${vars.seed}-r1
+          WANDB_RESUME: allow
+          WANDB_MODE: shared
+          WANDB__PRIMARY: "true"
+          WANDB__LABEL: trainer
+  # DISCRETE. Base: fsq64_hold10, SONIC's own token space -- a 64 x 32 FSQ
+  # lattice published with no learned projection and held for 10 control steps
+  # with a live sin_cos phase. 10B: 0.9197 SR / 24.93 mm. This is the interface
+  # a language planner emits into, so it is kept alive alongside the
+  # continuous leader rather than dropped for scoring one rank lower.
+  fsq64_hold10_sonicreset:
+    vars:
+      base_arm: fsq64_hold10
+      z_dim: 64
+      command_dim: 66
+      hold: 10
+    stages: *continuation_stages

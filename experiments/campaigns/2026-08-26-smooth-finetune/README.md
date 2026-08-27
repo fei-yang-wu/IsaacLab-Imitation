@@ -38,8 +38,44 @@ parent's row. The HP search zeroed this weight because it slows quality per
 hour EARLY in training; that objection is weakest at the finetune stage, and
 `ar01scratch` measures what it costs from zero.
 
+## Verdict (2026-08-26): NO PROMOTION
+
+All three finetune arms finished their 2B budget and were scored on both
+paper boards. The gate was: acceleration distance drops toward SONIC's scale
+AND SR / MPJPE-L on `bones_testbed4096_v1` stay inside noise. **The second
+half fails.** On the deciding board, matched over the 3,932 clips every row
+completes:
+
+| arm | SR | MPJPE-L | MPJPE-G | acc m/s^2 |
+| --- | ---: | ---: | ---: | ---: |
+| parent @46.5B | 0.9773 | 21.95 mm | 92.31 mm | 5.45 |
+| `ar003` -0.03 | 0.9756 | 22.53 mm | 99.45 mm | 4.84 |
+| `ar01shake4` | 0.9753 | 24.02 mm | 106.94 mm | 4.38 |
+| `ar01` -0.1 | 0.9734 | 24.19 mm | 102.94 mm | 4.43 |
+
+Every arm pays SR, local error, and global error for its smoothness gain, and
+none reaches SONIC's 3.34 m/s^2. `ar003` is the efficient point (-11% acc for
++0.58 mm L); `ar01shake4` is dominated and the 4x anti-shake is dead. The
+user's read on 2026-08-26: keep the parent as the paper row.
+
+The 124-clip board is more favorable to the finetunes (`ar003` improves
+MPJPE-G 91.90 -> 78.65 mm at +0.23 mm L) but it is the calibration board, not
+the deciding one, and it was selected from SONIC's own results.
+
+Open, not refuted: the acceleration gap to SONIC is real and unclosed. A
+future attempt should change the objective rather than the weight -- the
+weight sweep is now measured and it buys acc by spending accuracy.
+
 ## Status
 
+- 2026-08-26 22:16: all three finetune arms COMPLETE at 48.5B and scored on
+  both boards; verdict above. `ar01scratch` still training (3.15B of 10B).
+  INCIDENT: `ar003`'s first segment (5592180) went non-finite at 47.82B and
+  `IPMD._abort_on_nonfinite` aborted it before a poisoned checkpoint was
+  written -- the guard's first real save. `lowlevel2` resumed from the last
+  good 47.5B checkpoint and trained cleanly to 48.5B; all 41 float tensors of
+  every final checkpoint verified finite. `ar003`'s history is therefore NOT
+  identical to the other two arms.
 - 2026-08-26 17:42: submitted from commit 63041d9, no drift.
   `ar01` 5592178-79, `ar003` 5592180-81, `ar01shake4` 5592182-83,
   `ar01scratch` 5592184-86. Nothing measured.

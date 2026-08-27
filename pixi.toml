@@ -11,7 +11,7 @@ lint = "ruff check ."
 format-check = "ruff format --check ."
 typecheck = "ty check"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
-test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_ipmd_l2t.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py tests/test_hl_skill_encoder.py tests/test_hl_skill_jepa.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
+test-rlopt = { cmd = "pytest tests/test_ipmd_components.py tests/test_ipmd_l2t.py tests/test_offline_dataset.py tests/test_gail_amp_ase_components.py tests/test_skill_commander.py tests/test_hl_skill_encoder.py tests/test_hl_skill_jepa.py tests/test_hl_skill_recon_phase.py -o 'filterwarnings=ignore:Creating VanillaWeightUpdater.*:DeprecationWarning'", cwd = "RLOpt" }
 test-runtime-bootstrap = "pytest -q source/isaaclab_imitation/tests/test_rlopt_runtime_bootstrap.py"
 test-experiments = "pytest -q source/imitation_experiments/tests"
 test-scripts = "pytest -q scripts/audit/test_audit_bones_seed_phase5.py scripts/audit/test_compare_bones_seed_exports.py scripts/data/test_prepare_bones_seed_phase5.py scripts/rlopt/test_resolve_checkpoint_path.py"
@@ -44,6 +44,9 @@ torchvision = { version = "==0.26.0", index = "https://download.pytorch.org/whl/
 tensordict = "==0.11.0"
 torchrl = "==0.11.1"
 wandb = "==0.25.0"
+# Matches the gr00t/isaaclab pins; the default env runs the async planner
+# service protocol tests.
+pyzmq = "==27.0.1"
 pyrefly = "*"
 huggingface-hub = "*"
 rlopt = { path = "./RLOpt", editable = true }
@@ -78,6 +81,10 @@ imitation-experiments = { path = "./source/imitation_experiments", editable = tr
 tyro = "*"
 dm-tree = "*"
 albumentations = "==1.4.18"
+# Async planner-service client (D1): zmq transport between the Isaac
+# evaluator and the gr00t-env batch service. Wire format is JSON header +
+# raw float32 bytes, so no torch version coupling crosses the socket.
+pyzmq = "==27.0.1"
 opencv-python-headless = "*"
 
 [feature.isaaclab.tasks]
@@ -151,6 +158,8 @@ wandb = "==0.23.0"
 dm-tree = "*"
 huggingface-hub = { version = "*", extras = ["cli"] }
 tqdm = "*"
+# Upstream pin (Isaac-GR00T pyproject); serves the D1 batch chunk service.
+pyzmq = "==27.0.1"
 imitation-experiments = { path = "./source/imitation_experiments", editable = true }
 # Direct wheel URL (cp312/cu12/torch2.9) mirrored from Isaac-GR00T's
 # [tool.uv.sources]; avoids a source build.

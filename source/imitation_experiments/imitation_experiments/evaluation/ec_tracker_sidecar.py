@@ -673,6 +673,10 @@ def wandb_payload(
     frames = (summary.get("contract") or {}).get("cumulative_env_frames")
     if frames is not None:
         payload[f"{prefix}cumulative_env_frames"] = int(frames)
+        # The trainer declares `env_frames` as its x-axis; publishing the same
+        # key here lets a companion run and its trainer share one axis in a
+        # grouped W&B panel.
+        payload["env_frames"] = int(frames)
     clean = {key: value for key, value in payload.items() if value is not None}
     return clean, (int(frames) if frames is not None else None)
 
@@ -682,7 +686,9 @@ def infer_training_run_id(path: Path) -> str | None:
 
     RLOpt nests checkpoints under ``<timestamp>_wandb-<run_id>``, so the run
     that produced a checkpoint is knowable from the file alone — no run
-    registry, and no guessing from a name that several runs may share.
+    registry, and no guessing from a name that several runs may share. Kept
+    for provenance (naming and tagging a companion run after the trainer it
+    scored); it no longer selects a run to write into.
     """
     for part in path.resolve().parts:
         match = _WANDB_RUN_ID_RE.search(part)
@@ -692,13 +698,19 @@ def infer_training_run_id(path: Path) -> str | None:
 
 
 class SidecarWandb:
-    """Publishes sidecar points into W&B, lazily so the run id can be inferred.
+    """Publishes sidecar points into a companion W&B run.
 
-    Two modes. ``attach`` writes ``Eval/*`` into the TRAINING run itself, using
-    W&B shared mode (``x_primary=False``) so a second process may write a run
-    the trainer owns; points land at the trainer's own frame step. Otherwise a
-    companion run carries them, which is what a re-scored bundle or an
-    already-finished run gets.
+    One mode, on purpose. Writing ``Eval/*`` into the TRAINING run needed W&B
+    shared mode, which had to be set when the trainer created the run, could
+    never be added afterwards, and refused ASYNCHRONOUSLY -- a sidecar pointed
+    at a non-shared run looked healthy and dropped every point (job 5580308).
+    Shared mode also made the trainer's ``wandb.log(step=...)`` a no-op, which
+    is why RLOpt publishes the frame count as its own x-axis metric. Retired
+    2026-08-18.
+
+    The companion run carries the same ``cumulative_env_frames`` x-axis and
+    also publishes it as ``env_frames``, the key the trainer declares, so the
+    two runs overlay on one axis in a grouped workspace.
     """
 
     def __init__(
@@ -710,7 +722,6 @@ class SidecarWandb:
         entity: str | None = None,
         tags: list[str] | None = None,
         config: dict[str, Any] | None = None,
-        attach: bool = False,
         run_id: str | None = None,
         prefix: str = METRIC_PREFIX,
     ) -> None:
@@ -723,67 +734,33 @@ class SidecarWandb:
         self._entity = entity
         self._tags = tags or []
         self._config = config or {}
-        self._attach = attach
         self._run_id = run_id
         self._prefix = prefix
         self.run: Any | None = None
 
     def _start(self, run_id: str | None) -> None:
         wandb = self._wandb
-        settings = None
-        resume = None
-        if self._attach and run_id:
-            # Shared mode is W&B's supported multi-writer path: the trainer is
-            # the primary, this process is a labelled secondary. Without it,
-            # two processes on one run id race over the step counter.
-            #
-            # The TRAINER must have created the run in shared mode
-            # (WANDB_MODE=shared, WANDB__PRIMARY=true). W&B refuses to convert
-            # an existing run -- "cannot enable shared mode for run <id> with
-            # existing history" -- and the refusal arrives asynchronously on
-            # the filestream, so the points are dropped rather than raised.
-            #
-            # x_update_finish_state=False is what keeps this process's
-            # finish() from marking the TRAINER's run finished.
-            settings = wandb.Settings(
-                mode="shared",
-                x_primary=False,
-                x_label="ec-sidecar",
-                x_update_finish_state=False,
-            )
-            resume = "allow"
         self.run = wandb.init(
             project=self._project,
-            id=run_id if self._attach else None,
-            resume=resume,
-            name=None if (self._attach and run_id) else self._run_name,
+            id=run_id,
+            resume="allow" if run_id else None,
+            name=self._run_name,
             group=self._group,
             entity=self._entity,
             tags=self._tags,
             config=self._config,
-            job_type=None if (self._attach and run_id) else "ec_sidecar",
-            settings=settings,
+            job_type="ec_sidecar",
             reinit=True,
         )
         wandb.define_metric(f"{self._prefix}cumulative_env_frames")
+        wandb.define_metric("env_frames")
         wandb.define_metric(
             f"{self._prefix}*", step_metric=f"{self._prefix}cumulative_env_frames"
         )
 
     def publish(self, summary: dict[str, Any], source: Path | None = None) -> None:
         if self.run is None:
-            run_id = self._run_id
-            if self._attach and run_id is None and source is not None:
-                run_id = infer_training_run_id(source)
-            if self._attach and run_id is None:
-                print(
-                    "[WANDB] no training run id in the checkpoint path; "
-                    "falling back to a companion run.",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                self._attach = False
-            self._start(run_id)
+            self._start(self._run_id)
         payload, frames = wandb_payload(summary, self._prefix)
         if not payload:
             return
@@ -1136,15 +1113,6 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wandb-group", default=None)
     parser.add_argument("--wandb-entity", default=None)
     parser.add_argument("--wandb-tags", default="", help="comma-separated")
-    parser.add_argument(
-        "--wandb-attach",
-        action="store_true",
-        help=(
-            "write Eval/* into the TRAINING run instead of a companion run; "
-            "the run id comes from the checkpoint path's _wandb-<id> segment "
-            "unless --wandb-run-id says otherwise"
-        ),
-    )
     parser.add_argument("--wandb-run-id", default=None)
     parser.add_argument("--wandb-metric-prefix", default=METRIC_PREFIX)
 
@@ -1159,7 +1127,6 @@ def _make_wandb(args: argparse.Namespace) -> SidecarWandb | None:
         group=args.wandb_group,
         entity=args.wandb_entity,
         tags=[tag for tag in args.wandb_tags.split(",") if tag],
-        attach=bool(args.wandb_attach),
         run_id=args.wandb_run_id,
         prefix=args.wandb_metric_prefix,
         # The identity of what these numbers mean travels with them.

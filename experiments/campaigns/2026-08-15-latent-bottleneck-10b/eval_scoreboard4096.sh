@@ -34,10 +34,11 @@ SEED=0
 SCALED_CELLS="[2048,2048,1024,1024,512,512]"
 RUNTIME_BODY_NAMES="[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
 
-# arm | frames | z_dim | command_dim | hold
-# The dyn arms are absent on purpose: their encoder is fine-tuned inside the
-# tracker checkpoint, so pairing them with the pretrained encoder file this
-# runner passes would score a mismatched pair.
+# arm | frames | z_dim | command_dim | hold | encoder_source (default auto)
+# The dyn arms score with `--skill_encoder_source checkpoint`: their encoder is
+# fine-tuned inside the tracker checkpoint and `load_model` restores it from
+# `hl_skill_command_sampler_state_dict` (premise that they could not be scored
+# was retired 2026-08-20; the pretrained file below only seeds construction).
 ARMS_TABLE=(
 "cont_det_ln_hold1|10000269312|256|258|1"
 "cont_det_hold1_resetramp|10000269312|256|258|1"
@@ -47,6 +48,20 @@ ARMS_TABLE=(
 "jepa_sigreg_ebm_hold10_256d|10000269312|256|258|10"
 "jepa_sigreg_ebm_hold10_fsq64|10000269312|64|66|10"
 "jepa_ntp_hold10_256d|8500543488|256|258|10"
+# 20B continuations from 2026-08-18-sonic-reset-20b; same protocol, same
+# mirror tree, encoder copied from the base arm (binding identical by
+# construction).
+"ln_hold1_sonicreset|20000145408|256|258|1"
+"fsq64_hold10_sonicreset|20000145408|64|66|10"
+# 30B continuations from 2026-08-21-sonic-reset-30b, same recipe as the 20B
+# rows, budget the only change.
+"ln_hold1_sonicreset|30000021504|256|258|1"
+"fsq64_hold10_sonicreset|30000021504|64|66|10"
+# Online-dynamics finetune arms (dyn_block: achieved ring + offline DiffSR,
+# pg_coeff=0). Encoder read from the tracker checkpoint, see note above.
+"cont_det_hold1_dyn|10000269312|256|258|1|checkpoint"
+"cont_det_hold1_resetramp_dyn|10000269312|256|258|1|checkpoint"
+"fsq64_hold10_dyn|10000269312|64|66|10|checkpoint"
 )
 ARMS="${ARMS:-cont_det_ln_hold1 cont_det_hold1_resetramp cont_det_hold1 jepa_pure_256d_hold1 fsq64_hold10 jepa_sigreg_ebm_hold10_256d jepa_sigreg_ebm_hold10_fsq64 jepa_ntp_hold10_256d}"
 
@@ -67,7 +82,8 @@ for arm in ${ARMS}; do
         [[ "${candidate%%|*}" == "${arm}" ]] && row="${candidate}"
     done
     [ -n "${row}" ] || { log "[SKIP] unknown arm ${arm}"; continue; }
-    IFS='|' read -r _ frames z_dim command_dim hold <<<"${row}"
+    IFS='|' read -r _ frames z_dim command_dim hold enc_src <<<"${row}"
+    enc_src="${enc_src:-auto}"
 
     checkpoint="${MIRROR}/${arm}_seed0/tracker/f${frames}/models/model_step_${frames}.pt"
     encoder="${MIRROR}/${arm}_seed0/encoder/checkpoints/latest.pt"
@@ -88,6 +104,7 @@ for arm in ${ARMS}; do
         --reference_start_frame 0 --reset_schedule sequential \
         --trajectory_ranks "${ranks[@]}" \
         --output_json "${out}" --label "${arm}_f${frames}" --headless \
+        --skill_encoder_source "${enc_src}" \
         --kit_args=--/app/extensions/fsWatcherEnabled=false \
         physics=newton_mjwarp \
         env.sim.physics.solver_cfg.njmax=320 \
