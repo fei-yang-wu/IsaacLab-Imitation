@@ -1,6 +1,6 @@
 # Whole-Body VLA and Latent-Action Literature Review
 
-Last reviewed: 2026-07-28.
+Last reviewed: 2026-08-01.
 
 This page records the literature behind the paper's interface comparison. Its
 purpose is to keep three things separate:
@@ -98,7 +98,7 @@ j(t)\in\{0,\ldots,H_x-1\}
 $$
 
 Here, $H_x$ is the trajectory horizon and $j(t)$ selects the target executed at timestep $t$. A single-step command is represented by $H_x=1$. 
-SONIC's kinematic planner, HuMI, Humanoid-VLA, and BeyondMimic follow this general formulation. 
+SONIC's kinematic planner, HuMI, CyboRacket, Dream2Act, Humanoid-VLA, and BeyondMimic follow this general formulation.
 They mainly differ in which body parts are represented, how the targets are expressed, and how often the trajectory is replanned.
 
 ### B. Continuous latent interface
@@ -144,7 +144,7 @@ $$
 
 Here, $M$ is the token vocabulary size, $N_q$ is the number of predicted tokens, and $D$ is a decoder or token-to-command mapping. 
 When the low-level controller consumes the tokens directly, $D$ can be treated as part of $\pi_{\mathrm{L}}$. 
-SONIC's universal motion tokens and WholeBodyVLA follow this general formulation.
+SONIC's universal motion tokens, Humanoid-LLA, and WholeBodyVLA follow this general formulation.
 
 Some methods combine continuous and discrete components. MotionWAM, for example, uses a hybrid motion command:
 
@@ -197,8 +197,12 @@ They mainly differ in the action representation, chunk length, replanning strate
 | --- | --- | --- | --- | --- | --- |
 | **Our main comparison** | Causal `10 x 93` robot history; optional explicit language goal | Either a continuous 256-value DiffSR code or the exact 670-value ten-frame vanilla command packet | 5 Hz / 50 Hz | Whether the interface alone changes planner learning difficulty when the rest of the protocol is matched | Main controlled experiment |
 | **SONIC VLA integration** | Vision, language, and robot context through GR00T N1.5 | 78 values: a 64-value discrete universal motion token plus 14 hand joints; explicit ablation uses 81-value SMPL pose plus hands | VLA/low-level timing is system-dependent; tracker runs at 50 Hz | Whether learned universal motion tokens are easier for a VLA to predict than explicit poses | Closest published quantitative evidence for our hypothesis, but not a native reproduction |
+| **Humanoid-LLA** | Free-form language, with motion chain-of-thought for abstract or compositional commands | A sequence from a discrete human-humanoid motion vocabulary, consumed by a vocabulary-directed controller | Exact generation and control rates require verification | Whether a shared discrete vocabulary can connect language reasoning, cross-embodiment motion data, and physical execution | Direct Type C precedent; its VQ vocabulary and language-training pipeline differ from our continuous DiffSR interface |
 | **SONIC kinematic planner** | Four generated context frames plus operator motion commands | Full-body trajectory, up to 64 frames at 30 fps, resampled for the 50 Hz tracker | Up to 10 Hz / 50 Hz | Real-time generation of explicit whole-body reference trajectories | Motivates the strong explicit full-body baseline; distinct from SONIC's token VLA experiment |
 | **HuMI** | Camera streams and proprioception | Receding-horizon task-space keypoints and gripper commands; default keypoints are both grippers and pelvis, with feet optional | 5 Hz / 50 Hz | Whether compact task-space trajectories can drive whole-body manipulation | Best reference for an EE/pelvis chunk diagnostic, not the main full-body baseline |
+| **CEER** | Commands from heterogeneous high-level planners or teleoperation modules | Root motion commands and end-effector pose targets | Planner-dependent / low-level rate requires full-method verification | Whether one compliant, interpretable task-space interface can support different planners and contact-rich tasks | Strong structured-command reference; motivates an EE-plus-root diagnostic rather than a native reproduction |
+| **CyboRacket** | Onboard visual tracking and a predicted ball-interception state | Target end-effector and base-motion commands executed by SONIC | Real-time system; exact planner and controller rates require verification | Whether a compact task-space interface can support fast perception-to-action control | Direct downstream use of SONIC and a strong EE-plus-base structured-command example |
+| **ReactiveBFM** | Text instruction and the current physical state | Replanned short-horizon full-body trajectory chunks | Asynchronous planner / high-frequency tracker; exact rates require full-method verification | Whether closed-loop generation can recover from tracking error and environmental change | Strengthens the explicit trajectory family and highlights replanning and chunk-continuity choices |
 | **WholeBodyVLA** | Egocentric image and language | Two learned discrete latent action streams, decoded into dual-arm joint actions and locomotion commands | 10 Hz / 50 Hz locomotion controller | Unified visual latent actions for locomotion and manipulation | Same broad latent-interface motivation; its visual latent and split decoder differ from DiffSR |
 | **MotionWAM** | Egocentric image, language, and robot context | Hybrid continuous and discrete whole-body motion representation decoded through a SONIC-based execution layer | Chunk-wise inference reported at 4.9 Hz on an A100 | World-action modeling with a deployed motion interface | Recent hybrid B/C interface; not a native reproduction |
 | **LeVERB** | Egocentric/third-person vision and language | A continuous 256-value latent verb consumed by a distilled whole-body controller | Hierarchical slow/fast system; exact numeric rates are missing from the paper's HTML conversion | A vision-language policy and whole-body controller connected through a learned latent vocabulary | Closest conceptual predecessor to our language-conditioned Phase 5 study |
@@ -212,7 +216,7 @@ Rates should not be treated as interchangeable across papers. Some papers
 report a model inference rate, others an action sampling rate, and others the
 low-level control loop. A fair native comparison must record all three.
 
-## Detailed Notes
+## Core Method Notes
 
 ### SONIC
 
@@ -244,6 +248,16 @@ fixed.
 SONIC also supports our metric choices: it reports local MPJPE, tracking
 success, and velocity and acceleration distances. Its released controller is
 available in [GR00T-WholeBodyControl](https://github.com/NVlabs/GR00T-WholeBodyControl).
+
+### Humanoid-LLA
+
+[Humanoid-LLA](https://arxiv.org/abs/2511.22963) learns a discrete motion vocabulary shared by paired human and retargeted humanoid motion.
+A language model produces sequences from this vocabulary, and a vocabulary-directed student controller, distilled from a privileged motion-tracking teacher, turns the tokens and current robot state into joint targets.
+The tokens are therefore a deployed Type C interface rather than labels used only during pretraining.
+
+The paper is especially relevant because the same representation connects language reasoning, abundant human motion data, and physical humanoid execution.
+It also fine-tunes token generation with feedback from simulated rollouts.
+Its discrete VQ representation, cross-embodiment objective, and language-model training differ from our continuous DiffSR code, so it is a close conceptual precedent rather than a native baseline.
 
 ### HuMI
 
@@ -372,9 +386,7 @@ input, output target, actual parameter count, data, training updates, and
 evaluation starts for both interfaces. It is an architecture-family study,
 not a claim that our small state-only models reproduce GR00T, ACT, or pi0.
 
-### End-to-End Humanoid Language-Action Policies
-
-### OpenHLM
+### E2E and Unified Humanoid Policies
 
 [OpenHLM](https://arxiv.org/abs/2606.22174) maps language, egocentric images,
 and robot state to whole-body actions. We place it under Type D because the
@@ -407,12 +419,39 @@ separately evaluated high- and low-level systems. It therefore demonstrates
 language-conditioned motion generation, but it does not answer whether a
 latent is a better interface to a fixed controller.
 
-[Humanoid-VLA](https://arxiv.org/abs/2502.14795) represents the hierarchical
-motion-generation direction: language and egocentric visual context are used
-to generate whole-body motion that a controller executes. It is relevant when
-we later add vision and scene-level tasks. For the current no-vision study, the
-stronger and more controlled explicit reference remains the exact command
-packet consumed by our qualified vanilla tracker.
+[Psi-Zero](https://arxiv.org/abs/2603.12263) pretrains a VLM backbone on egocentric human video and then post-trains a flow-based action expert on humanoid trajectories.
+The visual-action features condition joint-control prediction, but they are internal to the model rather than a separately evaluated command consumed by a frozen controller.
+It is therefore a recent dual-system/direct-action comparison, not a Type B or C interface.
+
+[WOLF-VLA](https://arxiv.org/abs/2606.25591) trains a VLA on dynamically feasible trajectories produced by whole-body optimal control.
+It is useful evidence for direct language- and vision-conditioned humanoid locomotion, but it does not isolate a separate high-to-low motion interface.
+
+[ULTRA](https://arxiv.org/abs/2603.03279) distills a universal tracker into one multimodal controller that can act from dense motion references or sparse task goals, including egocentric perception.
+Although it contains a variational skill bottleneck, that latent is internal to the unified policy rather than a separately deployed command between high- and low-level models.
+ULTRA is therefore useful as a unified-controller comparison, not a native Type B baseline.
+
+## Broader and Supporting Literature
+
+The following works provide adjacent system designs, controller background, and evaluation evidence.
+They are useful for positioning, but not all are direct baselines for the main interface comparison.
+
+### Broader Hierarchical Humanoid Systems
+
+The systems below broaden the review beyond motion-level interfaces.
+They are important examples of hierarchical humanoid VLA, but most pass task steps, skills, primitives, or routing decisions rather than the motion code studied in our main comparison.
+
+| Method | High-level output | Execution layer | Role in this review |
+| --- | --- | --- | --- |
+| [Being-0](https://arxiv.org/abs/2503.12533) | Actionable skill commands and coordination signals | Modular locomotion and dexterous-manipulation skills | Task-level skill hierarchy with a VLM Connector between planning and execution |
+| [BiBo](https://arxiv.org/abs/2511.00041) | Parameterized motion primitives, including skill, target, and facing direction | Diffusion-based humanoid motion executor | Interpretable semantic-to-motion command interface |
+| [EgoActor](https://arxiv.org/abs/2602.04515) | Spatially grounded locomotion, head, height, manipulation, and interaction commands | Humanoid locomotion and manipulation controllers | Structured command prediction from egocentric vision |
+| [Cybo-Waiter](https://arxiv.org/abs/2603.10675) | Typed subtasks with preconditions and success conditions | Locomotion and whole-body manipulation primitives | Long-horizon planning, verification, and replanning |
+| [Hierarchical Vision-Language Planning](https://arxiv.org/abs/2506.22827) | Next skill and completion decision | Imitation-trained skill policies followed by an RL whole-body tracker | Clear three-level planner-skill-tracker hierarchy |
+| [Humanoid Agent via Chain-of-Action](https://arxiv.org/abs/2504.09532) | A structured sequence of locomotion and manipulation primitives | Decoupled locomotion and manipulation controllers | Zero-shot task decomposition and skill sequencing |
+| [MetaWorld-X](https://arxiv.org/abs/2603.08572) | Routing and composition over specialized experts | Motion-prior-trained expert policies | VLM-guided expert composition rather than one shared motion code |
+
+[Persistent 3D Object Tokens](https://arxiv.org/abs/2607.18016) provide a recent complementary design: persistent object representations are shared by action generation and task-success verification.
+These tokens belong to the perception and memory path, not to the deployed motion command $c_k$, so they are architecture context rather than a core interface row.
 
 ### LAPA and Video-Derived Latent Actions
 
@@ -465,6 +504,45 @@ before any quantitative comparison.
 [Diffuse-CLoC](https://arxiv.org/abs/2503.11801) similarly plans with guided
 diffusion over look-ahead states for physics characters. Neither is
 reproduced here.
+
+[CEER](https://arxiv.org/abs/2605.19981) instead uses a compact explicit interface consisting of root motion commands and end-effector pose targets.
+A distilled whole-body policy consumes only this EE-root command, allowing different high-level planners and task modules to share the same compliant controller.
+It is a useful reference for an EE-plus-root diagnostic, but it does not replace our full-body explicit packet because the two interfaces contain different information.
+
+[ReactiveBFM](https://arxiv.org/abs/2606.30362) connects a generative motion planner to a behavior foundation model in a closed loop.
+It uses asynchronous replanning and trajectory chunking so the planner can respond to tracking errors instead of repeatedly conditioning on an ideal reference.
+This makes it relevant to our explicit row and to any later study of chunk overlap, latency, or replanning.
+[TextOp](https://arxiv.org/abs/2602.07439) is a related two-level system in which an autoregressive motion diffusion model generates short-horizon kinematic trajectories from streaming text commands and a low-level tracker executes them on a physical humanoid.
+
+[CyboRacket](https://arxiv.org/abs/2603.14605) is a task-level example built directly on SONIC.
+Onboard perception estimates the incoming ball trajectory, and the planner converts the interception state into end-effector and base-motion commands for SONIC to execute.
+Its interface is compact and explicit, making it a useful complement to HuMI and CEER for studying which task-space signals are sufficient for whole-body behavior.
+
+[Dream2Act](https://arxiv.org/abs/2603.19709) uses a video generator to imagine a robot completing an interaction, extracts robot-native joint trajectories from the synthesized video, and executes them with a general-purpose whole-body controller.
+It is relevant to the explicit trajectory family and to world-model-based planning, but its video synthesis and pose extraction make it a system-level comparison rather than a controlled interface baseline.
+
+[Humanoid-VLA](https://arxiv.org/abs/2502.14795) represents the hierarchical motion-generation direction: language and egocentric visual context are used to generate whole-body motion that a controller executes.
+It is relevant when we later add vision and scene-level tasks.
+For the current no-vision study, the stronger and more controlled explicit reference remains the exact command packet consumed by our qualified vanilla tracker.
+
+### Interface Robustness and Tracker Transfer
+
+[HumanoidArena](https://arxiv.org/abs/2606.17833) directly evaluates the interface between a high-level egocentric policy and a low-level general motion tracker.
+Its results show that performance depends strongly on the chosen tracker and that transferring the same intermediate whole-body action across trackers remains fragile.
+This supports keeping our low-level controller fixed in the main comparison: otherwise an apparent interface effect could instead come from a change in tracker capability.
+
+### Tracker Scaling and Motion Executability
+
+[Scaling Behavior Foundation Model](https://arxiv.org/abs/2607.15163) extends the scaling question studied by SONIC.
+It analyzes how the motion-tracking learning paradigm, rollout and reference-motion data, and a Humanoid Transformer architecture jointly affect whole-body tracking and generalization.
+This supports the low-level-controller background but does not introduce a new high-to-low interface.
+
+[GenTrack](https://arxiv.org/abs/2608.01410) alternates execution-grounded motion-generator alignment with tracker training and evaluates the result with SONIC and ProtoMotions backbones.
+It directly studies whether generated references lie inside the tracker's executable motion distribution.
+Unlike our main comparison, however, GenTrack updates both sides of the system rather than holding the low-level controller fixed.
+
+[What Matters in Humanoid General Motion Tracking?](https://arxiv.org/abs/2607.19903) provides a controlled empirical study of low-level design choices, including motion-command representation, observation history, action representation, actuation, and training strategy.
+Its methodology reinforces the need to fix the tracker and evaluation protocol when attributing performance differences to a high-level command interface.
 
 ### Physics-Based Character Skill Latents
 
@@ -600,16 +678,13 @@ result.
 
 ### Structured latent spaces and skill composition (exploratory)
 
-Evidence that skill latents support composition: ASE, CALM, and PADL
-interpolation; part-wise hybrid latents; FLD's periodic parameterization; FB
-task arithmetic in `z` space; METRA and HILP directional semantics. Our own
-composition direction is exploratory. Any added structure (orthogonality,
-directional constraints, periodicity) changes the encoder and must be ablated
-against the frozen paper encoder, never silently swapped in. If it matures it
-becomes one secondary section with closed-loop compositional evaluation
-against defined target motions, not a headline claim.
+Evidence that skill latents support composition: ASE, CALM, and PADL interpolation; part-wise hybrid latents; FLD's periodic parameterization; FB task arithmetic in `z` space; METRA and HILP directional semantics.
+[MetaWorld-X](https://arxiv.org/abs/2603.08572) adds a recent humanoid example of semantic composition through VLM-routed expert policies, although its routing weights are not the same as a reusable motion latent.
+Our own composition direction is exploratory.
+Any added structure (orthogonality, directional constraints, periodicity) changes the encoder and must be ablated against the frozen paper encoder, never silently swapped in.
+If it matures it becomes one secondary section with closed-loop compositional evaluation against defined target motions, not a headline claim.
 
-### Found 2026-07-16, not yet read
+### Reading Queue
 
 Triage before citing; record the deployed-interface status for each:
 [MotionVLA](https://arxiv.org/abs/2606.15142),
@@ -748,11 +823,32 @@ one secondary section, never as the headline result.
 - SONIC project: <https://nvlabs.github.io/GEAR-SONIC/>
 - GR00T Whole-Body Control code:
   <https://github.com/NVlabs/GR00T-WholeBodyControl>
+- Humanoid-LLA: <https://arxiv.org/abs/2511.22963>
 - HuMI: <https://arxiv.org/abs/2602.06643>
+- CEER: <https://arxiv.org/abs/2605.19981>
+- CyboRacket: <https://arxiv.org/abs/2603.14605>
+- ReactiveBFM: <https://arxiv.org/abs/2606.30362>
+- HumanoidArena: <https://arxiv.org/abs/2606.17833>
+- TextOp: <https://arxiv.org/abs/2602.07439>
+- Dream2Act: <https://arxiv.org/abs/2603.19709>
+- GenTrack: <https://arxiv.org/abs/2608.01410>
+- Scaling Behavior Foundation Model: <https://arxiv.org/abs/2607.15163>
+- What Matters in Humanoid General Motion Tracking?: <https://arxiv.org/abs/2607.19903>
+- Being-0: <https://arxiv.org/abs/2503.12533>
+- BiBo: <https://arxiv.org/abs/2511.00041>
+- EgoActor: <https://arxiv.org/abs/2602.04515>
+- Cybo-Waiter: <https://arxiv.org/abs/2603.10675>
+- Hierarchical Vision-Language Planning: <https://arxiv.org/abs/2506.22827>
+- Humanoid Agent via Chain-of-Action: <https://arxiv.org/abs/2504.09532>
+- MetaWorld-X: <https://arxiv.org/abs/2603.08572>
+- Persistent 3D Object Tokens: <https://arxiv.org/abs/2607.18016>
 - WholeBodyVLA: <https://arxiv.org/abs/2512.11047>
 - WholeBodyVLA code: <https://github.com/OpenDriveLab/WholebodyVLA>
 - MotionWAM: <https://arxiv.org/abs/2606.09215>
 - OpenHLM: <https://arxiv.org/abs/2606.22174>
+- ULTRA: <https://arxiv.org/abs/2603.03279>
+- Psi-Zero: <https://arxiv.org/abs/2603.12263>
+- WOLF-VLA: <https://arxiv.org/abs/2606.25591>
 - LeVERB: <https://arxiv.org/abs/2506.13751>
 - SENTINEL: <https://arxiv.org/abs/2511.19236>
 - LangWBC: <https://arxiv.org/abs/2504.21738>
