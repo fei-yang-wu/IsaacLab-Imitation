@@ -27,6 +27,86 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Global-error decomposition: the G gap to SONIC is root translation drift, and it accumulates (2026-08-29)
+
+Question: local tracking is nearly tied with `sonic_v1_1` (L 26.9 vs 26.7 mm
+on the 4,096 clean board) but our global error is 2.2x better (86 vs 188 mm).
+What produces the gap?
+
+**The decomposition is exact and closes arithmetically.** MPJPE-L is
+root-relative and MPJPE-G is world-frame (`contracts/tracking_metrics.py`),
+so per link the world error is the root translation error plus the
+root-relative residual. If the two are uncorrelated, G^2 = drift^2 + L^2.
+Measured (success-only micro, 4,096 clean, one seed each):
+
+| arm | G | root drift | L | sqrt(drift^2+L^2) | residual |
+|---|---:|---:|---:|---:|---:|
+| `sonic_v1_1` | 187.7 | **186.0** | 26.7 | 187.9 | -0.3 |
+| `base` @5B | 86.0 | **78.9** | 26.9 | 83.4 | +2.6 |
+| `ar0` @5B | 93.1 | 86.2 | 24.2 | 89.5 | +3.6 |
+| `energy` @5B | 86.8 | 78.0 | 27.0 | 82.5 | +4.2 |
+
+The identity closes to 0.2% for SONIC and 3-5% for ours (small positive
+correlation between drift direction and pose error). **The entire G gap is
+where the pelvis is, not body shape**: root drift 186 vs 79 mm (2.4x), while
+local pose and heading are near-tied (heading 0.074 vs 0.053 rad; its
+lever-arm contribution, ~0.35 m x theta ~ 18-26 mm, lives INSIDE L on both
+sides).
+
+**SONIC's drift accumulates; ours is bounded.** Final-step vs episode-mean
+root drift: `sonic_v1_1` 1.77 (172.9 -> 305.8 mm on the 124 board; 1.73 on
+4,096), `base` 1.47 (61.0 -> 89.7 mm). A ratio near 2 is what an uncorrected
+random walk gives over a 10 s episode; SONIC slides while tracking locally.
+
+**Config-level mechanism (verified in the released `sonic_v1_1` config, not
+inferred):**
+
+1. **SONIC's actor is blind to drift.** `motion_anchor_pos_b` /
+   `motion_anchor_ori_b` — the world-frame anchor error — appear ONLY in its
+   CRITIC observation group (asymmetric). The policy cannot observe planar
+   drift, so it cannot servo it; its anchor rewards (w=0.5, std=0.3) can
+   only shape open-loop reproduction. Our v2 policy observes
+   `expert_anchor_pos_b`/`ori_b` directly (with U(-0.25,0.25) noise).
+2. **SONIC's anchor termination is height-based** (`exceeded_anchor_height`,
+   threshold 0.15, its own training config), so planar drift is never
+   terminal during its training. Ours trains under a planar `anchor_pos`
+   termination (0.25 m) plus explicit world-frame rewards
+   (`motion_global_anchor_pos` + `_wide`).
+
+The attribution to actor-visible drift feedback is a HYPOTHESIS until
+ablated. The falsifying experiment is one arm: train `base` with
+`expert_anchor_pos_b`/`ori_b` removed from the policy group (critic keeps
+them, SONIC-style). Prediction: G rises toward the SONIC drift regime while
+L stays put. Not yet run.
+
+Infrastructure: `evaluate_checkpoint` per-env rows now carry
+`root_pos_xyz_error_final_m` (drift at the last active step), giving the
+accumulation ratio; SONIC rows already had the analogous
+`anchor_pos_err_final_m` from the command term. Same-quantity check done:
+both drift columns are the world-frame pelvis/anchor position error norm.
+
+## Smooth-ablation 5B finals: base / energy / ar0 scored on both boards (2026-08-29)
+
+First three arms of `2026-08-28-smooth-ablation-5b` finished 5B and scored;
+full tables with the `sonic_v1_1` comparison rows (standing user directive:
+every table carries the same-board sonic_v1_1 row) are in the campaign
+README. Headlines, one seed:
+
+- Penalty decomposition at 5B (`base` vs `ar0`, matched): `action_rate_l2`
+  -0.03 costs 0.014 SR and +2.7 mm L, buys -30% jerk / -34% adelta / -7 mm G.
+- UNRESOLVED: `base`'s local error regressed 22.78 -> 26.93 mm over its last
+  1.25B while `ar0` stayed flat — a late-training regression specific to the
+  penalty arm; milestone curve is the diagnostic before promotion.
+- `energy` converges to `base`'s smoothness (jerk 202.5 vs 204.0) at an SR
+  cost: on top of an action-rate penalty the energy term buys nothing at 5B.
+- Gap to `sonic_v1_1` acceleration on the 124 board: `base` 3.77 vs 2.89
+  (ratio 1.30) against the 46.5B leader's 4.67 (1.62). SR remains SONIC's
+  axis, global error remains ours.
+- Eval-infra postmortem: three background eval waiters deadlocked matching
+  their own `pgrep -f evaluate_checkpoint` guard strings (~70 min idle GPU).
+  Process-name grep guards are retired from local pipelines; sequential
+  chains + skip-existing-rows idempotence instead.
+
 ## Smoothness is now measured directly: jerk + action metrics in board rows (2026-08-29)
 
 `evaluate_checkpoint.py` now writes four smoothness measures per environment,
