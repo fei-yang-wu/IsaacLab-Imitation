@@ -140,6 +140,123 @@ chunk cell (a blurry mean chunk), per-frame autoregressive factorization
 (breaks the chunk-atomic design at Hx cost), CVAE (out of paper scope),
 flow matching (drop-in alternative parameterization of the same head, defer).
 
+## Round 5 (2026-08-27): the merged head
+
+`diffntp_merged_h1_ee_wide` folds `diffntp_chunk`'s two diffusion heads into
+ONE head denoising `s[t+H..t+2H]` (11 frames, 418-d, executed anchor) and
+drops the separate endpoint term (`--jepa_ntp_chunk_span boundary_next
+--jepa_endpoint_coeff 0`, both new RLOpt knobs, tests in
+`test_hl_skill_recon_phase.py`, 32 pass). One variable against
+`diffntp_chunk`: the same frames are covered, but the endpoint moves from its
+own coeff-1.0 38-d head into 1 of 11 slots of the chunk head, so the
+grounding pressure is ~10x lower by construction. The endpoint head is still
+built and serialized (checkpoint contract unchanged); its weights receive no
+gradient. Jobs 5594018-20, seed 0. Nothing measured.
+
+## Round 6 (2026-08-28): additive EMA-trick term next to the chunk head
+
+`diffntp_chunktok_h1_ee_wide`: `diffntp_chunk`'s loss plus exactly one term,
+`1.0 * ||P(z1) - z2_EMA||^2` (`--jepa_token_pred_coeff`, new RLOpt knob; the
+mlp head refuses it as a double-count, tests 33 pass). Question: the
+EMA-lagged latent-dynamics term owns global drift in the mechanism square
+(dsrsig -> hub -24% G) while `diffntp_chunk` gets its G win from drift kept
+in the data target — do the two mechanisms STACK or substitute? `diffntp_pair`
+(token folded INTO the diffusion target) did not stack (G 96.22 vs chunk's
+85.74), but it also dropped the chunk target, so it is not the additive cell.
+Jobs 5594207-09, seed 0. Nothing measured.
+
+Also round 6: `diffntp_merged64_h1_ee_wide` — the merged head at 64-D
+(z_dim 64, command 66), one variable against `diffntp_merged` on the token
+width. 64-D continuous hold-1 was a dead zone at 100M and a budget artifact
+by 2B (2026-08-15 grid), so its own row must be read against 64-D
+comparables as well as the 256-D merged row. Jobs 5594211-13, seed 0.
+Nothing measured.
+
+### `merged64_pen_ramp_5b` results (2026-08-28, one seed)
+
+The 5B run finished its single segment (job 5594864, COMPLETED, 10:43:26) and
+reached 5,000,134,656 frames, so the 0 -> 1B failure-share ramp completed and
+4B ran at the landed ratio. Scored locally on `bones_testbed4096_v1`:
+
+| row | SR | MPJPE-L | MPJPE-G | vel | acc | terminations |
+|---|---:|---:|---:|---:|---:|---|
+| clean (`randomization=none`) | **0.9543** | 23.67 mm | 89.33 mm | 0.211 m/s | **4.84 m/s²** | ee 149, ori 32, pos 15 |
+| robust (`no_push`) | 0.9458 | 26.46 mm | 155.73 mm | 0.255 m/s | 5.53 m/s² | ee 177, ori 35, pos 22 |
+
+Its own 2B parent `diffntp_merged64_h1_ee_wide` scored 0.9207 / 24.54 / 91.12
+with acc 6.90 m/s². The 5B row is +0.034 SR, -3.5% local error and -30%
+acceleration against it.
+
+THREE variables separate the two rows — frames (2B -> 5B), `action_rate_l2`
+(0 -> -0.03) and the reset schedule (`random80_adaptive20` -> `sonic` with the
+0.2 -> 0.8 failure-share ramp) — so no single field owns the gain. The
+acceleration drop is the one effect with a named mechanism, since
+`action_rate_l2` is the term the 2026-08-26 smoothness sweep measured, and
+4.84 m/s² is the lowest acceleration any arm of this program has reached
+(the public `sonic_v1_1` 42M checkpoint reads 3.45 m/s² all-clip on this same
+board, 3.34 on the matched-3,932 intersection; the 16M `sonic_release`
+checkpoint has NO acceleration measurement, because the metric was added on
+2026-08-26 and every `sonic_release` artifact predates it).
+
+The training curve carries one supporting signal for the smoothness reading:
+`Episode_Reward/action_rate_l2` shrinks monotonically from -0.190 at 0.36B to
+-0.069 at 4.85B, so the policy kept smoothing across the whole run. Nothing in
+the curve steps at the 1B ramp boundary — episode length plateaus near 150-180
+from 0.36B onward — so the failure-share ramp does not visibly own the gain
+either.
+
+The encoder binding is exact: `live_vs_checkpoint_encoder_max_abs` and
+`post_load_vs_checkpoint_max_abs` are both 0.0, so the frozen pretrained file
+this arm reused is tensor-identical to the encoder inside the tracker
+checkpoint.
+
+The arm's `selection=sonic` and adaptive-ratio settings do NOT reach the
+evaluation: `--trajectory_ranks` forces `schedule=custom` and
+`pin_reference_start` sets `full_trajectory=False` with a fixed start frame 0,
+so the board population and start rule match every sibling arm.
+
+Against the current headline tracker row on the same clean board,
+`ln_hold1_sonicreset` @46.50B (0.9773 / 22.42 mm / 103.31 mm / acc 5.57), this
+arm is 0.023 SR behind at a ninth of the frames while landing 13.5% lower
+global error and 13% lower acceleration. Robust rows: 0.9458 / 26.46 / 155.73
+/ 5.53 here against 0.9688 / 24.38 / 182.25 / 6.41 there.
+
+The budget axis (`bones_milestone_testbed256_v1`, 20 checkpoints, one seed):
+
+| frames | SR | L | G | acc |
+|---:|---:|---:|---:|---:|
+| 0.25B | 0.8555 | 33.11 | 171.25 | 5.78 |
+| 0.50B | 0.9023 | 28.78 | 154.41 | 5.56 |
+| 1.00B | 0.9219 | 26.82 | 125.64 | 5.57 |
+| 1.50B | 0.9336 | 25.10 | 93.52 | 5.37 |
+| 2.00B | 0.9375 | 24.17 | 83.62 | 5.22 |
+| 2.50B | 0.9336 | 23.95 | 76.41 | 5.06 |
+| 3.00B | 0.9375 | 22.75 | 73.79 | 5.10 |
+| 4.00B | 0.9453 | 22.91 | 68.29 | 5.17 |
+| 4.25B | 0.9609 | 23.12 | 81.66 | 5.24 |
+| 5.00B | 0.9570 | 22.89 | 77.05 | 5.05 |
+
+(Clip-weighted micro-averages over successes; the summarizer's frame-weighted
+figures above differ slightly on the same rows.)
+
+Local error and acceleration flatten by about 3.0B and global error by about
+4.0B; success rate is still creeping in the last 1B but inside the board's
+noise at 256 clips. The run therefore spent its last 1-2B buying very little,
+and a longer chain is not the obvious next move.
+
+Showcase clips (2026-08-28, `--style studio_light --shot hero_low`, PhysX,
+ranks 2389 / 72338 / 121035): `logs/showcase_videos/merged64_pen_ramp_5b/` for
+the 5B penalty arm and `logs/showcase_videos/merged64_parent_2b_nopen/` for its
+2B parent at `action_rate_l2` 0.0, rendered on the same clips and preset for a
+visual read of the acceleration difference (4.84 against 6.90 m/s²). Frames and
+the reset schedule still differ between the two, so the pair is not a
+single-variable penalty comparison. The `diffntp_chunk_2b` and
+`diffntp_token_2b` reels reuse the same three ranks but also trained at
+`action_rate_l2` 0.0.
+
+QUALIFICATION: one seed, one segment, and the three-variable gap above. This
+is a lead for a decomposition, not an attribution.
+
 ### Round 4 results (2026-08-26, clean rows, one seed)
 
 Matched on the 3,521 clips all six arms survived (own -> matched):

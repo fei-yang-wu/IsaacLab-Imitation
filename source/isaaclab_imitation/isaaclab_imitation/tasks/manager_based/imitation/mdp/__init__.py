@@ -61,6 +61,7 @@ from .observations import (
 )
 from .rewards import (
     body_angular_velocity_excess_l2,
+    energy_consumption,
     mpjpe_relative_body_pos_m,
     reference_global_anchor_orientation_error_exp,
     reference_global_anchor_position_error_exp,
@@ -136,6 +137,7 @@ __all__ = [
     "reference_local_reward_point_position_error_exp",
     "mpjpe_relative_body_pos_m",
     "body_angular_velocity_excess_l2",
+    "energy_consumption",
     "randomize_joint_default_pos",
     "reset_joints_to_reference",
     "reset_root_and_joints_to_reference_with_randomization",
