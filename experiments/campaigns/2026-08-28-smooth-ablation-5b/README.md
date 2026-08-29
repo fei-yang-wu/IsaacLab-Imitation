@@ -50,6 +50,38 @@ milestone curve. Two metric requirements beyond the standard row:
    no scored board row has ever carried them. The reference-free jerk /
    high-frequency-power metric is still to be added to the evaluator.
 
+## Preliminary rows (2026-08-29, mid-training, one seed)
+
+Matched 3.75B checkpoints (`feetacc_weak` at 1.00B — its node runs at 39k fps
+against the siblings' ~133k, healthy curve, no restarts), clean protocol,
+scored with the 2026-08-29 smoothness metrics. PRELIMINARY: none of these is
+the 5B row.
+
+| arm | SR | L | G | acc | jerk | adelta |
+|---|---:|---:|---:|---:|---:|---:|
+| `base` | 0.9463 | 22.78 | 83.72 | 4.60 | 194.4 | 0.809 |
+| `energy` | 0.9189 | 27.72 | 93.67 | 4.46 | **181.0** | **0.741** |
+| `sigma` | 0.0151 | — | — | — | (35.5) | (0.063) |
+| `feetacc_weak` @1.0B | 0.9014 | 25.99 | 132.25 | 5.13 | 224.1 | 0.882 |
+| `ar0` | **0.9553** | 24.21 | 98.73 | 5.52 | 285.4 | 1.229 |
+
+- **`sigma` is dead and the verdict needs no more budget**: episode length
+  pinned at 15-22 from the first iteration through 3.85B. SONIC's tight
+  exploration contract (init 0.05, clamped) does not train FROM SCRATCH under
+  our optimizer stack — its sigma init belongs to a warm-started release
+  policy. Its jerk 35.5 is a frozen robot, not a smooth one. The noise-aware
+  hypothesis survives; testing it needs a sigma ANNEAL or a floor applied
+  late, not a hard clamp at birth.
+- **`base` vs `ar0` (the penalty decomposition, preliminary): from scratch,
+  the -0.03 penalty currently costs 0.009 SR and buys -32% jerk, -34% adelta,
+  AND -1.4 mm L AND -15 mm G.** Opposite sign on L/G from the 2026-08-26
+  FINETUNE sweep, where every weight cost accuracy. If it holds at 5B:
+  the penalty hurts as a late finetune but helps trained-in.
+- `energy` is the smoothest trainable arm (jerk 181.0) and pays for it in
+  SR and L — directionally the same trade as the action-rate weight axis.
+- `base` already beats `merged64_pen_ramp_5b`'s FINAL row on jerk (194 vs
+  216), adelta (0.81 vs 0.91) and G (83.7 vs 89.3) at 1.25B fewer frames.
+
 ## Status
 
 - 2026-08-29 04:10: SUBMITTED, seed 0, all five arms, from commit `8e11d2e`
