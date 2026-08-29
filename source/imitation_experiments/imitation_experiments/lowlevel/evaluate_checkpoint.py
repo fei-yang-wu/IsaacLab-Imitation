@@ -1873,8 +1873,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         per_env_tracking_metric_sums: dict[str, torch.Tensor] = {}
         per_env_tracking_metric_counts: dict[str, torch.Tensor] = {}
         previous_action: torch.Tensor | None = None
+        previous_previous_action: torch.Tensor | None = None
         previous_body_lin_vel: tuple[torch.Tensor, torch.Tensor] | None = None
         previous_velocity_valid = torch.zeros(num_envs, dtype=torch.bool)
+        previous_actual_acc: torch.Tensor | None = None
+        previous_acc_valid = torch.zeros(num_envs, dtype=torch.bool)
         steps_executed = 0
         valid_transition_count = 0
         planner_publish_count = 0
@@ -1984,13 +1987,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             action_2d = action.detach().reshape(num_envs, -1)
             action_l2 = torch.linalg.vector_norm(action_2d, dim=-1).cpu()
             _accumulate_metric(metric_stats, "action_l2", action_l2, step_active)
+            # Per-environment too (2026-08-29): without it the action-space
+            # measures exist only as board-wide all-transition means and can
+            # never join the success-only row every paper metric reports on.
+            _accumulate_per_env("action_l2", action_l2, step_active)
+            action_cpu = action_2d.cpu()
             if previous_action is not None:
                 action_delta_l2 = torch.linalg.vector_norm(
-                    action_2d.cpu() - previous_action, dim=-1
+                    action_cpu - previous_action, dim=-1
                 )
                 _accumulate_metric(
                     metric_stats, "action_delta_l2", action_delta_l2, step_active
                 )
+                _accumulate_per_env("action_delta_l2", action_delta_l2, step_active)
                 if dt > 0.0:
                     _accumulate_metric(
                         metric_stats,
@@ -1998,7 +2007,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                         action_delta_l2 / dt,
                         step_active,
                     )
-            previous_action = action_2d.cpu()
+                if previous_previous_action is not None:
+                    # Reference-free second difference: buzz, not authority.
+                    # A fast sustained move has a large first difference and a
+                    # small second difference; per-step trembling has both.
+                    action_jerk_l2 = torch.linalg.vector_norm(
+                        action_cpu - 2.0 * previous_action + previous_previous_action,
+                        dim=-1,
+                    )
+                    _accumulate_metric(
+                        metric_stats, "action_jerk_l2", action_jerk_l2, step_active
+                    )
+                    _accumulate_per_env("action_jerk_l2", action_jerk_l2, step_active)
+            previous_previous_action = previous_action
+            previous_action = action_cpu
 
             with torch.inference_mode():
                 td_step = env.step(td)
@@ -2085,6 +2107,41 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                         "tracking_acceleration_distance_mps2",
                         acceleration_distance_cpu,
                         acceleration_mask,
+                    )
+                    # Reference-FREE smoothness (2026-08-29). The distance
+                    # metric above is an error against the reference: copying
+                    # a jerky clip scores 0 on it. `body_acc_mps2` is the
+                    # robot's own acceleration magnitude, and `body_jerk_mps3`
+                    # its finite difference — what "smooth" means physically,
+                    # independent of what the clip does.
+                    body_acc = torch.linalg.vector_norm(actual_acc, dim=-1).mean(
+                        dim=-1
+                    )
+                    body_acc_cpu = body_acc.cpu()
+                    _accumulate_metric(
+                        metric_stats, "body_acc_mps2", body_acc_cpu, acceleration_mask
+                    )
+                    _accumulate_per_env(
+                        "body_acc_mps2", body_acc_cpu, acceleration_mask
+                    )
+                    if previous_actual_acc is not None:
+                        body_jerk = torch.linalg.vector_norm(
+                            (actual_acc - previous_actual_acc) / float(dt), dim=-1
+                        ).mean(dim=-1)
+                        jerk_mask = acceleration_mask & previous_acc_valid
+                        body_jerk_cpu = body_jerk.cpu()
+                        _accumulate_metric(
+                            metric_stats, "body_jerk_mps3", body_jerk_cpu, jerk_mask
+                        )
+                        _accumulate_per_env(
+                            "body_jerk_mps3", body_jerk_cpu, jerk_mask
+                        )
+                    previous_actual_acc = actual_acc.clone()
+                    # Acc at this step is usable as a jerk operand next step
+                    # only if the velocity pair behind it was valid and the
+                    # episode continues.
+                    previous_acc_valid = (
+                        previous_velocity_valid & step_active & ~done_any
                     )
                 previous_body_lin_vel = (
                     body_lin_vel[0].clone(),

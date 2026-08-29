@@ -52,5 +52,11 @@ milestone curve. Two metric requirements beyond the standard row:
 
 ## Status
 
+- 2026-08-29 04:10: SUBMITTED, seed 0, all five arms, from commit `8e11d2e`
+  (drift=true: the RLOpt merged-head working-tree change rides along, as in
+  every pareto-stack round-5/6 submission). Jobs (lowlevel1 -> lowlevel2):
+  `base` 5597003 -> 5597004, `energy` 5597005 -> 5597006, `sigma`
+  5597007 -> 5597008, `feetacc_weak` 5597009 -> 5597010, `ar0`
+  5597011 -> 5597012. Nothing measured.
 - 2026-08-28: campaign written; all five arms plan clean offline
-  (`--skip-preflight`). Not submitted.
+  (`--skip-preflight`).

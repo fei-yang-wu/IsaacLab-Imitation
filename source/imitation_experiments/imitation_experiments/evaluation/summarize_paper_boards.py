@@ -51,6 +51,8 @@ class BoardRow:
     successful_frames: int
     velocity_distance_mps: float | None = None
     acceleration_distance_mps2: float | None = None
+    body_jerk_mps3: float | None = None
+    action_delta_l2: float | None = None
     termination_counts: tuple[tuple[str, int], ...] = ()
     env_frames: int | None = None
 
@@ -67,6 +69,13 @@ class BoardRow:
             head = f"{head} vel={self.velocity_distance_mps:.3f} m/s"
         if self.acceleration_distance_mps2 is not None:
             head = f"{head} acc={self.acceleration_distance_mps2:.2f} m/s2"
+        # Reference-free smoothness pair (2026-08-29): `jerk` is the robot's
+        # own body jerk, `adelta` the per-step action first difference. Both
+        # absent on rows scored before the evaluator carried them.
+        if self.body_jerk_mps3 is not None:
+            head = f"{head} jerk={self.body_jerk_mps3:.1f} m/s3"
+        if self.action_delta_l2 is not None:
+            head = f"{head} adelta={self.action_delta_l2:.3f}"
         failures = [
             f"{name}={count}"
             for name, count in self.termination_counts
@@ -221,6 +230,8 @@ def summarize_board(
         _optional_metric(item, "tracking_acceleration_distance_mps2")
         for item in successes
     ]
+    body_jerk = [_optional_metric(item, "body_jerk_mps3") for item in successes]
+    action_delta = [_optional_metric(item, "action_delta_l2") for item in successes]
     return BoardRow(
         label=str(label if label is not None else result.get("label", "unlabelled")),
         subset=subset,
@@ -233,6 +244,8 @@ def summarize_board(
         successful_frames=int(sum(weights)),
         velocity_distance_mps=_micro_optional(velocity, weights),
         acceleration_distance_mps2=_micro_optional(acceleration, weights),
+        body_jerk_mps3=_micro_optional(body_jerk, weights),
+        action_delta_l2=_micro_optional(action_delta, weights),
         termination_counts=_termination_counts(episodes),
         env_frames=_env_frames(result),
     )
