@@ -415,13 +415,25 @@ class G1SonicRewardsCfg(G1RewardsCfg):
             "std": 0.1,
         },
     )
-    # SONIC weights this -2.5e-7; ours was -2.5e-6, a 10x stronger penalty.
+    # SONIC parity is -2.5e-6 (both released configs: sonic_release and
+    # sonic_v1_1). The 2026-08-04 "align with SONIC" commit read the exponent
+    # backwards and weakened this 10x to -2.5e-7; corrected 2026-08-28. Their
+    # `joint_acc_l2` is a re-export of isaaclab's, so the function matches.
     feet_acc = RewTerm(
         func=mdp.joint_acc_l2,
-        weight=-2.5e-7,
+        weight=-2.5e-6,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=[r".*ankle.*"]),
         },
+    )
+    # SONIC's whole-body mechanical-power penalty, |tau * qvel| summed over
+    # joints, weighted -1.0e-4 in both released configs. OFF by default here
+    # (weight 0.0) so existing v2 rows stay comparable; a campaign enables it
+    # with `env.rewards.energy_consumption.weight=-1.0e-4`.
+    energy_consumption = RewTerm(
+        func=mdp.energy_consumption,
+        weight=0.0,
+        params={},
     )
 
 

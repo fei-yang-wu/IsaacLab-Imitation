@@ -400,6 +400,22 @@ def mpjpe_relative_body_pos_m(
     return torch.linalg.vector_norm(actual_rel_pos - ref_rel_pos, dim=-1).mean(dim=-1)
 
 
+def energy_consumption(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg | None = None,
+) -> torch.Tensor:
+    """Penalize instantaneous mechanical power, summed over all joints.
+
+    SONIC parity: reproduces ``gear_sonic.envs.manager_env.mdp.rewards.
+    energy_consumption`` — ``|applied_torque * joint_vel|`` summed over the
+    joint dimension. SONIC weights it -1.0e-4 over the whole robot.
+    """
+    asset_name = asset_cfg.name if asset_cfg is not None else "robot"
+    asset: Articulation = env.scene[asset_name]
+    power = asset.data.applied_torque.torch * asset.data.joint_vel.torch
+    return torch.abs(power).sum(dim=-1)
+
+
 def body_angular_velocity_excess_l2(
     env: ImitationRLEnv,
     asset_cfg: SceneEntityCfg,

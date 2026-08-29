@@ -49,3 +49,30 @@ should be submitted at 64-D.
 
 - 2026-08-27 17:47: submitted. Jobs 5593641 (pretrain) → 5593642 → 5593643,
   W&B group `leader64-gate`. Nothing measured.
+- 2026-08-27: CANCELLED by the user at ~0.84B frames after the tracker curve
+  stalled. Preliminary diagnosis (one seed, training-time metrics, no
+  scoreboard row):
+  - The **encoder pretrain is healthy at 64-D**. Final diagnostics match the
+    256-D control almost exactly: objective 7.36 vs 7.33,
+    `z_dim_std_mean` 1.02, effective rank 47.9 of 64, and the endpoint eval
+    triplet is fully informative (`loss_real_z_eval` 8.55 <<
+    `loss_zero_z_eval` 32.1 << `loss_shuffled_z_eval` 69.8). The width did
+    not hurt the pretrain.
+  - The **tracker stalled in the known 64-D hold-1 cell**: `episode/length`
+    plateaued at 50–62 and `Metrics/reference/mpjpe_l_mm` stayed flat at
+    ~51 mm from 0.04B through 0.84B. The 256-D control run
+    (`ps-dntpc-s0-929037`) was at episode length 166 and 42.6 mm at 0.17B.
+    The plateau values reproduce the 2026-08-15 grid's 64-D hold-1 rows
+    (`cont_det` 53.8 at 0.35B, `fsq64` 51.7 at 0.98B) despite the different
+    encoder objective and rewards — this is the width x hold interaction the
+    campaign was written to test, resolved against 64-D at hold 1.
+  - Caveat: `ix_fsq64_hold1` recovered to 0.8496 SR by 2B in the 08-19 star,
+    so a full-budget finish could climb — but that arm still lost ~0.05 SR
+    to its hold-10 partner, and this curve shows no comparable slope at
+    0.84B.
+  - W&B logging trap hit: the lowlevel stage resumed the PRETRAIN run id
+    (`l64-gate-pre-s0-276756`) because both stages share
+    `${vars.output_root}` and the control plane pins one run id per output
+    tree via `<output_root>/wandb_run_id`. Pretrain and tracker metrics are
+    interleaved in one run. Give the encoder stage its own output tree (or
+    delete the id file between stages) on any resubmission.

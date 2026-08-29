@@ -1,0 +1,252 @@
+# Smoothness ablation at 5B: one variable per arm on a shared 256-D base.
+#
+# The 2026-08-26 weight sweep measured that `action_rate_l2` buys acceleration
+# by spending accuracy, and said the next attempt should change the OBJECTIVE.
+# This campaign runs the first such cells, plus the two parity corrections of
+# 2026-08-28 as isolated variables.
+#
+# Base (every arm): `diffntp_chunk_h1_ee_wide`'s frozen encoder (round-4
+# winner), tracker from scratch to 5B in the `merged64_pen_ramp_5b` regime —
+# `action_rate_l2` -0.03, SONIC selection with the 0.8 -> 0.2 failure-share
+# ramp over the first 1B — but with TWO deliberate changes against that arm:
+# 256-D command (not 64) and 20,480 envs (not 16,384). 24,576 envs OOM'd the
+# H200 at the Newton graph launch (job 5580202); 20,480 is the measured safe
+# step up (2026-08-18-qvel-fullbody-leader).
+#
+# Every arm also carries the corrected `feet_acc` -2.5e-6 (in-tree since
+# 2026-08-28); `feetacc_weak` is the arm that isolates that correction.
+#
+# Arms, one variable each against `base`:
+#   base          control; also the 256-D + env20k + corrected-feet_acc row
+#   energy        env.rewards.energy_consumption.weight=-1.0e-4 (SONIC's
+#                 whole-body |tau*qvel| penalty, ported 2026-08-28)
+#   sigma         SONIC's exploration-noise contract: sigma init 0.05 clamped
+#                 to [0.001, 0.5], against our unbounded init-1.0 Gaussian.
+#                 Mechanism: `action_rate_l2` penalizes the SAMPLED action, so
+#                 exploration noise dilutes the smoothing gradient.
+#   feetacc_weak  env.rewards.feet_acc.weight=-2.5e-7 (the 2026-08-04..08-28
+#                 wrong value) — isolates the 10x parity fix
+#   ar0           env.rewards.action_rate_l2.weight=0.0 — the penalty's own
+#                 effect at matched frames, schedule, and batch shape
+#
+# The ramp keys off common_step_counter, which restarts per segment. Segment 1
+# carries the ramp (1B completes ~2.3h into a 15:59 walltime); segment 2 is a
+# safety resume that PINS the landed ratio 0.2, so a restart never re-runs the
+# ramp (the `select_hold` pattern from 2026-08-27-diffntp-history).
+name: smooth-ablation-5b
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: smooth-ablation-5b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+
+  z_dim: 256
+  command_dim: 258
+  code_latent_dim: 256
+  window_mode: intermediate
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  hold: 1
+  phase_mode: sin_cos
+  phase_source: hold
+  phase_period: 0
+  command_mode: z
+  finetune_args: ["agent.ipmd.hl_skill_finetune_enabled=false"]
+
+  # Frozen round-4 winner encoder, reused byte-identical by every arm.
+  encoder_ckpt: /data/pareto_stack/diffntp_chunk_h1_ee_wide_seed0/encoder/checkpoints/latest.pt
+  encoder_source: pretrained
+
+  # 20,480 envs: frames/batch 491,520, minibatch 368,640.
+  train_num_envs: 20480
+  rollout_steps: 24
+  frame_cap: 5000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/smooth_ablation_5b/${vars.arm}_seed${vars.seed}
+
+  # The base reward set. `action_rate_l2` at the 50B chains' -0.03; the
+  # corrected feet_acc -2.5e-6 comes from the in-tree default.
+  reward_args:
+    - env.rewards.motion_ee_pos.weight=1.0
+    - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    - env.rewards.action_rate_l2.weight=-0.03
+  # The per-arm single variable.
+  arm_args: []
+
+  # Failure-share ramp 0.8 -> 0.2 over the first 1B (segment 1 only).
+  select_ramp:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=1000000000
+  # Segment 2 pins the landed ratio so a resume never re-runs the ramp.
+  select_hold:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.2
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=smooth-ablation-5b
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.command_phase_source=${vars.phase_source}
+    - agent.ipmd.latent_learning.command_phase_period=${vars.phase_period}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+
+  tuned_core:
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=250000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.encoder_ckpt}
+  output_container_path: ${vars.output_root}
+
+arms:
+  base:
+    vars:
+      wandb_id: sm5b-base
+      arm_args: []
+    stages: &ablation_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.arm_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,smooth-ablation-5b,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.arm_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,smooth-ablation-5b,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # SONIC's whole-body mechanical-power penalty at its released weight.
+  energy:
+    vars:
+      wandb_id: sm5b-energy
+      arm_args:
+        - env.rewards.energy_consumption.weight=-1.0e-4
+    stages: *ablation_stages
+
+  # SONIC's exploration-noise contract (config.yaml:246 init_noise_std 0.05).
+  # Ours is unbounded init-1.0; the hypothesis is that sampled-action noise
+  # dilutes the action_rate_l2 gradient toward a smooth MEAN.
+  sigma:
+    vars:
+      wandb_id: sm5b-sigma
+      arm_args:
+        - agent.ppo.log_std_init=-2.995732273553991
+        - agent.ppo.clip_log_std=true
+        - agent.ppo.log_std_min=-6.907755278982137
+        - agent.ppo.log_std_max=-0.6931471805599453
+    stages: *ablation_stages
+
+  # The 2026-08-04..08-28 wrong feet_acc weight, isolated: this arm trains at
+  # the weak -2.5e-7 every earlier row used, against `base` at the corrected
+  # -2.5e-6.
+  feetacc_weak:
+    vars:
+      wandb_id: sm5b-facc7
+      arm_args:
+        - env.rewards.feet_acc.weight=-2.5e-7
+    stages: *ablation_stages
+
+  # The action-rate penalty's own effect on THIS base — the decomposition arm
+  # the merged64_pen_ramp_5b result asked for, at matched everything else.
+  ar0:
+    vars:
+      wandb_id: sm5b-ar0
+      arm_args:
+        - env.rewards.action_rate_l2.weight=0.0
+    stages: *ablation_stages

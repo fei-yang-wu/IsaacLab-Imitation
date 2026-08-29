@@ -27,6 +27,234 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Reward parity fixes: `feet_acc` 10x correction + `energy_consumption` term (2026-08-28)
+
+Two changes to `G1SonicRewardsCfg` (inherited by the v2 tuned recipe), both
+approved by the user and both verified against the released SONIC configs at
+`/mnt/hsstorage/fwu91/sonic_v1_1/config.yaml` and
+`/mnt/hsstorage/fwu91/sonic_release/config.yaml`:
+
+1. **`feet_acc` weight corrected -2.5e-7 -> -2.5e-6.** Both released SONIC
+   configs carry -2.5e-06. The 2026-08-04 "align the reward definition with
+   SONIC" commit (`5a36dfc`) read the exponent backwards and WEAKENED the
+   ankle-acceleration penalty 10x while claiming to strengthen parity. Their
+   `joint_acc_l2` is a re-export of isaaclab's (`gear_sonic/envs/manager_env/
+   mdp/__init__.py` does `from isaaclab.envs.mdp import *`), so the function
+   was always identical; only the weight was wrong. Every arm trained between
+   2026-08-04 and 2026-08-28 used the weak value. This is an IN-PLACE v2
+   recipe change: rows trained after 2026-08-28 differ from earlier rows on
+   this weight.
+2. **`energy_consumption` added, OFF by default.** SONIC's whole-body
+   mechanical-power penalty (`|applied_torque * joint_vel|` summed over
+   joints, ported verbatim from `gear_sonic`'s `rewards.py`), weighted
+   -1.0e-4 in both released configs, was missing from our reward set
+   entirely. It now exists in `imitation/mdp/rewards.py` with config default
+   weight 0.0 so existing rows stay comparable; enable per campaign with
+   `env.rewards.energy_consumption.weight=-1.0e-4`. Newton fills
+   `applied_torque` for implicit actuators via a post-actuator callback, so
+   the term works on both backends. Qualified with a 1-iteration smoke on
+   `Isaac-Imitation-G1-v2` (term registers and runs, exit 0).
+
+Also corrected while in the file: our `anti_shake_ang_vel` body set uses
+`torso_link` where SONIC uses `head_link` — deliberate (the bundled 29-DoF
+asset has no head body), already documented, unchanged.
+
+## qvel in the encoder input costs smoothness: three matched pairs agree (2026-08-28)
+
+Every arm whose DiffSR macro state is the FULL-BODY frame
+(`env.expert_macro_state_terms=[expert_motion,...]`, 670-wide, qpos+qvel) was
+scored against its `root_qpos` (380-wide) partner on `bones_testbed4096_v1`.
+Added today: robust rows for `qvel_h1_ee_wide` and `trip_qvel_h1_ee_wide`, the
+frame-matched 10.0B rows for the full-body leader, and its 8.5B robust row
+(the 2026-08-19 attempt died on a CUDA OOM caused by a concurrent job and left
+a log with no row).
+
+Clean rows, one seed:
+
+| pair | encoder input | frames | SR | L | G | vel | **acc** |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `cont_det_ln_hold1` | root_qpos 380 | 10.0B | **0.9226** | 24.19 | **119.42** | 0.223 | **5.78** |
+| `cont_det_ln_hold1_fullbody_env20k` | full_body 670 | 10.0B | 0.9099 | 24.45 | 126.34 | 0.238 | 6.33 |
+| `jepa_h1_ee_wide` | root_qpos 380 | 2.0B | 0.9060 | 26.99 | **103.61** | 0.252 | **7.02** |
+| `qvel_h1_ee_wide` | full_body 670 | 2.0B | 0.9070 | 26.02 | 121.54 | 0.263 | 7.68 |
+| `trip_h1_ee_wide` | root_qpos 380 | 2.0B | **0.9004** | 27.35 | 127.28 | 0.260 | **6.95** |
+| `trip_qvel_h1_ee_wide` | full_body 670 | 2.0B | 0.7891 | 33.75 | 128.87 | 0.274 | 7.14 |
+
+Robust (`no_push`) rows agree: 6.57 vs 7.14 (leader, 10.0B), 7.89 vs 8.43
+(`jepa`/`qvel`), 7.89 vs 8.10 (`trip`/`trip_qvel`).
+
+**qvel in the encoder input makes the motion LESS smooth, not more.** All three
+matched pairs move the same way on acceleration (+9.5%, +9.4%, +2.7% clean) and
+on velocity error, and two of three are clearly worse on global error. This is
+the opposite of the intuition that giving the encoder velocity information
+should help the tracker produce velocity-consistent motion, and it holds at
+both 2B and 10B and under both randomization profiles.
+
+It also reproduces the 2026-08-19 star's `in_fullbody670` result (-0.0271 SR)
+on a third axis: that arm reads acc 8.54 clean / 9.05 robust, the worst of the
+qvel group.
+
+`trip_qvel_h1_ee_wide` is a separate and larger failure — SR 0.7891 against its
+triplet partner's 0.9004, with 714 wrist terminations. Triplet context and qvel
+do not combine.
+
+QUALIFICATION: one seed per arm. The leader pair now shares a frame count
+(10.0B) after today's rescore; the previous comparison used its 8.5B row
+against a 10B control and understated nothing — acc moved 6.36 to 6.33 between
+those two checkpoints, so the arm was already flat.
+
+Artifacts: `logs/qvel_fullbody_eval/`, `logs/pareto_stack_eval/*qvel*`.
+
+## `merged64_pen_ramp_5b` scored at 5B; `diffntp_pair_hist` robust rows added (2026-08-28)
+
+The 5B merged-head run at 64-D finished its single segment (job 5594864,
+COMPLETED, 10:43:26) at 5,000,134,656 frames, so its 0 -> 1B failure-share
+ramp completed and 4B ran at the landed ratio. Scored locally on
+`bones_testbed4096_v1`:
+
+| row | SR | MPJPE-L | MPJPE-G | vel | acc |
+|---|---:|---:|---:|---:|---:|
+| `merged64_pen_ramp_5b` clean @5B | 0.9543 | 23.67 mm | 89.33 mm | 0.211 m/s | **4.84 m/s²** |
+| `merged64_pen_ramp_5b` robust @5B | 0.9458 | 26.46 mm | 155.73 mm | 0.255 m/s | 5.53 m/s² |
+| `ln_hold1_sonicreset` clean @46.5B | 0.9773 | 22.42 mm | 103.31 mm | 0.210 m/s | 5.57 m/s² |
+| `ln_hold1_sonicreset` robust @46.5B | 0.9688 | 24.38 mm | 182.25 mm | 0.252 m/s | 6.41 m/s² |
+
+At a ninth of the headline row's frames this arm is 0.023 SR behind on clean
+while landing 13.5% lower global error and 13% lower acceleration; the robust
+pair reads the same way. 4.84 m/s² is the lowest acceleration this program has
+measured on the 4,096-clip board. For scale, the public `sonic_v1_1` 42M
+checkpoint reads 3.45 m/s² all-clip on that board (3.34 matched-3,932); the
+16M `sonic_release` checkpoint has no acceleration row at all, since the
+metric landed on 2026-08-26 and every `sonic_release` artifact predates it.
+Do not attribute either figure to "the released checkpoint".
+
+It is NOT an attribution: three fields separate it from its own 2B parent
+`diffntp_merged64_h1_ee_wide` (0.9207 / 24.54 / 91.12 / acc 6.90) — frames,
+`action_rate_l2` 0 -> -0.03, and the reset schedule. The 20-point milestone
+curve flattens on local error and acceleration by about 3.0B and on global
+error by about 4.0B, so the last 1-2B bought very little and a longer chain is
+not the obvious next move. The decomposition worth running is the
+action-rate-only arm at the parent's schedule.
+
+Separately, the `diffntp_pair_hist` robust rows were added and agree with the
+REFUTED verdict: 0.8738 / 29.15 / 157.19 / acc 7.12 at 2.0B falling to
+0.8628 / 29.63 / 162.97 / acc 7.82 at 4.0B. On the clean board the ten-step
+history had bought -9.6% acceleration at 2.0B (6.42 against the parent's 7.10)
+while costing 0.027 SR; that smoothness edge is gone by 4.0B and absent under
+`no_push` at both depths. `experiments/campaigns/2026-08-27-diffntp-history/`
+now carries an `eval.sh` that reads the five `history_length=10` overrides back
+out of its `campaign.yaml`, because the widened actor input is part of the
+strict policy restore.
+
+All rows are one seed. Artifacts: `logs/pareto_stack_eval/merged64_pen_ramp_5b_*`
+and `logs/diffntp_history_eval/`.
+
+## Additive chunk+EMA cell submitted: `diffntp_chunktok_h1_ee_wide` (2026-08-28)
+
+Round 6 of `2026-08-22-pareto-stack`, jobs 5594207-09, seed 0, 2B screen.
+Loss = endpoint + `diff_chunk` + `1.0 * ||P(z1) - z2_EMA||^2` + SIGReg — the
+question is whether the EMA-trick latent-dynamics term stacks with chunk
+generation on MPJPE-G or substitutes. New RLOpt knob `jepa_token_pred_coeff`
+(default 0 reproduces every existing arm; positive requires a diffusion
+head). Reads against `diffntp_chunk` (0.9163 / 24.07 / 84.69) and the hub.
+Nothing measured. Same day: `diffntp_merged64_h1_ee_wide` (jobs 5594211-13)
+— the merged head at 64-D (z 64 / command 66), the width axis on the merged
+objective, one variable against `diffntp_merged`.
+
+## Merged-head cell submitted: `diffntp_merged_h1_ee_wide` (2026-08-27)
+
+Round 5 of `2026-08-22-pareto-stack`, jobs 5594018-20, seed 0, 2B screen.
+One diffusion head denoises `s[t+H..t+2H]` (418-d) in place of
+`diffntp_chunk`'s endpoint + next-chunk pair; the separate endpoint term is
+dropped (`jepa_endpoint_coeff=0`). New RLOpt knobs `jepa_ntp_chunk_span`
+{next, boundary_next} and `jepa_endpoint_coeff` in
+`RLOpt/rlopt/agent/hl_skill_diffsr.py`; `boundary_next` requires the
+executed anchor; the endpoint head stays in the checkpoint, gradient-free.
+Reads against the round-4 table (`diffntp_chunk` 0.9163 / 24.07 / 84.69
+clean). Nothing measured.
+
+## `diffntp_token_h1_ee_wide` re-score and showcase clips on ICE (2026-08-27)
+
+`experiments/campaigns/2026-08-27-diffntp-token-showcase/`. Jobs 5593843
+(`clean`), 5593844 (`robust`), 5593845 (`video`), chained `afterany` so they
+run one at a time. Nothing measured yet.
+
+The arm is round 4 of `2026-08-22-pareto-stack`. It ran 2B frames in ONE
+segment, so `model_step_2000289792.pt` is both its last and its final
+checkpoint; there is no longer chain behind it.
+
+**A board mix-up worth fixing.** The `diffntp_*` rows in
+[results-interface-ablations.md](results-interface-ablations.md) §5.6 come from
+`bones_milestone_testbed256_v1` (256 clips), not from the canonical
+`bones_testbed4096_v1`. For this arm the two disagree by more than a rounding
+step: 0.9258 / 24.11 / 84.20 on 256 clips against 0.9121 / 24.44 / 86.29 on
+4,096. The campaign README quotes the 4,096-clip row.
+
+**Robust row measured**: 0.9050 / 26.96 / 135.88 on 4,096 clips, one seed.
+Domain randomization costs this arm 0.007 SR, 2.5 mm local and 50 mm global
+against its clean row.
+
+**First RTX render submitted to the cluster, and it took two fixes.**
+`docker/cluster/run_singularity.sh` sent `scripts/viz/*.py` to the bare
+`/isaac-sim/python.sh` branch, which carries Kit but no torch; the rendering
+entrypoints now select the evaluator interpreter, the same class as
+`scripts/rlopt/eval*.py`. That alone was not enough: the interpreter only
+exports the CU130 site-packages path, and something in the process has to put
+it on `sys.path`. `eval_checkpoint_tree.py` calls `configure_cu130_bridge`;
+`render_paper_policy_video.py` did not, so `AppLauncher.__init__` still died on
+`No module named 'torch'` (ICE job 5593845) and the renderer now makes the same
+call before constructing the launcher.
+
+**That failure exited 0 and Slurm recorded COMPLETED.** The evaluator branch of
+`run_singularity.sh` carries no workload success marker -- by design, it is the
+PhysX trainer's contract -- so for an evaluation or render job the written
+output file is the only trustworthy success signal. A green `status` table is
+not one.
+
+The standing preference is still to render locally; this ran on ICE by request.
+
+## All jobs cancelled on both hosts (2026-08-27)
+
+The user stopped every job on ICE and on the workstation to start fresh.
+`scancel -u $USER` removed 25 ICE jobs: 4 running and 21 pending on
+`(Dependency)`. `squeue` is now empty. The workstation had 11
+`evaluate_checkpoint` processes; all 11 exited on `SIGTERM`.
+
+**No local result was lost.** Each of the 11 processes had zero accumulated CPU
+time since launch, one thread, no child process, and a `futex_do_wait` wait
+channel. The GPU read 0% utilization and 555 MiB of 97,887 MiB, which no
+4,096-environment Isaac evaluation can produce. They were hung, not slow. Two
+had been hung for more than 2 days.
+
+**Depth reached by each cancelled chain.** The last checkpoint under each output
+root, in environment frames. A chain can resume from it, because the checkpoint
+carries `cumulative_env_frames`.
+
+| output root | arm | last checkpoint | declared cap |
+| --- | --- | ---: | ---: |
+| `/data/diffntp_50b` | `diffntp_chunk_50b` | 2.50B | 50B |
+| `/data/diffntp_50b` | `diffntp_pair_50b` | 7.00B | 50B |
+| `/data/leader64_gate` | `leader64_h1_nophase` | 0.75B | 2B |
+| `/data/smooth_finetune` | `ar01scratch` | 9.00B | 10B |
+
+The other three `smooth-finetune` arms (`ar01`, `ar003`, `ar01shake4`) had
+already reached their 48.5B cap and are `COMPLETED`; the cancel did not touch
+them. `ln_hold1_sonicreset`'s 50B chain had already stopped at 49.00B before
+this cancel and was not in the queue.
+
+**Three campaigns were failing before the cancel, and the cause is unread.**
+`sacct` over the 24 hours to the cancel shows `diffntp-history` arms 5592715
+and 5592716 both `FAILED` after about 10.5 hours at 4.00B each,
+`diffntp_pair_50b` losing five consecutive segments to `FAILED`, and
+`emastack-20b` losing four. Read those job logs before resubmitting any of the
+three.
+
+**Before relaunching into any of these output trees.** Each root still holds its
+`wandb_run_id` file, which pins the chain to its W&B run. A fresh run that
+reuses the tree resumes that run. Delete the file to move to a new id. Never
+delete the run inside W&B: the service refuses an id that was ever deleted, and
+the refusal kills the job.
+
 ## Budget-axis curves for the whole interface study (2026-08-27)
 
 Every ablation axis the study measures now has a metric-against-frames curve,
