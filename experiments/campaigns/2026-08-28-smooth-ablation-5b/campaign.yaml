@@ -269,3 +269,45 @@ arms:
         - env.observations.policy.joint_vel_rel.history_length=10
         - env.observations.policy.last_action.history_length=10
     stages: *ablation_stages
+
+  # ---- Added 2026-08-29 (user): trained-in EMA low-pass on the joint-target
+  # ---- action term. alpha=0.65 is ~8.4 Hz at 50 Hz — deliberately milder
+  # ---- than the locomotion literature's 3-5 Hz so fast clips survive. The
+  # ---- policy trains THROUGH the filter (a deploy-only filter adds unseen
+  # ---- phase lag). Eval must repeat the alpha; `eval.sh` handles it per-arm.
+  ema:
+    vars:
+      wandb_id: sm5b-ema
+      arm_args:
+        - env.actions.joint_pos.ema_alpha=0.65
+    stages: *ablation_stages
+
+  # ---- Added 2026-08-29 (user): Lipschitz-constrained policy
+  # ---- (arXiv:2410.11825) — gradient penalty on the policy MEAN wrt the
+  # ---- observations, `agent.ppo.lcp_coeff`, computed on the first
+  # ---- `lcp_batch_cap` rows of each mini-batch (create_graph memory).
+  # ---- Smooths the policy FUNCTION: no phase lag, no bandwidth cap.
+  # ---- 0.005 is a first screen point, not a tuned value. Checkpoint is a
+  # ---- plain policy; eval needs no override.
+  lcp:
+    vars:
+      wandb_id: sm5b-lcp
+      arm_args:
+        - agent.ppo.lcp_coeff=0.005
+    stages: *ablation_stages
+
+  # ---- Added 2026-08-29 (user): LSTM actor. `agent.ppo.rnn_hidden_size=256`
+  # ---- builds normalize/concat -> LSTMModule -> the tuned MLP head, adds
+  # ---- InitTracker + the LSTM's TensorDictPrimer to the env, and switches
+  # ---- PPO mini-batches to time-contiguous [env, T] sequences (true BPTT
+  # ---- over the 24-step rollout; torchrl losses auto-enable recurrent
+  # ---- mode). Critic stays MLP so GAE is untouched. Submitted at 16,384
+  # ---- envs via --set (BPTT activations + the batch-shape caution from
+  # ---- hist). Eval must pass the same rnn overrides; recurrent-state
+  # ---- handling in evaluate_checkpoint must be QUALIFIED before scoring.
+  lstm:
+    vars:
+      wandb_id: sm5b-lstm
+      arm_args:
+        - agent.ppo.rnn_hidden_size=256
+    stages: *ablation_stages

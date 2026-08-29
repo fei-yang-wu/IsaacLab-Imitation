@@ -190,6 +190,21 @@ class ReferenceSelectionCfg:
             raise ValueError("random_trajectory_sampling_ratio must be in [0, 1].")
         if not 0.0 < float(self.random_trajectory_start_fraction) <= 1.0:
             raise ValueError("random_trajectory_start_fraction must be in (0, 1].")
+        if (
+            self.adaptive_uniform_ratio_final is not None
+            and float(self.random_trajectory_sampling_ratio) > 0.0
+        ):
+            raise ValueError(
+                "adaptive_uniform_ratio_final (the reset-curriculum ramp) is set "
+                "while random_trajectory_sampling_ratio > 0: the ramp would only "
+                "rescale the adaptive branch INSIDE the random-trajectory "
+                "wrapper (effective failure share "
+                f"{float(self.random_trajectory_sampling_ratio):.0%} smaller "
+                "than the ramp endpoints suggest — the cont_det_hold1_resetramp "
+                "near-no-op, re-shipped as job 5594817 on 2026-08-28). Ramp on "
+                "selection=sonic (random_trajectory_sampling_ratio=0), or drop "
+                "the ramp."
+            )
         if float(self.random_trajectory_sampling_ratio) > 0.0 and not bool(
             self.full_trajectory
         ):

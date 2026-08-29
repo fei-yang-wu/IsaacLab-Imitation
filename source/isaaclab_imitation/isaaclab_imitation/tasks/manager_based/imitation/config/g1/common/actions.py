@@ -33,7 +33,10 @@ class G1ActionsCfg:
 class G1SonicActionsCfg(G1ActionsCfg):
     """Action scale induced by SONIC's released actuator configuration."""
 
-    joint_pos = mdp.JointPositionActionCfg(
+    # EMA variant with ema_alpha=1.0 default: the identity, byte-for-byte the
+    # plain JointPositionActionCfg it replaced on 2026-08-29. A campaign
+    # enables the trained-in low-pass with env.actions.joint_pos.ema_alpha.
+    joint_pos = mdp.EMAJointPositionActionCfg(
         asset_name="robot",
         joint_names=G1_29DOF_ISAACLAB_JOINT_NAMES,
         preserve_order=True,

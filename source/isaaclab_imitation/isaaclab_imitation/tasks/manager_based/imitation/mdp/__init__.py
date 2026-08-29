@@ -59,6 +59,10 @@ from .observations import (
     robot_body_pos_b,
     robot_motion,
 )
+from .actions import (
+    EMAJointPositionAction,
+    EMAJointPositionActionCfg,
+)
 from .rewards import (
     body_angular_velocity_excess_l2,
     energy_consumption,
@@ -136,6 +140,8 @@ __all__ = [
     "reference_global_body_angular_velocity_error_exp",
     "reference_local_reward_point_position_error_exp",
     "mpjpe_relative_body_pos_m",
+    "EMAJointPositionAction",
+    "EMAJointPositionActionCfg",
     "body_angular_velocity_excess_l2",
     "energy_consumption",
     "randomize_joint_default_pos",
