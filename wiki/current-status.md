@@ -27,6 +27,74 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Smoothness is now measured directly: jerk + action metrics in board rows (2026-08-29)
+
+`evaluate_checkpoint.py` now writes four smoothness measures per environment,
+so they join the success-only row every paper metric reports on:
+
+- `action_delta_l2` / `action_l2` (existed board-wide only since 08-17;
+  never per-environment)
+- `action_jerk_l2` — NEW, `||a_t - 2a_{t-1} + a_{t-2}||`, buzz not authority
+- `body_acc_mps2` / `body_jerk_mps3` — NEW, the robot's OWN acceleration
+  magnitude and its finite difference over the 14 tracked links.
+  Reference-FREE: unlike `tracking_acceleration_distance_mps2` (an error
+  against the reference, where copying a jerky clip scores 0), these measure
+  what "smooth" physically means.
+
+`summarize_paper_boards` renders them as `jerk=... m/s3 adelta=...`; rows
+scored before 2026-08-29 simply omit them. `evaluate_sonic_release` does NOT
+carry them yet, so `sonic_v1_1` has no jerk/adelta row.
+
+Best checkpoints rescored on `bones_testbed4096_v1` clean (success-only
+micro; `logs/smoothness_rescore/`; SR/L/acc reproduce the existing rows
+within the known eval noise):
+
+| arm | SR | acc | **jerk m/s³** | **adelta** |
+|---|---:|---:|---:|---:|
+| `ar01` @48.5B | 0.9722 | 4.48 | **188.0** | 0.918 |
+| `merged64_pen_ramp_5b` @5B | 0.9541 | 4.85 | 215.8 | **0.911** |
+| `ar003` @48.5B | 0.9761 | 4.94 | 234.5 | 1.154 |
+| `ln_hold1_sonicreset` @46.5B | 0.9775 | 5.57 | 306.1 | 1.557 |
+| `diffntp_chunk_h1_ee_wide` @2B | 0.9163 | 6.99 | 412.0 | 1.720 |
+
+The reference-free jerk separates mature arms 63% (188 -> 306) where the
+tracking-error acc separates them 24% (4.48 -> 5.57): jerk is the
+discriminative smoothness axis. The headline tracker is 63% jerkier than
+`ar01` and 42% jerkier than `merged64_pen_ramp_5b`.
+
+A free harvest of the board-wide `action_delta_l2` already present in every
+`evaluate_checkpoint` JSON
+(`logs/smoothness_rescore/action_metrics_harvest_2026-08-29.txt`, 62 arms,
+all-transition means so survival-mix-weighted) adds three structural facts:
+
+- **Every arm trained with an action-rate penalty occupies the top of the
+  board** (0.915-1.171); the smoothest penalty-free arm is 1.29.
+- **Hold-10 and explicit-command arms are the jitteriest families**
+  (fsq64/jepa hold-10 2.0-2.8, `ctrl_*` explicit 2.35-2.80) despite hold-10
+  winning MPJPE-G — the smoothness cost of the wide-command interface was
+  invisible until now.
+- The leader's action jitter GROWS with depth: 1.59 @20B -> 1.62 @30B ->
+  1.71 @49B.
+- `diffntp_pair_hist` (ten-step history) is the smoothest penalty-free arm
+  (1.29) — the history smoothness signal was real in action space too.
+
+Broken artifact flagged while harvesting:
+`logs/bottleneck_10b_4096/fsq64_hold10_sonicreset_f30000021504.json` records
+0/4096 with `steps_run=6` — an eval-configuration failure, not a score. Do
+not cite it.
+
+## Smoothness ablation SUBMITTED: 5 arms x 5B, env 20,480 (2026-08-29)
+
+`experiments/campaigns/2026-08-28-smooth-ablation-5b/`, W&B group
+`smooth-ablation-5b`, commit `8e11d2e`, jobs 5597003-5597012 (two chained
+segments per arm). Base: `diffntp_chunk_h1_ee_wide`'s frozen encoder, tracker
+from scratch to 5B in the `merged64_pen_ramp_5b` regime but 256-D and 20,480
+envs. One variable per arm: `base` (control), `energy` (SONIC's
+`energy_consumption` at -1.0e-4), `sigma` (SONIC's exploration-noise contract,
+init 0.05 clamped [0.001, 0.5]), `feetacc_weak` (the old wrong -2.5e-7,
+isolating the parity fix), `ar0` (`action_rate_l2` 0.0 — the penalty
+decomposition `merged64_pen_ramp_5b` asked for). Nothing measured.
+
 ## Reward parity fixes: `feet_acc` 10x correction + `energy_consumption` term (2026-08-28)
 
 Two changes to `G1SonicRewardsCfg` (inherited by the v2 tuned recipe), both
