@@ -170,3 +170,33 @@ def test_zero_random_ratio_exactly_delegates_to_sonic() -> None:
     actual_ranks, actual_steps = wrapped.sample(1024)
     torch.testing.assert_close(actual_ranks, expected_ranks)
     torch.testing.assert_close(actual_steps, expected_steps)
+
+
+def test_reset_ramp_refuses_the_random_trajectory_wrapper() -> None:
+    """The adaptive_uniform_ratio ramp under the random80 wrapper is a silent
+    near-no-op (it rescales only the wrapped 20% branch); refuse it loudly."""
+    import pytest
+
+    from isaaclab_imitation.tasks.manager_based.imitation.mdp.commands.reference import (
+        ReferenceSelectionCfg,
+    )
+
+    cfg = ReferenceSelectionCfg(
+        schedule="random",
+        full_trajectory=True,
+        random_trajectory_sampling_ratio=0.8,
+        adaptive_uniform_ratio=0.8,
+        adaptive_uniform_ratio_final=0.2,
+        adaptive_ratio_ramp_frames=1_000_000_000,
+    )
+    with pytest.raises(ValueError, match="rescale the adaptive branch"):
+        cfg.resolve()
+    # The sonic shape (no wrapper) stays valid.
+    ok = ReferenceSelectionCfg(
+        schedule="random",
+        full_trajectory=True,
+        adaptive_uniform_ratio=0.8,
+        adaptive_uniform_ratio_final=0.2,
+        adaptive_ratio_ramp_frames=1_000_000_000,
+    )
+    ok.resolve()

@@ -82,6 +82,87 @@ the 5B row.
 - `base` already beats `merged64_pen_ramp_5b`'s FINAL row on jerk (194 vs
   216), adelta (0.81 vs 0.91) and G (83.7 vs 89.3) at 1.25B fewer frames.
 
+## Added arm (2026-08-29): `hist`
+
+Base + ten-step proprio history on all five actor observation terms (the
+`smooth_block` set). On the `diffntp_pair` base, history bought -9.6%
+acceleration at matched 2B before evaporating with budget — but that base had
+no action-rate penalty, and the 08-29 harvest showed `diffntp_pair_hist` as
+the smoothest penalty-free arm in action space (adelta 1.29). This cell asks
+whether history STACKS with the trained-in penalty. Its eval repeats the
+history overrides (strict restore on the widened actor input); `eval.sh`
+handles that per-arm.
+
+`hist` runs at **16,384 envs, not 20,480**: the first submission (5597331,
+commit `753a692`) died in 7 minutes on a Warp CUDA OOM at graph launch — the
+ten-step histories widen the observation buffers past what 20,480 envs leave
+on the H200, the same signature as the 24,576-env attempt (job 5580202).
+Resubmitted at 16,384 as jobs 5597345 -> 5597346
+(`--set vars.train_num_envs=16384`, minibatch 294,912). Reading caveat: the
+`hist` vs `base` comparison therefore carries batch shape as a second
+variable, like the 2026-08-18 env20k precedent.
+
+## Added arms (2026-08-29, round 2): `ema` and `lcp`
+
+The two objective-level levers from the smoothness plan that needed code,
+both landed with inert defaults so no other arm changes:
+
+- **`ema`** — trained-in first-order low-pass on the joint-target action term
+  (`EMAJointPositionAction`, new in `imitation/mdp/actions.py`; the G1 action
+  config now uses the EMA cfg class with `ema_alpha=1.0` = identity).
+  The arm sets `env.actions.joint_pos.ema_alpha=0.65`, ~8.4 Hz at 50 Hz —
+  deliberately milder than the locomotion literature's 3-5 Hz so fast clips
+  survive. The policy trains THROUGH the filter; the filter state resets to
+  the default pose on episode reset. Eval must repeat the alpha (the filter
+  lives in the env, not the checkpoint); `eval.sh` handles it per-arm.
+- **`lcp`** — Lipschitz-constrained policy (arXiv:2410.11825): RLOpt PPO now
+  carries `ppo.lcp_coeff` (default 0.0, inert) adding
+  `coeff * mean(||d loc / d obs||^2)` to the actor loss via the
+  vector-Jacobian ones-trick on the policy MEAN, computed on the first
+  `ppo.lcp_batch_cap=65536` rows of each mini-batch (create_graph memory
+  does not fit the full 368k-row production mini-batch). Smooths the policy
+  FUNCTION: no phase lag, no bandwidth cap. The arm sets
+  `agent.ppo.lcp_coeff=0.005` — a first screen point, not a tuned value.
+  The checkpoint is a plain policy; eval needs no override. This is an
+  in-repo RLOpt submodule edit (ppo.py + the IPMD hook now deferring to it).
+
+## Added arm (2026-08-29, round 3): `lstm`
+
+Recurrent actor (`agent.ppo.rnn_hidden_size=256`), user-requested from prior
+experience that recurrent policies train more stably. New config-driven path
+in RLOpt PPO (inherited by IPMD):
+
+- Actor becomes normalize/concat -> `LSTMModule` -> the tuned MLP head. The
+  critic stays feed-forward, so GAE is untouched.
+- The env gains `InitTracker` and the LSTM's `TensorDictPrimer`
+  (`make_tensordict_primer()`), so the collector carries recurrent states
+  across steps and zero-fills them on reset.
+- PPO mini-batches switch from shuffled flat rows to time-contiguous
+  `[env, T]` sequences sampled along the env dimension. TorchRL loss modules
+  run their forward under `set_recurrent_mode(True)`, so this gives true
+  BPTT over the 24-step rollout window with `is_init` resetting hidden state
+  at episode boundaries.
+- The pre-existing `PPORecurrent` class was NOT used: it pairs the LSTM with
+  the flat shuffled mini-batches, which recurrent mode would treat as one
+  arbitrary sequence.
+
+Runs at 16,384 envs (BPTT activation memory plus the `hist` OOM caution), so
+it carries batch shape as a second variable against `base`, like `hist`.
+
+QUALIFICATION DEBT: `evaluate_checkpoint`'s manual step loop has not been
+verified to carry recurrent states correctly (the primer keys must survive
+`step_mdp` and reset). Qualify that before citing any `lstm` row.
+
+## Sigma arm terminated (2026-08-29)
+
+`sigma` FAILED at 3.85B on the trainer's "interrupted before reaching its
+frame budget" guard (job 5597007, 9:43 elapsed — not walltime; consistent
+with a non-finite abort under the clamped exploration contract). The arm was
+already dead on merit (episode length pinned 15-22 from iteration one). Its
+dependent segment 5597008 was cancelled to free the H200. Verdict stands:
+SONIC's sigma contract does not train from scratch on our optimizer stack;
+test the noise hypothesis with an anneal or late floor instead.
+
 ## Status
 
 - 2026-08-29 04:10: SUBMITTED, seed 0, all five arms, from commit `8e11d2e`

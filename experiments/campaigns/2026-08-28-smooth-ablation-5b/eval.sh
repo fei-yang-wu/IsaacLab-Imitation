@@ -27,7 +27,7 @@ PERSIST_ID="${PERSIST_ID:-bones_seed_sonic_full_129785@e714bbff}"
 MAX_STEPS="${MAX_STEPS:-10000}"
 SEED="${SEED:-0}"
 ROWS="${ROWS:-clean robust}"
-ARMS="${ARMS:-base energy sigma feetacc_weak ar0 hist}"
+ARMS="${ARMS:-base energy sigma feetacc_weak ar0 hist ema lcp lstm}"
 SCALED_CELLS="[2048,2048,1024,1024,512,512]"
 RUNTIME_BODY_NAMES="[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
 
@@ -70,6 +70,8 @@ for arm in ${ARMS}; do
 
     # The `hist` arm widens the actor input with ten-step histories; the
     # policy restore is strict, so its eval MUST repeat those overrides.
+    # The `ema` arm's filter lives in the ENV action term, so its eval must
+    # repeat the alpha or it would score an unfiltered policy.
     arm_extra=()
     if [[ "${arm}" == "hist" ]]; then
         arm_extra=(
@@ -79,6 +81,14 @@ for arm in ${ARMS}; do
             env.observations.policy.joint_vel_rel.history_length=10
             env.observations.policy.last_action.history_length=10
         )
+    elif [[ "${arm}" == "ema" ]]; then
+        arm_extra=(env.actions.joint_pos.ema_alpha=0.65)
+    elif [[ "${arm}" == "lstm" ]]; then
+        # The LSTM lives in the actor; the strict restore needs the same
+        # architecture flags. NOTE: recurrent-state handling in
+        # evaluate_checkpoint's step loop must be qualified before this
+        # arm's rows are cited.
+        arm_extra=(agent.ppo.rnn_hidden_size=256)
     fi
 
     for row in ${ROWS}; do
