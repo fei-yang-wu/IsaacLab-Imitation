@@ -13,7 +13,11 @@ from typing import TYPE_CHECKING
 import torch
 from isaaclab.envs.mdp.actions.actions_cfg import JointPositionActionCfg
 from isaaclab.envs.mdp.actions.joint_actions import JointPositionAction
-from isaaclab.utils import configclass
+# Explicit module path: `from isaaclab.utils import configclass` resolves to
+# the configclass MODULE in the cluster container's Isaac Lab build (killed
+# jobs 5597424/26/29 in 23s); only the workstation build re-exports the
+# decorator at package level.
+from isaaclab.utils.configclass import configclass
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
