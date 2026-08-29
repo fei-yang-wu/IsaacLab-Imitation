@@ -50,6 +50,51 @@ milestone curve. Two metric requirements beyond the standard row:
    no scored board row has ever carried them. The reference-free jerk /
    high-frequency-power metric is still to be added to the evaluator.
 
+## Final 5B rows: base / energy / ar0 (2026-08-29, one seed)
+
+`bones_testbed4096_v1` (the deciding board). The `sonic_v1_1` row is the same
+board's all-clip figure; it predates the jerk/adelta metrics.
+
+| arm | row | SR | L | G | acc | jerk | adelta |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `sonic_v1_1` (public 42M) | clean | 0.9888 | 26.73 | 187.65 | **3.45** | — | — |
+| `base` | clean | 0.9446 | 26.93 | **86.01** | 4.75 | 204.0 | 0.835 |
+| `energy` | clean | 0.9268 | 26.98 | 86.79 | 4.73 | 202.5 | **0.818** |
+| `ar0` | clean | **0.9587** | **24.24** | 93.09 | 5.62 | 293.1 | 1.257 |
+| `sonic_v1_1` | robust | 0.9895 | 28.97 | 228.52 | **3.56** | — | — |
+| `base` | robust | 0.9336 | 30.36 | 140.38 | 5.45 | 243.0 | 1.039 |
+| `energy` | robust | 0.9041 | 29.93 | 144.80 | 5.51 | 249.3 | 1.056 |
+| `ar0` | robust | 0.9402 | 27.50 | 185.45 | 6.70 | 359.0 | 1.648 |
+
+`sonic_capability124_v1` (calibration board — never mix with the table above;
+this board reads ~0.82x the 4,096-clip acceleration):
+
+| arm | SR | L | G | vel | acc | jerk | adelta |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `sonic_v1_1` | **1.0000** | 23.89 | 174.23 | 0.165 | **2.89** | — | — |
+| `base` | 0.9516 | 22.11 | **59.20** | 0.172 | 3.77 | **160.7** | 0.673 |
+| `energy` | 0.9597 | 22.79 | 67.11 | 0.180 | 3.86 | 164.1 | **0.672** |
+| `ar0` | 0.9758 | **20.50** | 78.48 | 0.185 | 4.65 | 239.8 | 1.036 |
+
+Readings, all one seed:
+
+- **The penalty decomposition at 5B** (`base` vs `ar0`, everything else
+  matched): `action_rate_l2` -0.03 costs 0.014 SR and +2.7 mm L, and buys
+  -30% jerk (293 -> 204), -34% adelta, and -7 mm G on the deciding board.
+  The 3.75B intermediate had shown the penalty AHEAD on L too; that flipped
+  because `base`'s local error regressed 22.78 -> 26.93 over the last 1.25B
+  while `ar0`'s stayed flat (24.21 -> 24.24) — an UNRESOLVED late-training
+  regression specific to the penalty arm on this base. The 20-checkpoint
+  milestone curve for `base` is the diagnostic before promoting anything.
+- **`energy` converges to `base`'s smoothness, not below it** (jerk 202.5 vs
+  204.0, adelta 0.818 vs 0.835) while costing ~0.018 SR and more wrist
+  failures — its 3.75B smoothness lead did not survive. On top of an
+  action-rate penalty the energy term buys nothing measurable at 5B.
+- **Against `sonic_v1_1`**: the acceleration gap ratio on the 124 board is
+  now 1.30 (`base` 3.77 vs 2.89) against 1.62 for the 46.5B leader (4.67).
+  Success rate remains SONIC's axis (1.0000 vs our 0.95-0.98 there, 0.9888
+  vs 0.94-0.96 on 4,096); global error remains ours (59-93 vs 174-188).
+
 ## Preliminary rows (2026-08-29, mid-training, one seed)
 
 Matched 3.75B checkpoints (`feetacc_weak` at 1.00B — its node runs at 39k fps
@@ -165,6 +210,12 @@ test the noise hypothesis with an anneal or late floor instead.
 
 ## Status
 
+- 2026-08-29: round-2/3 arms SUBMITTED from commits `78ed349` (top) +
+  `8378891` (RLOpt): `ema` 5597424 -> 5597425, `lcp` 5597426 -> 5597427,
+  `lstm` 5597429 -> 5597430 (16,384 envs via `--set`). Both new code paths
+  smoke-qualified together (EMA+LCP one run; LSTM one run, recurrent-state
+  keys confirmed in the policy in_keys). `base` and `energy` finished 5B in
+  segment 1.
 - 2026-08-29 04:10: SUBMITTED, seed 0, all five arms, from commit `8e11d2e`
   (drift=true: the RLOpt merged-head working-tree change rides along, as in
   every pareto-stack round-5/6 submission). Jobs (lowlevel1 -> lowlevel2):

@@ -1878,6 +1878,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         previous_velocity_valid = torch.zeros(num_envs, dtype=torch.bool)
         previous_actual_acc: torch.Tensor | None = None
         previous_acc_valid = torch.zeros(num_envs, dtype=torch.bool)
+        # Last active-step root drift per env: with the mean this gives the
+        # drift ACCUMULATION ratio (final/mean ~1 = bounded servo, ~2 =
+        # uncorrected linear drift). SONIC's rows carry the analogous
+        # anchor_pos_err_final_m from the command term.
+        final_root_drift = torch.zeros(num_envs, dtype=torch.float64)
         steps_executed = 0
         valid_transition_count = 0
         planner_publish_count = 0
@@ -2083,6 +2088,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                     metric_stats, metric_name, metric_values_cpu, metric_mask
                 )
                 _accumulate_per_env(metric_name, metric_values_cpu, metric_mask)
+                if metric_name == "root_pos_xyz_error_m":
+                    drift_now = metric_values_cpu.reshape(num_envs, -1)[:, 0].double()
+                    final_root_drift = torch.where(
+                        metric_mask & torch.isfinite(drift_now),
+                        drift_now,
+                        final_root_drift,
+                    )
             if body_lin_vel is not None and dt > 0.0:
                 if previous_body_lin_vel is not None:
                     actual_lin_vel, ref_lin_vel = body_lin_vel
@@ -2373,6 +2385,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                             per_env_tracking_metric_counts[metric_name][env_id].item()
                         )
                         > 0
+                    }
+                    | {
+                        # Root drift at the LAST active step; with the mean
+                        # above this gives the accumulation ratio.
+                        "root_pos_xyz_error_final_m": float(
+                            final_root_drift[env_id].item()
+                        )
                     },
                     "tracking_metric_counts": {
                         metric_name: int(
