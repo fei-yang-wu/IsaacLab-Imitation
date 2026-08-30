@@ -372,6 +372,28 @@ Convergence caveat: no 2B arm is converged. Training MPJPE-L slope over
 1.5B->2.0B is still negative for every arm except the hub (flat), so this
 screen ranks arms mid-flight.
 
+## Round 7 (2026-08-30): this campaign's cell became a new star's hub
+
+`diffntp_chunk_h1_ee_wide` beat the v1 interface star's hub on all three
+canonical metrics (0.9163 / 24.07 / 84.69 against 0.9023 / 24.49 / 212.3 on
+`bones_testbed4096_v1` clean), so the user rebased the whole command-interface
+ablation on it. The design — the family spine, the code-shape axis, the window
+axis, the cadence axis, the 62-row census and its cost — is
+[wiki/latent-learning-star-v2.md](../../../wiki/latent-learning-star-v2.md).
+
+Sixteen of that star's rows are already MEASURED here, at this campaign's
+hold-1 + `ee` + `wide` cell. Two of its arms are written into this
+`campaign.yaml` and are NOT submitted:
+
+| arm | change vs the new hub | why it is not a repeat |
+|---|---|---|
+| `diffntp_chunk_nosig_h1_ee_wide` | `--jepa_sigreg_coeff 0` | `jepa_nosig` removed SIGReg from a loss whose EMA self-target it was stabilising; `diff_chunk` has no self-target. It is also the control for every discrete cell of the new star, whose premise is that SIGReg is what could rescue a collapsing codebook. |
+| `diffntp_chunk_h1_ee_wide_s1` | seed 1 | the new hub has no seed repeat; every within-band ordering in the round-4 table rests on one seed. |
+
+Both pin `env.rewards.feet_acc.weight=-2.5e-7`, the pre-2026-08-28 value every
+row above trained on, so they stay one-variable reads. Plans resolve and
+preflight clean on ICE.
+
 ## Pipeline
 
 ```bash

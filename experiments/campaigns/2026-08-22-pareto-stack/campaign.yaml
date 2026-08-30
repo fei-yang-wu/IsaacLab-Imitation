@@ -515,6 +515,140 @@ arms:
       reward_args: *eew_rewards
     stages: *full_stages
 
+  # ---- Round 5 (2026-08-27): the MERGED head. diffntp_chunk keeps two
+  # ---- diffusion heads (endpoint s[t+H]; next chunk s[t+H+1..t+2H]). This
+  # ---- cell folds them into ONE head denoising s[t+H..t+2H] (11 frames,
+  # ---- 418-d, executed anchor) and drops the separate endpoint term
+  # ---- (jepa_endpoint_coeff=0; the head is still built so the checkpoint
+  # ---- contract holds, its weights just get no gradient). Against
+  # ---- diffntp_chunk this is one variable: same frames covered, the
+  # ---- endpoint moves from its own coeff-1.0 38-d head into 1 of 11 slots
+  # ---- of the chunk head — grounding pressure ~10x lower by construction.
+  # ---- RLOpt knobs added 2026-08-27: jepa_ntp_chunk_span, jepa_endpoint_coeff
+  # ---- (tests in test_hl_skill_recon_phase.py).
+  # ---- Round 6 (2026-08-28): does the EMA-trick latent-dynamics term STACK
+  # ---- with chunk generation? diffntp_chunk's G win comes from drift kept
+  # ---- in the data target; the hub's EMA-lagged prediction owns G in the
+  # ---- mechanism square (dsrsig -> hub -24%). Different mechanisms, so they
+  # ---- may add. Loss: endpoint + diff_chunk + 1.0 * ||P(z1) - z2_EMA||^2 +
+  # ---- SIGReg — diffntp_chunk plus exactly one term
+  # ---- (--jepa_token_pred_coeff, new RLOpt knob; mlp head refuses it as a
+  # ---- double-count).
+  diffntp_chunktok_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntpct
+      objective: jepa_ntp
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+        - --jepa_token_pred_coeff
+        - "1.0"
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  diffntp_merged_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntpm
+      objective: jepa_ntp
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+        - --jepa_ntp_chunk_span
+        - boundary_next
+        - --jepa_endpoint_coeff
+        - "0"
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # The merged head at 64-D: does the single wide-target objective survive a
+  # 4x narrower token? 64-D continuous hold-1 was a dead zone at 100M and a
+  # budget artifact by 2B (2026-08-15 grid), so this reads against
+  # diffntp_merged (256-D) as the width axis, one variable.
+  diffntp_merged64_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntpm64
+      z_dim: 64
+      command_dim: 66
+      objective: jepa_ntp
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+        - --jepa_ntp_chunk_span
+        - boundary_next
+        - --jepa_endpoint_coeff
+        - "0"
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+    stages: *full_stages
+
+  # ---- 2026-08-28: merged64 at 5B with the action-rate penalty AND a reset
+  # ---- curriculum. Reuses merged64's OWN pretrained encoder (no new
+  # ---- pretrain), so the encoder binding is identical to the scored 2B row.
+  # ---- NOTE it differs from that row by TWO variables (penalty + ramp), so a
+  # ---- difference cannot be attributed to either alone.
+  # ---- The ramp keys off common_step_counter, which restarts per segment;
+  # ---- this arm is ONE segment and the ramp is 1B, so it completes inside.
+  merged64_pen_ramp_5b:
+    vars:
+      wandb_id: ps-m64pr
+      z_dim: 64
+      command_dim: 66
+      objective: jepa_ntp
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+        - --jepa_ntp_chunk_span
+        - boundary_next
+        - --jepa_endpoint_coeff
+        - "0"
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      frame_cap: 5000000000
+      encoder_ckpt: /data/pareto_stack/diffntp_merged64_h1_ee_wide_seed0/encoder/checkpoints/latest.pt
+      encoder_source: pretrained
+      reward_args:
+        - env.rewards.motion_ee_pos.weight=1.0
+        - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+        - env.rewards.action_rate_l2.weight=-0.03
+      extra_args:
+        # Failure-driven share 20% -> 80% across the first 1B frames. This
+        # MUST replace the selection preset with `sonic`: under
+        # `random80_adaptive20` the outer random_trajectory_sampling_ratio=0.8
+        # wrapper stays active and adaptive_uniform_ratio only rescales the
+        # remaining 20% branch (effective failure share 4% -> 16%, the
+        # near-no-op the first submission of this arm shipped with, job
+        # 5594817, cancelled). `start_mode` is ignored entirely under
+        # full_trajectory=true (reference.py returns before consulting it).
+        - env.command_interface.reference.selection=sonic
+        - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+        - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+        - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=1000000000
+    stages:
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,pareto-stack,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
   # dyn on use_hold1, seed 0. Parent row: use_hold1 (0.8921/26.44/150.4).
   # Settles whether the 10B dyn G-effect reproduces at the 2B screen.
   hold1_dyn:
@@ -660,3 +794,68 @@ arms:
         - env.rewards.motion_ee_pos.weight=1.0
         - env.rewards.motion_global_anchor_pos_wide.weight=1.0
     stages: *lowlevel_stages
+
+  # ---- Round 7 (2026-08-30): the latent-learning-strategy star REBASED on
+  # ---- the new control, diffntp_chunk_h1_ee_wide (0.9297/23.45/74.85 curve
+  # ---- board; the only arm that leads all three metrics). Scope decision by
+  # ---- the user 2026-08-30: this star ablates LATENT LEARNING STRATEGIES
+  # ---- only — no interface axes (width, quantization, hold, stride,
+  # ---- rewards) and no smoothness columns. chunkra re-run DROPPED by user
+  # ---- decision. Rows reused as-is from rounds 2-6: endpoint, mlp hub
+  # ---- (jepa_h1_ee_wide), dsrsig, sg/lejepa family, pair, chunktok, merged,
+  # ---- merged64.
+  # ----
+  # ---- feet_acc PIN: G1SonicRewardsCfg corrected feet_acc from -2.5e-7 to
+  # ---- -2.5e-6 IN PLACE on 2026-08-28. Every existing star row trained on
+  # ---- the weak value, so every round-7 arm pins -2.5e-7 via extra_args to
+  # ---- keep the one-variable contract against those rows.
+  # ----
+  # ---- GATED, NOT IN THIS FILE YET (README round-7 section):
+  # ---- (a) dntpc_zcond — chunk head conditioned on z_t only, closing the
+  # ---- (s_t,z_t)-vs-z_t confound against the mlp hub; needs a new RLOpt
+  # ---- conditioning knob. (b) diffntp_token re-run — its EMA z2 target
+  # ---- routes through the interleaved-vs-columns rot6d mismatch found
+  # ---- 2026-08-29; meaningless to re-run before that convention decision.
+
+  # SIGReg off on the new control. The old nosig row (jepa_nosig, mlp head)
+  # cost 17% G, but there SIGReg was pinning the marginal a SELF-target lived
+  # in. diff_chunk carries no self-target, so whether SIGReg still earns its
+  # term is open.
+  diffntp_chunk_nosig_h1_ee_wide:
+    vars:
+      wandb_id: ps-dntpcns
+      objective: jepa_ntp
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+        - --jepa_sigreg_coeff
+        - "0"
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+      extra_args:
+        - env.rewards.feet_acc.weight=-2.5e-7
+    stages: *full_stages
+
+  # Seed repeat of the control itself (own seed-1 pretrain, like `hold1` s1).
+  # The rebased star has no seed pair on its own control; every within-band
+  # ordering in the round-4 table is one seed. Run id resolves to
+  # ps-dntpc-s1, keeping the control's W&B family.
+  diffntp_chunk_h1_ee_wide_s1:
+    vars:
+      wandb_id: ps-dntpc
+      submit_seed: 1
+      objective: jepa_ntp
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+      hold: 1
+      code_latent_dim: ${vars.z_dim}
+      reward_args: *eew_rewards
+      extra_args:
+        - env.rewards.feet_acc.weight=-2.5e-7
+    stages: *full_stages

@@ -54,6 +54,18 @@ ARMS_TABLE=(
 "ar01_48b5|ar01|48500047872|256|258|1"
 "ar003_48b5|ar003|48500047872|256|258|1"
 "ar01shake4_48b5|ar01shake4|48500047872|256|258|1"
+# Pareto-stack round-6 merged-head arm at 64-D, full 2B screen budget. Its
+# mirror lives under logs/pareto_stack_mirror, so score it with
+# MIRROR=logs/pareto_stack_mirror. 2B is the SCREEN budget, not the 10B
+# promotion budget; never place this row beside a 30B+ row without saying so.
+"diffntp_merged64_2b|diffntp_merged64_h1_ee_wide|2000289792|64|66|1"
+# diffntp-history arms, 2B/4B screen budgets, mirror
+# logs/diffntp_history_mirror. The `hist10` tag adds the five ten-step
+# history overrides; they widen the actor input and the strict policy restore
+# fails without them. The mirror tree's `encoder` is a symlink to the parent
+# pareto-stack pretrain, exactly the file training bound.
+"diffntp_pair_hist_2b|diffntp_pair_hist|2000289792|256|258|1|hist10"
+"diffntp_pair_hist_4b|diffntp_pair_hist|4000186368|256|258|1|hist10"
 )
 ARMS="${ARMS:-ln_hold1_sonicreset_46b5}"
 
@@ -99,7 +111,17 @@ for arm in ${ARMS}; do
         [[ "${candidate%%|*}" == "${arm}" ]] && entry="${candidate}"
     done
     [[ -n "${entry}" ]] || { log "[SKIP] unknown arm ${arm}"; continue; }
-    IFS='|' read -r _ mirror_arm frames z_dim command_dim hold <<<"${entry}"
+    IFS='|' read -r _ mirror_arm frames z_dim command_dim hold extra_tag <<<"${entry}"
+    extra_overrides=()
+    if [[ "${extra_tag:-}" == "hist10" ]]; then
+        extra_overrides=(
+            env.observations.policy.projected_gravity.history_length=10
+            env.observations.policy.base_ang_vel.history_length=10
+            env.observations.policy.joint_pos_rel.history_length=10
+            env.observations.policy.joint_vel_rel.history_length=10
+            env.observations.policy.last_action.history_length=10
+        )
+    fi
 
     checkpoint="${MIRROR}/${mirror_arm}_seed0/tracker/f${frames}/models/model_step_${frames}.pt"
     encoder="${MIRROR}/${mirror_arm}_seed0/encoder/checkpoints/latest.pt"
@@ -166,6 +188,7 @@ for arm in ${ARMS}; do
         env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b] \
         env.expert_macro_frame_stride=1 \
         env.expert_macro_anchor_mode=robot_heading \
+        "${extra_overrides[@]}" \
         env.terminations.anchor_pos.params.threshold=0.25 \
         env.terminations.anchor_pos.params.down_threshold=0.25 \
         env.terminations.anchor_ori.params.threshold=1.0 \

@@ -1,0 +1,165 @@
+# Score the history arms' budget curve on ICE, where their checkpoints live.
+#
+# The interface-design-study trees were cleaned off ICE under the 300 GB quota,
+# so the 29 arms of the frozen star are scored from the local mirror. The
+# hold-5 pair (submitted 2026-08-27, jobs 5592720 and 5592723) writes its
+# checkpoints to ICE, so scoring them there costs no transfer at all.
+#
+# ONE JOB PER ARM, not one per checkpoint: `eval_checkpoint_tree.py` keeps a
+# single Isaac Sim start and swaps the policy weights across the eight
+# milestones. Measured locally on `hold1_seed1`: 30.9 s/cell against 47.4
+# s/cell for the one-process-per-checkpoint path, and on the cluster it also
+# collapses eight container starts into one.
+#
+# The interface fields below MUST match the arm's training row in
+# `experiments/campaigns/2026-08-19-interface-design-study/campaign.yaml`.
+# `hold` is the whole point of these two arms; everything else is the hub.
+#
+# Submit only after the training chain finishes: `preflight` requires the
+# tracker tree and the encoder file, so an early plan fails loudly.
+name: diffntp-hist-eval
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: diffntp-history
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  seed: 0
+  # The tree the trainer wrote, and the encoder inside it.
+  output_root: /data/diffntp_history/${vars.arm}_seed${vars.seed}
+  # The history arms carry NO encoder of their own: they bind the frozen
+  # pretrain of their round-4 parent, exactly as training did.
+  encoder_arm: SET_PER_ARM
+  encoder_ckpt: /data/pareto_stack/${vars.encoder_arm}_seed${vars.seed}/encoder/checkpoints/latest.pt
+  eval_root: /data/eval/diffntp_hist
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  board: bones_milestone_testbed256_v1
+  row: milestone
+  steps: 10000
+
+  # The hub interface. Only `hold` and the code width move.
+  hold: 1
+  z_dim: 256
+  command_dim: 258
+  code_latent_dim: 256
+  phase_mode: sin_cos
+  command_mode: z
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  scaled_cells: "[2048,2048,1024,1024,512,512]"
+  runtime_body_names: "[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.output_root}/tracker
+    - ${vars.encoder_ckpt}
+  output_container_path: ${vars.eval_root}
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+arms:
+  diffntp_pair_hist:
+    vars:
+      encoder_arm: diffntp_pair_h1_ee_wide
+    stages: &eval_stage
+      - name: score
+        executable: scripts/rlopt/eval_checkpoint_tree.py
+        time_limit: "02:00:00"
+        # 2026-08-27: jobs 5594039 and 5594066 both crashed ~26 s in inside
+        # libomni.kit.telemetry.plugin (PythonTracebackStatus empty, so the
+        # fault is outside Python), on two DIFFERENT nodes. The third attempt
+        # (5594068) COMPLETED in 19:47 on the same node the second one died
+        # on, so these are transient Isaac Sim startup crashes. No node
+        # exclusion is justified; retry instead.
+        gres: gpu:h200:1
+        mem: 160G
+        args:
+          - --tree
+          - ${vars.output_root}
+          - --output_root
+          - ${vars.eval_root}
+          - --arm
+          - ${vars.arm}
+          - --seed
+          - "${vars.seed}"
+          - --row
+          - ${vars.row}
+          - --board
+          - ${vars.board}
+          - --
+          - --task
+          - ${vars.task}
+          - --algo
+          - IPMD
+          - --agent_entry_point
+          - rlopt_ipmd_tuned_cfg_entry_point
+          - --randomization
+          - none
+          - --action_sampling
+          - mode
+          - --steps
+          - "${vars.steps}"
+          - --seed
+          - "0"
+          - --reference_start_frame
+          - "0"
+          - --reset_schedule
+          - sequential
+          - --skill_encoder_source
+          - pretrained
+          - --headless
+          - physics=newton_mjwarp
+          - env.sim.physics.solver_cfg.njmax=320
+          - env.sim.physics.solver_cfg.nconmax=200
+          - env.events.push_robot=null
+          - env.data.manifest=null
+          - env.data.reference_arrays_dir=${vars.ref_arrays}
+          - env.data.persist_id=${vars.persist_id}
+          - env.data.reference_arrays_resident=true
+          - env.data.reference_arrays_warm_workers=16
+          - env.data.runtime_cache_device=cuda:0
+          - env.data.reference_prefetch_mode=off
+          - env.data.macro_cache_device=cuda:0
+          - env.data.runtime_cache_body_names=${vars.runtime_body_names}
+          - env.command_interface.actor=latent
+          - env.command_interface.actor.dim=${vars.command_dim}
+          - env.command_interface.encoder=single
+          - agent.ipmd.latent_dim=${vars.command_dim}
+          - agent.ipmd.command_source=hl_skill
+          - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+          - agent.ipmd.hl_skill_horizon_steps=10
+          - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+          - agent.ipmd.latent_steps_min=${vars.hold}
+          - agent.ipmd.latent_steps_max=${vars.hold}
+          - agent.ipmd.latent_learning.code_period=${vars.hold}
+          - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+          - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+          - agent.ipmd.hl_skill_finetune_enabled=false
+          - env.observations.policy.projected_gravity.history_length=10
+          - env.observations.policy.base_ang_vel.history_length=10
+          - env.observations.policy.joint_pos_rel.history_length=10
+          - env.observations.policy.joint_vel_rel.history_length=10
+          - env.observations.policy.last_action.history_length=10
+          - env.expert_macro_state_terms=${vars.macro_terms}
+          - env.expert_macro_frame_stride=${vars.stride}
+          - env.expert_macro_anchor_mode=${vars.anchor_mode}
+          - env.terminations.anchor_pos.params.threshold=0.25
+          - env.terminations.anchor_pos.params.down_threshold=0.25
+          - env.terminations.anchor_ori.params.threshold=1.0
+          - env.terminations.ee_body_pos.params.threshold=0.25
+          - env.terminations.ee_body_pos.params.down_threshold=0.25
+          - env.terminations.foot_pos_xyz=null
+          - env.terminations.base_too_low=null
+          - agent.policy.num_cells=${vars.scaled_cells}
+          - agent.policy.activation_fn=silu
+          - agent.value_function.num_cells=${vars.scaled_cells}
+          - agent.value_function.activation_fn=silu
+
+  diffntp_chunk_hist:
+    vars:
+      encoder_arm: diffntp_chunk_h1_ee_wide
+    stages: *eval_stage
