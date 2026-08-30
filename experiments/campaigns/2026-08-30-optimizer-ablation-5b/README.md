@@ -4,7 +4,33 @@ Twelve arms, one optimizer field each except `ent_sonic`. Nothing else moves: sa
 environment, same reward set, same command interface, same 20,480 x 24
 geometry, same 5B budget, seed 0.
 
-Status: **BUILT, NOT SUBMITTED.**
+Status: **SUBMITTED 2026-08-30**, seed 0, twelve arms, 24 jobs. W&B group
+`optimizer-ablation-5b`, project `g1-bones-seed`.
+
+| arm | seg1 | seg2 | W&B id |
+|---|---:|---:|---|
+| `ctrl` | 5598837 | 5598838 | `oa5b-ctrl-s0` |
+| `mb_half_e5` | 5598839 | 5598840 | `oa5b-mbh5-s0` |
+| `mb_half_e3` | 5598841 | 5598842 | `oa5b-mbh3-s0` |
+| `mb_full_e5` | 5598843 | 5598844 | `oa5b-mbf5-s0` |
+| `mb_full_e3` | 5598845 | 5598846 | `oa5b-mbf3-s0` |
+| `critic_lin` | 5598847 | 5598848 | `oa5b-clin-s0` |
+| `wd_1e2` | 5598849 | 5598850 | `oa5b-wd2-s0` |
+| `wd_1e4` | 5598851 | 5598852 | `oa5b-wd4-s0` |
+| `wd_1e1` | 5598853 | 5598854 | `oa5b-wd1-s0` |
+| `ent_only` | 5598855 | 5598856 | `oa5b-ent-s0` |
+| `floor_late` | 5598858 | 5598859 | `oa5b-floor-s0` |
+| `ent_sonic` | 5598860 | 5598861 | `oa5b-entsonic-s0` |
+
+Code state: `2218f29` (top level) with `RLOpt 27e8741`. `submit` packs the
+working tree, and the tree carried unrelated uncommitted work at submission
+time (the `hl_skill_diffsr.py` `*_z_explained` diagnostic in RLOpt, the
+endpoint-collapse-probe edits, the suffix-arm aggregator), so every plan
+records `drift=true`. None of it is on the tracker path these arms exercise.
+
+**First thing to check:** `mb_full_e5` / `mb_full_e3` peak activation memory.
+An OOM lands in iteration one; if those two survive their first logged
+iteration they will survive the run.
 
 ## Base
 
