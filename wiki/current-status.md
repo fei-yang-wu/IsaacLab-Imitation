@@ -27,6 +27,54 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Optimizer ablation built on the `diffntp_chunk` base (2026-08-30)
+
+Ten arms, one optimizer field each, 5B, seed 0. Nothing submitted. Campaign:
+`experiments/campaigns/2026-08-30-optimizer-ablation-5b/`. The base is
+`2026-08-28-smooth-ablation-5b/base` verbatim, so the environment, reward set,
+command interface and `diffntp_chunk_h1_ee_wide` encoder are held fixed and
+only the optimizer moves.
+
+What the audit found in the production recipe, and what each arm answers:
+
+- **Ragged minibatch.** `mini_batch_size = 3/4 x batch` is a non-divisor, so
+  `SamplerWithoutReplacement` yields 368,640 + 122,880 per epoch: half the
+  optimizer steps run on a 3x smaller batch at the same LR, and each
+  contributes equally to the per-iteration KL mean. `mb_half_*` removes the
+  asymmetry and cuts peak activation memory 33%; `mb_full_*` maximizes the
+  effective batch at +33% memory and may OOM. `epochs` 5 vs 3 crosses both.
+- **The actor LR ladder is a sigma effect.** Read from checkpoints: actor lr
+  5.85e-5 at 2.5B, 3.90e-5 at 4B, 2.60e-5 at 7B, each exactly `1e-3 / 1.5^k`,
+  while sigma anneals 0.256 -> 0.147 over the same span. The KL controller is
+  answering the anneal, not instability, and at 2.5B it still has ~17x of
+  headroom below `max_lr`. Consequence: **an epochs cut is a wall-clock knob,
+  not a drift knob** — the controller compensates, so those arms must be
+  scored on time-to-quality.
+- **The critic never moves.** Its group is built `adaptive_lr=False` and stays
+  at 1e-3 for the whole run, 20-40x the actor by the time the ladder settles.
+  `critic_lin` decays it linearly 1e-3 -> 1e-5 on cumulative frames.
+- **AdamW is Adam today** (`optim.weight_decay=0`). `wd_1e2` / `wd_1e4` turn
+  decay on for the networks only.
+- **SONIC's log_std contract is already dead on this base** —
+  `smooth-ablation-5b/sigma` pinned episode length 15-22 from iteration one and
+  aborted at 3.85B. So the exploration cells are `ent_only` (the entropy term
+  alone, which the 2026-08-02 ablation retired at ~100M frames, before sigma
+  had annealed) and `floor_late` (a floor at sigma 0.10, chosen to bite against
+  the measured per-dim minimum of 0.0859 at 7B), not a repeat of the init.
+
+Two RLOpt knobs were added for this (`RLOpt/rlopt/agent/ipmd/ipmd.py`, tests in
+`RLOpt/tests/test_ipmd_components.py`): `ipmd.critic_lr_schedule` /
+`ipmd.critic_lr_final`, and a separate `actor_log_std` parameter group pinned
+at `weight_decay=0`. The second exists because a global decay would pull
+`log_std` toward 0, i.e. sigma toward 1.0 rad, against the anneal above.
+A config-only critic decay was impossible: `optim.scheduler="adaptive"`
+excludes every torch scheduler, and a torch scheduler steps all parameter
+groups, overwriting the actor's KL rule.
+
+Also recorded, because it governs any future cap arm: `log_std` is a bare
+parameter and `torch.clamp` passes zero gradient outside its range, so a
+`log_std_max` below the init freezes sigma for the entire run.
+
 ## Linear-closure arm built: affine phi, and the obstruction is measured (2026-08-30)
 
 The affine spectral arm is implemented and its campaign is frozen. Nothing is

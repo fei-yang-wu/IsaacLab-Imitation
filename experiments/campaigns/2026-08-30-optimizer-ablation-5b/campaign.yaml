@@ -1,0 +1,399 @@
+# Optimizer ablation at 5B: one optimizer field per arm on the smoothness base.
+#
+# Every arm here changes the OPTIMIZER, never the environment, the reward set,
+# the command interface, or the encoder. The base is
+# `2026-08-28-smooth-ablation-5b/base` reproduced verbatim: the frozen
+# `diffntp_chunk_h1_ee_wide` encoder, 20,480 envs, `action_rate_l2` -0.03,
+# the SONIC 0.8 -> 0.2 failure-share ramp over the first 1B, corrected
+# `feet_acc`. `ctrl` is that recipe re-run inside THIS campaign rather than
+# the 08-28 row, because `submit` packs the working tree and this campaign
+# changes RLOpt (two new knobs below) -- a control from another code state is
+# not a control.
+#
+# What the campaign answers, and what is already known going in:
+#
+#  A. GEOMETRY (`mb_*`). The production `minibatch = 3/4 x batch` is a
+#     non-divisor: the sampler yields 368,640 + 122,880, so half the
+#     optimizer steps run on a 3x smaller batch at the same LR, and each
+#     contributes equally to the per-iteration KL mean. `mb_half` (2 equal
+#     minibatches) also cuts peak activation memory 33%; `mb_full` (1
+#     minibatch) raises it 33% over anything measured on the H200 and may OOM
+#     in iteration one -- that failure is cheap and expected to be immediate.
+#     `epochs` 5 -> 3 cuts learn-phase compute 40%; collection was the
+#     bottleneck as of 2026-08-19, so the wall-clock gain will be smaller.
+#     READ THESE ON TIME-TO-QUALITY, NOT ON FRAMES: the KL controller answers
+#     a lower update density by raising the actor LR (measured headroom at
+#     2.5B is 1.5^7 ~ 17x below `max_lr`), so `epochs` is a wall-clock knob,
+#     not a policy-drift knob.
+#
+#  B. CRITIC LR (`critic_lin`). The critic group is built `adaptive_lr=False`
+#     and never moves: 1e-3 for the whole run, while the actor's KL rule takes
+#     it to 5.85e-5 by 2.5B and 2.60e-5 by 7B (read from
+#     `diffntp_chunk_50b_seed0` / `diffntp_pair` checkpoints). Nobody chose
+#     that 20-40x ratio. New RLOpt knob `ipmd.critic_lr_schedule=linear` with
+#     `ipmd.critic_lr_final`, driven by cumulative frames so a chained segment
+#     continues the decay instead of restarting it.
+#
+#  C. WEIGHT DECAY (`wd_*`). `optim.weight_decay` is 0.0 today, so AdamW is
+#     Adam. A global decay would also pull `log_std` toward 0, i.e. sigma
+#     toward 1.0 rad, against the anneal that is currently doing useful work
+#     (sigma 0.256 at 2B -> 0.147 at 7B). RLOpt now puts `log_std` in its own
+#     `actor_log_std` group at `weight_decay=0`, so these arms decay the
+#     NETWORKS only. 1e-2 is the PyTorch AdamW default; 1e-4 is the common
+#     lighter setting. 1e-1 is the LLM-scale setting and bounds the upper end
+#     of the axis; on 6-layer 2048-wide networks with no warmup it is the arm
+#     most likely to simply lose.
+#
+#  D. EXPLORATION (`ent_only`, `floor_late`, `ent_sonic`). SONIC's contract is
+#     ALREADY MEASURED AND DEAD on this exact base: `smooth-ablation-5b/sigma`
+#     (init 0.05, clamped [0.001, 0.5]) pinned episode length at 15-22 from
+#     iteration one and aborted at 3.85B. That campaign's verdict was to test
+#     an anneal or a LATE floor, not a clamp at birth, so this campaign does
+#     not repeat the init. `ent_only` is the entropy term alone -- the
+#     2026-08-02 ablation that retired it was scored at ~100M frames, before
+#     sigma had annealed at all. `floor_late` keeps our init 1.0 and adds a
+#     floor at sigma 0.10, chosen to BITE: per-dim minimum sigma was 0.108 at
+#     4B and 0.0859 at 7B.
+#
+#     `ent_sonic` is the one deliberate repeat: SONIC's exploration block
+#     ENTIRE -- init 0.05, clamped [0.001, 0.5] -- plus the entropy bonus that
+#     `sigma` did NOT carry. Four fields against `ctrl`, so it attributes
+#     nothing on its own; its comparison point is `sigma`, and the single
+#     question it answers is whether the bonus rescues the contract that died
+#     without it.
+#
+#     `log_std` is a bare parameter and `torch.clamp` passes zero gradient
+#     outside its range (`gaussian_policy.py:64`), so a `log_std_max` below
+#     the init freezes the parameter for the whole run. `floor_late` keeps
+#     `log_std_max=2.0` for exactly that reason. Any future cap arm must keep
+#     the init strictly inside [min, max].
+#
+# Arms, one optimizer field each against `ctrl`:
+#   ctrl         production optimizer: minibatch 3/4, 5 epochs, critic 1e-3
+#                constant, weight_decay 0, entropy 0, no log_std clamp
+#   mb_half_e5   minibatch 245,760 (2 equal), 5 epochs
+#   mb_half_e3   minibatch 245,760, 3 epochs
+#   mb_full_e5   minibatch 491,520 (1 per epoch), 5 epochs
+#   mb_full_e3   minibatch 491,520, 3 epochs
+#   critic_lin   critic LR linear 1e-3 -> 1e-5 over the 5B budget
+#   wd_1e2       optim.weight_decay 1e-2 (log_std excluded)
+#   wd_1e4       optim.weight_decay 1e-4 (log_std excluded)
+#   wd_1e1       optim.weight_decay 1e-1 (log_std excluded)
+#   ent_only     ppo.entropy_coeff 0.01
+#   floor_late   clip_log_std, sigma floor 0.10, cap left at exp(2.0)
+#   ent_sonic    SONIC's whole exploration block + its entropy bonus
+#
+# The ramp keys off common_step_counter, which restarts per segment. Segment 1
+# carries the ramp; segment 2 PINS the landed ratio 0.2 so a restart never
+# re-runs it.
+name: optimizer-ablation-5b
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: optimizer-ablation-5b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+
+  z_dim: 256
+  command_dim: 258
+  code_latent_dim: 256
+  window_mode: intermediate
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  hold: 1
+  phase_mode: sin_cos
+  phase_source: hold
+  phase_period: 0
+  command_mode: z
+  finetune_args: ["agent.ipmd.hl_skill_finetune_enabled=false"]
+
+  # Frozen round-4 winner encoder, reused byte-identical by every arm.
+  encoder_ckpt: /data/pareto_stack/diffntp_chunk_h1_ee_wide_seed0/encoder/checkpoints/latest.pt
+  encoder_source: pretrained
+
+  # 20,480 envs: frames/batch 491,520. `minibatch_size` and `epochs` are the
+  # geometry axis of this campaign, so both are vars an arm overrides.
+  # 3/4 x 5 epochs is the production setting: minibatch 368,640, which the
+  # sampler splits 368,640 + 122,880 (ceil, `ppo.py:884`), so 2 minibatches
+  # per epoch and 10 optimizer steps per iteration.
+  train_num_envs: 20480
+  rollout_steps: 24
+  frame_cap: 5000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  epochs: 5
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/optimizer_ablation_5b/${vars.arm}_seed${vars.seed}
+
+  # The base reward set. `action_rate_l2` at the 50B chains' -0.03; the
+  # corrected feet_acc -2.5e-6 comes from the in-tree default.
+  reward_args:
+    - env.rewards.motion_ee_pos.weight=1.0
+    - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    - env.rewards.action_rate_l2.weight=-0.03
+  # The per-arm single variable.
+  arm_args: []
+
+  # Failure-share ramp 0.8 -> 0.2 over the first 1B (segment 1 only).
+  select_ramp:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=1000000000
+  # Segment 2 pins the landed ratio so a resume never re-runs the ramp.
+  select_hold:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.2
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bones-seed
+    - agent.logger.group_name=optimizer-ablation-5b
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.command_phase_source=${vars.phase_source}
+    - agent.ipmd.latent_learning.command_phase_period=${vars.phase_period}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+
+  tuned_core:
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.loss.epochs=${vars.epochs}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=250000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.encoder_ckpt}
+  output_container_path: ${vars.output_root}
+
+arms:
+  # Production optimizer, unchanged. The comparison point for all nine others.
+  ctrl:
+    vars:
+      wandb_id: oa5b-ctrl
+      arm_args: []
+    stages: &ablation_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.arm_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,optimizer-ablation-5b,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.arm_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,optimizer-ablation-5b,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # ---- A. Geometry. `minibatch_size` and `epochs` only; the collected batch
+  # ---- (491,520 frames) is identical in all five.
+
+  # Half the batch: 2 EQUAL minibatches, same 10 optimizer steps per
+  # iteration as `ctrl`, and 33% less peak activation memory. Isolates the
+  # ragged 3:1 split from the update density.
+  mb_half_e5:
+    vars:
+      wandb_id: oa5b-mbh5
+      minibatch_size: ${floor_div:${vars.frames_per_batch},2}
+    stages: *ablation_stages
+
+  # Same equal split at 3 epochs: 6 steps per iteration instead of 10,
+  # -40% learn-phase compute. The KL controller is expected to raise the
+  # actor LR in answer; `train/actor_lr` and `train/kl_approx` are the
+  # diagnostic pair.
+  mb_half_e3:
+    vars:
+      wandb_id: oa5b-mbh3
+      minibatch_size: ${floor_div:${vars.frames_per_batch},2}
+      epochs: 3
+    stages: *ablation_stages
+
+  # Full batch: one gradient step per epoch, the largest effective batch this
+  # geometry allows. +33% peak activation memory over `ctrl`; if it OOMs it
+  # does so in iteration one.
+  mb_full_e5:
+    vars:
+      wandb_id: oa5b-mbf5
+      minibatch_size: ${vars.frames_per_batch}
+    stages: *ablation_stages
+
+  # Full batch at 3 epochs: 3 optimizer steps per iteration, the lowest
+  # update density in the campaign (1 step per 163,840 frames against
+  # `ctrl`'s 1 per 49,152).
+  mb_full_e3:
+    vars:
+      wandb_id: oa5b-mbf3
+      minibatch_size: ${vars.frames_per_batch}
+      epochs: 3
+    stages: *ablation_stages
+
+  # ---- B. Critic learning rate.
+
+  # Linear 1e-3 -> 1e-5 over the 5B budget on the critic group only; the
+  # actor keeps its KL-adaptive rule untouched. Progress is cumulative
+  # frames, so segment 2 continues the decay instead of restarting it.
+  critic_lin:
+    vars:
+      wandb_id: oa5b-clin
+      arm_args:
+        - agent.ipmd.critic_lr_schedule=linear
+        - agent.ipmd.critic_lr_final=1.0e-5
+    stages: *ablation_stages
+
+  # ---- C. Weight decay. `log_std` is excluded by construction (RLOpt puts
+  # ---- it in its own group at weight_decay=0), so these decay the networks.
+
+  # The PyTorch AdamW default, i.e. the industry-standard setting when decay
+  # is turned on at all.
+  wd_1e2:
+    vars:
+      wandb_id: oa5b-wd2
+      arm_args:
+        - agent.optim.weight_decay=1.0e-2
+    stages: *ablation_stages
+
+  # The lighter common setting, two orders below.
+  wd_1e4:
+    vars:
+      wandb_id: oa5b-wd4
+      arm_args:
+        - agent.optim.weight_decay=1.0e-4
+    stages: *ablation_stages
+
+  # The LLM-scale setting, bounding the upper end of the axis. On 6-layer
+  # 2048-wide networks with no warmup this is the arm most likely to simply
+  # lose; it is here to bound the axis, not because it is expected to win.
+  wd_1e1:
+    vars:
+      wandb_id: oa5b-wd1
+      arm_args:
+        - agent.optim.weight_decay=1.0e-1
+    stages: *ablation_stages
+
+  # ---- D. Exploration. NOT SONIC's contract: `smooth-ablation-5b/sigma`
+  # ---- already measured that verbatim on this base and it is dead.
+
+  # The entropy bonus alone, at SONIC's weight, on our init-1.0 unbounded
+  # Gaussian. The ablation that retired the bonus was scored at ~100M frames;
+  # this asks the question in the regime where sigma has actually annealed.
+  ent_only:
+    vars:
+      wandb_id: oa5b-ent
+      arm_args:
+        - agent.ppo.entropy_coeff=0.01
+    stages: *ablation_stages
+
+  # A floor, not a clamp at birth: our init 1.0 is unchanged and the cap
+  # stays at exp(2.0), so the parameter keeps its gradient until sigma
+  # reaches 0.10. log(0.10) = -2.302585092994046.
+  floor_late:
+    vars:
+      wandb_id: oa5b-floor
+      arm_args:
+        - agent.ppo.clip_log_std=true
+        - agent.ppo.log_std_min=-2.302585092994046
+        - agent.ppo.log_std_max=2.0
+    stages: *ablation_stages
+
+  # SONIC's exploration block ENTIRE (init log(0.05), clamped
+  # [log 0.001, log 0.5]) plus the entropy bonus that
+  # `smooth-ablation-5b/sigma` did not carry. Four fields against `ctrl`, so
+  # it attributes nothing on its own -- read it against `sigma`, whose only
+  # difference is the missing bonus. The init sits strictly inside the clamp,
+  # so the parameter keeps its gradient.
+  ent_sonic:
+    vars:
+      wandb_id: oa5b-entsonic
+      arm_args:
+        - agent.ppo.entropy_coeff=0.01
+        - agent.ppo.log_std_init=-2.995732273553991
+        - agent.ppo.clip_log_std=true
+        - agent.ppo.log_std_min=-6.907755278982137
+        - agent.ppo.log_std_max=-0.6931471805599453
+    stages: *ablation_stages
