@@ -6,7 +6,7 @@ Always talk in ASD-STE100 Simplified Technical English. Always read CONTEXT.md
 files, and use their ubiquitous language. Always follow Google Developer
 Documentation Style Guide for langauge style.
 
-Last refreshed 2026-08-18. A rule here is a live constraint. If a rule is only
+Last refreshed 2026-08-30. A rule here is a live constraint. If a rule is only
 history, it belongs in `wiki/`, not in this file.
 
 ## Scope
@@ -194,6 +194,15 @@ performance.
   `env.expert_macro_state_terms=[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]`
   plus its original reward overrides. Invoke the `g1-encoder-interface` skill
   before changing or pairing an encoder.
+- **Tracker optimizer geometry**: new campaigns pass
+  `--agent rlopt_ipmd_tuned_fullbatch_cfg_entry_point` (full batch, 3 epochs =
+  3 optimizer steps per iteration, +18.9% frames per unit wall-clock).
+  `rlopt_ipmd_tuned_cfg_entry_point` is FROZEN, not deprecated: it is still the
+  only way to reproduce the 46.5B/50B chains and every campaign before
+  2026-08-30. Never redirect it. The promotion rests on `mb_full_e3` in
+  `2026-08-30-optimizer-ablation-5b` at 3.47B of a 5B budget with no matched
+  control, and its half-minibatch sibling at the same 3 epochs COLLAPSED, so
+  read the class docstring before citing the recipe.
 - **G1 task versioning**: "the default" is the highest-numbered
   `Isaac-Imitation-G1-vN`. A breaking recipe change registers `vN+1`; a
   superseded `vN` keeps its exact old kwargs forever and simply stops being
@@ -244,7 +253,33 @@ performance.
 
 ## Validation
 
-Run the smallest relevant checks from the repository root.
+Run validation within the blast radius of the change by default. A full test
+suite is not required for every code change. First identify the changed
+package, its direct consumers, and the tests that exercise the changed
+behavior. Run those targeted tests and report them.
+
+Expand to a full suite only when the change crosses package boundaries,
+changes a shared contract, fixture, registration path, dependency or package
+metadata, affects many consumers, or when a targeted check fails. Also run the
+full relevant suite before a release or a broad integration submission when
+the change needs that confidence. A source-code change alone is not a reason
+to run every suite.
+
+Examples:
+
+- For an RLOpt algorithm change, run the directly affected RLOpt test files and
+  the top-level integration tests for any changed boundary. Use
+  `test-rlopt` for shared RLOpt behavior or a cross-package change.
+- For `source/imitation_experiments/`, run the affected package tests first.
+  Use `test-experiments` when the change affects shared schemas, provenance,
+  the control plane, or multiple subpackages.
+- For Isaac Lab environment behavior, run the affected environment/config
+  tests and a targeted smoke. Use `test-isaaclab` when registration, shared
+  environment contracts, or simulator-wide behavior is affected.
+- For scripts, shell wrappers, and documentation, run the matching syntax or
+  formatting check; do not start an unrelated Python test suite.
+
+Run commands from the repository root.
 
 ```bash
 pixi run lint

@@ -2,7 +2,7 @@
 
 Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
 
-Last verified: 2026-08-27. New latent/interface work uses
+Last verified: 2026-08-30. New latent/interface work uses
 `Isaac-Imitation-G1-v2`; frozen v0/v1 aliases remain only for reproducing the
 historical runs recorded below. The current contract for what goes in the paper
 is [final-paper-experiment-design.md](final-paper-experiment-design.md).
@@ -21,11 +21,80 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Current research focus (2026-08-30)
+
+The active work is organized around five questions. The status below is the
+current decision record; detailed job chronology remains in the sections that
+follow and in the linked campaign pages.
+
+1. **Latent expressiveness and compositionality.** The bilinear skill head now
+   has an affine latent path, so straight-line mixtures of `z` have an exactly
+   affine denoising score and product-of-conditionals semantics. The matched
+   affine/concat tracker comparison is running; an offline affinity result is
+   not evidence that a frozen tracker executes mixed latents.
+2. **Information leakage in encoder learning.** The endpoint-collapse study
+   shows that the pretraining objective does not reward path shape: the
+   two-visible-slot suffix arm matches or beats the nine-slot production arm.
+   This is a pretraining result, not proof that the tracker is indifferent to
+   intermediate states. The rot6d re-anchoring mismatch remains an open data
+   plane issue for affected non-production arms.
+3. **Past state chunks as conditioning.** The pretraining code now supports a
+   past state chunk in `phi`, with current-state and past-start anchoring
+   variants. Focused and full RLOpt tests passed before the latest evaluation
+   fix, but the real pipeline smoke exposed a remaining single-frame
+   evaluation path. This work is not submitted and has no tracking result.
+4. **Policy smoothness.** The action-rate penalty is useful, but it is not the
+   conclusion. From-scratch results show a favorable jerk trade, while the
+   trained-in EMA action filter gives the current smoothness records but costs
+   success or robust recovery. The active follow-up is the EMA alpha/budget
+   sweep; `ar0` and `energy` are discarded.
+5. **Paper ablation design.** The command-interface star is being rebuilt on
+   the stronger `diffntp_chunk_h1_ee_wide` hub. The current census is 62 rows,
+   with 45 new rows and a proposed cut line to 33. The paper comparison still
+   requires matched protocol, repeated evidence, and SR, MPJPE-L, and MPJPE-G
+   together.
+
 Update this page after a meaningful code decision, qualification result,
 cluster submission, job failure, or paper result. Verify changing external
 state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
+
+## Full-batch/3-epoch tracker geometry PROMOTED (2026-08-30)
+
+New entry point `rlopt_ipmd_tuned_fullbatch_cfg_entry_point`
+(`G1ImitationTunedFullBatchRLOptIPMDConfig`), registered on
+`Isaac-Imitation-G1-v2`, `-Explicit-v2` and `-Chunk-v2`. Two fields move
+against the tuned recipe: `loss.epochs` 5 -> 3, and `loss.mini_batch_size` to
+the whole collected batch, i.e. **3 optimizer steps per iteration instead of
+10**. The minibatch is a sentinel clamped by `train_impl.py` so it stays the
+full batch at any environment count.
+
+`rlopt_ipmd_tuned_cfg_entry_point` is unchanged and frozen, NOT redirected --
+the 46.5B/50B chains and every pre-08-30 campaign resolve it. New campaigns use
+the fullbatch entry point.
+
+Evidence, from `mb_full_e3` in `2026-08-30-optimizer-ablation-5b`, seed 0:
+**+18.9% frames per unit wall-clock** (4.21B against `mb_full_e5`'s 3.54B in a
+matched 7h24m; epochs is the only geometry knob that moves wall-clock, since an
+epoch touches the same rows at any minibatch size), and the best MPJPE-L of the
+campaign at matched 3.47B, 28.72 +- 0.11 mm against a 29.3-39.2 field, with the
+highest `reference_finished` share at 0.546.
+
+PROMOTED ON USER DIRECTION WHILE THE CAMPAIGN WAS LIVE. What is not
+established, all of it recorded in the class docstring: the campaign had not
+finished (3.47B windows of a 5B budget, one seed); there is NO matched control,
+because `ctrl` sat on a slow node at ~55k fps and only reached 1.44B, where
+every arm including this one is inside 2.0 mm of it and this arm ranks seventh
+of eight; MPJPE-G is WORSE, 195.6 +- 6.3 against `critic_lin`'s 169.0 +- 4.1;
+and `mb_half_e3`, the same 3 epochs at half the minibatch, was the campaign's
+worst arm (39.21 mm, `reference_finished` 0.343). One epochs setting produced
+both the best and the worst arm, so the promotion rests on the full-batch cell
+specifically, not on "3 epochs".
+
+`critic_lin`, `wd_1e2` and `wd_1e4` stay running for their convergence
+behaviour; at the only matched point that includes `ctrl` (1.44B) all three are
+nulls against it.
 
 ## Optimizer ablation SUBMITTED on the `diffntp_chunk` base (2026-08-30)
 
@@ -83,7 +152,10 @@ Also recorded, because it governs any future cap arm: `log_std` is a bare
 parameter and `torch.clamp` passes zero gradient outside its range, so a
 `log_std_max` below the init freezes sigma for the entire run.
 
-Both entropy arms were CANCELLED ~2h in, on user direction; ten arms continue.
+Both entropy arms were CANCELLED ~2h in, on user direction. A live ICE check
+on 2026-08-30 found nine optimizer stage-1 jobs still running, with their
+second segments pending. `wd_1e1` failed at 938,803,200 frames with a
+non-finite reward, and its second segment is permanently unsatisfiable.
 `ent_sonic` reproduced the `sigma` death exactly (episode length pinned 16-22
 from iteration one through 220M, against 150-180 in every sibling), so
 **SONIC's `log_std_init=0.05` clamp is what kills the contract from scratch,
@@ -109,8 +181,11 @@ must start the actor below `max_lr`.
 
 ## Linear-closure arm built: affine phi, and the obstruction is measured (2026-08-30)
 
-The affine spectral arm is implemented and its campaign is frozen. Nothing is
-submitted. Campaign:
+The affine spectral arm is implemented and its campaign is frozen. Its
+pretraining and matched probes are complete. A live ICE check on 2026-08-30
+found the two 5B tracker stage-1 jobs running: affine `5598889` and concat
+`5598891`; their second segments `5598890` and `5598892` are pending. No
+tracker result exists yet. Campaign:
 `experiments/campaigns/2026-08-30-linear-closure-affine/`.
 
 `BilinearSR` gained a third `phi_parameterization`, `affine`: the matrix-valued
@@ -151,8 +226,8 @@ pretraining its own encoder here so the comparison moves exactly one variable,
 then a 5B tracker in the smooth-ablation-5b regime with the trained-in EMA
 action filter `env.actions.joint_pos.ema_alpha=0.65`. The smooth-ablation-5b
 `ema` row is context, not the control: it reuses the pareto-stack encoder, so
-it also differs by pretrain provenance. Both arms plan cleanly through the
-control plane.
+it also differs by pretrain provenance. Both tracker plans passed control-plane
+preflight and are now running.
 
 Operational note for the storage budget: an affine (matrix-`F`) encoder
 checkpoint is 4.1 GB against the production encoder's 1.3 GB, because `F(s)`'s
@@ -163,6 +238,30 @@ Not settled by any of this: whether the *tracker* executes chords of `z`
 space. That is a property of the (encoder, tracker) pair and needs the in-sim
 alpha-sweep, which does not exist yet. A scoreboard win would not be evidence
 of linear closure.
+
+**Both arms scored, 2026-08-30 evening.** Pretraining: no measurable capacity
+penalty (affine at 0.936x concat's endpoint eval loss and 1.001x its
+next-chunk loss over updates 25k-50k, both inside the milestone spread), at a
+1.96x wall-clock cost and 4.13 GB checkpoints against 1.35 GB. Interpolation
+probe on the finished encoders: affine's midpoint score gap is float32
+roundoff (1.7e-7) against the matched control's **10.9% mean and 52.4% max** —
+a matched pair, so the gap is attributable to the parameterization rather than
+to provenance, and it reproduces the production encoder's 11.1%. Interpolant
+geometry is near-identical between arms, so affine did not buy affinity by
+distorting the latent distribution.
+
+Tracking, PRELIMINARY (4,096 board, clean, one seed, scored at 1.25B of a 5B
+budget with both arms still running, three checkpoints per arm because
+checkpoint variance exceeds evaluation noise): concat leads on success rate
+and local error at every checkpoint — 0.9006/26.59 against 0.8823/28.12 at
+1.0B — by about 0.018 SR and 1.5 mm. Those gaps are no larger than each arm's
+own movement across the bracket, but the sign never flips across three
+independent checkpoints. Affine is smoother: jerk 152-155 against 160-171,
+flat across the bracket where concat's climbs. Both remain far from
+`sonic_v1_1`'s 0.9888 on the same board, and `ee_body_pos` dominates failures
+for both. So the current read is that the affine constraint buys exact score
+interpolation for a small tracking cost and an apparent smoothness gain;
+whether that trade holds at 5B is open.
 
 ## The command-interface star is rebased on `diffntp_chunk` (2026-08-30)
 

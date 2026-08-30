@@ -243,6 +243,15 @@ _CURRENT_V2_IPMD_TUNED_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationTunedRLOptIPMDConfig"
 )
 
+# The 2026-08-30 optimizer geometry (full batch, 3 epochs) as a SEPARATE entry
+# point rather than a redirect of the tuned one: the tuned contract is frozen
+# so the 46.5B/50B chains stay reproducible. New campaigns should pass
+# `--agent rlopt_ipmd_tuned_fullbatch_cfg_entry_point`; see the class docstring
+# for what is measured and what is not.
+_CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT = (
+    f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationTunedFullBatchRLOptIPMDConfig"
+)
+
 _CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationPosteriorRootQposRLOptIPMDConfig"
 )
@@ -286,6 +295,9 @@ gym.register(
         ),
         "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
         "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
+        "rlopt_ipmd_tuned_fullbatch_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT
+        ),
         "rlopt_ipmd_posterior_root_qpos_cfg_entry_point": (
             _CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT
         ),
@@ -314,6 +326,9 @@ gym.register(
         ),
         "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
         "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
+        "rlopt_ipmd_tuned_fullbatch_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT
+        ),
     },
 )
 
@@ -330,6 +345,9 @@ gym.register(
         "env_cfg_entry_point": (f"{__name__}.surfaces:ImitationG1ChunkSurfaceEnvCfg"),
         "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
         "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
+        "rlopt_ipmd_tuned_fullbatch_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT
+        ),
     },
 )
 
