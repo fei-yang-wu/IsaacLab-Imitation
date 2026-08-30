@@ -27,10 +27,13 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
-## Optimizer ablation built on the `diffntp_chunk` base (2026-08-30)
+## Optimizer ablation SUBMITTED on the `diffntp_chunk` base (2026-08-30)
 
-Ten arms, one optimizer field each, 5B, seed 0. Nothing submitted. Campaign:
-`experiments/campaigns/2026-08-30-optimizer-ablation-5b/`. The base is
+Twelve arms, one optimizer field each except `ent_sonic`, 5B, seed 0. Jobs
+5598837-5598861 on ICE (24 jobs, two chained segments per arm), W&B group
+`optimizer-ablation-5b`, code state `2218f29` with `RLOpt 27e8741`. Campaign:
+`experiments/campaigns/2026-08-30-optimizer-ablation-5b/`, which carries the
+per-arm job table. The base is
 `2026-08-28-smooth-ablation-5b/base` verbatim, so the environment, reward set,
 command interface and `diffntp_chunk_h1_ee_wide` encoder are held fixed and
 only the optimizer moves.
@@ -60,7 +63,12 @@ What the audit found in the production recipe, and what each arm answers:
   aborted at 3.85B. So the exploration cells are `ent_only` (the entropy term
   alone, which the 2026-08-02 ablation retired at ~100M frames, before sigma
   had annealed) and `floor_late` (a floor at sigma 0.10, chosen to bite against
-  the measured per-dim minimum of 0.0859 at 7B), not a repeat of the init.
+  the measured per-dim minimum of 0.0859 at 7B), plus `ent_sonic` on user
+  request: SONIC's block entire plus the bonus `sigma` lacked. `ent_sonic`
+  moves four fields, so it reads against `sigma`, never against `ctrl`.
+- **Weight decay spans 1e-4 / 1e-2 / 1e-1.** `wd_1e1` bounds the upper end on
+  user request; on 6-layer 2048-wide networks without warmup it is the arm most
+  likely to simply lose.
 
 Two RLOpt knobs were added for this (`RLOpt/rlopt/agent/ipmd/ipmd.py`, tests in
 `RLOpt/tests/test_ipmd_components.py`): `ipmd.critic_lr_schedule` /
