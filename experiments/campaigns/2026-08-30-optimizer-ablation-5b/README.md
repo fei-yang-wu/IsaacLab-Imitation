@@ -28,9 +28,41 @@ time (the `hl_skill_diffsr.py` `*_z_explained` diagnostic in RLOpt, the
 endpoint-collapse-probe edits, the suffix-arm aggregator), so every plan
 records `drift=true`. None of it is on the tracker path these arms exercise.
 
-**First thing to check:** `mb_full_e5` / `mb_full_e3` peak activation memory.
-An OOM lands in iteration one; if those two survive their first logged
-iteration they will survive the run.
+`mb_full_e5` / `mb_full_e3` cleared the memory question: both ran past
+iteration 1900 with no OOM, so the +33% peak activation fits on the H200.
+
+## Both entropy arms cancelled (2026-08-30, ~2h in)
+
+`ent_sonic` (5598860/5598861) and `ent_only` (5598855/5598856) were cancelled
+on user direction. Neither needs more budget.
+
+`ent_sonic` reproduced the `smooth-ablation-5b/sigma` death exactly: episode
+length pinned 16-22 from iteration one through 220M frames, against 150-180 in
+every sibling. **Verdict: SONIC's `log_std_init=0.05` clamp is what kills the
+contract from scratch on our optimizer stack, and `entropy_coeff=0.01` does
+not rescue it.** `ent_only` carries the same bonus with our init 1.0 and had
+healthy episode length throughout, so the bonus is not the cause. That closes
+the question the arm was built for, and it reads against `sigma` as designed.
+
+`ent_only` was not pinned -- episode length 156.8 and rising at cancellation --
+but it lost on reward rate at every matched point, five in a row:
+
+| frames | `ent_only` r_step | field r_step |
+|---:|---:|---|
+| 210M | 0.1259 | 0.150-0.185 |
+| 370M | 0.1314 | 0.165-0.199 |
+| 530M | 0.1324 | ~0.207 |
+| 690M | 0.1317 | 0.184-0.213 |
+
+A third of the reward rate at equal episode length is the shape of a policy
+held wide by the bonus. This reproduces the 2026-08-02 verdict that retired
+the entropy bonus, now in the multi-billion-frame regime the earlier screen
+could not reach. PRELIMINARY: training-curve evidence at 690M of a 5B budget,
+one seed, never scored on the board. Its 250M and 500M checkpoints survive on
+ICE if a scored row is ever wanted.
+
+`floor_late` continues -- the exploration question that stays open is the late
+floor, not the bonus and not the init.
 
 ## Base
 
