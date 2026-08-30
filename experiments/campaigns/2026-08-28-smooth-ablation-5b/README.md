@@ -50,6 +50,57 @@ milestone curve. Two metric requirements beyond the standard row:
    no scored board row has ever carried them. The reference-free jerk /
    high-frequency-power metric is still to be added to the evaluator.
 
+## Campaign close-out (2026-08-30, one seed; `feetacc_weak` resume still queued)
+
+Rows of record, `bones_testbed4096_v1` clean:
+
+| arm | ckpt | SR | L | G | acc | jerk | adelta |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `sonic_v1_1` | — | 0.9888 | 26.73 | 187.65 | 3.45 | — | — |
+| `base` | 4.75B | **0.9570** | **23.68** | **86.68** | 4.56 | 192.4 | 0.810 |
+| `lcp` | 5B | 0.9324 | 26.21 | 93.37 | 4.53 | 189.1 | 0.807 |
+| `ema` | 5B | 0.9282 | 25.82 | 112.18 | **4.37** | **166.8** | 0.865 |
+| `lstm` | 5B | 0.9229 | 25.40 | 97.12 | 5.30 | 242.9 | 1.050 |
+
+Verdicts: the from-scratch `action_rate_l2` penalty is FREE (cornerstone;
+matched-4.75B decomposition vs the discarded `ar0`); `ema` alone beats the
+penalty's smoothness further but overpays at alpha=0.65 (SR, robust G);
+`lcp` (0.005, untuned) and `lstm` converge to `base`'s smoothness without
+beating it — `lstm` is functional (recurrent path fixed and vindicated) with
+its best relative axis on robust G (149.5 vs base 140.4); `energy`, `hist`,
+`sigma` dead; `ar0`/`energy` discarded by user directive. `base@4750049280`
+is the program's best all-round row. Live decisions: alpha=0.8 arm and
+alpha=0.65 @10B. cap124 rows in `logs/smooth_ablation_cap124_eval/`
+(`ema` acc 3.49 / `lcp` 3.60 / `lstm` 4.33 vs `sonic_v1_1` 2.89).
+
+## `ema` gate verdict (2026-08-30, one seed): smoothness records, NOT promoted as-is
+
+| row | board | SR | L | G | acc | jerk | adelta |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `sonic_v1_1` | 4096 clean | 0.9888 | 26.73 | 187.65 | 3.45 | — | — |
+| `ema` @5.0B | 4096 clean | 0.9282 | 25.82 | 112.18 | **4.37** | **166.8** | 0.865 |
+| `ema` @4.75B | 4096 clean | 0.9163 | 26.94 | 121.16 | 4.70 | 188.5 | 0.970 |
+| `base` @4.75B (row of record) | 4096 clean | 0.9570 | 23.68 | 86.68 | 4.56 | 192.4 | 0.810 |
+| `sonic_v1_1` | 4096 robust | 0.9895 | 28.97 | 228.52 | 3.56 | — | — |
+| `ema` @5.0B | 4096 robust | 0.8950 | 29.99 | **272.82** | 5.30 | 211.9 | 1.126 |
+| `base` @5.0B | 4096 robust | 0.9336 | 30.36 | 140.38 | 5.45 | 243.0 | 1.039 |
+| `sonic_v1_1` | 124 clean | 1.0000 | 23.89 | 174.23 | 2.89 | — | — |
+| `ema` @5.0B | 124 clean | 0.9516 | 22.16 | 75.71 | **3.49** | **132.5** | 0.697 |
+
+- CONFIRMED: the trained-in filter holds the smoothness records at 5B — jerk
+  166.8 clean (best final-checkpoint row on the board) and 132.5 / acc 3.49
+  on the 124 board, `sonic_v1_1` acceleration ratio 1.21, the program's
+  closest.
+- PRICE at matched 5B: -0.029 clean SR vs `base@4.75B`, and robust
+  MPJPE-G DOUBLES (272.8 vs 140.4) — the 8.4 Hz cap costs the fast root
+  corrections perturbation recovery needs.
+- NUANCE: `ema` improved on every axis from 4.75B to 5.0B (unlike `base`) —
+  still converging at the cap, so part of the SR gap may be budget, not
+  asymptote.
+- Follow-ups, in order: alpha=0.8 (~13 Hz) arm; extend alpha=0.65 to 10B
+  (budget hypothesis); alpha-anneal (unfiltered early, tight late) if the
+  sweep says the trade is convergence-speed.
+
 ## Final 5B rows: base / energy / ar0 (2026-08-29, one seed)
 
 `bones_testbed4096_v1` (the deciding board). The `sonic_v1_1` row is the same
@@ -126,6 +177,19 @@ the 5B row.
   SR and L — directionally the same trade as the action-rate weight axis.
 - `base` already beats `merged64_pen_ramp_5b`'s FINAL row on jerk (194 vs
   216), adelta (0.81 vs 0.91) and G (83.7 vs 89.3) at 1.25B fewer frames.
+
+## `hist` 5B verdict (2026-08-29): does NOT stack — REFUTED
+
+Clean: 0.9290 / 27.73 / 94.45 / acc 5.26 / jerk 242.9 / adelta 1.038 against
+`base`'s 0.9446 / 26.93 / 86.01 / 4.75 / 204.0 / 0.835 — worse on every
+axis, and the robust rows agree (0.9116 / jerk 281.6 vs 0.9336 / 243.0).
+The 2B smoothness signal history showed on the penalty-free `diffntp_pair`
+base does not reproduce on a base that already trains with the action-rate
+penalty: the penalty delivers the smoothing more cheaply and the widened
+actor input costs capacity. Caveat: `hist` ran at 16,384 envs (OOM
+fallback), so batch shape is a second variable; the six-metric sweep of the
+deficit argues against that being the cause. One seed. History is off the
+smoothness program's lever list.
 
 ## Added arm (2026-08-29): `hist`
 
@@ -208,8 +272,48 @@ dependent segment 5597008 was cancelled to free the H200. Verdict stands:
 SONIC's sigma contract does not train from scratch on our optimizer stack;
 test the noise hypothesis with an anneal or late floor instead.
 
+## lstm arm: first run destroyed by a buffer-shaping bug (2026-08-29)
+
+The 5597601 run collapsed to episode length ~1.9 within 0.3B frames while
+`ema` and `lcp` trained normally. Root cause (reproduced locally under
+Newton, `RLOpt` commit `c016496`): IPMD's three `data_buffer.extend` sites
+flatten the rollout unconditionally, bypassing the recurrent [env, T]
+sequence path — the sequence buffer (capacity `num_envs`) received
+`num_envs * T` flat rows, kept only the last 4%, and the loss's recurrent
+mode treated arbitrary row groups as sequences. The local smoke had not
+caught it because nothing crashes; quality is invisible in a 2-iteration
+run. Fix: `_rollout_for_buffer()` owns the shaping and every extend site
+routes through it. Verified at a matched 1M-frame local Newton budget:
+broken 1.94, fixed 7.42 against an MLP control at 7.80 (parity).
+Cancelled 5597601/02, RESUBMITTED as 5597630 -> 5597631.
+
+The resubmission was then ALSO cancelled (user, on a negative-return read)
+before its own curve could be separated from the first run's — both cluster
+jobs logged into ONE W&B run id (`sm5b-lstm-s0-e7a995`, pinned by the
+output-tree `wandb_run_id` file), so the chart overlays the dead first run's
+collapsing tail with the resubmission's first minutes. Local qualification
+of the fixed code afterwards (2026-08-29): 1024 envs x 400 iters — LSTM
+ep_len 21.8 / return +1.83 vs a matched MLP control at 26.97 / +1.86; 4096
+envs x 150 iters with the cluster's exact data placement — ep_len climbing
+14.98 -> 19.52, return +1.52 and rising. No divergence at either scale. Any
+resubmission must (a) delete `<output_root>/wandb_run_id` for a fresh W&B
+id, and (b) use a fresh output tree so the poisoned first-run checkpoints
+are unreachable by a resume.
+
+RESUBMITTED with both (user, 2026-08-29): jobs 5597815 -> 5597816,
+`--set vars.output_root=/data/smooth_ablation_5b/lstm_r2_seed0` and
+`--set vars.wandb_id=sm5b-lstm2`. NOTE for mirroring/eval: the tree is
+`lstm_r2_seed0`, not `lstm_seed0` — pass the path explicitly or symlink
+before `mirror.sh`/`eval.sh`.
+
 ## Status
 
+- 2026-08-29: round-2/3 first submission (5597424/26/29) died in 23s on an
+  import bug — `from isaaclab.utils import configclass` resolves to the
+  MODULE in the container's Isaac Lab build; only the workstation build
+  re-exports the decorator, which is why the local smoke passed. Fixed in
+  `26fc161` and RESUBMITTED: `ema` 5597597 -> 5597598, `lcp`
+  5597599 -> 5597600, `lstm` 5597601 -> 5597602.
 - 2026-08-29: round-2/3 arms SUBMITTED from commits `78ed349` (top) +
   `8378891` (RLOpt): `ema` 5597424 -> 5597425, `lcp` 5597426 -> 5597427,
   `lstm` 5597429 -> 5597430 (16,384 envs via `--set`). Both new code paths

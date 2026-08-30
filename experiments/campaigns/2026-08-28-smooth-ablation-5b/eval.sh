@@ -27,6 +27,12 @@ PERSIST_ID="${PERSIST_ID:-bones_seed_sonic_full_129785@e714bbff}"
 MAX_STEPS="${MAX_STEPS:-10000}"
 SEED="${SEED:-0}"
 ROWS="${ROWS:-clean robust}"
+# Default board is the deciding 4,096-clip set. For the 124-clip calibration
+# board pass RANKS_JSON (the frozen artifact) and a SEPARATE OUTPUT_ROOT —
+# rows from different boards are different populations and must never share
+# a directory or a table column.
+BOARD="${BOARD:-bones_testbed4096_v1}"
+RANKS_JSON="${RANKS_JSON:-}"
 ARMS="${ARMS:-base energy sigma feetacc_weak ar0 hist ema lcp lstm}"
 SCALED_CELLS="[2048,2048,1024,1024,512,512]"
 RUNTIME_BODY_NAMES="[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
@@ -55,10 +61,15 @@ fi
 [[ -s "${ENCODER}" ]] || { log "[FATAL] encoder missing: ${ENCODER}"; exit 2; }
 mkdir -p "${OUTPUT_ROOT}"
 
-mapfile -t ranks < <(pixi run python -c "
+if [[ -n "${RANKS_JSON}" ]]; then
+    [[ -s "${RANKS_JSON}" ]] || { log "[FATAL] ranks artifact missing: ${RANKS_JSON}"; exit 2; }
+    mapfile -t ranks < <(jq -r '.[]' "${RANKS_JSON}")
+else
+    mapfile -t ranks < <(pixi run python -c "
 from imitation_experiments.evaluation.protocol import BOARDS
-print('\n'.join(str(case.trajectory_rank) for case in BOARDS['bones_testbed4096_v1'].cases))
+print('\n'.join(str(case.trajectory_rank) for case in BOARDS['${BOARD}'].cases))
 ")
+fi
 [[ "${#ranks[@]}" -gt 0 ]] || { log "[FATAL] board returned no ranks"; exit 2; }
 
 for arm in ${ARMS}; do

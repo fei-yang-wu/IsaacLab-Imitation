@@ -27,6 +27,128 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## The command-interface star is rebased on `diffntp_chunk` (2026-08-30)
+
+User decision: the 72-arm interface ablation is re-run against a new hub,
+because `diffntp_chunk_h1_ee_wide` beats the v1 hub `ctrl` on all three
+canonical metrics — 0.9163 / 24.07 / 84.69 against 0.9023 / 24.49 / 212.3 on
+`bones_testbed4096_v1` clean, a 2.5x difference in global error. Every v1
+main effect is conditional on a hub that is no longer competitive, and three
+of them are already known to be conditional: the objective ordering inverts
+(the v1 star's worst converged objective is this hub's ancestor), the hold
+effect was measured on one objective only, and the width and quantization
+verdicts came from a loss with no marginal regularizer.
+
+Design page: [latent-learning-star-v2.md](latent-learning-star-v2.md). Axes:
+A what the encoder predicts (predictive generative / predictive mean /
+other predictive targets / reconstruction / posterior-in-RL; contrastive
+excluded), B continuous versus discrete, C encoder input and window size,
+D publication cadence, E frozen versus finetuned versus learned-in-RL,
+F loss detail and seed. Census: 62 rows, 16 already MEASURED at the hub's
+cell inside `2026-08-22-pareto-stack`, 1 trained-unscored, 45 to train —
+about 118 ICE segments. The page carries a four-step cut line down to 33
+new arms that keeps every family claim.
+
+Scored while assembling the table (4,096 clean, one seed, first rows for
+both): `diffntp_chunktok` 0.9189 / 23.55 / 88.92 and `diffntp_chunkra`
+0.9194 / 24.74 / 106.45. `chunktok` beats the hub on success rate and local
+error and is 5% worse globally, all inside the band.
+
+Four gates before any v2 arm is submitted: pin
+`env.rewards.feet_acc.weight=-2.5e-7` against the 2026-08-28 in-place
+correction; decide the rot6d convention (it distorts every re-anchored and
+EMA-token target, though not the hub's); score `diffntp_merged` so
+`merged64`'s lead becomes attributable; smoke one pretrain per quantizer
+family. Two v2 arms are already written into the pareto-stack
+`campaign.yaml` and NOT submitted: `diffntp_chunk_nosig_h1_ee_wide` and
+`diffntp_chunk_h1_ee_wide_s1`.
+
+## Linear-closure program: the affine spectral EBM is the only arm (2026-08-29)
+
+Decision: the linear-closure thread keeps exactly one design. The chord
+(Jensen-gap) penalty, the residual split `g(z) = Gz + h(z)`, and the
+mixture-target interior coverage from
+[linear-closure-problem-statement.md](linear-closure-problem-statement.md)
+are dropped, not deferred.
+
+The arm: `z = E(s_{t+1:t+H})`, `M(z) = M0 + sum_k z_k M_k`,
+`f(s_t, y, z) = psi(y)^T M(z) phi(s_t)`,
+`p(y | s, z) ∝ q0(y | s) exp(f)`. The networks `psi`, `phi`, and `E` stay
+nonlinear; only the path from `z` to the energy is affine. This makes the
+score exactly linear along chords, so
+`p(y | s, z_alpha) ∝ p1^alpha * p2^(1-alpha)`: a mixed latent means the
+product (intersection) of the endpoint skills, which settles Q2 of the
+problem statement. `A(s, z)` is convex in `z`, so `log p` is concave along
+every chord.
+
+Consequences recorded with the decision:
+
+- The `z` domain must be convex, so the arm removes the final LayerNorm
+  (or replaces it with a ball constraint). Straight-line interpolation is
+  the only combination with exact semantics; spherical interpolation has no
+  guarantee under this model.
+- In the repo's bilinear head this is `g(z) = Gz + c` with
+  `F(s, y) = vec(psi(y) phi(s)^T)`; the tanh bound on `g` must go.
+- `q0(y | s)` absorbs skill-independent predictability. Because the visible
+  boundary pair explains 98.0-99.7% of the mid frames (Tier A below), a
+  single endpoint target gives the `M_k` a weak gradient; the target choice
+  waits on the Tier B suffix verdict.
+- The guarantee covers model validity only. Encoder realizability needs
+  joint training with `E`, and executability of the frozen tracker on mixed
+  latents stays open: the alpha-sweep probe (survival, jerk, lawfulness)
+  remains the falsifier.
+
+## Endpoint-collapse probe: does the diffntp_chunk z summarize the window or just the boundary? (2026-08-29)
+
+Question: the diffntp_chunk code z_t is trained to predict the endpoint
+`s[t+10]` and the next chunk `s[t+11..t+20]`. Because the macro state is close
+to a boundary-plus-velocity sufficient statistic, z could collapse to a
+function of the last visible frames `s[t+8], s[t+9]` and the paper's
+"z summarizes the intermediate states" claim would be hollow. Campaign:
+`experiments/campaigns/2026-08-29-endpoint-collapse-probe/`.
+
+**Tier A (offline probes, round-4 `diffntp_chunk_h1_ee_wide_seed0` encoder,
+2,500 reference windows, one seed, correlational): partial collapse.**
+
+- Frame-sufficiency is non-discriminative on-manifold: the last visible frame
+  alone reaches MLP R2 0.914 vs 0.914 for the whole visible window, but
+  smooth motion makes every subset predictive of every other.
+- The visible boundary pair (s_t, s[t+9]) linearly explains 98.0-99.7% of
+  every mid frame; z recovers 28-61% of the small residual (peak at slots
+  6-8). z carries real mid-window information, but the pool it draws from is
+  tiny.
+- Sensitivity per unit input RMSE: last-frame replacement moves z 4.3x more
+  than mid-frame replacement (232 vs 54). On-manifold mid replacement still
+  moves z by 1.14x its own norm, so z is not mid-blind.
+- Integrated gradients (batch-permuted baseline): 53% of attribution on the
+  last visible slot, 66% on the last two, 26% spread over slots 1-7.
+
+Tooling that made this measurable: window builder validated against the
+compiled sampler primitives to 1e-6
+(`imitation_experiments.capacity.probe_skill_window_usage`); the trainer now
+logs `train/jepa_endpoint_loss[_eval]` and `train/jepa_ntp_loss[_eval]`
+separately (they were merged into `jepa_objective` before).
+
+**Tier B (causal falsifier, running):** new `encoder_window_mode=suffixN`
+(encoder sees only the last N slots of the intermediate window; `suffix9` ==
+production `intermediate`). Arms suffix1/suffix9 launched locally 2026-08-29
+evening at the full 50k-update round-4 recipe; suffix2/suffix5 follow. Flat
+eval losses in N kill the summarization claim; improvement with N measures
+it.
+
+**Found while verifying frame conventions (not fixed, needs a decision):**
+the data plane's `quat_to_rot6d_flat` emits the INTERLEAVED 6-D layout
+(`R[..., :2].reshape` = r00,r01,r10,r11,r20,r21) but RLOpt's
+`_rot6d_to_matrix` parses two concatenated columns. Consequences: (a)
+`_reanchor_heading_frames` extracts a wrong (sign-flipped, roll/pitch-mixed)
+yaw from data-plane frames, so every `jepa_ntp` target that routes through
+re-anchoring (chunk_anchor='next' arms, context>0 arms, and the z2 EMA-target
+token of every jepa arm) is a deterministically distorted view, and (b)
+`analyze_reference_latent_scale.py` builds windows with a full-rotation
+anchor and rows-concatenated rot6d, both off the sampler convention, so its
+absolute geometry claims are suspect. The production diffntp_chunk loss path
+(context 0, chunk_anchor='executed') is NOT affected.
+
 ## Global-error decomposition: the G gap to SONIC is root translation drift, and it accumulates (2026-08-29)
 
 Question: local tracking is nearly tied with `sonic_v1_1` (L 26.9 vs 26.7 mm
@@ -84,6 +206,56 @@ Infrastructure: `evaluate_checkpoint` per-env rows now carry
 accumulation ratio; SONIC rows already had the analogous
 `anchor_pos_err_final_m` from the command term. Same-quantity check done:
 both drift columns are the world-frame pelvis/anchor position error norm.
+
+## Smooth-ablation campaign CLOSED: all code arms scored (2026-08-30)
+
+`lcp` and `lstm` finished 5B and were scored on both boards at final +
+penultimate checkpoints; with `ema`'s gate that completes every surviving
+arm (only `feetacc_weak`'s queued resume outstanding). Close-out table and
+verdicts in `experiments/campaigns/2026-08-28-smooth-ablation-5b/README.md`.
+Headlines: `base@4750049280` 0.9570/23.68/86.68 is the program's best
+all-round row; `lcp` (0.005, untuned) and `lstm` converge to base's
+smoothness without beating it (`lstm` functional — the recurrent path is
+fixed and trains competitively — with its best relative axis on robust G);
+only `ema` beats the penalty's smoothness (jerk 166.8; cap124 acc 3.49 vs
+`sonic_v1_1` 2.89). Live decisions: `alpha=0.8` arm and `alpha=0.65` at
+10B decide the ema promotion.
+
+## EMA gate scored: smoothness records, promotion deferred to the alpha sweep (2026-08-30)
+
+`ema` finished 5B and was scored at both final and penultimate checkpoints
+(both boards, `ema_alpha=0.65` repeated at eval). Verdict, one seed: the
+trained-in filter holds the program's smoothness records (jerk 166.8 on the
+4,096 clean board, 132.5 / acc 3.49 on the 124 board — `sonic_v1_1`
+acceleration ratio 1.21, the closest yet) but is NOT promoted as-is: it
+costs 0.029 clean SR against `base@4750049280` (the base row of record; its
+5.0B save is an arm-specific anomaly) and DOUBLES robust MPJPE-G (272.8 vs
+140.4) — the 8.4 Hz bandwidth cap visibly costs perturbation recovery.
+`ema` was still improving into its cap (4.75B -> 5.0B better on every
+axis), so budget is a live confounder on the SR gap. Follow-ups in order:
+`alpha=0.8`, `alpha=0.65` at 10B, alpha-anneal. Full table in
+`experiments/campaigns/2026-08-28-smooth-ablation-5b/README.md`. Also
+2026-08-30: `ar0` and `energy` discarded by user directive (their closing
+contribution: at matched 4.75B the from-scratch action-rate penalty costs
+~0 SR and buys -34% jerk — the penalty is free trained-in; and the cap-hit
+checkpoint anomaly is base-specific, with checkpoint-to-checkpoint variance
+near convergence exceeding eval-repeat noise, so rows of record must name
+their checkpoint).
+
+## EMA action filter is the smoothness program's lead lever (2026-08-29)
+
+User decision after the matched-1.0B mid-training rows
+(`bones_testbed4096_v1` clean, one seed): `ema` (trained-in
+`EMAJointPositionAction` low-pass, `ema_alpha=0.65` ~ 8.4 Hz at 50 Hz) read
+0.9055 SR / 26.96 L / 128.29 G / acc 4.40 / jerk 163.5 / adelta 0.812 —
+the lowest jerk measured on this board, below `base`'s 5B final (204.0),
+at NO success-rate cost against the matched-frames MLP reference
+(`feetacc_weak` 0.9014). The `sonic_v1_1` acceleration ratio falls to 1.28
+at one-fifth of the budget. `lcp` also delivers (adelta 0.789, jerk 189.4);
+`lstm` trails on every axis at 1.0B. The 5B final row is the gate; if the
+profile holds, `ema` is the promotion candidate and the follow-up axes are
+the alpha sweep and ema x lcp. Eval discipline: the filter lives in the env
+action term, so every eval of an ema checkpoint must repeat the alpha.
 
 ## Smooth-ablation 5B finals: base / energy / ar0 scored on both boards (2026-08-29)
 
