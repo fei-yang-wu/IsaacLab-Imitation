@@ -1,0 +1,140 @@
+# Endpoint-collapse probe, Tier B on ICE: the suffix-k dose-response arms.
+#
+# Read README.md first. One moved variable per arm: encoder_window_mode
+# (suffix1 / suffix2 / suffix5 / suffix9). suffix9 equals the production
+# 'intermediate' mode at horizon 10 and is the control row. Everything else
+# is the round-4 diffntp_chunk pretrain recipe from
+# 2026-08-22-pareto-stack, byte-matched.
+#
+# Pretrain-only stages: no tracker training here. The comparison metrics are
+# `train/jepa_endpoint_loss_eval` and `train/jepa_ntp_loss_eval` in each
+# arm's metrics.jsonl (frozen 10% trajectory eval split). Local seed-0
+# qualification ran 2026-08-29 on the workstation; ICE adds seeds for noise
+# bars. Logger stays `none`: metrics.jsonl carries everything this campaign
+# needs, so no W&B runs are created.
+name: endpoint-collapse-probe
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: endpoint-collapse-probe
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  window_mode: suffix9
+  submit_seed: 0
+
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/endpoint_collapse_probe/${vars.arm}_seed${vars.seed}
+
+  pretrain_args:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --logger_backend
+    - none
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --horizon_steps
+    - "10"
+    - --encoder_window_mode
+    - ${vars.window_mode}
+    - --transition_objective
+    - jepa_ntp
+    - --jepa_loss
+    - sigreg_ebm
+    - --jepa_ntp_head
+    - diff_chunk
+    - --latent_mode
+    - deterministic
+    - --z_dim
+    - "256"
+    - --encoder_layer_norm
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+    - env.expert_macro_frame_stride=1
+    - env.expert_macro_anchor_mode=robot_heading
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  output_container_path: /data/endpoint_collapse_probe/${vars.arm}_seed${vars.seed}
+
+arms:
+  suffix1:
+    vars:
+      window_mode: suffix1
+    stages: &pretrain_only
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_args},${vars.data_overrides}}
+        time_limit: "03:59:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,endpoint-collapse-probe,${vars.arm},seed${vars.seed},pretrain
+
+  suffix2:
+    vars:
+      window_mode: suffix2
+    stages: *pretrain_only
+
+  suffix5:
+    vars:
+      window_mode: suffix5
+    stages: *pretrain_only
+
+  suffix9:
+    vars:
+      window_mode: suffix9
+    stages: *pretrain_only
