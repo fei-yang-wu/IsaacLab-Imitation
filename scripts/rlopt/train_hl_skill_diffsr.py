@@ -59,10 +59,12 @@ parser.add_argument(
     "--encoder_window_mode",
     type=str,
     default="full",
-    choices=("full", "intermediate"),
     help=(
         "Future window visible to E_skill. 'full' keeps legacy s_{t+1:t+W}; "
-        "'intermediate' hides target s_{t+W} and uses s_{t+1:t+W-1}."
+        "'intermediate' hides target s_{t+W} and uses s_{t+1:t+W-1}; "
+        "'suffix<N>' keeps only the last N slots of the intermediate window "
+        "(s_{t+W-N:t+W-1}), the window-usage ablation. Validated by the "
+        "trainer config."
     ),
 )
 parser.add_argument(
@@ -121,6 +123,39 @@ parser.add_argument(
         "Heading frame of the diff_chunk target: 'executed' keeps the next "
         "chunk in the executed chunk's slot-0 frame (drift in the target); "
         "'next' re-anchors onto s_{t+H}'s own frame (drift erased)."
+    ),
+)
+parser.add_argument(
+    "--jepa_ntp_chunk_span",
+    type=str,
+    default="next",
+    choices=("next", "boundary_next"),
+    help=(
+        "Frames the diff_chunk head denoises: 'next' is the next chunk's H "
+        "frames s[t+H+1..t+2H] (the round-4 recipe); 'boundary_next' widens "
+        "the target to s[t+H..t+2H] (H+1 frames) so ONE head covers the "
+        "endpoint and the next chunk — pair with --jepa_endpoint_coeff 0 for "
+        "the merged-head cell. Requires --jepa_ntp_chunk_anchor executed."
+    ),
+)
+parser.add_argument(
+    "--jepa_token_pred_coeff",
+    type=float,
+    default=0.0,
+    help=(
+        "Weight of the mlp token-prediction MSE ||P(z1) - z2||^2 ADDED "
+        "alongside a diffusion NTP head. 0 (default) reproduces every "
+        "existing arm; positive requires a diffusion --jepa_ntp_head."
+    ),
+)
+parser.add_argument(
+    "--jepa_endpoint_coeff",
+    type=float,
+    default=1.0,
+    help=(
+        "Weight of the endpoint DiffSR term p(s[t+H]|s[t],z) inside "
+        "sigreg_ebm. 0 drops it from the loss; the head is still built and "
+        "serialized, so the checkpoint contract is unchanged."
     ),
 )
 parser.add_argument(
@@ -315,10 +350,14 @@ parser.add_argument(
     "--diffsr_phi_parameterization",
     type=str,
     default="concat",
-    choices=("concat", "bilinear"),
+    choices=("concat", "bilinear", "affine"),
     help=(
         "DiffSR phi(s,z) parameterization. 'concat' is the newer simple-concat "
-        "path; 'bilinear' restores the legacy matrix F(s) with g(z)^T F(s)."
+        "path; 'bilinear' restores the legacy matrix F(s) with g(z)^T F(s); "
+        "'affine' uses that matrix form with a single linear g(z) = A z + b, "
+        "which makes phi and the diffusion score field affine in z, so a "
+        "latent interpolation grounds to the geometric mixture of the endpoint "
+        "conditionals."
     ),
 )
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
@@ -576,6 +615,9 @@ def _build_trainer_config(
         jepa_ntp_coeff=args_cli.jepa_ntp_coeff,
         jepa_ntp_head=args_cli.jepa_ntp_head,
         jepa_ntp_chunk_anchor=args_cli.jepa_ntp_chunk_anchor,
+        jepa_ntp_chunk_span=args_cli.jepa_ntp_chunk_span,
+        jepa_endpoint_coeff=args_cli.jepa_endpoint_coeff,
+        jepa_token_pred_coeff=args_cli.jepa_token_pred_coeff,
         jepa_sigreg_sketches=args_cli.jepa_sigreg_sketches,
         jepa_context_chunks=args_cli.jepa_context_chunks,
         jepa_target_encoder_mode=args_cli.jepa_target_encoder_mode,
