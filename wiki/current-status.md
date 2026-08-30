@@ -27,6 +27,63 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Linear-closure arm built: affine phi, and the obstruction is measured (2026-08-30)
+
+The affine spectral arm is implemented and its campaign is frozen. Nothing is
+submitted. Campaign:
+`experiments/campaigns/2026-08-30-linear-closure-affine/`.
+
+`BilinearSR` gained a third `phi_parameterization`, `affine`: the matrix-valued
+`F(s)` of the legacy `bilinear` branch with a single `nn.Linear` in place of the
+Mish action net, so `phi(s, z) = F(s)^T (A z + b) / sqrt(E)`. Because
+`eps_pred = phi(s,z)^T mu(y_t, t)` and `mu` never sees `z`, the whole learned
+denoising score field is affine in `z`, and an interpolated latent grounds to
+the geometric mixture of the endpoint conditionals. `A` and `b` are learned;
+only the functional form is constrained. One config field drives both DiffSR
+heads, so the endpoint head and the `diff_chunk` head are affine together.
+Exactness is asserted in fp64 in `RLOpt/tests/test_ipmd_components.py`, with
+the nonlinear `bilinear` branch as a negative control.
+
+**The obstruction is real and now has a number.** A new offline probe,
+`imitation_experiments.capacity.probe_latent_interpolation`, measures the gap
+between `phi` at a mixed latent and the mixture of the endpoint `phi`s over
+1,000 cross-motion pairs. On the production `diffntp_chunk_h1_ee_wide_seed0`
+encoder the midpoint gap is **11.1% of the mixed score's norm on average,
+47.3% at worst**. On a 500-update affine encoder it is 3e-7, which is float32
+roundoff. Preliminary: one encoder each, and the affine one is a smoke run.
+
+Two side findings from the same probe, both preliminary:
+
+- **There is no sphere.** The claim that the encoder's final LayerNorm puts
+  every `z` on the sphere of radius `sqrt(256)` was wrong — the output layer
+  is a bare linear map and `--encoder_layer_norm` gates hidden layers only.
+  Chord midpoints sit at 0.72x the real-`z` norm and 1.05x the real
+  nearest-neighbour distance from the real set, so the interior is near the
+  manifold, not off it. `wiki/linear-closure-problem-statement.md` is
+  corrected; Q4 (sphere versus linear space) is moot and Q2 is answered by the
+  design (the product, not the average).
+- **Denoising transfer is already smooth.** Sweeping alpha, the endpoint
+  head's error against each side's own true future trades off monotonically
+  with no interior bump, on both the affine and the production encoder.
+
+The campaign runs two arms, `affine` and a matched `concat` control, each
+pretraining its own encoder here so the comparison moves exactly one variable,
+then a 5B tracker in the smooth-ablation-5b regime with the trained-in EMA
+action filter `env.actions.joint_pos.ema_alpha=0.65`. The smooth-ablation-5b
+`ema` row is context, not the control: it reuses the pareto-stack encoder, so
+it also differs by pretrain provenance. Both arms plan cleanly through the
+control plane.
+
+Operational note for the storage budget: an affine (matrix-`F`) encoder
+checkpoint is 4.1 GB against the production encoder's 1.3 GB, because `F(s)`'s
+output layer is `embed_dim x feature_dim` = 262,144 wide. ICE has a 300 GB
+hard cap.
+
+Not settled by any of this: whether the *tracker* executes chords of `z`
+space. That is a property of the (encoder, tracker) pair and needs the in-sim
+alpha-sweep, which does not exist yet. A scoreboard win would not be evidence
+of linear closure.
+
 ## The command-interface star is rebased on `diffntp_chunk` (2026-08-30)
 
 User decision: the 72-arm interface ablation is re-run against a new hub,
@@ -129,12 +186,42 @@ compiled sampler primitives to 1e-6
 logs `train/jepa_endpoint_loss[_eval]` and `train/jepa_ntp_loss[_eval]`
 separately (they were merged into `jepa_objective` before).
 
-**Tier B (causal falsifier, running):** new `encoder_window_mode=suffixN`
-(encoder sees only the last N slots of the intermediate window; `suffix9` ==
-production `intermediate`). Arms suffix1/suffix9 launched locally 2026-08-29
-evening at the full 50k-update round-4 recipe; suffix2/suffix5 follow. Flat
-eval losses in N kill the summarization claim; improvement with N measures
-it.
+**Tier B (causal falsifier, ICE 2026-08-30): the intermediate frames are not
+load-bearing for this objective.** New `encoder_window_mode=suffixN` (encoder
+sees only the last N slots of the intermediate window; `suffix9` == production
+`intermediate`). Four arms at the full 50k-update round-4 recipe, tail-averaged
+over the last 5,000 updates then over seeds (bracket = per-seed min/max):
+
+| arm | visible slots | endpoint eval | next-chunk eval |
+|---|---:|---|---|
+| suffix1 | 1 | 0.2767 [0.2751, 0.2783] | 7.7333 [7.7014, 7.7652] |
+| suffix2 | 2 | **0.1877** [0.1835, 0.1918] | **7.0827** [7.0623, 7.1031] |
+| suffix5 | 5 | 0.1947 [0.1888, 0.2006] | 7.0852 [7.0829, 7.0875] |
+| suffix9 (production) | 9 | 0.2129 [0.2097, 0.2183] | 7.1714 [7.1545, 7.1830] |
+
+The entire gain is one visible frame to two (endpoint -32%, next-chunk -8.4%).
+From two to nine, both losses stop improving and drift slightly the wrong way:
+suffix2 beats the production suffix9 by 11.9% on endpoint and 1.2% on
+next-chunk, seed ranges disjoint on both. Local seed-0 runs replicate the
+ordering on a different machine. Jobs 5598329-5598340 plus 5598580-5598582;
+scored by `imitation_experiments.capacity.aggregate_window_suffix_arms`.
+
+**Read this result narrowly.** Window slots are expressed in slot 0's heading
+frame and a suffix slice does not re-anchor, so the last visible frame carries
+the NET displacement from the window start (measured over 900 reference
+windows: anchored planar displacement grows linearly, 0 at slot 0 by
+construction to 3.7 cm at slot 9). A suffix2 encoder still sees a
+window-integrated quantity plus the rate of arrival; what it loses is the PATH
+SHAPE in between. The defensible claim is therefore "the objective does not
+reward encoding path shape", NOT "z is a local boundary snapshot".
+
+Two follow-ups this implies, neither run: a matched-input-width coverage arm
+(`suffix3` slots 7,8,9 versus a strided arm on slots 1,5,9 — same width,
+opposite coverage, removes the dimensionality confound in the suffix ladder),
+and a displacement-removal arm (re-anchor the visible suffix onto its own
+first slot). Tier C (tracker command swap on the 4,096 board) still has to say
+whether the tracker cares, and suffix2 is a live efficiency candidate on its
+own (same or better losses on a quarter of the encoder input).
 
 **Found while verifying frame conventions (not fixed, needs a decision):**
 the data plane's `quat_to_rot6d_flat` emits the INTERLEAVED 6-D layout
