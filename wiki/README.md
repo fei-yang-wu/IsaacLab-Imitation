@@ -30,6 +30,9 @@ so no page becomes orphaned.
 - [Interface Ablation Study](interface-ablation-study.md): the setup behind
   those results. Shared training and evaluation protocol, and every arm's
   single changed field with its override path and its 2B row.
+- [Latent-Learning Star v2](latent-learning-star-v2.md): the same ablation
+  rebased on `diffntp_chunk`, which beat the v1 hub on all three metrics.
+  Family spine, code shape, window, cadence; 62 rows, 45 of them untrained.
 - [Project Live Status](current-status.md): live research state, gates,
   running and failed jobs, and the immediate work queue.
 - [Context Management](context-management.md): how agent context is organized
@@ -39,6 +42,10 @@ so no page becomes orphaned.
 
 ## Active work
 
+- [Linear Closure Problem Statement](linear-closure-problem-statement.md):
+  self-contained, shareable statement of the skill-latent linear-closure
+  problem — the bilinear score, the closure definition, hard-linear and
+  chord-penalty relaxations, and the Q1-Q6 discussion questions.
 - [Tracker Pareto Program](tracker-pareto-program.md): plan of record for
   improving SR, MPJPE-L, and MPJPE-G together — lever evidence, the
   pareto-stack campaign design, the feature menu, and the push-termination
