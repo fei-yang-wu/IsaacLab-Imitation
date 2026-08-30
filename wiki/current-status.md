@@ -83,6 +83,30 @@ Also recorded, because it governs any future cap arm: `log_std` is a bare
 parameter and `torch.clamp` passes zero gradient outside its range, so a
 `log_std_max` below the init freezes sigma for the entire run.
 
+Both entropy arms were CANCELLED ~2h in, on user direction; ten arms continue.
+`ent_sonic` reproduced the `sigma` death exactly (episode length pinned 16-22
+from iteration one through 220M, against 150-180 in every sibling), so
+**SONIC's `log_std_init=0.05` clamp is what kills the contract from scratch,
+and `entropy_coeff=0.01` does not rescue it** -- `ent_only` carried the same
+bonus with our init 1.0 and stayed healthy on episode length. `ent_only` was
+not pinned but lost on reward rate at five consecutive matched points (0.126 to
+0.132 against a 0.15-0.21 field), reproducing the 2026-08-02 verdict that
+retired the bonus, now in the multi-billion-frame regime that screen could not
+reach. Both readings are PRELIMINARY training-curve evidence at 220M and 690M
+of a 5B budget, one seed, never scored on a board.
+
+Two early observations from the live geometry arms, PRELIMINARY and one seed:
+update density orders `r_step` monotonically at four consecutive matched points
+(10 steps > 6 > 5 > 3), and minibatch size looks close to inert once step count
+is held -- `mb_full_e5` (5 steps, 491,520 rows) and `mb_half_e3` (6 steps,
+245,760 rows) scored together at 370M. Minibatch size also does not move
+wall-clock; only epochs does (~16%). Related design finding: because
+`ipmd.actor_learning_rate` (1e-3) EQUALS `optim.max_lr` (1e-3), the KL
+controller cannot compensate a lower update density upward -- it can only
+descend more slowly. Measured at 250M: 8.78e-5 at 10 steps/iteration against
+1.32e-4 at 3, 5 and 6. An arm that wants epochs to be a clean wall-clock knob
+must start the actor below `max_lr`.
+
 ## Linear-closure arm built: affine phi, and the obstruction is measured (2026-08-30)
 
 The affine spectral arm is implemented and its campaign is frozen. Nothing is
