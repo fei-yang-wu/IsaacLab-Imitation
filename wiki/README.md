@@ -44,8 +44,10 @@ so no page becomes orphaned.
 
 - [Linear Closure Problem Statement](linear-closure-problem-statement.md):
   self-contained, shareable statement of the skill-latent linear-closure
-  problem — the bilinear score, the closure definition, hard-linear and
-  chord-penalty relaxations, and the Q1-Q6 discussion questions.
+  problem — the bilinear score, the closure definition, the chosen affine
+  head, and the Q1-Q6 discussion questions with Q2, Q4, and Q6 now settled.
+  The arm it describes is built in
+  `experiments/campaigns/2026-08-30-linear-closure-affine/`.
 - [Tracker Pareto Program](tracker-pareto-program.md): plan of record for
   improving SR, MPJPE-L, and MPJPE-G together — lever evidence, the
   pareto-stack campaign design, the feature menu, and the push-termination
