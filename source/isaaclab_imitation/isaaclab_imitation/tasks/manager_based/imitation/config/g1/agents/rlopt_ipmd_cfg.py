@@ -865,6 +865,72 @@ class G1ImitationTunedRLOptIPMDConfig(G1ImitationLatentSonicRLOptIPMDConfig):
 
 
 @configclass
+class G1ImitationTunedFullBatchRLOptIPMDConfig(G1ImitationTunedRLOptIPMDConfig):
+    """The tuned recipe with the 2026-08-30 optimizer geometry: full batch, 3 epochs.
+
+    Select with ``--agent rlopt_ipmd_tuned_fullbatch_cfg_entry_point``. A NEW
+    class rather than an edit to :class:`G1ImitationTunedRLOptIPMDConfig`, for
+    the reason that class's own docstring gives: the 46.5B and 50B chains and
+    every campaign on the board resolve that contract, and redefining it would
+    change what those runs mean after the fact. The tuned entry point stays
+    exactly as it was and is still the right choice for reproducing them.
+
+    Two fields move, both geometry:
+
+    * ``loss.epochs`` 5 -> 3.
+    * ``loss.mini_batch_size`` -> the whole collected batch, so one optimizer
+      step per epoch.
+
+    Together that is **3 optimizer steps per iteration instead of 10**, on an
+    unchanged 20,480 x 24 = 491,520-frame rollout.
+
+    Measured in `experiments/campaigns/2026-08-30-optimizer-ablation-5b`
+    (arm `mb_full_e3`, seed 0, `diffntp_chunk_h1_ee_wide` encoder), against the
+    same base at the production `3/4 x batch` minibatch and 5 epochs:
+
+    * **+18.9% frames per unit wall-clock** (4.21B vs `mb_full_e5`'s 3.54B in a
+      matched 7h24m). Epochs is the only geometry knob that moves wall-clock;
+      minibatch size does not, because an epoch touches the same rows either
+      way.
+    * Best MPJPE-L of the campaign at matched 3.47B: 28.72 +- 0.11 mm against a
+      29.3-39.2 field, and the highest `reference_finished` share, 0.546.
+
+    WHAT THIS IS NOT, as of promotion (2026-08-30):
+
+    * The campaign had NOT finished. These are 3.47B-frame windows of a 5B
+      budget, one seed, and the arms were still moving.
+    * There is NO matched control. `ctrl` ran on a slow node at ~55k fps and
+      only reached 1.44B. At that frame count every arm INCLUDING this one is
+      inside 2.0 mm of `ctrl` -- and this arm was seventh of eight there. Its
+      lead appears between 1.44B and 3.47B and is supported by one window.
+    * MPJPE-G is worse, not better: 195.6 +- 6.3 mm against `critic_lin`'s
+      169.0 +- 4.1. That is a 15.7% gap, sitting on the resolution boundary.
+      The local-vs-global split is the usual one -- G is root translation
+      drift, L is joint tracking given survival.
+    * **Three epochs is not by itself safe.** `mb_half_e3` -- the same 3
+      epochs at half the minibatch -- was the campaign's WORST arm (39.21 mm,
+      `reference_finished` 0.343) after degrading steadily from ~2.3B. One
+      epochs setting produced both the best and the worst arm, so the variance
+      on this axis is real and this promotion rests on the full-batch cell
+      specifically.
+
+    Promoted on user direction while the campaign was live. Re-read the
+    campaign README for the 5B rows before citing this recipe in a paper.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.loss.epochs = 3
+        # One minibatch per epoch at ANY environment count.
+        # `scripts/rlopt/train_impl.py` clamps `loss.mini_batch_size` down to
+        # the scaled rollout (num_envs x collector.frames_per_batch) for every
+        # on-policy algorithm, so a value above any realistic batch resolves to
+        # exactly the full batch. Setting a literal here instead would silently
+        # become a partial batch the moment `num_envs` changed.
+        self.loss.mini_batch_size = 1 << 30
+
+
+@configclass
 class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
     G1ImitationLatentSonicRLOptIPMDConfig
 ):
