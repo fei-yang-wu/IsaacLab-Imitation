@@ -612,6 +612,12 @@ case "${CLUSTER_PYTHON_EXECUTABLE}" in
     scripts/rlopt/train.py) ;;
     scripts/rlopt/train*.py) rlopt_pipeline=1 ;;
     scripts/rlopt/eval*.py) rlopt_pipeline=1; rlopt_eval=1 ;;
+    # The rendering entrypoints under `scripts/viz/` are in the evaluator
+    # class too: they build the same environment, load the same torch
+    # checkpoint, and construct `AppLauncher` at import. Without this they
+    # fell through to the bare `/isaac-sim/python.sh` branch and died on
+    # `No module named 'torch'` (the same failure as ICE job 5558033).
+    scripts/viz/*.py) rlopt_pipeline=1; rlopt_eval=1 ;;
 esac
 case "${CLUSTER_PYTHON_EXECUTABLE}" in
     scripts/rlopt/train*.py|scripts/rlopt/eval*.py)

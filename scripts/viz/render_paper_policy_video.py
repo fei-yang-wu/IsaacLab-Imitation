@@ -101,7 +101,31 @@ Example (latent hold-1 recipe; everything after the flags is Hydra):
 from __future__ import annotations
 
 import argparse
+import os
+from pathlib import Path
 import sys
+
+# In the split container runtime Kit's Python is the only interpreter that has
+# both Kit and Torch, but Torch lives in the CU130 site-packages and has to be
+# put on the path first. `AppLauncher.__init__` imports Torch, so the bridge has
+# to run BEFORE the launcher is constructed, not before the first explicit
+# `import torch` further down. Outside the container it finds nothing and does
+# nothing. Without it a cluster render died on `No module named 'torch'` and
+# still exited 0 (ICE job 5593845).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+# The container's PYTHONPATH does not carry the shared experiment package, so
+# `imitation_experiments.provenance` is unimportable there (ICE job 5593919).
+# `eval_checkpoint_tree.py` makes the same two insertions for the same reason.
+sys.path.insert(0, str(_REPO_ROOT / "source" / "imitation_experiments"))
+sys.path.insert(0, str(_REPO_ROOT / "scripts" / "rlopt"))
+
+from runtime_bootstrap import configure_cu130_bridge, verify_cu130_torch
+
+_cu130_site_packages = configure_cu130_bridge(
+    required=os.environ.get("ISAACLAB_REQUIRE_CU130_RUNTIME") == "1"
+)
+if _cu130_site_packages is not None:
+    verify_cu130_torch(_cu130_site_packages)
 
 from isaaclab.app import AppLauncher
 
@@ -393,9 +417,7 @@ simulation_app = app_launcher.app
 
 import json
 import math
-import os
 import tempfile
-from pathlib import Path
 from typing import Any, Literal, cast
 
 import gymnasium as gym
