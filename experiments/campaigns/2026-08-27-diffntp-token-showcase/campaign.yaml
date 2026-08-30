@@ -1,0 +1,292 @@
+# Re-score the `diffntp_token_h1_ee_wide` final checkpoint on the canonical
+# 4,096-clip board and render policy-only showcase clips from it -- both on
+# ICE, where the tree already lives, so no checkpoint moves.
+#
+# The arm is round 4 of `2026-08-22-pareto-stack`: generative next-TOKEN
+# prediction (`--jepa_ntp_head diff_token`), the clean one-variable estimator
+# swap against the hub's conditional-mean MLP predictor. It trained to 2B in
+# one segment and stopped there; `model_step_2000289792.pt` is its last and
+# final checkpoint.
+#
+# Existing rows for this arm (local mirror, 2026-08-26):
+#   clean  `bones_testbed4096_v1`          0.9121 / 24.44 / 86.29
+#   f2.0B  `bones_milestone_testbed256_v1` 0.9258 / 24.11 / 84.20
+# The `robust` row was never scored. `clean` is re-scored here as a second
+# sample of an Isaac evaluation that is not deterministic.
+#
+# The interface fields below MUST match the arm's training row in
+# `experiments/campaigns/2026-08-22-pareto-stack/campaign.yaml`. The arm is the
+# hub interface at hold 1; only the encoder objective moved, and the encoder is
+# a frozen file either way.
+name: diffntp-token-showcase
+profile: ice
+wandb_project: g1-bones-seed
+wandb_group: pareto-stack-2b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  seed: 0
+  arm_tree: /data/pareto_stack/${vars.arm}_seed${vars.seed}
+  encoder_ckpt: ${vars.arm_tree}/encoder/checkpoints/latest.pt
+  # The trainer layout, one run directory holding every checkpoint, one
+  # segment: the file name IS the cumulative frame count, and
+  # `score_tree.plan_cells` reads it directly. Each arm names its own run
+  # directory; a second, empty one exists in both trees and is ignored.
+  run_dir: SET_PER_ARM
+  final_ckpt: ${vars.arm_tree}/tracker/${vars.run_dir}/models/model_step_2000289792.pt
+  eval_root: /data/eval/diffntp_token_showcase
+  video_root: /data/eval/diffntp_token_showcase/video
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  board: bones_testbed4096_v1
+  steps: 10000
+
+  # The hub interface at hold 1, exactly as the arm trained.
+  hold: 1
+  z_dim: 256
+  command_dim: 258
+  code_latent_dim: 256
+  phase_mode: sin_cos
+  phase_source: hold
+  phase_period: 0
+  command_mode: z
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  scaled_cells: "[2048,2048,1024,1024,512,512]"
+  runtime_body_names: "[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+
+  # Everything the evaluator needs except the row's own randomization profile.
+  eval_common:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent_entry_point
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --action_sampling
+    - mode
+    - --steps
+    - "${vars.steps}"
+    - --seed
+    - "0"
+    - --reference_start_frame
+    - "0"
+    - --reset_schedule
+    - sequential
+    - --skill_encoder_source
+    - pretrained
+    - --headless
+    - physics=newton_mjwarp
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - env.events.push_robot=null
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cuda:0
+    - env.data.reference_prefetch_mode=off
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=${vars.runtime_body_names}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.command_phase_source=${vars.phase_source}
+    - agent.ipmd.latent_learning.command_phase_period=${vars.phase_period}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+    - env.terminations.anchor_pos.params.threshold=0.25
+    - env.terminations.anchor_pos.params.down_threshold=0.25
+    - env.terminations.anchor_ori.params.threshold=1.0
+    - env.terminations.ee_body_pos.params.threshold=0.25
+    - env.terminations.ee_body_pos.params.down_threshold=0.25
+    - env.terminations.foot_pos_xyz=null
+    - env.terminations.base_too_low=null
+    - agent.policy.num_cells=${vars.scaled_cells}
+    - agent.policy.activation_fn=silu
+    - agent.value_function.num_cells=${vars.scaled_cells}
+    - agent.value_function.activation_fn=silu
+
+  # The renderer builds its own scene: it forces one environment, disables
+  # every termination term and domain randomization, and refuses a Newton
+  # selection because the Kit RTX camera exists only under PhysX. So this list
+  # carries the command interface and the data source, and nothing else.
+  video_common:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent_entry_point
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --checkpoint
+    - ${vars.final_ckpt}
+    - --output_dir
+    - ${vars.video_root}
+    - --style
+    - studio_light
+    - --shot
+    - hero_low
+    - --seed
+    - "0"
+    - --headless
+    - physics=physx
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=false
+    - env.data.reference_arrays_warm_workers=8
+    - env.data.runtime_cache_device=cuda:0
+    - env.data.reference_prefetch_mode=off
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=${vars.runtime_body_names}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.command_phase_source=${vars.phase_source}
+    - agent.ipmd.latent_learning.command_phase_period=${vars.phase_period}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+    - agent.policy.num_cells=${vars.scaled_cells}
+    - agent.policy.activation_fn=silu
+    - agent.value_function.num_cells=${vars.scaled_cells}
+    - agent.value_function.activation_fn=silu
+
+  # No `--rescore`: a stage whose row already exists on ICE plans zero cells
+  # and returns before Isaac Sim starts, so a re-submission of this chain
+  # repeats only the rows that are missing.
+  # `concat` returns a list, so a stage's `args` must be ONE concat call, not a
+  # literal list with a concat inside it. The per-row head carries the cell
+  # identity and the randomization profile; `eval_common` carries the rest.
+  clean_head:
+    - --tree
+    - ${vars.arm_tree}
+    - --output_root
+    - ${vars.eval_root}
+    - --arm
+    - ${vars.arm}
+    - --seed
+    - "${vars.seed}"
+    - --row
+    - clean
+    - --board
+    - ${vars.board}
+    - --final_only
+    - --
+    - --randomization
+    - none
+  robust_head:
+    - --tree
+    - ${vars.arm_tree}
+    - --output_root
+    - ${vars.eval_root}
+    - --arm
+    - ${vars.arm}
+    - --seed
+    - "${vars.seed}"
+    - --row
+    - robust
+    - --board
+    - ${vars.board}
+    - --final_only
+    - --
+    - --randomization
+    - no_push
+  video_ranks:
+    - --ranks
+    - "2389"
+    - "72338"
+    - "121035"
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.arm_tree}/tracker
+    - ${vars.encoder_ckpt}
+    - ${vars.final_ckpt}
+  output_container_path: ${vars.eval_root}
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+arms:
+  diffntp_token_h1_ee_wide:
+    vars:
+      run_dir: 2026-08-26_07-44-02_wandb-ps-dntpt-s0-0a47e6
+    stages:
+      # Row of record. `--final_only` scores the last checkpoint alone.
+      - &clean_stage
+        name: clean
+        executable: scripts/rlopt/eval_checkpoint_tree.py
+        time_limit: "02:00:00"
+        gres: gpu:h200:1
+        mem: 160G
+        cpus_per_task: 16
+        args: ${concat:${vars.clean_head},${vars.eval_common}}
+
+      # Same board and checkpoint under domain randomization with pushes off.
+      # Serialized behind `clean`: two evaluation jobs that started minutes
+      # apart shared one Isaac Sim cache and the second died inside Kit startup
+      # (ICE 2026-08-27, hold5-curve-eval).
+      - &robust_stage
+        name: robust
+        executable: scripts/rlopt/eval_checkpoint_tree.py
+        depends_on: clean
+        dependency_kind: afterany
+        time_limit: "02:00:00"
+        gres: gpu:h200:1
+        mem: 160G
+        cpus_per_task: 16
+        args: ${concat:${vars.robust_head},${vars.eval_common}}
+
+      # Policy-only showcase clips, PhysX and the Kit RTX camera. The three
+      # ranks are surviving clips of the arm's own clean row, picked for low
+      # local error and enough length to read as a clip: 2389
+      # walk_forward_loop (1041 control steps, L 12.52 mm), 72338
+      # dancing_routine_1 (820, 12.90), 121035 reach_jump_R (661, 12.32).
+      - name: video
+        executable: scripts/viz/render_paper_policy_video.py
+        depends_on: robust
+        dependency_kind: afterany
+        time_limit: "03:00:00"
+        gres: gpu:h200:1
+        mem: 120G
+        cpus_per_task: 16
+        env:
+          CLUSTER_SIM_BACKEND: physx
+        args: ${concat:${vars.video_common},${vars.video_ranks}}
+
+  # The round-4 winner and the arm promoted to 50B, scored on the same board
+  # and the same protocol so its rows read against the token arm's. Its
+  # showcase clips render locally instead, on the mirrored checkpoint.
+  diffntp_chunk_h1_ee_wide:
+    vars:
+      run_dir: 2026-08-26_07-47-46_wandb-ps-dntpc-s0-929037
+    stages:
+      - *clean_stage
+      - *robust_stage

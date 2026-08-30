@@ -56,6 +56,8 @@ ARMS_TABLE=(
 # 30B continuations from 2026-08-21-sonic-reset-30b, same recipe as the 20B
 # rows, budget the only change.
 "ln_hold1_sonicreset|30000021504|256|258|1"
+# 50B chain, 2026-08-27 (adaptive_uniform_ratio 0.05 for its last 20B).
+"ln_hold1_sonicreset|49000218624|256|258|1"
 "fsq64_hold10_sonicreset|30000021504|64|66|10"
 # Online-dynamics finetune arms (dyn_block: achieved ring + offline DiffSR,
 # pg_coeff=0). Encoder read from the tracker checkpoint, see note above.
