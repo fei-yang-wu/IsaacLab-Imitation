@@ -38,11 +38,14 @@ follow and in the linked campaign pages.
    This is a pretraining result, not proof that the tracker is indifferent to
    intermediate states. The rot6d re-anchoring mismatch remains an open data
    plane issue for affected non-production arms.
-3. **Past state chunks as conditioning.** The pretraining code now supports a
+3. **Past state chunks as conditioning.** The pretraining code supports a
    past state chunk in `phi`, with current-state and past-start anchoring
-   variants. Focused and full RLOpt tests passed before the latest evaluation
-   fix, but the real pipeline smoke exposed a remaining single-frame
-   evaluation path. This work is not submitted and has no tracking result.
+   variants. Both are now scored. On pretrain eval, `srccur10` did not beat
+   its `h10` control (+5.1% endpoint, overlapping seed ranges, unresolved). On
+   tracking at 500M it is a null against the same control at two checkpoints:
+   SR inside the replicate band, MPJPE-L about 1 mm better, MPJPE-G 42 to
+   50 mm worse on the robust row. `srcpast10` stays a pretrain diagnostic and
+   cannot be bound to a tracker.
 4. **Policy smoothness.** The action-rate penalty is useful, but it is not the
    conclusion. From-scratch results show a favorable jerk trade, while the
    trained-in EMA action filter gives the current smoothness records but costs
@@ -263,41 +266,294 @@ for both. So the current read is that the affine constraint buys exact score
 interpolation for a small tracking cost and an apparent smoothness gain;
 whether that trade holds at 5B is open.
 
-## The command-interface star is rebased on `diffntp_chunk` (2026-08-30)
 
-User decision: the 72-arm interface ablation is re-run against a new hub,
-because `diffntp_chunk_h1_ee_wide` beats the v1 hub `ctrl` on all three
-canonical metrics — 0.9163 / 24.07 / 84.69 against 0.9023 / 24.49 / 212.3 on
-`bones_testbed4096_v1` clean, a 2.5x difference in global error. Every v1
-main effect is conditional on a hub that is no longer competitive, and three
-of them are already known to be conditional: the objective ordering inverts
-(the v1 star's worst converged objective is this hub's ancestor), the hold
-effect was measured on one objective only, and the width and quantization
-verdicts came from a loss with no marginal regularizer.
+## FIXED: every pre-2026-08-30 checkpoint was unevaluatable (2026-08-30)
 
-Design page: [latent-learning-star-v2.md](latent-learning-star-v2.md). Axes:
-A what the encoder predicts (predictive generative / predictive mean /
-other predictive targets / reconstruction / posterior-in-RL; contrastive
-excluded), B continuous versus discrete, C encoder input and window size,
-D publication cadence, E frozen versus finetuned versus learned-in-RL,
-F loss detail and seed. Census: 62 rows, 16 already MEASURED at the hub's
-cell inside `2026-08-22-pareto-stack`, 1 trained-unscored, 45 to train —
-about 118 ICE segments. The page carries a four-step cut line down to 33
-new arms that keeps every family claim.
+**Fix shipped** (submodule edit, RLOpt): `IPMD.load_model` now calls a new
+`_load_optimizer_state_dict`, which compares the saved and live param-group
+counts, and on a mismatch logs a warning naming both counts and skips the
+optimizer restore instead of raising. Evaluation is unaffected by the skip —
+the policy is already restored before that line — and a training resume
+continues with fresh optimizer moments, which the warning states because it
+changes the first updates after the restore. Test:
+`test_optimizer_restore_survives_a_param_group_count_change` in
+`RLOpt/tests/test_ipmd_components.py`, asserting both that a legacy 2-group
+state dict is skipped and that a matching one still restores. `pixi run
+test-rlopt` passes, 209 tests.
 
-Scored while assembling the table (4,096 clean, one seed, first rows for
-both): `diffntp_chunktok` 0.9189 / 23.55 / 88.92 and `diffntp_chunkra`
-0.9194 / 24.74 / 106.45. `chunktok` beats the hub on success rate and local
-error and is 5% worse globally, all inside the band.
+The failure, for the record:
 
-Four gates before any v2 arm is submitted: pin
-`env.rewards.feet_acc.weight=-2.5e-7` against the 2026-08-28 in-place
-correction; decide the rot6d convention (it distorts every re-anchored and
-EMA-token target, though not the hub's); score `diffntp_merged` so
-`merged64`'s lead becomes attributable; smoke one pretrain per quantizer
-family. Two v2 arms are already written into the pareto-stack
-`campaign.yaml` and NOT submitted: `diffntp_chunk_nosig_h1_ee_wide` and
-`diffntp_chunk_h1_ee_wide_s1`.
+`evaluate_checkpoint.py` failed on every checkpoint written before today with
+`ValueError: loaded state dict has a different number of parameter groups`,
+raised from `IPMD.load_model` at `RLOpt/rlopt/agent/ipmd/ipmd.py:3177`
+(`self.optim.load_state_dict(data["optimizer_state_dict"])`).
+
+Cause: RLOpt commit `27e8741` (today 12:01, "critic LR schedule and a
+no-decay log_std group") moves the actor's `log_std` into its own
+`weight_decay=0.0` param group, taking the optimizer from two groups to
+three. Verified against the checkpoints themselves: `diffntp_merged`,
+`diffntp_merged64` and `diffntp_chunk` all carry
+`optimizer_state_dict` with 2 groups of sizes [15, 14], so the checkpoints
+are fine and the live optimizer is what changed.
+
+Scope: the whole back catalogue. `diffntp_merged64` scored cleanly on
+2026-08-28 through the same path and fails today. Training resume from any
+pre-today checkpoint hits the same line.
+
+The failure is quiet in the way flagged on 2026-08-27: the single-checkpoint
+job exits 0 and writes no row, so only the missing output file reveals it.
+
+It blocked the star-v2 curve backfill for `diffntp_chunktok`,
+`diffntp_merged64` and `diffntp_merged` — all three mirrored off ICE today
+with their eight checkpoints, 0 of 24 cells scored — which is how it was
+found.
+
+## Star v2 reorganized into the paper's three sections (2026-08-31)
+
+User decision: the ablation reports as three tables, not six groups.
+
+1. **Factorization target** — what the encoder predicts. Default is the next
+   chunk `s[t+10..t+20]`; alternatives are endpoint, next latent token,
+   endpoint delta, successor occupancy, semi-Markov, the split two-head form,
+   and triplet context.
+2. **Predictive architecture** — how the prediction is estimated. Generative
+   DiffSR versus a deterministic conditional mean, versus reconstruction,
+   versus a posterior learned in RL, plus the target-asymmetry family and the
+   online encoder finetune.
+3. **Remaining design choices** — latent prior (continuous width, FSQ, VQ,
+   categorical), encoder input space (joint velocities, stride, full versus
+   intermediate window, anchor frame, horizon), and publication cadence
+   (hold 5, hold 10, hold 10 without the phase clock).
+
+The mapping lives in `campaign.yaml` itself as `section` / `section_label` /
+`section_group` on each arm, so the tables cannot drift from the configs.
+`imitation_experiments.reporting.ablation_sections` renders them with per-arm
+status and, as rows are scored, success rate and both MPJPE columns; run it
+with `experiments/campaigns/2026-08-30-latent-star-v2/sections.sh`. Status is
+derived from three independent signals (scored row, deepest checkpoint, Slurm
+state) and an unknown prints `-`, never a zero. 19 unit tests.
+
+**A section-1 cell is missing.** The joint next (state, token) target —
+round 4's `diffntp_pair`, `--jepa_ntp_head diff_pair` — was never added to the
+campaign, so the target axis has chunk, endpoint, token and delta but no pair.
+One arm closes it.
+
+Status at 2026-08-31: 41 arms, 20 training, 19 pretraining, 2 pending, no
+failures since the quota repair. Nothing scored yet.
+
+## Star v2 first training signal: hub healthy, pretrained VQ fails at the TRACKER (2026-08-31)
+
+All 41 arms are training; 21 of 34 pretrains have completed and throughput is
+about 138k fps, so a 5B arm takes roughly 10 hours and fits inside ONE 15:59
+segment (segment 2 will mostly resume, see the budget already met, and exit).
+
+**The hub gate passes.** Episode length over its first 1.1B frames:
+106.5 at 0.12B, 141.9, 185.5, 199.4 at 0.48B, then 169.8 / 163.4 / 173.0 /
+149.2 / 149.0. The 64-D hold-1 stall this hub was chosen to avoid
+(`leader64_h1_nophase`) sat flat at 50-62 through 0.84B, so the hub is nowhere
+near it. The dip after 0.48B is the reset ramp doing its job, not decay:
+`adaptive_uniform_ratio` falls 0.8 -> 0.2 across the first 1B frames, so the
+failure-weighted share of reset starts rises 20% -> 80% and episodes get harder
+by construction.
+
+**Pretrained VQ fails in the TRACKER, with a provably healthy encoder.** This
+is sharper than the v1 verdict. `g1_recon_vq` pretrained cleanly — 50,000
+updates, code perplexity 275-279 of 512, reconstruction loss 0.0298 against
+0.148 with the code zeroed and 0.176 shuffled — and its tracker is still flat
+at episode length 15-30 from 0.05B to 0.61B, while its FSQ twin `g1_recon_fsq`
+runs 160-195 on the same frames. v1 could only say "the frozen pretrained
+codebook fails" because there the encoder had collapsed too; here the code is
+informative and the tracker still cannot use it. `g3_vq64` (same route, SIGReg
+active) is the remaining cell and has not reached its tracker yet.
+
+Two arms are low but expected: `g2_lejepa_online` 73.4 and `g2_lejepa_sg` 91.1,
+matching v1 where the online LeJEPA cell collapsed to 0.7048 and the stop-grad
+one reached 0.8384. Everything else sits at 108-169.
+
+**Disk is the live constraint.** Scratch is at 151 GB of 300 GB with the
+campaign tree at 50 GB. The campaign still needs about 260 GB more against
+149 GB free, so it fills near **2.5-3B of the 5B budget**. The cheapest
+recovery is the encoder `best.pt` files: 1.34 GB per pretrained arm, about
+45 GB across the star, and nothing ever reads them (`mirror.sh` pulls only
+`latest.pt`).
+
+## ICE scratch quota killed 38 star-v2 jobs; repaired (2026-08-31)
+
+**33 pretrains and 5 tracker chains died on `OSError: [Errno 122] Disk quota
+exceeded`** writing their encoder checkpoint, about 5 minutes into each job.
+ICE scratch was at 300.1 GB against a 300.0 GB hard cap. Not a partition or
+code problem: the jobs reached the GPU, built the CUDA graph, and failed at the
+first save.
+
+**The campaign does not fit the quota as configured, and this is arithmetic,
+not bad luck.** Per arm: a tracker checkpoint is 213 MB and the 200M interval
+over 5B writes 25 of them (5.3 GB), and a pretrained encoder writes
+`latest.pt` AND `best.pt` at 1.34 GB each (2.67 GB). Across 41 arms that is
+about 218 GB of trackers plus 91 GB of encoders — roughly 309 GB, on a 300 GB
+quota that already held 264 GB of other campaigns. Only `latest.pt` is ever
+read; `best.pt` is pure overhead.
+
+**Freed 187 GB** by user decision: `endpoint_collapse_probe` (68 GB) MOVED to
+`/storage/ice-shared/vip-vwt/scratch-fwu91/archived_data/` (ice-shared is 2 TB,
+24% used), and `smooth_ablation_5b`, `optimizer_ablation_5b`, `emastack_20b`,
+`sonic_reset_50b`, `diffntp_50b`, `diffntp_history`, `leader64_gate`,
+`encoder_interface_500m`, `sidecar_smoke` deleted (119 GB). `pareto_stack` was
+kept. Slurm logs moved to ice-shared too — 493 of 518 files, 34 GB, skipping
+the 27 belonging to running jobs — and `profile_ice.yaml` now writes new logs
+there.
+
+Scratch went 300.1 GB -> 127.8 GB (42.6%).
+
+**Repair, in order:** held the 67 pending jobs to stop the cascade, released
+the 7 healthy arms, cancelled the 60 queued jobs of the 34 broken arms whose
+dependencies could never be satisfied, then resubmitted all 34. All 41 arms are
+back in the queue as 112 jobs with 30 running and zero failures since.
+
+**The wall is still ahead.** 172 GB free minus about 60 GB for the 30
+outstanding encoders leaves roughly 112 GB of tracker room, and all 41 arms
+together write about 8.7 GB per 200M-frame wave. That is about 12 waves, so
+scratch fills again near **2.4B of the 5B budget** unless checkpoints are
+archived to ice-shared during the run. The user chose to keep the 200M interval
+and manage the moves.
+
+## ICE capacity: `coe-gpu` has 3x the H200s of the profile default (2026-08-31)
+
+The star-v2 queue sat 36 jobs deep on `Priority` because the ICE profile
+submits to `ice-gpu`, which holds only 6 H200 nodes. Measured the same hour:
+
+| partition | H200 nodes | H200 GPUs | free |
+|---|---:|---:|---:|
+| `ice-gpu` (profile default) | 6 | 48 | 7 |
+| `coe-gpu` | 18 | 144 | **60** |
+
+Our association holds `coc-ice`, `coe-grade`, `coe-ice`, `pace-grade`.
+`coe-gpu` accepts `coe-ice`/`coe-grade`, `coc-gpu` accepts `coc-ice`,
+`pace-gpu` accepts `pace-grade` — but **neither `coc-gpu` nor `pace-gpu` has
+any H200** (L40S, A100, V100, A40, RTX 6000, MI210), so neither substitutes for
+a 20,480-environment job until someone measures whether it fits in 80 GB.
+
+Moving an already-queued job needs no resubmission:
+`scontrol update JobId=<id> Partition=coe-gpu`. Applied to all 106 pending
+star-v2 jobs, running jobs went from 6 to 31 in under a minute. The campaign
+now pins `partition: coe-gpu` + `qos: coe-ice` per stage (set both together —
+a partition names the QoS it accepts). The profile default is unchanged, so
+other campaigns still go to `ice-gpu`.
+
+## Star v2 SUBMITTED: 38 arms, 110 ICE jobs (2026-08-31)
+
+`experiments/campaigns/2026-08-30-latent-star-v2/`, W&B project
+**`g1-bs-ablation`**, group `latent-star-v2`. `hub` is jobs 5600005-07 and the
+rest run 5600008-5600122. Nothing measured.
+
+**Regime, set by the user at launch:** 20,480 environments, ee + wide rewards
+with `action_rate_l2` -0.03, the SONIC reset selection with the failure share
+ramped 0.8 -> 0.2 across the first 1B frames, **5B** budget, checkpoints every
+200M (25 curve points). The ramp keys off `common_step_counter`, which restarts
+per segment, so segment 1 carries the ramp and segment 2 pins the landed 0.2.
+The preset must be `sonic`: under `random80_adaptive20` the outer
+`random_trajectory_sampling_ratio=0.8` wrapper stays active and the effective
+failure share would move 4% -> 16% instead of 80% -> 20%.
+
+**Group 5 is held**, not forgotten: `g5_hold5`, `g5_hold10` and
+`g5_phase_none_h10` bind the hub's encoder file, which does not exist until job
+5600005 completes. Submit them then.
+
+**Two risks accepted at launch, both recorded before it.** The hub is
+unqualified — its exact combination has never been trained, and the intended
+gate was to run it alone first and compare its episode-length slope against
+`diffntp_merged64`'s curve; do that as soon as its first checkpoints land.
+And Group 2b went out before the rot6d convention was decided, so eight arms
+(`g2_mlp`, `g2_nosig`, `g2_sg`, `g2_online`, the three `g2_lejepa_*`,
+`g2_trip`, `g2_token`) are training against a distorted token target.
+
+**Pretrained VQ is submitted knowing it is likely dead, and the reason is
+route-specific.** v1 measured both routes and they disagree: `bn_vq_ema`
+(pretrained, frozen codebook) scored 0.0000 while the same quantizer learned
+during RL trained normally — `post_recon_vq` 0.8945, `post_pgrecon_vq` 0.8867,
+`post_pg_vq` 0.8828. What fails is the frozen pretrained codebook, not vector
+quantization. A probe on 2026-08-30 ran the hub objective with VQ at the
+production batch for 400 updates with and without
+`--vq_dead_code_reset_iters 25`: identical and collapsed either way, code
+perplexity 1.0, usage 1/512, `z_dim_std_mean` 2.4e-9. Revival never fires
+because `dead_code_frac` is 0.0 — the EMA cluster sizes never fall under the
+threshold even while one code takes every sample. `z_effective_rank` reads a
+spurious 26.5 on the all-zero covariance and cannot detect this; perplexity
+can. 400 updates is 0.8% of the pretrain, so it does not settle whether SIGReg
+rescues the codebook at full budget, which is why `g3_vq64` was submitted.
+
+**Before launch the wiring smoke ran 35 pass / 2 fail / 4 skipped** and caught
+two configuration errors that reading the code had missed, both fixed and
+re-smoked:
+
+1. **`g2_trip` used a diffusion head with triplet context.** RLOpt validates
+   that the diffusion NTP heads support only the chunk pair
+   (`jepa_context_chunks=0`), so the triplet arm uses the MLP head and its
+   control is `g2_mlp`.
+2. **`g6_dyn` cannot run at the hub.** The online finetune requires
+   `jepa_ntp_head='mlp'` and refuses every diffusion head, so "dyn on the new
+   hub" is impossible without an RLOpt change. The arm now sits on the
+   conditional-mean cell against `g2_mlp`, and **the frozen-versus-finetuned
+   axis is not measured at the hub.**
+
+## Command-interface star v2: hub confirmed, 41 arms (2026-08-30)
+
+The interface ablation is rebased on a new hub and re-scoped into six groups.
+Design page: [latent-learning-star-v2.md](latent-learning-star-v2.md).
+
+**Hub, confirmed with the user.** The merged-head cell: ONE diffusion head
+denoising `s[t+10..t+20]` (`--jepa_ntp_chunk_span boundary_next
+--jepa_endpoint_coeff 0`), continuous **64-D** with the phase channel kept
+(command 66), hold 1, window 10, `robot_heading`, ee + wide rewards,
+**`action_rate_l2` -0.03**, `feet_acc` **-2.5e-6** (corrected), reset
+selection `random80_adaptive20`, **20,480 environments**, 2B frames,
+checkpoint every **200M** frames for 10 curve points.
+
+**Why the merged head rather than the two-head `diffntp_chunk`.** At 64-D and
+hold 1 the two-head form has never trained — `leader64_h1_nophase` stalled at
+0.84B (episode length 50-62, MPJPE-L flat about 51 mm) against a 256-D
+control at 166 / 42.6 mm by 0.17B, with a provably healthy encoder pretrain.
+The merged head at that width and hold works twice: `diffntp_merged64`
+0.9207 / 24.54 / 91.12 at 2B and `merged64_pen_ramp_5b` 0.9543 at 5B. The
+stalled arm also dropped the phase channel, so width and phase are confounded
+in that one failure; the hub keeps phase, and `g5_phase_none_h10` separates
+them at last.
+
+**Groups (41 arms, about 115 ICE segments).** 1 reconstruction and posterior
+(7), 2a factorization targets (6), 2b predictor form (10), 3 encoder space
+design (6), 4 input and window (7), 5 cadence (3), 6 encoder adaptation (1),
+plus the hub.
+
+**The 16 v1-regime rows are context, not table rows.** They sit four fields
+from the hub (256-D, 16,384 environments, no penalty, weak `feet_acc`), so
+they support no one-variable v2 claim. The user's decision (2026-08-30) is
+therefore to re-train the ten JEPA-family predictor-form arms at the v2 hub
+as Group 2b rather than cite them across regimes; the rest stay as a
+historical panel. Their curves can only ever be 8 points either way — those
+arms ran with `agent.save_interval=250000000`, and no re-evaluation can
+write a checkpoint that was never saved. The 250M and 200M grids coincide
+only at 1.0B and 2.0B.
+
+**Curve backfill DONE.** All 27 arms of the family now carry complete 8-point
+milestone series (`logs/report/milestone_curve.csv`, 620 rows). The three
+that were missing — `diffntp_chunktok`, `diffntp_merged64`, `diffntp_merged`
+— were mirrored off ICE and scored 8/8 each once the optimizer fix landed.
+
+**`diffntp_merged` scored for the first time: 0.9004 / 26.47 / 115.76** on
+4,096 clean. Two readings, one safe:
+
+- SAFE — at 256-D the separate endpoint head earns its place. Two-head
+  `diffntp_chunk` 0.9163 / 24.07 / 84.69 beats merged-256 on all three,
+  exactly as predicted from folding the endpoint into 1 of 11 slots and
+  cutting its grounding pressure about tenfold.
+- UNRESOLVED — whether the merged head prefers 64-D. At 2B `merged64`
+  (0.9207 / 24.54 / 91.12) beats merged-256 on all three, but merged-256
+  regressed over its last 500M on the milestone board (0.9219 / 24.34 /
+  81.09 at 1.5B down to 0.8945 / 25.14 / 93.34 at 2.0B) and its 1.5B point
+  is level with `merged64`'s 2B. Checkpoint variance exceeds evaluation
+  noise here; report the neighbour.
+
+**Disk hazard:** `/mnt/hsstorage` is at 100% with 7.1 GB free; the
+pareto-stack mirror alone holds 70 GB.
 
 ## Linear-closure program: the affine spectral EBM is the only arm (2026-08-29)
 
@@ -333,6 +589,93 @@ Consequences recorded with the decision:
   joint training with `E`, and executability of the frozen tracker on mixed
   latents stays open: the alpha-sweep probe (survival, jerk, lawfulness)
   remains the falsifier.
+
+## Optimizer ablation ENDED: seven arms at 5B, the control at 2B (2026-08-31)
+
+Every job of `optimizer-ablation-5b` has left the queue. `mb_full_e3`,
+`mb_full_e5`, `mb_half_e3`, `mb_half_e5`, `critic_lin`, `wd_1e2` and `wd_1e4`
+reached the full 5B. Five arms did not: `ctrl` 2.00B, `floor_late` 1.75B,
+`wd_1e1` 0.75B, `ent_only` 0.75B, `ent_sonic` 0.25B. The campaign README
+carries the per-arm table.
+
+`wd_1e1` and `floor_late` died on `IPMD._abort_on_nonfinite`
+(`train/step_reward_mean` non-finite at 0.94B and 1.93B cumulative frames).
+The guard stopped each chain instead of writing poisoned checkpoints, and both
+`lowlevel2` jobs were `DependencyNeverSatisfied`; they were cancelled
+2026-08-31 along with `ctrl`'s seg1 (5598837, running at 44k fps on a slow node
+against 136k elsewhere) and its orphaned seg2.
+
+**Consequence for the promoted optimizer geometry.** The full-batch/3-epoch
+recipe was promoted on `mb_full_e3` at a 3.47B window with no matched control,
+and `ctrl` was the arm that would have supplied one. `ctrl` now stops at 2.00B,
+so the promotion keeps resting on an unmatched comparison until a `ctrl`
+resume runs to 5B on a fast node. The two `past-chunk-affine-64d` arms
+submitted 2026-08-31 use the promoted geometry.
+
+## Past-chunk conditioning SUBMITTED at 64-D, concat vs affine (2026-08-31)
+
+Two arms, 5B frames each, seed 0, W&B group `past-chunk-affine-64d`. Campaign:
+`experiments/campaigns/2026-08-30-past-chunk-affine-64d/`. Both give `phi` a
+five-frame past chunk (`--source_history_steps 5 --source_anchor current`,
+228-value source); they differ only in `--diffsr_phi_parameterization`, concat
+against affine. ICE chains 5599861-5599863 (`p5_concat`) and 5599864-5599866
+(`p5_affine`), each pretrain plus two tracker segments.
+
+Five frames, not ten, because the Tier B linear probe reads R2 0.751 from two
+past frames and 0.730 from eleven, so the extrapolation information saturates
+early and the wider source buys nothing.
+
+Both arms take the merged star-v2 hub objective
+(`--jepa_ntp_chunk_span boundary_next --jepa_endpoint_coeff 0`, `--z_dim 64`,
+command 66) because the two-head `diffntp_chunk` form has never trained at
+64-D hold 1. That makes the affine axis here NOT comparable with the 256-D
+`linear-closure-affine` pair: head and width both move.
+
+Two limits recorded at submission. There is no matched no-past control at 64-D
+in this campaign, by user decision, so the nearest reference is
+`merged64_pen_ramp_5b`, which also differs by pretrain provenance, a
+16,384-environment rollout, and the frozen optimizer geometry. And both
+submissions carry `drift=true`, so neither is reproducible from a git SHA.
+
+The interpolation probe stage was deliberately omitted:
+`probe_latent_interpolation` loads `diffsr_state_dict`, the endpoint head,
+which `--jepa_endpoint_coeff 0` leaves untrained. The merged head is
+`jepa["ntp_diffsr"]` and the probe cannot load it yet.
+
+## Encoder-interface 500M scored: the horizon cliff is the only resolved row (2026-08-30)
+
+Tier C of the endpoint-collapse investigation. Nine encoders, one tracker
+recipe, 500M frames each, seed 0, scored on `bones_testbed4096_v1` with clean
+and `no_push` rows. Campaign and full table:
+`experiments/campaigns/2026-08-30-encoder-interface-500m/README.md`.
+
+**The noise floor came out of the campaign itself.** `prod`, `suffix9` and
+`h10` are the same pretrain recipe run three times. Their clean spread is
+0.0064 SR, 0.46 mm MPJPE-L and 10.8 mm MPJPE-G. Checkpoint-to-checkpoint
+movement inside one arm is larger: `h10` clean SR moves 0.0135 and MPJPE-G
+16.4 mm between `f400195584` and `f500170752`.
+
+**Resolved: horizons 1 and 2 collapse.** `h1` 0.7878 and `h2` 0.7891 clean SR
+against `h5` 0.8677 and `h10` 0.8765, and about 0.13 SR on the robust row.
+That is more than ten times the replicate spread, and `ee_body_pos`
+terminations roughly double (399-468 at horizon 10, 743-748 at horizons 1 and
+2). `h1` was a ceiling reference by construction, so `h2` carries the result.
+
+**Not resolved: what the encoder sees inside a horizon-10 window.** Every
+suffix arm sits inside the replicate band. The two-visible-slot pretrain
+advantage from Tier B does not reappear in tracking: `suffix2` 0.8723 and
+`suffix9` 0.8701 are level.
+
+**Null: past-chunk conditioning in `phi`.** `srccur10` against its matched
+`h10` control, both checkpoints scored. SR +0.001 to +0.005, inside the band.
+MPJPE-L about 1 mm better at both checkpoints, a consistent sign but only 3%.
+MPJPE-G worse at both: about 10 mm clean, inside checkpoint variance, and 42
+to 50 mm on the robust row, roughly twice the replicate spread. The +5.1%
+pretrain endpoint penalty neither survived nor reversed.
+
+500M is a screen. This recipe's milestone curve flattens only past roughly 3-4B
+and the failure-share ramp is still mid-sweep at 0.5, so every ordering here is
+a hypothesis about the 5B ordering.
 
 ## Endpoint-collapse probe: does the diffntp_chunk z summarize the window or just the boundary? (2026-08-29)
 
