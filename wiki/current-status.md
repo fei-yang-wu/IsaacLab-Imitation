@@ -63,6 +63,52 @@ state such as Slurm jobs before treating a status below as current. Keep old
 chronology in the phase-specific pages instead of allowing this page to grow
 without bound.
 
+## Headline arm SUBMITTED at 50B on the promoted geometry (2026-08-31)
+
+`diffntp_chunk_h1_ee_wide` from zero to 50B, seed 0, 11 chained stages, jobs
+**5601421-5601431**, W&B group `diffntp-chunk-50b-fullbatch`. Campaign:
+`experiments/campaigns/2026-08-31-diffntp-chunk-50b-fullbatch/`. **This is the
+first 50B run of the headline arm** -- the 08-27 attempt (5592690-5592700) was
+cancelled 9h06m into `std1`, its downstream stages never started, and
+`/data/diffntp_50b` is gone from ICE.
+
+Uses `rlopt_ipmd_tuned_fullbatch_cfg_entry_point` at 20,480 envs: full batch, 3
+epochs, 3 optimizer steps per iteration. The campaign passes NO
+`agent.loss.mini_batch_size` and NO `agent.loss.epochs` -- the config owns both
+and an override would silently restore the 3/4 minibatch. Stage caps stay
+10B/30B/50B; `iters_*` divides by the batch, so the environment count does not
+move them.
+
+Chosen because `mb_full_e3` was the only arm of eight in
+`2026-08-30-optimizer-ablation-5b` that did NOT degrade in the second half of
+training, on top of the best 5B MPJPE-L (28.54 +- 0.08 mm) and completion
+(0.558).
+
+CONSEQUENCE TO CARRY: the headline is no longer optimizer-matched to
+`sonic-reset-50b` or `emastack-50b`. The geometry evidence is one seed with no
+matched control, and the 5B grid did not order by update density (3 -> 28.54,
+5 -> 40.37, 6 -> 44.34, 10 -> 32.71), so the mechanism is unexplained.
+
+## Optimizer ablation COMPLETE (2026-08-31)
+
+Seven arms reached the full 5B. `ctrl` was cancelled by an external SIGTERM at
+2.14B -- exit 0:0, no non-finite, well short of walltime -- so the campaign
+never produced a matched control and every comparison is arm-vs-arm.
+
+Final 5B MPJPE-L, 300M window, seed 0: `mb_full_e3` 28.54 +- 0.08,
+`wd_1e2` 30.33, `wd_1e4` 31.55, `mb_half_e5` 32.71, `critic_lin` 33.66,
+`mb_full_e5` 40.37, `mb_half_e3` 44.34. Completion tracks it: 0.558 down to
+0.261.
+
+Only `mb_full_e3` and `wd_1e2` never degraded; six of eight arms turned over
+after ~2.3B and two of those went non-finite (`wd_1e1` at 939M, `floor_late` at
+1.93B). `floor_late`'s sigma clamp was provably inert at death (sigma 0.264
+against a 0.10 floor), so that pair reads as base-recipe instability rather
+than arm effects. `critic_lin` led the field at 3.6B and finished fifth after
+six consecutive declining windows -- the linear critic decay does not protect
+against the late instability. The geometry grid does not order by update
+density, so `mb_full_e3` is one good cell, not a trend.
+
 ## Full-batch/3-epoch tracker geometry PROMOTED (2026-08-30)
 
 New entry point `rlopt_ipmd_tuned_fullbatch_cfg_entry_point`
