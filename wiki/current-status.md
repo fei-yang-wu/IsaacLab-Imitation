@@ -76,8 +76,38 @@ only routes by which it can act:
    flag. The policy never sees it: `_inject_latent_command` overwrites the
    policy key before the forward.
 
+**`nophase_linlr` (5607072) RULED OUT the learning rate (2026-09-01 late):**
+with the adaptive rule replaced by a linear decay, `train/lr` held 2.0e-4
+exactly (W&B), and the arm is WORSE than `nophase` -- ep_len 14.4 / 17.3 /
+21.0 at 60-100M / 100-150M / 150-250M against `nophase` 28.1 / 37.4 / 41.1
+and the control 61.7 / 99.9 / 124.1, with `train/kl_approx` climbing to
+0.041 at the fixed lr (control 0.025 at the same lr). The lr collapse in
+`nophase` was a symptom. Route 2 (seed) is also out on width grounds: a
+2048-wide first layer averages its init, and `obs_hist` (994 inputs, a
+third init) trains at the control's level.
+
+The two 500M checkpoints (`z64_merged`, `nophase`) side by side:
+
+- The published z is identical in both runs: per-dimension running mean
+  correlation 0.99, variance ratio 1.02. The encoder side is not it.
+- The no-phase policy SHRINKS its first-layer weights on z (column norm 1.80
+  from an init of 2.09) while the control grows them (2.12 from 2.07); its
+  critic does the same (2.44 vs 2.87). Its Adam second moments on the z
+  columns are 6x smaller (7.2e-8 vs 4.2e-7) and on proprio 2.3x smaller; its
+  `log_std` stays at -0.33 (sigma 0.72) against the control's -0.56.
+- The cos column's Adam moments are bit-identical to the first-layer bias's
+  (max diff 4e-8 on `exp_avg`, 1e-10 on `exp_avg_sq`), and `w_cos - b` has
+  std 0.065 = sqrt(2) x the bias std 0.045, i.e. exactly two independent
+  inits. So the with-phase network is the no-phase network with the
+  first-layer bias updated at TWICE the Adam rate and initialized sqrt(2)
+  wider, in both actor and critic. That is the whole policy-side
+  difference, and it is deterministic, not luck.
+
 None of the three is expected to flip a run from training to stalling, and
-none is measured. Mechanism OPEN. Two more facts from the 500M checkpoint:
+none is measured. Mechanism OPEN; route 1 (the extra constant column as a
+second bias) is the only deterministic policy-side candidate left, and
+route 3 (critic reset flag) is weakened because `last_action` is zero at
+reset and marks the same samples. Two more facts from the 500M checkpoint:
 the critic's cos-column weights grew from the init norm 1.39 to 1.86, the
 same growth as its bias (1.89), while the policy's stayed at init (2.06 vs
 2.07); and the Adam second moment on the cos column is 2x the mean z column
