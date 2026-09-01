@@ -79,6 +79,12 @@ vars:
   persist_id: bones_seed_sonic_full_129785@e714bbff
   output_root: /data/latent64_probe_10b/${vars.arm}_seed${vars.seed}
 
+  # Optimizer extras from 2026-08-30-optimizer-ablation-5b. Empty on every arm
+  # that does not take them; the reference 50B chain carries neither, so the
+  # defaults are optim.weight_decay=0 (AdamW behaving as Adam) and
+  # ipmd.critic_lr_schedule='constant' pinned at critic_learning_rate=1e-3.
+  optim_args: []
+
   # Ten-step proprio history on the ACTOR only; the critic stays single-frame,
   # as in 2026-08-27-diffntp-history. Empty for every arm that does not take it.
   history_args: []
@@ -179,7 +185,7 @@ arms:
     stages: &probe_stages
       - name: lowlevel1
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         time_limit: "15:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
@@ -237,4 +243,42 @@ arms:
     vars:
       wandb_id: l64p-ctrl16k
       train_num_envs: 16384
+    stages: *probe_stages
+
+  # ---- The optimizer extras, on the working 64-D merged base. Against
+  # ---- `z64_merged` three fields move, but only two of them can act: the
+  # ---- phase channel is a CONSTANT at hold 1 (`phase = (phase_period -
+  # ---- latent_steps) / phase_period` is 0 every step, so `sin_cos` appends
+  # ---- `0.0, 1.0` and `none` appends nothing), and the `latent_command` key is
+  # ---- excluded from input normalization, so those two values reach the first
+  # ---- layer raw either way. Dropping them removes 2 constant inputs and
+  # ---- 2 x 2048 first-layer weights per network, and takes the command from
+  # ---- 66 to 64.
+  # ----
+  # ---- What can act is `optim.weight_decay=1e-2` plus the linear critic decay
+  # ---- 1e-3 -> 1e-5. Both were unique to the cancelled `past-chunk-hist-50b`
+  # ---- arms, together with `enable_termination_curriculum=false`, which this
+  # ---- arm does NOT take: the curriculum stays on at 5M-30M. So this arm and
+  # ---- `z64_merged` isolate the optimizer extras, and whatever they do not
+  # ---- explain belongs to the curriculum.
+  # ----
+  # ---- 5B evidence for the pair, seed 0, arm-vs-arm with no matched control
+  # ---- (`ctrl` died at 2.14B): `wd_1e2` 30.33 mm MPJPE-L and `critic_lin`
+  # ---- 33.66 against `mb_full_e3`'s 28.54, all measured at the tuned 10-step
+  # ---- geometry rather than this full-batch one. `wd_1e2` was one of only two
+  # ---- arms of eight that never degraded; `critic_lin` led at 3.6B and
+  # ---- finished fifth through six declining windows.
+  # ----
+  # ---- The critic ramp is monotone here because the single segment carries the
+  # ---- whole 10B cap, and the schedule divides cumulative frames by
+  # ---- `collector.total_frames`.
+  nophase_wd_clin:
+    vars:
+      wandb_id: l64p-nopwdcl
+      phase_mode: none
+      command_dim: 64
+      optim_args:
+        - agent.optim.weight_decay=1.0e-2
+        - agent.ipmd.critic_lr_schedule=linear
+        - agent.ipmd.critic_lr_final=1.0e-5
     stages: *probe_stages
