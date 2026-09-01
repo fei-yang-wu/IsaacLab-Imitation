@@ -931,6 +931,74 @@ class G1ImitationTunedFullBatchRLOptIPMDConfig(G1ImitationTunedRLOptIPMDConfig):
 
 
 @configclass
+class G1ImitationTunedFullBatchLinearLRRLOptIPMDConfig(
+    G1ImitationTunedFullBatchRLOptIPMDConfig
+):
+    """The full-batch recipe with a LINEAR actor learning-rate decay instead of
+    the KL-adaptive rule.
+
+    Select with ``--agent rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point``.
+    A NEW class, for the same reason as its parent: the full-batch entry point
+    is what every 2026-08-30+ campaign resolves, and it keeps the adaptive rule.
+
+    Why it exists (2026-09-01). In `2026-09-01-latent64-probe-10b` the no-phase
+    64-D hold-1 arm stalls under the adaptive rule: its `train/kl_approx` sits
+    at 0.033-0.036 against `desired_kl=0.02`, the rule in
+    `rlopt/base_class.py::_maybe_adjust_lr` divides the actor lr by 1.5 every
+    iteration whose mean KL exceeds 0.04, and the lr ratchets from 1e-3 to
+    2.6e-5 by 250M frames while the phase control holds 2e-4. This entry point
+    removes the feedback loop so the lr is a function of progress only.
+
+    What moves against :class:`G1ImitationTunedFullBatchRLOptIPMDConfig`:
+
+    * ``optim.scheduler`` ``"adaptive"`` -> ``"linearlr"`` (PyTorch
+      ``LinearLR``), stepped once per optimizer update
+      (``optim.scheduler_step="update"``). ``LinearLR`` multiplies EVERY
+      parameter group's current lr by a per-step factor, so the schedule
+      covers the actor and its ``log_std`` group.
+    * ``ipmd.actor_learning_rate`` 1e-3 -> 2e-4, the level the adaptive rule
+      holds on the healthy 64-D control from 60M frames to 1B (W&B window
+      means 2.0e-4 to 2.3e-4, then drifting to 1.0e-4 by 3B). ``start_factor``
+      is 1.0, so the run starts at this value with no warm-up.
+    * ``optim.scheduler_kwargs`` -> ``{"start_factor": 1.0, "end_factor":
+      0.05, "total_iters": 61038}``: 2e-4 down to 1e-5 (the adaptive rule's
+      ``optim.min_lr``) over the 10B budget at 20,480 x 24 frames per batch
+      and 3 updates per iteration (20,346 iterations x 3). ``total_iters``
+      counts scheduler steps, not iterations. A campaign with another budget
+      or geometry MUST pass ``agent.optim.scheduler_kwargs.total_iters``;
+      after ``total_iters`` the lr holds at the end value.
+    * ``ipmd.critic_lr_schedule`` ``"constant"`` -> ``"linear"`` with
+      ``critic_lr_final == critic_learning_rate``. This is a PIN, not a decay:
+      ``_apply_critic_lr_schedule`` rewrites the critic group's lr to 1e-3 at
+      the start of every iteration, which undoes ``LinearLR``'s global scaling
+      for that group (the within-iteration drift over 3 steps is below 1e-4
+      relative). Without the pin the critic would decay with the actor and the
+      comparison against the adaptive control would move two learning rates.
+
+    Unchanged: ``optim.desired_kl``, ``kl_adapt_step``, ``min_lr``,
+    ``max_lr`` (all inert once the scheduler is not ``"adaptive"``), the
+    geometry, the networks, and everything else in the parent.
+
+    Chained segments: ``LinearLR`` state is saved in ``lr_scheduler_state_dict``
+    and restored on resume, so a walltime-chained run continues the decay.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.optim.scheduler = "linearlr"
+        self.optim.scheduler_step = "update"
+        self.optim.scheduler_kwargs = {
+            "start_factor": 1.0,
+            "end_factor": 0.05,
+            "total_iters": 61038,
+        }
+        self.ipmd.actor_learning_rate = 2.0e-4
+        # Pin, not decay: see the class docstring.
+        self.ipmd.critic_lr_schedule = "linear"
+        self.ipmd.critic_lr_final = float(self.ipmd.critic_learning_rate)
+
+
+@configclass
 class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
     G1ImitationLatentSonicRLOptIPMDConfig
 ):

@@ -74,3 +74,30 @@ python -m imitation_experiments.pipeline.cluster submit --plan-sha <PLAN_SHA>
 
 Per AGENTS.md every result table carries the `sonic_v1_1` row for the same
 board.
+
+## `nophase` result (2026-09-01)
+
+`nophase` (5606899) diverges from `z64_merged` from about 60M frames and sits
+at ep_len 37-41 from 100M on, where the control is at 100-151; its trajectory
+matches the cancelled `nophase_wd_clin` on every logged series, so the
+optimizer extras were inert. The failure signature is the KL-adaptive
+learning rate collapsing to 2.6e-5 (control 2.0e-4) under `train/kl_approx`
+0.033-0.036. The code says the phase pair is the constant `(0, 1)` at hold 1
+(confirmed on the 500M checkpoint normalizer statistics), so the mechanism is
+open; see `wiki/current-status.md` (2026-09-01, "The 64-D hold-1 phase pair
+decides training") for the three candidate routes and the seed experiment
+that separates them.
+
+## `nophase_linlr` (2026-09-01)
+
+`nophase` with the KL-adaptive actor learning rate replaced by a linear decay
+(`--agent rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point`, new in
+`config/g1/agents/rlopt_ipmd_cfg.py`): actor lr 2e-4 down to 1e-5 over the
+10B budget (61,038 scheduler steps = 3 updates x 20,346 iterations), critic
+pinned at 1e-3, everything else the `nophase` batch script. The adaptive
+rule is what turned the high-KL regime of `nophase` into an 8x lr cut; this
+arm asks whether the no-phase interface trains once that feedback loop is
+gone. Two things move against `nophase` (schedule shape, and the start value
+2e-4 instead of 1e-3), so a recovery is attributable to the schedule only if
+the control's own adaptive lr is accepted as the reference for the start
+value.
