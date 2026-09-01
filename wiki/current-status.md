@@ -21,6 +21,76 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## The 64-D hold-1 phase pair decides training, and the code says it is a constant (2026-09-01)
+
+`2026-09-01-latent64-probe-10b`, W&B project `g1-bs-pareto`, group
+`latent64-probe-10b`, one seed (0), 20,480 envs, the 50B chain's `std1`
+recipe with the star-v2 hub encoder (64-D merged, hold 1).
+
+| arm | change vs `z64_merged` | ep_len 60-100M | 100-150M | 150-250M | 250-400M |
+|---|---|---:|---:|---:|---:|
+| `z64_merged` (5606149) | control, `sin_cos`, command 66 | 62.2 | 99.9 | 123.8 | 150.8 |
+| `nophase` (5606899) | `command_phase_mode=none`, command 64 | 28.1 | 37.4 | 41.1 | 40.8 |
+| `nophase_wd_clin` (5606855, cancelled 0.39B) | none + `weight_decay=1e-2` + linear critic decay | 26.3 | 37.5 | 41.9 | 43.7 |
+
+W&B window means; same node, same seed, every other override identical
+(mechanical diff of the two batch scripts). `nophase` and `nophase_wd_clin`
+track each other to within noise on every logged series, so the optimizer
+extras did nothing; the cancelled `past-chunk-hist-50b` stall belongs to the
+missing phase pair, not to weight decay, the critic schedule, or the
+curriculum.
+
+Failure signature of `nophase` (matched frames): `train/kl_approx` 0.033-0.036
+against the control's 0.024-0.029, so the KL rule in `base_class.py:1438`
+(`kl > 2 x desired_kl=0.02` divides the lr by 1.5) ratchets `train/lr` to
+2.6e-5 by 250-400M while the control holds 2.0e-4; clip fraction 0.26 vs 0.16;
+`Episode_Termination/anchor_ori` 0.17 vs 0.03; entropy stops falling at 32
+while the control reaches 28.5.
+
+What the code says the pair is. At `code_period=1`, `phase = (phase_period -
+latent_steps) / phase_period` is 0 on every step (`hl_skill_diffsr.py:2148`),
+so `sin_cos` appends the constant `(0, 1)`. Verified on the 500M
+`z64_merged` checkpoint: the policy normalizer's running variance on the two
+columns is 3e-10 and 7e-6. The pair bypasses input normalization
+(`normalize_input_exclude_keys`), and `latent_dim` feeds only reshapes. The
+only routes by which it can act:
+
+1. The policy and critic first layer gets one extra input column that is
+   always 1: a second bias vector with the kaiming-uniform init magnitude
+   (0.039 per unit, equal to the trained bias, 10% of the z contribution).
+   At 500M that column's weights still sit at their init norm (2.06 vs 2.07).
+2. The width change (159 vs 157 policy inputs) shifts the seed-0 RNG stream,
+   so every layer's init differs. Every no-phase 64-D hold-1 run on record
+   (the 2026-08-15 grid, `leader64_h1_nophase`, `nophase_wd_clin`, `nophase`)
+   shares one seed-0 init at 157 inputs on the same trunk, and every with-phase
+   64-D hold-1 run (`bn_cont64`, the star-v2 hub and its arms, `z64_merged`)
+   shares one seed-0 init at 159. On initialization this is one sample
+   against one sample; `obs_hist` (994 policy inputs, a third init) trains
+   at the control's level, and the no-phase stalls span different encoders,
+   reward recipes, and reset regimes, so a reproducibly bad init would have
+   to be robust to all of them. The user's read: not a seed effect.
+3. The critic reads `("critic","latent_command")` from the env buffer, which
+   `LatentActorCommand.reset_command` zero-fills at reset, so about 1.4% of
+   critic samples carry an all-zero latent; with `sin_cos` the cos column is
+   0 there and 1 elsewhere (critic running mean 0.986, var 0.013), a reset
+   flag. The policy never sees it: `_inject_latent_command` overwrites the
+   policy key before the forward.
+
+None of the three is expected to flip a run from training to stalling, and
+none is measured. Mechanism OPEN. Two more facts from the 500M checkpoint:
+the critic's cos-column weights grew from the init norm 1.39 to 1.86, the
+same growth as its bias (1.89), while the policy's stayed at init (2.06 vs
+2.07); and the Adam second moment on the cos column is 2x the mean z column
+and 12x the mean proprio column in both networks, because a constant input's
+gradient is the bias gradient and never cancels across samples. The KL gap is
+present in the first 30M frames at the shared lr of 1e-3 (0.020 vs 0.017),
+before any episode-length difference, so the no-phase network is more
+KL-sensitive per unit lr from the start. The experiment that separates init luck from
+the constant: `nophase` and `z64_merged` at seeds 1 and 2, 300-500M each (the
+gap is 2x by 100M and 3x by 150M). If no-phase trains at another seed, route
+2 (a bad seed-0 init) explains the whole record; if it stalls at every seed,
+the constant acts through route 1 or 3.
+
 ## Current research focus (2026-08-30)
 
 The active work is organized around five questions. The status below is the
@@ -353,6 +423,34 @@ It blocked the star-v2 curve backfill for `diffntp_chunktok`,
 `diffntp_merged64` and `diffntp_merged` — all three mirrored off ICE today
 with their eight checkpoints, 0 of 24 cells scored — which is how it was
 found.
+
+## Star v2 training finished: 39 of 44 arms at 5B (2026-09-01)
+
+Two arms will never finish and both were cancelled on purpose (`g1_recon_vq`
+2.60B, `g3_vq64` 2.00B, the diverging pretrained-VQ cells). Three were still
+running at the last check: `g4_anchor_robot` 4.60B, `g4_h20` 3.40B, and
+`g6_dyn`, which stopped for cause.
+
+**A second non-finite abort, and the two share a pattern.** `g6_dyn` hit
+`Training went non-finite at 4098785280 cumulative frames:
+['train/step_reward_mean']` -- `IPMD._abort_on_nonfinite` firing before a
+poisoned checkpoint could be written, leaving it at 4.00B. Earlier
+`g1_post_pgrecon_fsq` went non-finite at 0.68B and self-healed on resume.
+
+Both arms are ones whose ENCODER changes during RL: `g6_dyn` is the online
+achieved-ring finetune, `g1_post_pgrecon_fsq` is the posterior route. Every
+frozen-encoder arm has trained clean. That is a two-point pattern, not a
+result, but it is the cheapest hypothesis to carry into any future dyn or
+posterior run.
+
+Neither affects the 2B screen the tables and figures report: both arms have
+their full ten points below 2B.
+
+**Curve evaluation: 33 of 44 arms have the complete 10-point series to 2B.**
+791 rows scored in total; the surplus above 2B is simply not plotted. The 11
+incomplete arms are being re-submitted -- three pure-PG arms that were only
+1.0B deep when first scored, three still-training input-axis arms at eight
+points, and five that had no rows at all.
 
 ## Curves move to the 4,096-clip board; figure tooling built (2026-08-31)
 

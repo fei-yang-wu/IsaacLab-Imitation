@@ -52,6 +52,10 @@ vars:
   task: Isaac-Imitation-G1-v2
   wandb_arm: ${dash:${vars.arm}}
 
+  # Tracker agent entry point. `nophase_linlr` swaps it for the linear-lr
+  # variant (2026-09-01); every other arm keeps the promoted full-batch one.
+  agent_entry: rlopt_ipmd_tuned_fullbatch_cfg_entry_point
+
   # --- The variable ---
   z_dim: 64
   command_dim: 66
@@ -107,7 +111,7 @@ vars:
     - --algo
     - IPMD
     - --agent
-    - rlopt_ipmd_tuned_fullbatch_cfg_entry_point
+    - ${vars.agent_entry}
     - --num_envs
     - ${vars.train_num_envs}
     - --seed
@@ -299,4 +303,33 @@ arms:
       wandb_id: l64p-nophase
       phase_mode: none
       command_dim: 64
+    stages: *probe_stages
+
+  # ---- The adaptive-lr feedback loop removed (2026-09-01). `nophase`
+  # ---- stalls with `train/kl_approx` at 0.033-0.036 against desired_kl=0.02,
+  # ---- and the rule in RLOpt `base_class.py::_maybe_adjust_lr` (kl > 0.04
+  # ---- divides the actor lr by 1.5 once per iteration) ratchets `train/lr`
+  # ---- from 1e-3 to 2.6e-5 by 250M frames while `z64_merged` holds 2e-4.
+  # ---- This arm is `nophase` with the actor lr a function of progress only:
+  # ---- `rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point` = PyTorch
+  # ---- LinearLR from 2e-4 (the level the adaptive rule holds on the healthy
+  # ---- control from 60M to 1B) to 1e-5 (the adaptive floor, optim.min_lr)
+  # ---- over total_iters = 3 updates x 20,346 iterations = 61,038 scheduler
+  # ---- steps, i.e. the full 10B budget; the critic is PINNED at 1e-3
+  # ---- through critic_lr_schedule=linear with critic_lr_final=1e-3 so the
+  # ---- global scheduler cannot move it. Against `nophase` two things move:
+  # ---- the schedule shape and the start value (2e-4 instead of 1e-3, which
+  # ---- the adaptive rule left within ~50M frames on every arm here). The
+  # ---- entry point is new plumbing because `scheduler_kwargs` cannot be
+  # ---- replaced by an override: Isaac Lab's `update_class_from_dict` raises
+  # ---- on a key that is not in the default dict.
+  nophase_linlr:
+    vars:
+      wandb_id: l64p-nophaselin
+      phase_mode: none
+      command_dim: 64
+      agent_entry: rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point
+      optim_args:
+        - agent.ipmd.actor_learning_rate=2.0e-4
+        - agent.optim.scheduler_kwargs.total_iters=${mul:3,${vars.max_iterations}}
     stages: *probe_stages

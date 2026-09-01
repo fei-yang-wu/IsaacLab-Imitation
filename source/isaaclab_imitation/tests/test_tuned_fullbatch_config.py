@@ -16,6 +16,7 @@ import pytest
 
 import isaaclab_imitation.tasks  # noqa: F401  (registers the gym tasks)
 from isaaclab_imitation.tasks.manager_based.imitation.config.g1.agents.rlopt_ipmd_cfg import (
+    G1ImitationTunedFullBatchLinearLRRLOptIPMDConfig,
     G1ImitationTunedFullBatchRLOptIPMDConfig,
     G1ImitationTunedRLOptIPMDConfig,
 )
@@ -84,3 +85,45 @@ def test_both_entry_points_are_registered(task_id):
     assert tuned.endswith(":G1ImitationTunedRLOptIPMDConfig")
     assert full.endswith(":G1ImitationTunedFullBatchRLOptIPMDConfig")
     assert tuned != full
+
+
+def test_linearlr_moves_only_the_actor_schedule():
+    """Linear actor decay: scheduler, start lr, and the critic pin; nothing else."""
+    full = G1ImitationTunedFullBatchRLOptIPMDConfig()
+    lin = G1ImitationTunedFullBatchLinearLRRLOptIPMDConfig()
+
+    assert full.optim.scheduler == "adaptive"
+    assert lin.optim.scheduler == "linearlr"
+    assert lin.optim.scheduler_step == "update"
+    assert set(lin.optim.scheduler_kwargs) == {
+        "start_factor",
+        "end_factor",
+        "total_iters",
+    }
+    assert lin.optim.scheduler_kwargs["start_factor"] == 1.0
+    assert lin.ipmd.actor_learning_rate == 2.0e-4
+    # 2e-4 -> 1e-5, the adaptive rule's floor.
+    assert lin.ipmd.actor_learning_rate * lin.optim.scheduler_kwargs[
+        "end_factor"
+    ] == pytest.approx(full.optim.min_lr)
+    # The critic is pinned, not decayed: final == start.
+    assert lin.ipmd.critic_lr_schedule == "linear"
+    assert lin.ipmd.critic_learning_rate == full.ipmd.critic_learning_rate
+    assert lin.ipmd.critic_lr_final == lin.ipmd.critic_learning_rate
+
+    assert lin.loss.epochs == full.loss.epochs
+    assert lin.loss.mini_batch_size == full.loss.mini_batch_size
+    assert lin.optim.weight_decay == full.optim.weight_decay
+    assert lin.optim.max_grad_norm == full.optim.max_grad_norm
+    assert lin.ppo.entropy_coeff == full.ppo.entropy_coeff
+    assert lin.ppo.clip_epsilon == full.ppo.clip_epsilon
+    assert lin.loss.gamma == full.loss.gamma
+    assert lin.policy.num_cells == full.policy.num_cells
+
+
+@pytest.mark.parametrize("task_id", TUNED_TASK_IDS)
+def test_linearlr_entry_point_is_registered(task_id):
+    kwargs = gym.spec(task_id).kwargs
+    lin = kwargs["rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point"]
+    assert lin.endswith(":G1ImitationTunedFullBatchLinearLRRLOptIPMDConfig")
+    assert lin != kwargs["rlopt_ipmd_tuned_fullbatch_cfg_entry_point"]

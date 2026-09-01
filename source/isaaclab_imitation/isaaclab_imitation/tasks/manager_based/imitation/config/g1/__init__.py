@@ -252,6 +252,13 @@ _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationTunedFullBatchRLOptIPMDConfig"
 )
 
+# Full batch + LINEAR actor lr decay in place of the KL-adaptive rule
+# (2026-09-01). Additive, like the full-batch entry point; see the class
+# docstring for the 64-D no-phase stall that motivated it.
+_CURRENT_V2_IPMD_TUNED_FULLBATCH_LINEARLR_ENTRY_POINT = (
+    f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationTunedFullBatchLinearLRRLOptIPMDConfig"
+)
+
 _CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationPosteriorRootQposRLOptIPMDConfig"
 )
@@ -298,6 +305,9 @@ gym.register(
         "rlopt_ipmd_tuned_fullbatch_cfg_entry_point": (
             _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT
         ),
+        "rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_LINEARLR_ENTRY_POINT
+        ),
         "rlopt_ipmd_posterior_root_qpos_cfg_entry_point": (
             _CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT
         ),
@@ -329,6 +339,9 @@ gym.register(
         "rlopt_ipmd_tuned_fullbatch_cfg_entry_point": (
             _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT
         ),
+        "rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_LINEARLR_ENTRY_POINT
+        ),
     },
 )
 
@@ -347,6 +360,9 @@ gym.register(
         "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
         "rlopt_ipmd_tuned_fullbatch_cfg_entry_point": (
             _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT
+        ),
+        "rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_LINEARLR_ENTRY_POINT
         ),
     },
 )
