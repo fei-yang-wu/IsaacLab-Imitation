@@ -105,8 +105,8 @@ failed for a missing checkpoint.
   3 optimizer steps per iteration. The campaign passes no
   `agent.loss.mini_batch_size` and no `agent.loss.epochs`; the class owns both
   and a literal minibatch would silently become a partial batch.
-- 20,480 environments x 24 rollout steps = 491,520 frames per batch, 50B cap in
-  every segment, 101,725 iterations.
+- 16,384 environments x 24 rollout steps = 393,216 frames per batch, 50B cap in
+  every segment, 127,157 iterations.
 - Rewards `motion_ee_pos` 1.0, `motion_global_anchor_pos_wide` 1.0,
   `action_rate_l2` -0.03, `tracking_reward_points` 4.0; `feet_acc` -2.5e-6 from
   the in-tree default.
@@ -114,10 +114,32 @@ failed for a missing checkpoint.
   state, stride 1, `reference_prefetch_mode=next`.
 - Checkpoints every 500M cumulative frames.
 - Eight chained segments of 15:59 per arm, `afterany`, so a walltime kill
-  continues from the resume checkpoint. `p5_concat` reached 5B in 8h29m at this
-  environment count without the history, so 50B is roughly seven segments; a
-  segment that starts after the budget is met exits immediately with
-  "0 iterations remain".
+  continues from the resume checkpoint. A segment that starts after the budget
+  is met exits immediately with "0 iterations remain".
+
+## The first submission died on GPU memory
+
+Jobs 5605194-5605209 (2026-09-01) were cancelled. Both arms' `seg1` failed
+about seven minutes in with
+
+```
+Warp CUDA error 2: out of memory (in function wp_cuda_graph_launch)
+```
+
+immediately after `Initialized LazyTensorStorage with torch.Size([491520])`,
+on two different H200 nodes, so it is the recipe and not a node.
+
+The ten-step history widens the actor observation from about 157 to about 994
+values per frame, and the rollout buffer holds `frames_per_batch` transitions
+on the GPU — `LazyTensorStorage(..., device=self.device)` in RLOpt's `ppo.py`,
+which has no CPU-storage option. At 20,480 environments that leaves physics no
+room for its CUDA graph.
+
+The environment count therefore moved 20,480 -> 16,384, the count
+`2026-08-27-diffntp-history` already ran this history set at. The full-batch
+sentinel clamps to the collected batch at any environment count, and the budget
+is in frames, so the geometry and the 50B target are unchanged. The arms are no
+longer at the 20,480 rollout the full-batch promotion was measured at.
 
 ## Running
 

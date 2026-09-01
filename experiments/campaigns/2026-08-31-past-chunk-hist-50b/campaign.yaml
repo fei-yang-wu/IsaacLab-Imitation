@@ -103,8 +103,22 @@ vars:
   encoder_arm: SET_PER_ARM
   encoder_ckpt: /data/past_chunk_affine_64d/${vars.encoder_arm}_seed0/encoder/checkpoints/latest.pt
 
-  # --- Tracker scale: 20,480 x 24 = 491,520 frames per batch, 50B budget ---
-  train_num_envs: 20480
+  # --- Tracker scale: 16,384 x 24 = 393,216 frames per batch, 50B budget ---
+  #
+  # NOT 20,480. The first submission (jobs 5605194-5605209, 2026-09-01) died in
+  # both arms with `Warp CUDA error 2: out of memory (in function
+  # wp_cuda_graph_launch)` about seven minutes in, immediately after
+  # `Initialized LazyTensorStorage with torch.Size([491520])`, on two different
+  # H200 nodes. The ten-step history widens the actor observation from about
+  # 157 to about 994 values per frame; the rollout buffer holds
+  # `frames_per_batch` transitions on the GPU
+  # (`LazyTensorStorage(..., device=self.device)` in RLOpt `ppo.py`, with no
+  # CPU-storage option), which leaves physics no room for its CUDA graph.
+  # 16,384 is the count `2026-08-27-diffntp-history` already ran this exact
+  # history set at. The full-batch sentinel clamps to whatever batch is
+  # collected, so the optimizer geometry follows the new count, and the budget
+  # is expressed in frames so 50B is unchanged.
+  train_num_envs: 16384
   rollout_steps: 24
   frame_cap: 50000000000
   frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
