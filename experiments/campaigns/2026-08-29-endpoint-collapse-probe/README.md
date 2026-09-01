@@ -151,21 +151,101 @@ reading.
 require path shape; they do not yet say the tracker is indifferent to it.
 Tier C answers that.
 
-### Open follow-ups this result implies
+## Horizon sweep: the coherent window-size comparison
 
-1. **Matched-width coverage (the clean path-shape test).** suffix1/5/9 differ
-   in encoder input width as well as coverage, so dimensionality is a
-   confound. Compare `suffix3` (slots 7,8,9) against a strided arm seeing
-   slots 1,5,9: identical input width and parameter count, opposite temporal
-   coverage. Flat means path shape is genuinely inert; a strided win means
-   coverage matters and the suffix ladder was confounded by width.
-2. **Displacement removal.** Re-anchor the visible suffix onto its own first
-   visible slot, which deletes the net-displacement channel and leaves local
-   pose and velocity. If the losses degrade sharply, the integrated
-   displacement was carrying the result, and the window-summary claim
-   survives in its weaker form.
+A suffix arm hands the encoder a view that never occurs at deployment — it
+sees only late frames yet must still predict a target a full horizon away,
+anchored at the window start. The horizon arms move `horizon_steps` itself,
+so the encoder input, the endpoint target, and the next-chunk target shrink
+together and every arm stays internally coherent. This is the fairer
+comparison for the question "does a longer window, with more intermediate
+states to summarize, buy anything".
 
-Neither arm exists yet; both are one `encoder_window_mode` value plus a slice.
+| arm | horizon | window mode | visible slots | encoder input | chunk target |
+|---|---:|---|---:|---:|---:|
+| h1 | 1 | full | 1 | 76 | 38 |
+| h2 | 2 | intermediate | 1 | 76 | 76 |
+| h5 | 5 | intermediate | 4 | 190 | 190 |
+| h10 | 10 | intermediate | 9 | 380 | 380 |
+
+`h1` is a degenerate ceiling row, not a point on the curve: horizon 1 has no
+intermediate window, so the arm must use `full`, and then its single visible
+frame IS the endpoint target — the code can copy the answer. `h10` repeats
+the production recipe as this sweep's own control.
+
+**Raw losses are not comparable across these arms**: the chunk target is
+`horizon x 38` wide, so it changes size with the horizon and the losses move
+wholesale. Read `train/jepa_endpoint_z_explained` and
+`train/jepa_ntp_z_explained` instead — `1 - real / shuffled-code loss`, the
+fraction of each head's loss that knowing this window's code removes. That
+ratio is dimensionless. The shuffled-code control was added to the trainer
+for this sweep, so the earlier suffix arms do not carry it and print `-`.
+
+ICE 2026-08-30, three seeds per arm: jobs 5598588-5598590 (h1),
+5598591-5598594 (h2), 5598595-5598597 (h5), 5598598-5598600 (h10).
+
+## phi's conditioning: give the SOURCE a past chunk
+
+Every arm above changes what the ENCODER sees. These two change what phi
+conditions on — `s[t-10..t]` instead of `s_t` alone — via the new
+`--source_history_steps` and `--source_anchor` flags.
+
+The motivation is an asymmetry in the current objective. The macro state is
+`root_qpos` and carries no velocities, so `s_t` alone cannot express which way
+the motion is already going, while the encoder gets a whole future window.
+That forces z to carry both the momentum any dynamics model should infer from
+the past AND whatever genuinely distinguishes this future. Give phi the past
+and the first part moves out of z, so z is measured on the residual.
+
+This does not starve z. A linear probe over 2,998 held-out windows predicts
+`s[t+10]` from the past at R2 0.751 (two frames) and 0.730 (the full chunk),
+against 0.956 for interpolating a midpoint from both endpoints. Extrapolation
+leaves roughly a quarter of the variance unexplained, and that quarter is
+z's to carry.
+
+| arm | phi conditions on | anchor | phi source width |
+|---|---|---|---:|
+| h10 (control) | `s_t` | s_t | 38 |
+| `srccur10` | `s[t-10..t]` | s_t | 418 |
+| `srcpast10` | `s[t-10..t]` | `s[t-10]` | 418 |
+
+`srccur10` anchors the whole window on `s_t`, so the past reads as negative
+displacement and the encoder's own input is byte-identical to `h10` — this
+encoder stays drop-in comparable and deployable.
+
+`srcpast10` anchors on the oldest past frame, making `s[t-10..t+10]` one macro
+window anchored at its first slot. `s_t` is no longer canonical, so the
+ENCODER's input distribution changes. **That encoder cannot be bound to a
+tracker** until the frozen command sampler can anchor on the robot's heading
+10 steps ago; today it anchors on the live heading only. It is a pretrain
+diagnostic.
+
+Neither arm re-anchors anything, which matters because
+`_reanchor_heading_frames` mis-parses the data plane's interleaved rot6d (see
+"Found while verifying frame conventions" in `wiki/current-status.md`).
+`srccur10` uses the data plane's own past chunk, already in `s_t`'s frame
+because the sampler anchors at `center_index=past_steps`. `srcpast10` draws
+one longer window and relabels the sampled cursor as `t-10`, so slot 0 is
+already the oldest past frame.
+
+Compare on `train/jepa_endpoint_z_explained` and `train/jepa_ntp_z_explained`
+against `h10`: phi's source width differs, so raw losses are not comparable
+across families, and the aggregator refuses to form that ratio.
+
+ICE 2026-08-30, three seeds each: jobs 5599100-5599102 (`srccur10`),
+5599103-5599105 (`srcpast10`).
+
+## Still open
+
+**Displacement removal.** Re-anchor the visible suffix onto its own first
+visible slot, deleting the net-displacement channel and leaving local pose
+and velocity. If the losses degrade sharply, the integrated displacement was
+carrying the suffix result, and the window-summary claim survives in its
+weaker form. Not implemented.
+
+**Short past chunks.** The linear probe says two past frames carry as much as
+eleven, so a `--source_history_steps 2` arm may capture the whole effect at
+114 input width instead of 418. Not run.
 
 ## Not covered here
 

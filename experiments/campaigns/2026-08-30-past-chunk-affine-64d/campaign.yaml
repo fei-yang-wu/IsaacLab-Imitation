@@ -1,56 +1,74 @@
-# Linear closure of the skill latent: the affine spectral arm.
+# Past-chunk conditioning at 64-D, concat vs affine phi.
 #
-# One design question. The skill latent z is the action space of the high-level
-# MDP, so the planner must emit points in it. We want that space closed under
-# linear combination: a·z1 + b·z2 of two valid skills should mean something
-# predictable. Today nothing forces that, because the path from z to the
-# grounding score runs through an MLP.
+# Two questions in one pair of arms, sharing one encoder recipe.
 #
-# The change is one flag on encoder pretraining:
-# `--diffsr_phi_parameterization affine` makes phi(s,z) = F(s)^T (A z + b)
-# / sqrt(E). Both DiffSR heads (the endpoint head for p(s[t+10]|s_t,z) and the
-# diff_chunk head for p(s[t+11..t+20]|s_t,z)) become affine in z, so the
-# learned denoising score field is affine in z and an interpolated latent
-# grounds to the geometric mixture of its endpoints' conditionals:
-# p(y|s,z_a) is proportional to p(y|s,z1)^a p(y|s,z2)^(1-a). F(s), mu, and the
-# encoder stay nonlinear; only the z path is constrained. A and b are learned.
+# 1. PAST CHUNK. phi conditions on `s[t-5..t]` instead of `s_t` alone
+#    (`--source_history_steps 5 --source_anchor current`). The macro state is
+#    `root_qpos` and carries no velocities, so one frame cannot express which
+#    way the motion is already going; the past supplies that and z is left to
+#    carry the rest. Five frames, not ten: the Tier B linear probe over 2,998
+#    held-out windows predicts `s[t+10]` from the past at R2 0.751 with two
+#    frames and 0.730 with eleven, so the information saturates early. phi's
+#    source is 228 values (6 x 38) instead of 418 at past-10 or 38 at `s_t`.
 #
-# What the tracker consumes does NOT change: the sampler publishes
-# [z (256); sin_cos phase (2)] = 258-D as `latent_command`, exactly as every
-# other latent arm. phi, F(s), and the diffusion heads are pretraining-only.
+# 2. PHI PARAMETERIZATION. `p5_concat` keeps the production concat path;
+#    `p5_affine` uses `--diffsr_phi_parameterization affine`, phi(s,z) =
+#    F(s)^T (A z + b) / sqrt(E), which makes the denoising score field affine
+#    in z so an interpolated latent grounds to the geometric mixture of its
+#    endpoints' conditionals. The two axes compose in code without change:
+#    `_build_diffsr` widens phi's `obs_dim` to
+#    `state_dim * (source_history_steps + 1)` and passes
+#    `phi_parameterization` separately, so the past chunk enters F(s) and the
+#    affine constraint binds only the z path.
 #
-# Arms (both pretrained here, so the comparison holds pretrain provenance
-# fixed and moves exactly one variable):
-#   affine    --diffsr_phi_parameterization affine
-#   concat    --diffsr_phi_parameterization concat  (matched control; this is
-#             the production parameterization of `diffntp_chunk_h1_ee_wide`)
+# WHY THE MERGED HEAD AND NOT `diffntp_chunk`. At 64-D and hold 1 the two-head
+# form has never trained: `leader64_h1_nophase` was cancelled at 0.84B with
+# episode length plateaued at 50-62 and MPJPE-L flat near 51 mm, while its
+# 256-D control was at 166 / 42.6 mm by 0.17B, and its encoder pretrain was
+# provably healthy. The merged head at the same width and hold is the
+# confirmed star-v2 hub, so both arms take it:
+# `--jepa_ntp_chunk_span boundary_next --jepa_endpoint_coeff 0`.
 #
-# Everything else is the round-4 `diffntp_chunk` recipe (jepa_ntp + sigreg_ebm
-# + diff_chunk head, intermediate window, 380-D root_qpos macro state,
-# robot_heading anchor) and the smooth-ablation-5b tracker regime with the
-# trained-in EMA action filter `env.actions.joint_pos.ema_alpha=0.65` — the
-# current smoothness lead. 5B frames, 20,480 envs, failure-share ramp
-# 0.8 -> 0.2 over the first 1B.
+# WHAT THIS PAIR CAN AND CANNOT ATTRIBUTE. Between the two arms exactly one
+# flag moves, so concat-vs-affine at 64-D with a past chunk is clean. There is
+# NO matched no-past control at 64-D in this campaign (user decision,
+# 2026-08-30). The nearest reference is `merged64_pen_ramp_5b` in
+# 2026-08-22-pareto-stack (0.9543 SR / 23.67 mm L / 89.33 mm G clean at 5B),
+# which differs by the past chunk AND by encoder pretrain provenance, the
+# 16,384-environment rollout, and the frozen `rlopt_ipmd_tuned` optimizer
+# geometry. Treat it as a reference row, not a control.
 #
-# The existing smooth-ablation-5b `ema` row is a THIRD comparison point, not a
-# matched one: it reuses the pareto-stack encoder, so it differs from `concat`
-# here by pretrain provenance as well.
+# OPTIMIZER GEOMETRY. Both arms use
+# `--agent rlopt_ipmd_tuned_fullbatch_cfg_entry_point`, the geometry promoted
+# 2026-08-30 (full batch, 3 epochs, +18.9% frames per unit wall-clock). That
+# class sets `loss.mini_batch_size` to a sentinel that `train_impl.py` clamps
+# to the whole rollout, so this campaign must NOT pass
+# `agent.loss.mini_batch_size`: a literal would silently become a partial
+# batch. Read the class docstring before citing the recipe.
 #
-# Scoreboard: bones_testbed4096_v1, clean + robust, alongside the standing
-# sonic_v1_1 row for the same board.
-name: linear-closure-affine
+# NO INTERPOLATION PROBE STAGE. `probe_latent_interpolation` reads
+# `diffsr_state_dict`, the endpoint head, which `--jepa_endpoint_coeff 0`
+# leaves untrained. The merged objective's head is `jepa["ntp_diffsr"]`, which
+# the probe cannot load yet. Run the probe only after it grows a chunk-head
+# option.
+#
+# The ramp keys off common_step_counter, which restarts per segment. Segment 1
+# carries the 0.8 -> 0.2 failure-share ramp; segment 2 PINS the landed 0.2 so a
+# restart never re-runs it.
+name: past-chunk-affine-64d
 profile: ice
 wandb_project: g1-bones-seed
-wandb_group: linear-closure-affine
+# Confirmed with the user 2026-08-30.
+wandb_group: past-chunk-affine-64d
 
 vars:
   task: Isaac-Imitation-G1-v2
   wandb_arm: ${dash:${vars.arm}}
 
-  # --- Latent interface (identical to smooth-ablation-5b) ---
-  z_dim: 256
-  command_dim: 258
-  code_latent_dim: 256
+  # --- Latent interface: the star-v2 64-D hub ---
+  z_dim: 64
+  command_dim: 66
+  code_latent_dim: 64
   window_mode: intermediate
   macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
   stride: 1
@@ -65,42 +83,41 @@ vars:
   # --- Encoder pretraining ---
   # The per-arm variable. Overridden by each arm.
   phi_parameterization: concat
+  # Shared by both arms: phi sees s[t-5..t], anchored on s_t, so the encoder's
+  # own input and the deployed 66-wide command are untouched.
+  source_args: ["--source_history_steps", "5", "--source_anchor", "current"]
   pretrain_updates: 50000
   pretrain_batch_size: 8192
-  # Each arm pretrains its own encoder, then binds it in the tracker stages.
   encoder_ckpt: ${vars.output_root}/encoder/checkpoints/latest.pt
   encoder_source: pretrained
 
-  # --- Tracker scale (smooth-ablation-5b): frames/batch 491,520, mb 368,640 ---
+  # --- Tracker scale: 20,480 x 24 = 491,520 frames per batch ---
   train_num_envs: 20480
   rollout_steps: 24
   frame_cap: 5000000000
   frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
   max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
-  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
 
   ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
   persist_id: bones_seed_sonic_full_129785@e714bbff
-  output_root: /data/linear_closure_affine/${vars.arm}_seed${vars.seed}
+  output_root: /data/past_chunk_affine_64d/${vars.arm}_seed${vars.seed}
 
-  # smooth-ablation-5b base rewards; feet_acc -2.5e-6 comes from the in-tree
-  # default.
+  # merged64_pen_ramp_5b rewards; feet_acc -2.5e-6 comes from the in-tree
+  # default (corrected 2026-08-28).
   reward_args:
     - env.rewards.motion_ee_pos.weight=1.0
     - env.rewards.motion_global_anchor_pos_wide.weight=1.0
     - env.rewards.action_rate_l2.weight=-0.03
-  # The trained-in EMA action filter, shared by both arms. It is the tracker
-  # regime, not the variable under test, so it must be repeated at eval.
-  arm_args:
-    - env.actions.joint_pos.ema_alpha=0.65
 
-  # Failure-share ramp 0.8 -> 0.2 over the first 1B (segment 1 only).
+  # Failure-share ramp 0.8 -> 0.2 over the first 1B (segment 1 only). This MUST
+  # replace the selection preset with `sonic`: under `random80_adaptive20` the
+  # outer wrapper stays active and adaptive_uniform_ratio only rescales the
+  # remaining 20% branch.
   select_ramp:
     - env.command_interface.reference.selection=sonic
     - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
     - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
     - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=1000000000
-  # Segment 2 pins the landed ratio so a resume never re-runs the ramp.
   select_hold:
     - env.command_interface.reference.selection=sonic
     - env.command_interface.reference.selection.adaptive_uniform_ratio=0.2
@@ -124,7 +141,7 @@ vars:
     - --wandb_project
     - g1-bones-seed
     - --wandb_group
-    - linear-closure-affine
+    - past-chunk-affine-64d
     - --wandb_run_name
     - ${vars.wandb_arm}-pretrain-s${vars.seed}
     - --horizon_steps
@@ -137,6 +154,10 @@ vars:
     - sigreg_ebm
     - --jepa_ntp_head
     - diff_chunk
+    - --jepa_ntp_chunk_span
+    - boundary_next
+    - --jepa_endpoint_coeff
+    - "0"
     - --diffsr_phi_parameterization
     - ${vars.phi_parameterization}
     - --latent_mode
@@ -174,40 +195,13 @@ vars:
     - --eval_batches
     - "4"
 
-  # Offline check on the finished encoder, before any tracker time is spent:
-  # is the score-affinity gap still at floating-point roundoff after 50k
-  # updates, and does the interpolant sit near the real-z set? Cross-motion
-  # pairs only, so a mix is a genuine skill blend. Runs on the arm's own
-  # encoder, so `concat` gives the comparison number.
-  probe_args:
-    - --skill_checkpoint
-    - ${vars.output_root}/encoder/checkpoints/latest.pt
-    - --reference_arrays_dir
-    - ${vars.ref_arrays}
-    - --output_dir
-    - ${vars.output_root}/interp_probe
-    - --motion_count
-    - "400"
-    - --windows_per_motion
-    - "4"
-    - --pairs
-    - "2000"
-    - --alphas
-    - "0.0"
-    - "0.25"
-    - "0.5"
-    - "0.75"
-    - "1.0"
-    - --seed
-    - "0"
-
   lowlevel_head:
     - --task
     - ${vars.task}
     - --algo
     - IPMD
     - --agent
-    - rlopt_ipmd_tuned_cfg_entry_point
+    - rlopt_ipmd_tuned_fullbatch_cfg_entry_point
     - --num_envs
     - ${vars.train_num_envs}
     - --seed
@@ -220,7 +214,7 @@ vars:
     - agent.logger.backend=wandb
     - agent.logger.video=false
     - agent.logger.project_name=g1-bones-seed
-    - agent.logger.group_name=linear-closure-affine
+    - agent.logger.group_name=past-chunk-affine-64d
     - env.command_interface.actor=latent
     - env.command_interface.actor.dim=${vars.command_dim}
     - env.command_interface.encoder=single
@@ -244,9 +238,9 @@ vars:
     - env.termination_curriculum_end_frames=30000000
     - env.data.reference_prefetch_mode=next
 
+  # No `agent.loss.mini_batch_size` here: the fullbatch entry point owns it.
   lowlevel_tail:
     - agent.collector.frames_per_batch=${vars.rollout_steps}
-    - agent.loss.mini_batch_size=${vars.minibatch_size}
     - agent.ipmd.expert_batch_size=24576
     - agent.loss.gamma=0.97
     - agent.save_interval=250000000
@@ -289,51 +283,36 @@ preflight:
   output_container_path: ${vars.output_root}
 
 arms:
-  # The arm: phi affine in z, so both grounding scores interpolate exactly.
-  affine:
+  # Production phi with the past chunk: the concat path, 228-wide source.
+  p5_concat:
     vars:
-      wandb_id: lca-affine
-      phi_parameterization: affine
-    stages: &closure_stages
+      wandb_id: pca64-p5concat
+      phi_parameterization: concat
+    stages: &past_chunk_stages
       - name: pretrain
         executable: scripts/rlopt/train_hl_skill_diffsr.py
-        args: ${concat:${vars.pretrain_head},${vars.pretrain_tail},${vars.data_overrides}}
+        args: ${concat:${vars.pretrain_head},${vars.source_args},${vars.pretrain_tail},${vars.data_overrides}}
         time_limit: "15:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,linear-closure-affine,${vars.arm},seed${vars.seed},pretrain
-      - name: probe
-        executable: scripts/audit/probe_latent_interpolation.py
-        args: ${vars.probe_args}
-        depends_on: pretrain
-        time_limit: "00:30:00"
-        # Minutes of work on small tensors: the widest thing it holds is the
-        # affine head's F(s) at ~0.5 GB, so it does not need a training card
-        # and should not queue behind one. a100 is sm_80, which the CU130
-        # runtime supports, and its nodes idle while h200/h100/l40s are full.
-        # Do not relax to v100 (sm_70, dropped by CUDA 13) or mi210 (ROCm).
-        gres: gpu:a100:1
-        cpus_per_task: 4
-        mem: 32G
-        env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,linear-closure-affine,${vars.arm},seed${vars.seed},probe
+          CLUSTER_WANDB_TAGS: bones-seed,129785,past-chunk-affine-64d,${vars.arm},seed${vars.seed},pretrain
       - name: lowlevel1
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.arm_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         depends_on: pretrain
         time_limit: "15:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,linear-closure-affine,${vars.arm},seed${vars.seed},lowlevel,segment1
+          CLUSTER_WANDB_TAGS: bones-seed,129785,past-chunk-affine-64d,${vars.arm},seed${vars.seed},lowlevel,segment1
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
       - name: lowlevel2
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.arm_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.finetune_args},${vars.reward_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel1
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -341,14 +320,13 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,linear-closure-affine,${vars.arm},seed${vars.seed},lowlevel,segment2
+          CLUSTER_WANDB_TAGS: bones-seed,129785,past-chunk-affine-64d,${vars.arm},seed${vars.seed},lowlevel,segment2
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
 
-  # Matched control: the production parameterization, pretrained here so the
-  # only difference from `affine` is the phi parameterization flag.
-  concat:
+  # The same past chunk with phi affine in z, so the score field interpolates.
+  p5_affine:
     vars:
-      wandb_id: lca-concat
-      phi_parameterization: concat
-    stages: *closure_stages
+      wandb_id: pca64-p5affine
+      phi_parameterization: affine
+    stages: *past_chunk_stages

@@ -1,0 +1,1142 @@
+# Latent-Learning Star v2 -- how should the command latent be learned?
+#
+# Read `wiki/latent-learning-star-v2.md` first: it is the design of record and
+# carries the hub rationale, the census, and the gates. This file is the
+# executable form of that page.
+#
+# THE HUB (confirmed with the user 2026-08-30). The merged head: ONE diffusion
+# head denoising s[t+10..t+20] (`--jepa_ntp_chunk_span boundary_next
+# --jepa_endpoint_coeff 0`), continuous 64-D with the phase channel KEPT
+# (command 66), hold 1, window 10, root_qpos 380 frames, robot_heading anchor,
+# ee + wide rewards, action_rate_l2 -0.03, feet_acc -2.5e-6 (recipe default
+# since 2026-08-28), SONIC reset selection with the failure share ramped
+# 0.8 -> 0.2 over the first 1B frames, 20,480 environments, 5B frames, a
+# checkpoint every 200M frames.
+#
+# Why the merged head and not the two-head `diffntp_chunk`: at 64-D and hold 1
+# the two-head form has NEVER trained (`leader64_h1_nophase` stalled at 0.84B
+# with a provably healthy encoder pretrain), while the merged head at that
+# width and hold works twice over (`diffntp_merged64` 0.9207/24.54/91.12 at 2B,
+# `merged64_pen_ramp_5b` 0.9543 at 5B). The stalled arm ALSO dropped the phase
+# channel, so width and phase are confounded in that one failure -- the hub
+# keeps phase, and `g5_phase_none_h10` separates them.
+#
+# Why 64-D: it width-matches Group 3's discrete cells, so continuous-versus-
+# discrete is a clean contrast instead of one carrying a width confound.
+#
+# 20,480 environments is the measured-safe step up; 24,576 OOM'd the H200 at
+# the Newton graph launch (job 5580202).
+#
+# NESTED CONTROLS. Group 2b does not read against the hub. The hub's
+# `jepa_endpoint_coeff=0` is meaningful only for the merged span, where the
+# endpoint frame lives INSIDE the target; with any other head that setting
+# removes the data grounding entirely. So every Group 2b arm restores
+# `jepa_endpoint_coeff=1.0` with the split heads and reads against
+# `g2_twohead`, which is itself a Group 2a row against the hub. The chain is
+# hub (merged) -> g2_twohead (split) -> the 2b head and asymmetry variants.
+#
+# Frozen across every arm: data, environment, terminations and their
+# curriculum, reset selection and its ramp, 20,480 envs x 24, gamma 0.97,
+# prefetch mode, network sizes, optimizer, and the 5B budget.
+name: latent-star-v2
+profile: ice
+wandb_project: g1-bs-ablation
+wandb_group: latent-star-v2
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  wandb_id: lsv2-arm
+  submit_seed: 0
+
+  # ---- The hub. An arm overrides only what it changes.
+  objective: jepa_ntp
+  objective_args: &merged_objective
+    - --jepa_loss
+    - sigreg_ebm
+    - --jepa_ntp_head
+    - diff_chunk
+    - --jepa_ntp_chunk_span
+    - boundary_next
+    - --jepa_endpoint_coeff
+    - "0"
+  latent_mode: deterministic
+  mode_args: []
+  z_dim: 64
+  command_dim: 66
+  code_latent_dim: ${vars.z_dim}
+  ln_args: ["--encoder_layer_norm"]
+  window_mode: intermediate
+  horizon: 10
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  hold: 1
+  phase_mode: sin_cos
+  phase_source: hold
+  phase_period: 0
+  command_mode: z
+  finetune_args: ["agent.ipmd.hl_skill_finetune_enabled=false"]
+  extra_args: []
+
+  # The hub's reward set. `feet_acc` is NOT overridden: the recipe default is
+  # the corrected -2.5e-6 since 2026-08-28 and every arm here trains on it.
+  reward_args: &hub_rewards
+    - env.rewards.motion_ee_pos.weight=1.0
+    - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    - env.rewards.action_rate_l2.weight=-0.03
+
+  # Which encoder file the tracker binds. Arms that change nothing about the
+  # encoder point at the HUB's tree and carry no pretrain stage.
+  encoder_ckpt: ${vars.output_root}/encoder/checkpoints/latest.pt
+  hub_encoder: /data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt
+  # `checkpoint` for arms whose encoder diverges during RL (dyn).
+  encoder_source: pretrained
+
+  # Online-dynamics finetune (achieved obs-ring; no policy gradient).
+  dyn_block:
+    - env.achieved_ring_capacity=128
+    - agent.ipmd.hl_skill_finetune_enabled=true
+    - agent.ipmd.hl_skill_pg_coeff=0
+    - agent.ipmd.hl_skill_offline_diffsr_coeff=1.0
+    - agent.ipmd.hl_skill_achieved_coeff=1.0
+    - agent.ipmd.hl_skill_anchor_coeff=0.01
+
+  # SONIC's released token space needs one level per coordinate: the config
+  # asserts z_dim == len(sonic_fsq_levels).
+  fsq64_levels: &fsq64_levels
+    - --sonic_fsq_levels
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+    - "32"
+
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+  train_num_envs: 20480
+  rollout_steps: 24
+  frame_cap: 5000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  minibatch_size: ${floor_div:${mul:${vars.frames_per_batch},3},4}
+  # Every 200M frames (user decision 2026-08-30), which over the 5B budget is
+  # 25 curve points rather than the 10 that interval bought at 2B.
+  save_interval: 200000000
+
+  # SONIC selection with the failure-driven share ramped 0.8 -> 0.2 across the
+  # first 1B frames -- the `merged64_pen_ramp_5b` regime.
+  #
+  # The preset MUST be `sonic`. Under `random80_adaptive20` the outer
+  # `random_trajectory_sampling_ratio=0.8` wrapper stays active and
+  # `adaptive_uniform_ratio` only rescales the remaining 20% branch, so the
+  # effective failure share moves 4% -> 16% instead of 80% -> 20%: the
+  # near-no-op that job 5594817 shipped with and was cancelled for.
+  select_ramp:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=1000000000
+  # The ramp keys off `common_step_counter`, which RESTARTS every segment, so
+  # segment 2 pins the landed ratio instead of re-running the ramp.
+  select_hold:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.2
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+
+  # ---- Posterior route (Group 1): no pretrained encoder at all.
+  # `route` is read by eval.sh to pick the agent entry point and the command
+  # source, so evaluation cannot drift from training on this axis.
+  route: pretrained
+  through_policy: "true"
+  recon_coeff: "1.0"
+  kl_coeff: "0.0"
+  quantizer: identity
+  posterior_space_args: []
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /data/latent_star_v2/${vars.arm}_seed${vars.seed}
+
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - "env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
+    - "env.expert_macro_state_terms=${vars.macro_terms}"
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  pretrain_head:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bs-ablation
+    - --wandb_group
+    - latent-star-v2
+    - --wandb_run_name
+    - ${vars.wandb_arm}-pretrain-s${vars.seed}
+    - --horizon_steps
+    - ${vars.horizon}
+    - --encoder_window_mode
+    - ${vars.window_mode}
+    - --transition_objective
+    - ${vars.objective}
+    - --latent_mode
+    - ${vars.latent_mode}
+    - --z_dim
+    - ${vars.z_dim}
+
+  pretrain_tail:
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bs-ablation
+    - agent.logger.group_name=latent-star-v2
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=${vars.horizon}
+    - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.command_phase_source=${vars.phase_source}
+    - agent.ipmd.latent_learning.command_phase_period=${vars.phase_period}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+
+  # Group 1's posterior arms: a different entry point, no encoder checkpoint,
+  # and the code shaped inside RL. `encoder.components` is the root_qpos trio
+  # so the posterior reads the same 38-value frame the pretrained route does.
+  posterior_lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - rlopt_ipmd_posterior_root_qpos_cfg_entry_point
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bs-ablation
+    - agent.logger.group_name=latent-star-v2
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - "env.command_interface.encoder.components=[joint_qpos,root_pos,root_ori]"
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=posterior
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.method=patch_autoencoder
+    - agent.ipmd.latent_learning.quantizer=${vars.quantizer}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.patch_past_steps=0
+    - agent.ipmd.latent_learning.patch_future_steps=9
+    - agent.ipmd.latent_learning.train_posterior_through_policy=${vars.through_policy}
+    - agent.ipmd.latent_learning.recon_coeff=${vars.recon_coeff}
+    - agent.ipmd.latent_learning.kl_coeff=${vars.kl_coeff}
+
+  # The reset selection is NOT here: it differs between segment 1 (ramp) and
+  # segment 2 (pinned), so each stage appends its own `select_*` block.
+  tuned_lowlevel:
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.loss.mini_batch_size=${vars.minibatch_size}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=${vars.save_interval}
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - "agent.policy.num_cells=[2048,2048,1024,1024,512,512]"
+    - "agent.value_function.num_cells=[2048,2048,1024,1024,512,512]"
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  output_container_path: /data/latent_star_v2/${vars.arm}_seed${vars.seed}
+
+arms:
+  # ======================================================================
+  # THE HUB
+  # ======================================================================
+  hub:
+    vars:
+      paper_label: "Ours"
+      section: 1
+      section_label: "next chunk s[t+10..t+20], merged span"
+      wandb_id: lsv2-hub
+    stages: &full_stages
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.objective_args},${vars.mode_args},${vars.ln_args},${vars.pretrain_tail},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent-star-v2,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent-star-v2,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent-star-v2,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # ======================================================================
+  # GROUP 1 -- reconstruction and the posterior route
+  # ======================================================================
+  # 1a. Pretrained RECONSTRUCTION: autoencode the encoder's own input window
+  # instead of predicting anything. Quantizer is the sub-axis.
+  g1_recon_ae:
+    vars:
+      paper_label: "Recon. (offline, cont.)"
+      section: 2
+      section_label: "reconstruction, continuous"
+      wandb_id: lsv2-g1recae
+      objective: reconstruction
+      objective_args: []
+    stages: *full_stages
+
+  g1_recon_fsq:
+    vars:
+      paper_label: "Recon. (offline, FSQ)"
+      section: 2
+      section_label: "reconstruction, FSQ"
+      wandb_id: lsv2-g1recfsq
+      objective: reconstruction
+      objective_args: []
+      latent_mode: sonic_fsq
+      mode_args: *fsq64_levels
+    stages: *full_stages
+
+  g1_recon_vq:
+    vars:
+      paper_label: "Recon. (offline, VQ)"
+      section: 2
+      section_label: "reconstruction, VQ"
+      wandb_id: lsv2-g1recvq
+      objective: reconstruction
+      objective_args: []
+      latent_mode: vq
+      mode_args: ["--vq_codebook_size", "512"]
+    stages: *full_stages
+
+  # 1b. POSTERIOR route: no pretrain at all, the code is shaped inside RL.
+  # `g1_post_ae` is reconstruction only; the three `pgrecon` arms add the
+  # policy gradient into the encoder on top.
+  g1_post_ae:
+    vars:
+      paper_label: "Recon. (joint, cont.)"
+      section: 2
+      section_label: "posterior in RL, recon only, continuous"
+      route: posterior
+      wandb_id: lsv2-g1postae
+      through_policy: "false"
+      recon_coeff: "1.0"
+      quantizer: identity
+      encoder_source: checkpoint
+    stages: &posterior_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.posterior_lowlevel_head},${vars.tuned_lowlevel},${vars.reward_args},${vars.posterior_space_args},${vars.extra_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent-star-v2,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.posterior_lowlevel_head},${vars.tuned_lowlevel},${vars.reward_args},${vars.posterior_space_args},${vars.extra_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent-star-v2,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # PURE POSTERIOR: the policy gradient is the ONLY thing shaping the code.
+  # `recon_coeff: 0` with `through_policy: true` removes the reconstruction
+  # term entirely, which is the cell that separates "the code is learned in RL"
+  # from "the code is an autoencoder that RL also touches". v1 rows for
+  # reference (old regime, not comparable): post_pg_ae 0.8906 / 30.55 / 442.47,
+  # post_pg_fsq 0.8789 / 32.74 / 436.66, post_pg_vq 0.8828 / 32.28 / 505.50.
+  g1_post_pg_ae:
+    vars:
+      paper_label: "PG (joint, cont.)"
+      section: 2
+      section_label: "posterior in RL, PG only, continuous"
+      route: posterior
+      wandb_id: lsv2-g1pgae
+      through_policy: "true"
+      recon_coeff: "0.0"
+      quantizer: identity
+      encoder_source: checkpoint
+    stages: *posterior_stages
+
+  g1_post_pg_fsq:
+    vars:
+      paper_label: "PG (joint, FSQ)"
+      section: 2
+      section_label: "posterior in RL, PG only, FSQ"
+      route: posterior
+      wandb_id: lsv2-g1pgfsq
+      through_policy: "true"
+      recon_coeff: "0.0"
+      quantizer: fsq
+      encoder_source: checkpoint
+      posterior_space_args:
+        - "agent.ipmd.latent_learning.fsq_levels=[32,32,32,32,32,32,32,32]"
+    stages: *posterior_stages
+
+  g1_post_pg_vq:
+    vars:
+      paper_label: "PG (joint, VQ)"
+      section: 2
+      section_label: "posterior in RL, PG only, VQ"
+      route: posterior
+      wandb_id: lsv2-g1pgvq
+      through_policy: "true"
+      recon_coeff: "0.0"
+      quantizer: vq_ema
+      encoder_source: checkpoint
+      posterior_space_args:
+        - "agent.ipmd.latent_learning.codebook_size=512"
+    stages: *posterior_stages
+
+  g1_post_pgrecon_ae:
+    vars:
+      paper_label: "Recon.+PG (joint, cont.)"
+      section: 2
+      section_label: "posterior in RL, PG + recon, continuous"
+      route: posterior
+      wandb_id: lsv2-g1pgrae
+      through_policy: "true"
+      recon_coeff: "1.0"
+      quantizer: identity
+      encoder_source: checkpoint
+    stages: *posterior_stages
+
+  g1_post_pgrecon_fsq:
+    vars:
+      paper_label: "Recon.+PG (joint, FSQ)"
+      section: 2
+      section_label: "posterior in RL, PG + recon, FSQ"
+      route: posterior
+      wandb_id: lsv2-g1pgrfsq
+      through_policy: "true"
+      recon_coeff: "1.0"
+      quantizer: fsq
+      encoder_source: checkpoint
+      posterior_space_args:
+        - "agent.ipmd.latent_learning.fsq_levels=[32,32,32,32,32,32,32,32]"
+    stages: *posterior_stages
+
+  g1_post_pgrecon_vq:
+    vars:
+      paper_label: "Recon.+PG (joint, VQ)"
+      section: 2
+      section_label: "posterior in RL, PG + recon, VQ"
+      route: posterior
+      wandb_id: lsv2-g1pgrvq
+      through_policy: "true"
+      recon_coeff: "1.0"
+      quantizer: vq_ema
+      encoder_source: checkpoint
+      posterior_space_args:
+        - "agent.ipmd.latent_learning.codebook_size=512"
+    stages: *posterior_stages
+
+  # ======================================================================
+  # GROUP 2a -- what the latent factorization predicts
+  # ======================================================================
+  # The split-head form: endpoint head at coeff 1.0 PLUS a next-chunk head.
+  # This is the round-4 winner's objective and the CONTROL for all of 2b.
+  g2_twohead:
+    vars:
+      paper_label: "Split end-point + chunk"
+      section: 1
+      section_label: "endpoint head + next-chunk head, split"
+      wandb_id: lsv2-g2two
+      objective_args: &twohead_objective
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+    stages: *full_stages
+
+  g2_endpoint:
+    vars:
+      paper_label: "End-point"
+      section: 1
+      section_label: "the immediate next state only"
+      wandb_id: lsv2-g2end
+      objective: endpoint
+      objective_args: []
+    stages: *full_stages
+
+  g2_delta:
+    vars:
+      paper_label: "End-point delta"
+      section: 1
+      section_label: "the endpoint delta"
+      wandb_id: lsv2-g2delta
+      objective: endpoint_delta
+      objective_args: []
+    stages: *full_stages
+
+  g2_state_occupancy:
+    vars:
+      paper_label: "Successor occupancy"
+      section: 1
+      section_label: "successor-representation occupancy"
+      wandb_id: lsv2-g2occ
+      objective: state_occupancy
+      objective_args: []
+    stages: *full_stages
+
+  g2_semimarkov:
+    vars:
+      paper_label: "Semi-Markov"
+      section: 1
+      section_label: "semi-Markov factorization"
+      wandb_id: lsv2-g2semi
+      objective: semimarkov_chain
+      objective_args: []
+    stages: *full_stages
+
+  # The hub's target with the legacy bilinear successor head instead of the
+  # concat head -- a parameterization change, not a target change.
+  g2_phi_bilinear:
+    vars:
+      paper_label: "Bilinear head"
+      section: 2
+      section_label: "bilinear successor head"
+      wandb_id: lsv2-g2phibi
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+        - --jepa_ntp_chunk_span
+        - boundary_next
+        - --jepa_endpoint_coeff
+        - "0"
+        - --diffsr_phi_parameterization
+        - bilinear
+    stages: *full_stages
+
+  # ======================================================================
+  # GROUP 2b -- the predictor form. Control is `g2_twohead`, NOT the hub.
+  # ======================================================================
+  # GATE: every arm below whose target is a TOKEN (EMA or stop-grad) routes
+  # through `_reanchor_heading_frames` and therefore through the unfixed rot6d
+  # interleaved-versus-columns mismatch. Do not launch this group before that
+  # convention is decided.
+  g2_mlp:
+    vars:
+      paper_label: "End-point-det"
+      section: 2
+      section_label: "deterministic conditional mean (JEPA-like)"
+      wandb_id: lsv2-g2mlp
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - mlp
+    stages: *full_stages
+
+  g2_dsrsig:
+    vars:
+      paper_label: "No predictor"
+      section: 2
+      section_label: "no predictor: DiffSR + SIGReg only"
+      wandb_id: lsv2-g2dsrsig
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_coeff
+        - "0"
+    stages: *full_stages
+
+  g2_nosig:
+    vars:
+      paper_label: "No SIGReg"
+      section: 2
+      section_label: "SIGReg removed"
+      wandb_id: lsv2-g2nosig
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_chunk
+        - --jepa_sigreg_coeff
+        - "0"
+    stages: *full_stages
+
+  g2_sg:
+    vars:
+      paper_label: "Stop-grad target"
+      section: 2
+      section_label: "stop-gradient target"
+      wandb_id: lsv2-g2sg
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - mlp
+        - --jepa_target_encoder_mode
+        - stopgrad
+    stages: *full_stages
+
+  g2_online:
+    vars:
+      paper_label: "Online target"
+      section: 2
+      section_label: "online target"
+      wandb_id: lsv2-g2online
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - mlp
+        - --jepa_target_encoder_mode
+        - online
+    stages: *full_stages
+
+  g2_lejepa_ema:
+    vars:
+      paper_label: "Pred.+SIGReg (EMA)"
+      section: 2
+      section_label: "prediction + SIGReg only, EMA target"
+      wandb_id: lsv2-g2lejema
+      objective_args:
+        - --jepa_loss
+        - sigreg
+        - --jepa_target_encoder_mode
+        - ema
+    stages: *full_stages
+
+  g2_lejepa_sg:
+    vars:
+      paper_label: "Pred.+SIGReg (stop-grad)"
+      section: 2
+      section_label: "prediction + SIGReg only, stop-grad"
+      wandb_id: lsv2-g2lejsg
+      objective_args:
+        - --jepa_loss
+        - sigreg
+        - --jepa_target_encoder_mode
+        - stopgrad
+    stages: *full_stages
+
+  g2_lejepa_online:
+    vars:
+      paper_label: "Pred.+SIGReg (online)"
+      section: 2
+      section_label: "prediction + SIGReg only, online"
+      wandb_id: lsv2-g2lejol
+      objective_args:
+        - --jepa_loss
+        - sigreg
+        - --jepa_target_encoder_mode
+        - online
+    stages: *full_stages
+
+  # Triplet context: the predictor reads cat(z[t-H], z[t]) over a 3H window.
+  # The MLP head is REQUIRED, not a choice -- RLOpt validates that the
+  # diffusion heads support only the chunk pair (`jepa_context_chunks=0`), so
+  # this arm's control is `g2_mlp`, one field away, rather than `g2_twohead`.
+  g2_trip:
+    vars:
+      section: 1
+      section_label: "triplet context cat(z[t-H], z[t])"
+      paper_label: "Triplet context"
+      wandb_id: lsv2-g2trip
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - mlp
+        - --jepa_context_chunks
+        - "1"
+    stages: *full_stages
+
+  g2_token:
+    vars:
+      paper_label: "Next-latent"
+      section: 1
+      section_label: "the next latent token"
+      wandb_id: lsv2-g2token
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - diff_token
+    stages: *full_stages
+
+  # ======================================================================
+  # GROUP 3 -- encoder space design: continuous versus discrete
+  # ======================================================================
+  # Every cell keeps the hub's merged objective and moves only the code.
+  # The v1 star found single-codebook quantizers collapsing under a loss with
+  # NO marginal regularizer; this hub carries SIGReg, so these are new
+  # measurements rather than repeats.
+  g3_cont128:
+    vars:
+      paper_label: "Cont. 128-D"
+      section: 3
+      section_label: "continuous 128"
+      section_group: "latent prior"
+      wandb_id: lsv2-g3c128
+      z_dim: 128
+      command_dim: 130
+    stages: *full_stages
+
+  g3_cont256:
+    vars:
+      paper_label: "Cont. 256-D"
+      section: 3
+      section_label: "continuous 256"
+      section_group: "latent prior"
+      wandb_id: lsv2-g3c256
+      z_dim: 256
+      command_dim: 258
+    stages: *full_stages
+
+  # PRETRAINED VQ IS THE KNOWN-COLLAPSING ROUTE, and this arm submits anyway
+  # to settle it at full budget. v1 measured both routes and they disagree
+  # completely: `bn_vq_ema` (pretrained, frozen codebook) scored 0.0000, while
+  # the SAME quantizer learned during RL trained normally -- `post_recon_vq`
+  # 0.8945, `post_pgrecon_vq` 0.8867, `post_pg_vq` 0.8828. What fails is the
+  # frozen pretrained codebook, not vector quantization; `g1_post_pgrecon_vq`
+  # is the working-route partner this reads against.
+  #
+  # Probed 2026-08-30 at the production batch, 400 updates, with and without
+  # `--vq_dead_code_reset_iters 25`: identical and collapsed either way --
+  # code perplexity 1.0, usage 1/512, `z_dim_std_mean` 2.4e-9. Revival never
+  # fires because `dead_code_frac` is 0.0: the EMA cluster sizes never fall
+  # under the revival threshold even though one code takes every sample. Note
+  # `z_effective_rank` reads a spurious 26.5 on an all-zero covariance, so it
+  # cannot detect this failure -- perplexity can.
+  #
+  # 400 updates is 0.8% of the 50,000-update pretrain, so this does NOT settle
+  # whether SIGReg rescues the codebook over a full run, which is the only
+  # reason the cell is worth GPU time.
+  g3_vq64:
+    vars:
+      section: 3
+      section_label: "VQ codebook 512"
+      paper_label: "VQ-EMA"
+      section_group: "latent prior"
+      wandb_id: lsv2-g3vq64
+      latent_mode: vq
+      mode_args: ["--vq_codebook_size", "512"]
+    stages: *full_stages
+
+  g3_fsq64:
+    vars:
+      paper_label: "FSQ 64x32"
+      section: 3
+      section_label: "FSQ 64 x 32 levels"
+      section_group: "latent prior"
+      wandb_id: lsv2-g3fsq64
+      latent_mode: sonic_fsq
+      mode_args: *fsq64_levels
+    stages: *full_stages
+
+  g3_multicat:
+    vars:
+      paper_label: "Cat. 64x32"
+      section: 3
+      section_label: "categorical 64 x 32, straight-through"
+      section_group: "latent prior"
+      wandb_id: lsv2-g3mcat
+      latent_mode: categorical
+      mode_args:
+        - --categorical_groups
+        - "64"
+        - --categorical_categories
+        - "32"
+    stages: *full_stages
+
+  g3_multicat_gumbel:
+    vars:
+      paper_label: "Gumbel 64x32"
+      section: 3
+      section_label: "categorical 64 x 32, Gumbel"
+      section_group: "latent prior"
+      wandb_id: lsv2-g3mcatg
+      latent_mode: gumbel_multicat
+      mode_args:
+        - --categorical_groups
+        - "64"
+        - --categorical_categories
+        - "32"
+    stages: *full_stages
+
+  # ======================================================================
+  # GROUP 4 -- what the encoder reads, and how wide the window is
+  # ======================================================================
+  g4_fullbody670:
+    vars:
+      paper_label: "+ joint velocity"
+      section: 3
+      section_label: "adds 29 reference joint velocities"
+      section_group: "encoder input"
+      wandb_id: lsv2-g4fb670
+      macro_terms: "[expert_motion,expert_anchor_pos_b,expert_anchor_ori_b]"
+    stages: *full_stages
+
+  g4_stride5:
+    vars:
+      paper_label: "Stride 5"
+      section: 3
+      section_label: "frames spaced 5 apart (0.9 s window)"
+      section_group: "encoder input"
+      wandb_id: lsv2-g4stride5
+      stride: 5
+    stages: *full_stages
+
+  g4_window_full:
+    vars:
+      paper_label: "Full window"
+      section: 3
+      section_label: "full window instead of intermediate"
+      section_group: "encoder input"
+      wandb_id: lsv2-g4winfull
+      window_mode: full
+    stages: *full_stages
+
+  g4_anchor_robot:
+    vars:
+      paper_label: "Robot frame"
+      section: 3
+      section_label: "anchor in the live robot frame"
+      section_group: "encoder input"
+      wandb_id: lsv2-g4anchrob
+      anchor_mode: robot
+    stages: *full_stages
+
+  g4_anchor_expert:
+    vars:
+      paper_label: "Expert heading"
+      section: 3
+      section_label: "anchor in the expert's heading frame"
+      section_group: "encoder input"
+      wandb_id: lsv2-g4anchexp
+      anchor_mode: expert_heading
+    stages: *full_stages
+
+  # `--horizon_steps` moves the encoder's INPUT window and the merged head's
+  # TARGET span together. These two arms are a joint window-size axis, not an
+  # input-size axis; the input-only read is the local suffixN probe series.
+  g4_h5:
+    vars:
+      paper_label: "Horizon 5"
+      section: 3
+      section_label: "horizon 5"
+      section_group: "encoder input"
+      wandb_id: lsv2-g4h5
+      horizon: 5
+    stages: *full_stages
+
+  g4_h20:
+    vars:
+      paper_label: "Horizon 20"
+      section: 3
+      section_label: "horizon 20"
+      section_group: "encoder input"
+      wandb_id: lsv2-g4h20
+      horizon: 20
+    stages: *full_stages
+
+  # ======================================================================
+  # GROUP 5 -- publication cadence. No pretrain: the hub's encoder verbatim.
+  # ======================================================================
+  g5_hold5:
+    vars:
+      paper_label: "Hold 5"
+      section: 3
+      section_label: "publish every 5 control steps"
+      section_group: "cadence"
+      wandb_id: lsv2-g5hold5
+      hold: 5
+      encoder_ckpt: ${vars.hub_encoder}
+    stages: &lowlevel_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.select_ramp},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent-star-v2,${vars.arm},seed${vars.seed},lowlevel,segment1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_lowlevel},${vars.finetune_args},${vars.reward_args},${vars.extra_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent-star-v2,${vars.arm},seed${vars.seed},lowlevel,segment2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  g5_hold10:
+    vars:
+      paper_label: "Hold 10"
+      section: 3
+      section_label: "publish every 10 control steps"
+      section_group: "cadence"
+      wandb_id: lsv2-g5hold10
+      hold: 10
+      encoder_ckpt: ${vars.hub_encoder}
+    stages: *lowlevel_stages
+
+  # The phase channel is only testable where the slot clock VARIES, so this
+  # arm sits at hold 10 and pairs with `g5_hold10`, not with the hub. It also
+  # finally separates width from phase in the `leader64_h1_nophase` failure.
+  g5_phase_none_h10:
+    vars:
+      paper_label: "No phase (hold 10)"
+      section: 3
+      section_label: "hold 10 with the phase clock dropped"
+      section_group: "cadence"
+      wandb_id: lsv2-g5phnone
+      hold: 10
+      phase_mode: none
+      command_dim: 64
+      encoder_ckpt: ${vars.hub_encoder}
+    stages: *lowlevel_stages
+
+  # ======================================================================
+  # GROUP 6 -- is the encoder frozen during RL
+  # ======================================================================
+  # Frozen -> finetuned (this) -> learned from scratch in RL (Group 1's
+  # posterior arms) is one ordered axis.
+  #
+  # NOT AT THE HUB, and not by choice. RLOpt's online finetune requires
+  # `jepa_ntp_head='mlp'` (`hl_skill_diffsr.py`, the "Online jepa_ntp
+  # finetuning supports only the chunk-pair EMA recipe" guard) and refuses
+  # every diffusion head, so dyn on the merged-head hub cannot run without an
+  # RLOpt change. Qualified on 2026-08-30: the smoke fails at the guard.
+  #
+  # This arm therefore sits on the CONDITIONAL-MEAN cell and its control is
+  # `g2_mlp`, one field away. It answers "does the online dynamics finetune
+  # help the mlp predictor", not "does it help the hub". Its own pretrain is
+  # required because it needs an mlp-head encoder, which no other arm's tree
+  # provides frozen; the encoder then diverges during RL, so evaluation reads
+  # it back out of the tracker checkpoint.
+  g6_dyn:
+    vars:
+      paper_label: "Online enc. finetune"
+      section: 2
+      section_label: "encoder adapted online during RL"
+      wandb_id: lsv2-g6dyn
+      objective_args:
+        - --jepa_loss
+        - sigreg_ebm
+        - --jepa_ntp_head
+        - mlp
+      finetune_args: ${vars.dyn_block}
+      encoder_source: checkpoint
+    stages: *full_stages
