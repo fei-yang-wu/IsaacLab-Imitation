@@ -5,10 +5,15 @@ reuse a finished encoder from
 [`../2026-08-30-past-chunk-affine-64d/`](../2026-08-30-past-chunk-affine-64d/README.md),
 so this campaign has no pretrain stage.
 
-| arm | encoder (reused) | phi parameterization | W&B run id |
-|---|---|---|---|
-| `p5h10_concat` | `/data/past_chunk_affine_64d/p5_concat_seed0/encoder` | concat | `pch50-concat-s0` |
-| `p5h10_affine` | `/data/past_chunk_affine_64d/p5_affine_seed0/encoder` | affine | `pch50-affine-s0` |
+| arm | encoder (reused) | phi parameterization | jobs | W&B run id |
+|---|---|---|---|---|
+| `p5h10_concat` | `/data/past_chunk_affine_64d/p5_concat_seed0/encoder` | concat | 5605194-5605201 | `pch50-concat-s0` |
+| `p5h10_affine` | `/data/past_chunk_affine_64d/p5_affine_seed0/encoder` | affine | 5605202-5605209 | `pch50-affine-s0` |
+
+Status: **SUBMITTED 2026-09-01** on ICE, H200, seed 0. W&B project
+`g1-bs-pareto`, group `past-chunk-hist-50b`. Both submissions recorded
+`drift=false`, so each chain is reproducible from the commit it was submitted
+at.
 
 Both encoders read a five-frame past chunk in `phi`
 (`--source_history_steps 5 --source_anchor current`, 228-value source) and
