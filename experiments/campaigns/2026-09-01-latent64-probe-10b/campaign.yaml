@@ -282,3 +282,21 @@ arms:
         - agent.ipmd.critic_lr_schedule=linear
         - agent.ipmd.critic_lr_final=1.0e-5
     stages: *probe_stages
+
+  # ---- The phase channel alone, no optimizer extras. `nophase_wd_clin` was
+  # ---- CANCELLED at 0.39B on 2026-09-01: its episode length ran 33-57 and
+  # ---- falling (56.6, 43.9, 33.0, 40.3, 40.1, 37.4 over the last six logged
+  # ---- windows) while `z64_merged` at the SAME 0.30-0.39B was at 136-174.
+  # ---- That arm moved three fields; this one keeps the weight decay and the
+  # ---- critic decay OFF and drops only the phase channel, so the pair
+  # ---- separates them. The code says the phase cannot act at hold 1 -- it
+  # ---- publishes a constant, and `latent_command` bypasses input
+  # ---- normalization -- so the prediction is that this arm tracks
+  # ---- `z64_merged`, and that the stall belongs to `optim.weight_decay=1e-2`
+  # ---- and/or `critic_lr_schedule=linear`. Curriculum stays on at 5M-30M.
+  nophase:
+    vars:
+      wandb_id: l64p-nophase
+      phase_mode: none
+      command_dim: 64
+    stages: *probe_stages
