@@ -354,6 +354,198 @@ It blocked the star-v2 curve backfill for `diffntp_chunktok`,
 with their eight checkpoints, 0 of 24 cells scored — which is how it was
 found.
 
+## Curves move to the 4,096-clip board; figure tooling built (2026-08-31)
+
+User decision: score the convergence curves on **the same board as the tables**
+(`bones_testbed4096_v1` clean), not the 256-clip milestone board. Curves and
+tables now come from ONE corpus and the 2B point of a curve IS the table row,
+instead of two boards that disagree by more than a rounding step. The cost is
+real -- roughly 90 minutes per 25-point arm instead of 15 -- which is why this
+runs on the cluster.
+
+`experiments/campaigns/2026-08-31-star-v2-curves/`, one job per arm, generated
+by `imitation_experiments.reporting.build_curve_eval_campaign` from the
+TRAINING campaign so every interface field (width, hold, phase, macro terms,
+stride, anchor, horizon, posterior-versus-pretrained route) is copied rather
+than retyped. 41 jobs in flight. 10 tests.
+
+**The Kit startup crash is NOT concurrency.** Giving each arm a private
+`CLUSTER_ISAAC_SIM_CACHE_DIR` did not stop it: a three-job pilot produced two
+crashes at about 25 s and one success, with the crash and the success on the
+SAME node while the third crashed alone elsewhere. It is the flaky startup
+already recorded for this profile, roughly a coin flip, and it lands before any
+scoring work. Re-running `submit_all.sh` is the retry loop. The private caches
+stay -- they remove a real shared-state hazard -- but they were not the cause.
+
+**A skip-logic bug worth remembering.** The first `submit_all.sh` skipped any
+arm with a COMPLETED job, which right after the board change starved two arms
+(`g2_sg`, `g2_state_occupancy`) of a 4,096-clip run because their 256-clip job
+had finished. It now skips only arms currently in the queue; a completed job is
+no reason to skip, because the tree scorer skips already-scored cells. The 19
+stale 256-clip rows were deleted from the curves directory.
+
+**Figures.** `imitation_experiments.reporting.ablation_curves` draws one figure
+per paper section, three panels each (SR, MPJPE-L, MPJPE-G) against frames,
+reading the same scored JSONs and the same section mapping as the tables. An
+arm with fewer than two points is NAMED rather than silently dropped, since one
+dot is not a curve and an omission reads as "no data" when the arm is merely
+early. 11 tests. Section 1 and 2 already draw; section 3 needs more points.
+
+**Keep the two eval corpora apart.** Cluster curve rows land in
+`logs/latent_star_v2_curves/`, local table rows in `logs/latent_star_v2_eval/`.
+The 2B cell exists in both -- same board, same protocol, different runs -- so
+merging them would let a table row change depending on which file landed last.
+Kept apart, the pair is a free second sample of the evaluation noise.
+
+Also submitted: the three pure-posterior arms (`g1_post_pg_ae`,
+`g1_post_pg_fsq`, `g1_post_pg_vq`, jobs 5604434-5604443), `through_policy=true`
+with `recon_coeff=0`, closing the PG-only row of the posterior grid that the
+campaign never had.
+
+## Star v2 scored at a matched 2B screen: 31 of 41 rows (2026-08-31)
+
+User decision: read the ablation at a matched **2B** checkpoint
+(`model_step_2000486400`) instead of waiting for 5B. Training continues to 5B
+untouched. 2B is matched across arms, matches the v1 star's screen budget, and
+was already available for 33 arms. `bones_testbed4096_v1` clean, one seed.
+
+**Section 1, factorization target.** The default chunk target wins, but the
+axis is tight. hub 0.9285 / 24.47 / 99.51; `g2_twohead` 0.9304 / 24.47 /
+106.17 and `g2_token` 0.9246 / 25.32 / 102.42 are inside the noise band on all
+three. Two targets are clearly worse: `g2_delta` 0.8115 / 40.04 / 127.01 and
+`g2_endpoint` 0.9148 / 26.24 / 128.32. So predicting a CHUNK beats predicting a
+single endpoint, and splitting the endpoint into its own head changes nothing
+measurable at this budget.
+
+**Section 2, predictive architecture. The family ordering is the headline and
+it is not close.**
+
+| family | best arm | SR | MPJPE-L | MPJPE-G |
+|---|---|---:|---:|---:|
+| predictive (DiffSR) | hub | 0.9285 | 24.47 | **99.51** |
+| reconstruction | `g1_recon_fsq` | **0.9368** | **22.50** | 238.12 |
+| posterior in RL | `g1_post_pgrecon_ae` | 0.8892 | 30.82 | 418.26 |
+
+Reconstruction wins success rate AND local error and loses global error by
+2.4x. The posterior route loses everything, 3.9-4.2x worse globally. Judged on
+the two metrics most papers report, reconstruction would look like the best
+interface in the study while drifting nearly two and a half times further.
+
+Inside the predictive family the estimator matters less than the family: the
+deterministic mean (`g2_mlp` 0.9192 / 26.25 / 110.77), stop-grad
+(`g2_sg` 0.9192 / 25.64 / 112.08) and SIGReg-off (`g2_nosig` 0.9304 / 24.24 /
+107.29) all sit near the hub. Dropping the DiffSR grounding is what breaks it:
+`g2_lejepa_sg` 0.7910 and `g2_lejepa_online` 0.7119 / 46.39 / 486.08.
+
+**Section 3 has the three largest effects in the whole study**, all failures:
+
+- `g5_phase_none_h10` **0.3784 / 67.10 / 1293.94** — dropping the phase clock
+  at hold 10 is catastrophic, reproducing v1's 0.4141 almost exactly and
+  finally separating width from phase in the `leader64_h1_nophase` stall.
+- `g4_fullbody670` **0.5330 / 54.85 / 528.55** — adding reference joint
+  velocities to the encoder input is far worse here than the -0.027 SR v1
+  measured at hold 10.
+- `g3_multicat` 0.6848 / 46.97 / 273.29 and `g4_stride5` 0.7356 / 37.17 /
+  147.36.
+
+Cadence is monotone in global error and cheap in success rate: hold 1 (hub)
+99.51, hold 5 125.89, hold 10 141.00. Width is a null — `g3_cont256`
+0.9277 / 24.68 / 104.02 against the 64-D hub. FSQ costs local error and holds
+global (`g3_fsq64` 0.8928 / 31.19 / 108.87).
+
+Eight arms are still training toward 2B, and the two cancelled VQ arms are
+being re-scored after a fix.
+
+## Star v2 training is half done; disk, not compute, sets the schedule (2026-08-31)
+
+39 arms remain after the two VQ cancellations. **97.6B of 190B trained (51%)**;
+`g1_post_ae` has finished its 5B, 38 arms are running, 37 jobs wait on
+dependency.
+
+**Throughput is bimodal and the cause is our own co-location.** Median 139,642
+fps, but a group sits at 48,000-64,000. Up to four of our jobs land on one
+node, and at 16 CPUs each they contend for host bandwidth rather than for the
+8 H200s. Nothing is wrong with the slow arms; they speed up as neighbours
+finish.
+
+Completion, at current rates: the median arm needs **4.3 h**, and the slowest
+(`g4_h20`, 0.45B done at 48k fps) needs 26.3 h if contention never lifts. It
+will lift, so the realistic all-arms figure is **12-16 h**, bounded below by
+5.8 h (the 92.4B of remaining work over 4.46M frames/s aggregate, which
+assumes perfect sharing that independent arms cannot achieve).
+
+**Disk was going to end the run in under three hours and no longer will.**
+Scratch hit 80.9% with 521 checkpoints worth 107.7 GB. Archiving everything
+except the newest three per arm moved 406 files and 84 GB to ice-shared and
+took scratch to 54.0%, buying roughly 6.5 h at the ~21 GB/h burn. The archive
+is a move, verified: 406 files present, none truncated. Repeat it as scratch
+climbs; the write rate falls as arms finish.
+
+## First star-v2 rows: reconstruction is locally better and globally 2.6x worse (2026-08-31)
+
+Early check at the user's request, both arms scored locally on
+`bones_testbed4096_v1` clean at a MATCHED 2.60B checkpoint. These are
+mid-training rows against a 5B budget, one seed, so they are preliminary.
+
+| arm | interface | SR | MPJPE-L | MPJPE-G | acc | jerk |
+|---|---|---:|---:|---:|---:|---:|
+| `hub` | merged chunk, 64-D, DiffSR | 0.9343 | 24.16 | **92.36** | **4.47** | **185.0** |
+| `g1_recon_fsq` | reconstruction, FSQ | **0.9353** | **22.07** | 239.80 | 4.96 | 225.0 |
+| `sonic_v1_1` | released reference, converged | 0.9888 | 26.73 | 187.7 | 3.45 | - |
+
+**The v1 reconstruction finding reproduces on the new hub and the new
+regime.** Success rate is tied — 0.001 apart against a 0.016 noise band — and
+reconstruction is 8.7% BETTER on local error, while being **2.6x worse
+globally** (239.80 against 92.36 mm). v1 measured 2.0x on its own hub. The
+mechanism is unchanged: autoencoding the encoder's own input window gives the
+code no reason to carry where that window sits in the world.
+
+This is the cleanest argument yet for the three-number row. Judged on success
+rate and MPJPE-L alone — the two metrics usually reported — reconstruction
+would look like the better interface. It is drifting 2.6x further.
+
+**The hub is in good shape at just over half its budget.** At 2.60B it already
+beats the converged `sonic_v1_1` reference on both error metrics (24.16 against
+26.73 local, 92.36 against 187.7 global) while trailing on success rate
+(0.9343 against 0.9888), and it is the smoother of the two star arms on both
+acceleration and jerk. For scale, `merged64_pen_ramp_5b` — the nearest
+measured relative, at 5B — reads 0.9543 / 23.67 / 89.33.
+
+## Pretrained VQ is dead on both sides; SIGReg does NOT rescue it (2026-08-31)
+
+Both pretrained-VQ arms of star v2 were CANCELLED as diverging, by user
+decision. The pair settles the question the axis was re-run for, and the
+answer is cleaner than either arm alone.
+
+| arm | objective | pretrain codebook | tracker at cancel |
+|---|---|---|---|
+| `g1_recon_vq` | reconstruction, no SIGReg | perplexity **275-279 / 512**, informative | r_step -45, ep_len 13.8 at 0.6B |
+| `g3_vq64` | merged chunk + **SIGReg** | perplexity **1.0**, collapsed | r_step **-2384**, ep_len 14.9 at 2.1B |
+
+Two findings, and they point in opposite directions from the hypothesis:
+
+1. **SIGReg did not rescue the codebook — it collapsed under it.** The whole
+   reason Group 3 re-ran the discrete sweep was that the v1 hub had no
+   marginal regularizer and this one does. In fact the reconstruction
+   objective kept the codebook alive at 54% utilization while the
+   generative-chunk-plus-SIGReg objective collapsed it to a single code.
+2. **A healthy codebook is not sufficient.** `g1_recon_vq` pretrained to an
+   informative code and its tracker still diverged. So the failure is not the
+   codebook: a frozen VQ code is unusable as a command channel regardless of
+   how well the codebook itself trained. v1 could not separate these because
+   there the encoder had collapsed too.
+
+The unbounded `action_rate_l2` penalty is what drives the step reward that far
+negative once the policy thrashes against an unusable command.
+
+**The posterior VQ arm is healthy and stays running** (`g1_post_pgrecon_vq`,
+ep_len 142.7, r_step 0.207), which reproduces v1's split: VQ works when the
+code is learned inside RL (`post_recon_vq` 0.8945) and fails when it is
+pretrained and frozen (`bn_vq_ema` 0.0000).
+
+Both cancelled arms keep their checkpoints, so an honest table row can still
+be scored from them rather than reported as a blank.
+
 ## Star v2 reorganized into the paper's three sections (2026-08-31)
 
 User decision: the ablation reports as three tables, not six groups.
