@@ -80,6 +80,11 @@ class StageSpec:
     gres: str | None = None
     mem: str | None = None
     cpus_per_task: int | None = None
+    # Slurm partition and QoS for this stage, overriding the profile pair.
+    # Set both together: a partition names the QoS values it allows, so a
+    # partition override with the profile's QoS is usually rejected.
+    partition: str | None = None
+    qos: str | None = None
     # Comma-separated node list handed to `sbatch --exclude`. Use it to keep a
     # chain off a node that is delivering degraded throughput; record why in
     # the campaign README, because it changes which hardware a row ran on.
@@ -125,6 +130,8 @@ class ResolvedStage:
     gres: str | None
     mem: str | None
     cpus_per_task: int | None
+    partition: str | None
+    qos: str | None
     exclude: str | None
     depends_on: str | None
     dependency_kind: str
@@ -238,6 +245,8 @@ def load_campaign(
             gres=stage.gres,
             mem=stage.mem,
             cpus_per_task=stage.cpus_per_task,
+            partition=getattr(stage, "partition", None),
+            qos=getattr(stage, "qos", None),
             exclude=getattr(stage, "exclude", None),
             depends_on=stage.depends_on,
             dependency_kind=str(getattr(stage, "dependency_kind", "afterok")),

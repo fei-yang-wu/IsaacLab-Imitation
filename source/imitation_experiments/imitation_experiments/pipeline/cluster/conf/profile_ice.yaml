@@ -30,7 +30,11 @@ slurm:
   time_limit: "15:59:00"
   # Relative Slurm log dirs kill the job in ~100s with no log anywhere
   # (jobs 5577430/5577435, 2026-08-15). Must be absolute and existing.
-  log_dir: /home/hice1/fwu91/scratch/slurm_logs
+  #
+  # On ice-shared, not scratch: the logs had grown to 36 GB against a 300 GB
+  # scratch quota that a full campaign already exceeds on checkpoints alone
+  # (2026-08-31). ice-shared is 2 TB.
+  log_dir: /storage/ice-shared/vip-vwt/scratch-fwu91/slurm_logs
   job_name_prefix: imit
 env:
   # Runtime keys consumed by run_singularity.sh inside the job. Everything
@@ -45,6 +49,6 @@ env:
   CLUSTER_AUTO_SETUP_G1_DATA: "0"
   CLUSTER_APPEND_DEFAULT_G1_MANIFEST: "0"
   CLUSTER_G1_MANIFEST_REFRESH_POLICY: never
-  CLUSTER_EXTRA_PYTHONPATH_REL: IsaacLab/source/isaaclab:IsaacLab/source/isaaclab_tasks:IsaacLab/source/isaaclab_assets:IsaacLab/source/isaaclab_rl:IsaacLab/source/isaaclab_mimic:source/isaaclab_imitation:RLOpt:ImitationLearningTools
+  CLUSTER_EXTRA_PYTHONPATH_REL: IsaacLab/source/isaaclab:IsaacLab/source/isaaclab_tasks:IsaacLab/source/isaaclab_assets:IsaacLab/source/isaaclab_rl:IsaacLab/source/isaaclab_mimic:source/isaaclab_imitation:source/imitation_experiments:RLOpt:ImitationLearningTools
   REMOVE_CODE_COPY_AFTER_JOB: "false"
   REMOVE_OVERLAY_AFTER_JOB: "true"

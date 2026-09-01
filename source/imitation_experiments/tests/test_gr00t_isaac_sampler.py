@@ -276,3 +276,24 @@ def test_root_qpos_vocabularies_agree_on_widths_but_not_names():
         "expert_anchor_ori_b",
     ]
     assert not set(command_names) & set(macro_names)
+
+
+def test_set_goal_assignment_reindexes_against_the_cached_vocabulary():
+    s = _per_env_sampler(["walk", "greet", "stoop"], num_envs=3)
+    s._gr00t_goal_vocabulary = ["walk", "greet", "stoop"]
+    s.set_goal_assignment("stoop")
+    assert s._gr00t_goal_names == ["stoop"] * 3
+    assert s._gr00t_goal_index.tolist() == [2, 2, 2]
+    s.set_goal_assignment(["greet", "walk", "stoop"])
+    assert s._gr00t_goal_index.tolist() == [1, 0, 2]
+
+
+def test_set_goal_assignment_rejects_a_goal_outside_the_cache():
+    s = _per_env_sampler(["walk", "greet", "stoop"], num_envs=3)
+    s._gr00t_goal_vocabulary = ["walk", "greet", "stoop"]
+    try:
+        s.set_goal_assignment("swim")
+    except KeyError as error:
+        assert "swim" in str(error)
+    else:
+        raise AssertionError("an unknown goal must be a hard error")
