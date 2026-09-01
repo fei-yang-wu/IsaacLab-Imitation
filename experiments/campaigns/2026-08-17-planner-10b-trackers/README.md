@@ -493,3 +493,151 @@ gradient inflation) and an undisclosed `attend_text_every_n_blocks=1` masking
 change in the head. Both are still present. Keeping them makes these arms
 comparable with the 46.95 mm row; fixing them first would not. Either choice is
 defensible, but it must be made before the first arm trains, not after.
+
+## Figure clips (2026-08-31)
+
+`render_clips.sh` renders one episode per selected motion for the paper teaser
+and the results row. It runs the headline deployment config of `ln_hold1_10b`
+(consume all 30 slots before re-planning, no temporal ensembling, DR off), one
+motion and one environment per Isaac process, at 1920x1080.
+
+```bash
+./render_clips.sh                       # ranks 0, 13, 17, 29
+RANKS_TO_RENDER="13 29" ./render_clips.sh
+```
+
+The recorder camera in Isaac Lab is static in world space, so a walking robot
+leaves the frame within a few seconds. The launcher passes
+`--video_track_env 0` to `eval_skill_commander_closed_loop.py`, which
+repositions the recorder camera from the tracked robot's root before each
+rendered frame. That flag touches the camera only: no simulation state and no
+metric changes. `env.video_recorder.window_width` / `window_height` set the
+recorded resolution; `env.viewer.resolution` does not.
+
+The scene carries the robot alone. There is no door, crate or mug prop, so
+every clip shows the reference motion performed on flat ground.
+
+| rank | goal text | episode MPJPE-L | steps | fell |
+|---|---|---:|---:|---|
+| 29 | slow walk forward | 19.4 mm | 400 | no |
+| 17 | lifting a crate, walk start, walk forward | 18.5 mm | 247 | no |
+| 13 | opening the right side door from inside, walking out, closing it | 25.5 mm | 316 | no |
+| 0 | picking up an object from the ground while walking | 60.4 mm | 340 | no |
+
+Single deterministic episodes, so these are not the 20-episode means of the
+results table above (29.5, 29.9, 27.9 and 41.3 mm). Collected clips:
+`outputs/planner_10b/clips/figure_v1/`.
+
+Rank 0 was replaced by rank 2 (`big_heavy_one_hand_front_low_to_front_high`,
+"picks up big heavy object with one hand from low up front and puts it away
+high up front", 26.2 mm over 20 episodes) for the studio pass below.
+
+## Studio clips (2026-08-31)
+
+`render_studio_clips.sh` renders the same arm through
+`scripts/viz/render_paper_policy_video.py`, which owns the paper look: a
+three-point rig on a seamless light cyclorama, fog instead of a horizon, and a
+chase camera on a 35 lens (`--style studio_light --shot hero_low`).
+
+```bash
+./render_studio_clips.sh                    # ranks 29, 17, 13, 2
+RANKS_TO_RENDER="13 29" ./render_studio_clips.sh
+PREVIEW=1 ./render_studio_clips.sh          # style x shot contact sheet
+```
+
+That renderer used to drive the tracker from the frozen encoder's oracle
+latents, which is the tracker ceiling and not the deployed system. It now takes
+`--gr00t_checkpoint`, `--gr00t_goal_features` and `--gr00t_goals` (one goal per
+rank, in rank order) and installs the same `Gr00tLatentCommandSampler` the
+closed-loop evaluator installs, so the clip shows language goal to head to
+latent to tracker. `Gr00tSkillCommandSampler.set_goal_assignment` moves the
+goal between clips, so the 4.9 GB head loads once for the whole run.
+
+The Kit RTX camera exists only under PhysX, so these clips run `physics=physx`
+while every reported number stays on the Newton evaluator. Terminations,
+rewards, pushes and randomization are all off: a stumble stays in frame.
+
+Clips and PNG stills: `outputs/planner_10b/clips/figure_v1_studio/` (the four
+figure motions) and `logs/planner_10b/studio_clips/` (per-run output, including
+the 28-motion pass over the whole trained set).
+
+The goal-feature cache `outputs/gr00t_language30/goal_features/goal_features.pt`
+was restored from the 2026-08-28 EC eval kit copy. It carries the same 30 goal
+names in the same order, but it is a rebuild, not the file the heads trained
+against.
+
+## The results figure: four sequence panels (2026-08-31)
+
+`render_studio_clips.sh` with `SHOT=sequence` renders the stroboscopic
+composite the results figure is built from: one image per motion, the robot
+drawn at six poses, on the studio cyclorama.
+
+```bash
+# one policy pass, recording the achieved motion of every clip
+SHOT=hero_low RECORD_TAKES=outputs/planner_10b/takes/ln_hold1_10b_u0012000 \
+  ./render_studio_clips.sh
+
+# panels, replayed from those takes: no head, no tracker, no physics
+SHOT=sequence TAKES_DIR=outputs/planner_10b/takes/ln_hold1_10b_u0012000 \
+  OUTPUT_DIR=logs/planner_10b/studio_clips/seq_figure_takes ./render_studio_clips.sh
+
+pixi run python scripts/viz/assemble_sequence_figure.py \
+  --panels <four sequence PNGs> --labels <four captions> --columns 2 \
+  --output outputs/paper/figures/qualitative_sequences.png
+```
+
+The figure is `outputs/paper/figures/qualitative_sequences.{png,pdf}`:
+3858x1444 px, 539 dpi at the 7.16 in width of an IEEE `figure*`, so it stands
+2.68 in tall on the page. Two rows of two panels: walk and crate-carry above,
+door and low-to-high lift below.
+
+Panel height is the assembler's job, not the renderer's. Each 16:9 panel is
+mostly empty backdrop, and tiling those whole would cost 4.04 in of page. The
+assembler crops each panel to the band that actually holds robots and shadows:
+ink is measured against a straight line fitted across each row (the cyclorama
+has both a vertical and a left-to-right gradient, so a single backdrop colour
+marks half the frame as ink), the heaviest band of qualifying lines is the
+body, and that band then grows outward over any remaining ink so a raised hand
+is not cut off. Panels are padded, never scaled, to one common cell, so the
+robots stay the same size across panels.
+
+Presentation rules, all of them render-only:
+
+- **Time runs right to left in every panel** (`--sequence_time_direction`).
+  A walking motion is framed from the side that makes it travel that way,
+  which costs nothing; a spread ladder is ordered to match.
+- **Poses are solid** (`--sequence_alpha_min 1.0`). The fade reproduces badly
+  on paper and the reading direction already carries the order.
+- **Crowded poses are spread** (`--sequence_spread`). Whether poses crowd is a
+  question about the gap between them, not about total travel: a door opened
+  on the spot walks a metre and still stacks six poses. Each pose is projected
+  onto the camera's horizontal axis and shifted onto an even ladder, so a pose
+  already standing clear barely moves.
+- **A replayed take's root path is straightened** (`--straighten_takes`) onto
+  the chord from its first frame to its last, so the poses stand in a row at
+  one depth instead of drifting toward and away from the camera. Joint angles,
+  orientation and height are untouched.
+
+### Motion takes
+
+`--record_takes DIR` writes the achieved root pose and joint angles of every
+rendered frame; `--takes` replays them. A replay poses the robot from the file
+and renders, so reframing or relighting a figure costs a render instead of a
+policy rollout, and the figure stops depending on a 4.9 GB head being present.
+Takes are a presentation artifact: no reported number comes from one.
+
+### Two bugs this pass found and fixed
+
+- **The studio floor was coplanar with the physics grid plane** at z=0. That
+  depth tie resolves per camera, so the locked sequence camera rendered the
+  grid while a chase camera in the same process rendered the studio floor, and
+  the plate-versus-pose difference then marked the whole frame as robot. The
+  slab now sits a millimetre higher; the horizontal banding warnings went with
+  it.
+- **The sequence figure's two passes shared the planner's slot cache.** The
+  environment reset between the path pass and the capture pass does not reach
+  the sampler, so the captured pass consumed latents predicted from the other
+  pass's states. It showed up as a robot that barely moved: the door take
+  carried 0.28 rad of joint travel against 1.55 rad once the sampler is reset
+  with the environment. Any planner-driven `--shot sequence` render made
+  before this fix is suspect.

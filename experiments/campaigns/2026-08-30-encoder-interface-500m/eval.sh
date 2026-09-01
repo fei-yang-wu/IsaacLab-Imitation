@@ -1,51 +1,66 @@
 #!/usr/bin/env bash
-# Score linear-closure-affine checkpoints on `bones_testbed4096_v1`.
+# Score encoder-interface-500m checkpoints on `bones_testbed4096_v1`, the
+# population behind the `paper_testbed4096_v1` profile.
 #
-# Both arms share ONE command channel (258-D hold-1 `sin_cos`, `root_qpos`
-# macro state) and ONE tracker regime, including the trained-in EMA action
-# filter. The filter lives in the ENV action term, so every row repeats
-# `env.actions.joint_pos.ema_alpha=0.65`; omitting it would score an
-# unfiltered policy.
+# Unlike the smooth-ablation launcher, this campaign varies the ENCODER, so
+# two overrides move per arm and everything else is held fixed:
 #
-# Each arm binds ITS OWN encoder from the mirror. The encoders differ in the
-# phi parameterization, which is the variable under test, so a crossed pair
-# would measure a mismatch instead. Run
-# `imitation_experiments.audit.validate_latent_skill_checkpoint_binding`
-# before citing any row.
+#   `agent.ipmd.hl_skill_checkpoint_path`   the encoder the tracker was bound to
+#   `agent.ipmd.hl_skill_horizon_steps`     that encoder's pretrain horizon
 #
-# Requires the 2026-08-29 evaluator (commit 85141ff): rows carry the
-# reference-free `body_jerk_mps3` / `action_delta_l2` smoothness metrics.
+# A wrong pair fails loudly: FrozenHighLevelSkillCommandSampler raises on a
+# horizon mismatch rather than feeding the encoder a wrong-width window.
+#
+# The probe encoders stay on ICE and are streamed one at a time, because they
+# are 0.74 to 1.26 GB each and the workstation pool holds about 16 GB. Each is
+# deleted after its arm is scored; set PRUNE_ENCODER=0 to keep them.
 #
 #   ./eval.sh                          # every mirrored arm, clean + robust
-#   ARMS=affine ROWS=clean ./eval.sh
-#   FRAMES="750059520 1000243200 1250426880" ROWS=clean ./eval.sh   # bracket 1B
+#   ARMS=prod ROWS=clean ./eval.sh
 #   ./eval.sh --report
 set -uo pipefail
 CAMPAIGN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "${CAMPAIGN_DIR}" rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
-MIRROR="${MIRROR:-${REPO_ROOT}/logs/linear_closure_affine_mirror}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/logs/linear_closure_affine_eval}"
+MIRROR="${MIRROR:-${REPO_ROOT}/logs/encoder_interface_500m_mirror}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/logs/encoder_interface_500m_eval}"
+ENCODER_CACHE="${ENCODER_CACHE:-${MIRROR}/encoders}"
+PROD_ENCODER="${PROD_ENCODER:-${REPO_ROOT}/logs/pareto_stack_mirror/diffntp_chunk_h1_ee_wide_seed0/encoder/checkpoints/latest.pt}"
+REMOTE_HOST="${REMOTE_HOST:-ice}"
+REMOTE_ENCODER_ROOT="${REMOTE_ENCODER_ROOT:-/home/hice1/fwu91/scratch/Research/IsaacLab/data/endpoint_collapse_probe}"
+PRUNE_ENCODER="${PRUNE_ENCODER:-1}"
 REFERENCE_ARRAYS="${REFERENCE_ARRAYS:-/mnt/hsstorage/fwu91/bones_seed_ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1}"
 PERSIST_ID="${PERSIST_ID:-bones_seed_sonic_full_129785@e714bbff}"
 MAX_STEPS="${MAX_STEPS:-10000}"
+# Per-row watchdog. A row normally finishes in about two minutes; on
+# 2026-08-30 one row wedged in Isaac Lab startup and produced nothing for over
+# two hours, which killed the rest of the sweep. Bound each row instead.
+ROW_TIMEOUT="${ROW_TIMEOUT:-1800}"
 SEED="${SEED:-0}"
 ROWS="${ROWS:-clean robust}"
-EMA_ALPHA="${EMA_ALPHA:-0.65}"
-# Default board is the deciding 4,096-clip set. For the 124-clip calibration
-# board pass RANKS_JSON (the frozen artifact) and a SEPARATE OUTPUT_ROOT —
-# rows from different boards are different populations and must never share
-# a directory or a table column.
+# The deciding 4,096-clip board. Rows from a different board are a different
+# population and must never share this directory or a table column.
 BOARD="${BOARD:-bones_testbed4096_v1}"
-RANKS_JSON="${RANKS_JSON:-}"
-ARMS="${ARMS:-affine concat}"
+ARMS="${ARMS:-prod suffix1 suffix2 suffix5 suffix9 h1 h2 h5 h10}"
 SCALED_CELLS="[2048,2048,1024,1024,512,512]"
 RUNTIME_BODY_NAMES="[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*"; }
 randomization_for() { [[ "$1" == "robust" ]] && echo no_push || echo none; }
 out_for() { printf '%s/%s_seed%s_%s_f%s.json' "${OUTPUT_ROOT}" "$1" "$2" "$3" "$4"; }
+
+# Each arm's pretrain horizon. The suffix family keeps horizon 10 and moves
+# only how much of the window the encoder sees; the horizon family shrinks the
+# horizon itself, so the encoder input and both pretrain targets move together.
+horizon_for() {
+    case "$1" in
+        h1) echo 1 ;;
+        h2) echo 2 ;;
+        h5) echo 5 ;;
+        *) echo 10 ;;
+    esac
+}
 
 report() {
     shopt -s nullglob
@@ -64,53 +79,52 @@ fi
 
 [[ -s "${REFERENCE_ARRAYS}/reference_arrays_manifest.json" ]] || {
     log "[FATAL] reference arrays missing: ${REFERENCE_ARRAYS}"; exit 2; }
-mkdir -p "${OUTPUT_ROOT}"
+mkdir -p "${OUTPUT_ROOT}" "${ENCODER_CACHE}"
 
-if [[ -n "${RANKS_JSON}" ]]; then
-    [[ -s "${RANKS_JSON}" ]] || { log "[FATAL] ranks artifact missing: ${RANKS_JSON}"; exit 2; }
-    mapfile -t ranks < <(jq -r '.[]' "${RANKS_JSON}")
-else
-    mapfile -t ranks < <(pixi run python -c "
+mapfile -t ranks < <(pixi run python -c "
 from imitation_experiments.evaluation.protocol import BOARDS
 print('\n'.join(str(case.trajectory_rank) for case in BOARDS['${BOARD}'].cases))
 ")
-fi
 [[ "${#ranks[@]}" -gt 0 ]] || { log "[FATAL] board returned no ranks"; exit 2; }
 
 for arm in ${ARMS}; do
     tree="${MIRROR}/${arm}_seed${SEED}"
-    encoder="${tree}/encoder/checkpoints/latest.pt"
-    [[ -s "${encoder}" ]] || { log "[SKIP] ${arm}: no mirrored encoder ${encoder}"; continue; }
     [[ -d "${tree}/tracker" ]] || { log "[SKIP] no mirror ${tree}"; continue; }
     mapfile -t frames < <(ls -1 "${tree}/tracker" 2>/dev/null | sed -n 's/^f\([0-9]\+\)$/\1/p' | sort -n)
     [[ "${#frames[@]}" -gt 0 ]] || { log "[SKIP] no checkpoints in ${tree}/tracker"; continue; }
-    # FRAMES pins which checkpoints to score. Default is the newest one only.
-    # Give several to bracket a milestone: checkpoint-to-checkpoint variance on
-    # this board is larger than evaluation noise, so a single checkpoint is not
-    # a reading of the arm. Frames absent from the mirror are skipped.
-    if [[ -n "${FRAMES:-}" ]]; then
-        selected=()
-        for want in ${FRAMES}; do
-            if [[ -s "${tree}/tracker/f${want}/models/model_step_${want}.pt" ]]; then
-                selected+=("${want}")
-            else
-                log "[SKIP] ${arm}: f${want} not mirrored"
-            fi
-        done
-    else
-        selected=("${frames[-1]}")
-    fi
-    [[ "${#selected[@]}" -gt 0 ]] || { log "[SKIP] ${arm}: no requested frames present"; continue; }
+    final="${frames[-1]}"
+    horizon="$(horizon_for "${arm}")"
 
-    for final in "${selected[@]}"; do
+    # `prod` binds the round-4 pareto encoder already on this workstation.
+    # Every other arm binds a probe encoder that lives on ICE.
+    streamed=0
+    if [[ "${arm}" == "prod" ]]; then
+        encoder="${PROD_ENCODER}"
+    else
+        encoder="${ENCODER_CACHE}/${arm}_seed${SEED}_latest.pt"
+        if [[ ! -s "${encoder}" ]]; then
+            log "[pull] ${arm} encoder"
+            if ! rsync -a --partial \
+                "${REMOTE_HOST}:${REMOTE_ENCODER_ROOT}/${arm}_seed${SEED}/encoder/checkpoints/latest.pt" \
+                "${encoder}"; then
+                log "[FAIL] ${arm}: encoder pull failed"
+                rm -f "${encoder}"
+                continue
+            fi
+            streamed=1
+        fi
+    fi
+    [[ -s "${encoder}" ]] || { log "[FAIL] ${arm}: encoder missing ${encoder}"; continue; }
+
     for row in ${ROWS}; do
         profile="$(randomization_for "${row}")"
         checkpoint="${tree}/tracker/f${final}/models/model_step_${final}.pt"
         out="$(out_for "${arm}" "${SEED}" "${row}" "${final}")"
         [[ -s "${out}" ]] && { log "[SKIP] already scored $(basename "${out}")"; continue; }
 
-        log "${arm} seed${SEED} ${row} f${final} (${#ranks[@]} clips)"
-        env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 \
+        log "${arm} seed${SEED} ${row} f${final} horizon ${horizon} (${#ranks[@]} clips)"
+        timeout "${ROW_TIMEOUT}" \
+            env TERM=xterm OMNI_KIT_ACCEPT_EULA=YES PYTHONUNBUFFERED=1 \
             HYDRA_FULL_ERROR=1 TORCHDYNAMO_DISABLE=1 \
             pixi run -e isaaclab python -u \
             -m imitation_experiments.lowlevel.evaluate_checkpoint \
@@ -145,7 +159,7 @@ for arm in ${ARMS}; do
             agent.ipmd.latent_dim=258 \
             agent.ipmd.command_source=hl_skill \
             "agent.ipmd.hl_skill_checkpoint_path=${encoder}" \
-            agent.ipmd.hl_skill_horizon_steps=10 \
+            "agent.ipmd.hl_skill_horizon_steps=${horizon}" \
             agent.ipmd.hl_skill_command_mode=z \
             agent.ipmd.latent_steps_min=1 \
             agent.ipmd.latent_steps_max=1 \
@@ -155,7 +169,6 @@ for arm in ${ARMS}; do
             agent.ipmd.latent_learning.command_phase_period=0 \
             agent.ipmd.latent_learning.code_latent_dim=256 \
             agent.ipmd.hl_skill_finetune_enabled=false \
-            "env.actions.joint_pos.ema_alpha=${EMA_ALPHA}" \
             "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]" \
             env.expert_macro_frame_stride=1 \
             env.expert_macro_anchor_mode=robot_heading \
@@ -171,17 +184,28 @@ for arm in ${ARMS}; do
             "agent.value_function.num_cells=${SCALED_CELLS}" \
             agent.value_function.activation_fn=silu > "${out}.log" 2>&1
         rc=$?
+        if (( rc == 124 )); then
+            log "[TIMEOUT] ${arm} ${row} f${final}: no row after ${ROW_TIMEOUT}s"
+            continue
+        fi
         if (( rc != 0 )); then
             log "[FAIL] ${arm} ${row} f${final} exit ${rc}: $(tail -3 "${out}.log" | tr '\n' ' ' | cut -c1-150)"
             continue
         fi
         if [[ ! -s "${out}" ]]; then
-            log "[FAIL] ${arm} ${row} f${final}: exit 0 but no row written: $(grep -iE 'error|out of memory' "${out}.log" | tail -1)"
+            # Report the FIRST hard error, not the last line: an OOM is
+            # followed by a teardown `AttributeError: '_is_closed'` that hides
+            # the real cause (2026-08-30).
+            log "[FAIL] ${arm} ${row} f${final}: exit 0 but no row written: $(grep -iE 'outofmemory|out of memory|AcceleratorError|RuntimeError' "${out}.log" | head -1 | cut -c1-160)"
             continue
         fi
         log "[OK] $(basename "${out}")"
     done
-    done
+
+    if [[ "${PRUNE_ENCODER}" == "1" && "${streamed}" == "1" ]]; then
+        rm -f "${encoder}"
+        log "[prune] ${arm} encoder removed"
+    fi
 done
 
 report

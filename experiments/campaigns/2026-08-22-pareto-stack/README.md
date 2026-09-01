@@ -381,18 +381,27 @@ ablation on it. The design — the family spine, the code-shape axis, the window
 axis, the cadence axis, the 62-row census and its cost — is
 [wiki/latent-learning-star-v2.md](../../../wiki/latent-learning-star-v2.md).
 
-Sixteen of that star's rows are already MEASURED here, at this campaign's
-hold-1 + `ee` + `wide` cell. Two of its arms are written into this
-`campaign.yaml` and are NOT submitted:
+The hub the user confirmed on 2026-08-30 is NOT this campaign's cell. It is
+the merged head at 64-D — one diffusion head over `s[t+10..t+20]`, phase kept
+— in a different training regime: 20,480 environments, `action_rate_l2`
+-0.03, `feet_acc` -2.5e-6, checkpoints every 200M. The two-head
+`diffntp_chunk` has never trained at 64-D and hold 1 (`leader64_h1_nophase`
+stalled at 0.84B), so it is a row of the new star's Group 2a rather than its
+hub.
 
-| arm | change vs the new hub | why it is not a repeat |
-|---|---|---|
-| `diffntp_chunk_nosig_h1_ee_wide` | `--jepa_sigreg_coeff 0` | `jepa_nosig` removed SIGReg from a loss whose EMA self-target it was stabilising; `diff_chunk` has no self-target. It is also the control for every discrete cell of the new star, whose premise is that SIGReg is what could rescue a collapsing codebook. |
-| `diffntp_chunk_h1_ee_wide_s1` | seed 1 | the new hub has no seed repeat; every within-band ordering in the round-4 table rests on one seed. |
+**Consequence for this campaign's rows.** All sixteen sit four fields from
+that hub — 256-D, 16,384 environments, no action penalty, `feet_acc`
+-2.5e-7 — so they support no one-variable claim about it. They stay as a
+historical panel; the ten JEPA-family predictor-form arms the new star needs
+are re-trained there as Group 2b rather than cited from here.
 
-Both pin `env.rewards.feet_acc.weight=-2.5e-7`, the pre-2026-08-28 value every
-row above trained on, so they stay one-variable reads. Plans resolve and
-preflight clean on ICE.
+**Two arms in this `campaign.yaml` are SUPERSEDED — do not submit them.**
+`diffntp_chunk_nosig_h1_ee_wide` and `diffntp_chunk_h1_ee_wide_s1` were
+written on 2026-08-30 before the hub was settled, and both pin the old
+`feet_acc` to stay comparable with the rows above. The questions they asked
+now belong to the new star at its own hub: SIGReg-off is `g2_nosig`, and the
+seed repeat belongs to the v2 hub. They remain declared so the record of
+what was planned stays intact.
 
 ## Pipeline
 

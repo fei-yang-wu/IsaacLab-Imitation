@@ -31,6 +31,44 @@ records `drift=true`. None of it is on the tracker path these arms exercise.
 `mb_full_e5` / `mb_full_e3` cleared the memory question: both ran past
 iteration 1900 with no OOM, so the +33% peak activation fits on the H200.
 
+## Final state (2026-08-31): seven arms at 5B, no matched control
+
+Every job of this campaign has left the queue. Last checkpoint per arm, read
+from `/data/optimizer_ablation_5b/<arm>_seed0/tracker/*/models/`:
+
+| arm | reached | how it ended |
+|---|---:|---|
+| `mb_full_e3` | 5.00B | completed |
+| `mb_full_e5` | 5.00B | completed |
+| `mb_half_e3` | 5.00B | completed |
+| `mb_half_e5` | 5.00B | completed |
+| `critic_lin` | 5.00B | completed |
+| `wd_1e2` | 5.00B | completed |
+| `wd_1e4` | 5.00B | completed |
+| `ctrl` | 2.00B | cancelled 2026-08-31 on user direction; seg1 was at 2.14B and running at 44k fps on a slow node, against 136k fps elsewhere |
+| `floor_late` | 1.75B | non-finite abort at 1.93B cumulative frames |
+| `wd_1e1` | 0.75B | non-finite abort at 0.94B cumulative frames |
+| `ent_only` | 0.75B | cancelled 2026-08-30, verdict reached |
+| `ent_sonic` | 0.25B | cancelled 2026-08-30, verdict reached |
+
+The two aborts were `IPMD._abort_on_nonfinite` firing on
+`train/step_reward_mean`, which stops the chain rather than writing poisoned
+checkpoints. Both arms' `lowlevel2` jobs (5598854, 5598859) were
+`DependencyNeverSatisfied` because the dependency is `afterok`, and were
+cancelled 2026-08-31. `ctrl`'s `lowlevel2` (5598838) went the same way when
+seg1 was cancelled.
+
+**The control is the arm that did not finish.** `ctrl` stops at 2.00B while the
+geometry arms all reached 5B, so the four `mb_*` cells still have no
+same-campaign control at their own frame count. This is the gap named in the
+`G1ImitationTunedFullBatchRLOptIPMDConfig` docstring at promotion time, and
+cancelling `ctrl` makes it permanent for this campaign. Closing it needs a
+resubmitted `ctrl` from its 2.00B checkpoint on a fast node.
+
+Two arms also end mid-budget with a usable prefix: `floor_late` at 1.75B and
+`wd_1e1` at 0.75B. Neither answers its question at 5B; both would need a
+resume from the last good checkpoint, and both went non-finite once already.
+
 ## Both entropy arms cancelled (2026-08-30, ~2h in)
 
 `ent_sonic` (5598860/5598861) and `ent_only` (5598855/5598856) were cancelled

@@ -129,13 +129,80 @@ control.
   (encoder, tracker) pair. Do not report a scoreboard win as evidence of
   linear closure.
 
+## Results
+
+### Pretraining capacity (both arms complete, 50k updates, one seed)
+
+No measurable capacity penalty. Averaged over the 26 milestones from update
+25,000 to 50,000, affine is at 0.936x concat's endpoint eval loss and 1.001x
+its next-chunk eval loss. The next-chunk term is the clean read at 1.001; the
+endpoint term nominally favours affine but the milestone-to-milestone standard
+deviation over that window is 0.028 (affine) and 0.023 (concat) against a mean
+separation of 0.015, and the final milestone inverts. Read it as a null.
+
+The cost is wall-clock: 1:37:08 against 0:49:38, a 1.96x slowdown, and 4.13 GB
+checkpoints against 1.35 GB. Both follow from `F(s)`'s 1024x256 output layer.
+
+### Interpolation probe (both encoders, 2,000 cross-motion pairs)
+
+The guarantee holds after full training, and the matched control quantifies
+what the production recipe loses.
+
+| alpha | affine score gap | concat score gap |
+|---|---|---|
+| 0.25 | 1.81e-07 | 7.69e-02 |
+| 0.50 | 1.72e-07 | 1.09e-01 |
+| 0.75 | 1.81e-07 | 7.43e-02 |
+
+Affine is at float32 roundoff; concat is 10.9% mean and 52.4% max at the
+midpoint. Interpolant geometry is near-identical between arms (midpoint norm
+ratio 0.724 vs 0.718, nearest-real-neighbour ratio 0.972 vs 1.076), so affine
+did not buy affinity by distorting the latent distribution. Denoising transfer
+is smooth and monotone on both.
+
+### Tracking at 1B, bracketed (4,096 board, clean, one seed) -- PRELIMINARY
+
+Scored at 1.25B of a 5B budget while both arms were still running. Three
+checkpoints per arm because checkpoint variance here exceeds evaluation noise.
+
+| arm | frames | SR | MPJPE-L | MPJPE-G | jerk | adelta |
+|---|---|---|---|---|---|---|
+| affine | 0.75B | 0.8682 | 28.80 | 145.31 | 155.5 | 0.802 |
+| affine | 1.00B | 0.8823 | 28.12 | 130.57 | 152.1 | 0.780 |
+| affine | 1.25B | 0.8862 | 27.56 | 118.81 | 154.3 | 0.787 |
+| concat | 0.75B | 0.8894 | 27.90 | 138.33 | 170.7 | 0.846 |
+| concat | 1.00B | 0.9006 | 26.59 | 129.83 | 159.8 | 0.803 |
+| concat | 1.25B | 0.9041 | 26.11 | 116.04 | 169.3 | 0.857 |
+| sonic_v1_1 | released | 0.9888 | -- | 26.73 | -- | acc 3.45 |
+
+Concat leads on success rate and local error at all three checkpoints. The
+gaps (about 0.018 SR, about 1.5 mm MPJPE-L) are no larger than each arm's own
+movement across the bracket, but the sign never flips across three independent
+checkpoints, which the training curves could not resolve. Affine is smoother:
+jerk 152-155 against 160-171, and its jerk is flat across the bracket while
+concat's climbs. `ee_body_pos` dominates failures for both, as it does on this
+board generally. MPJPE-G is still falling steeply for both and is not settled.
+
 ## Status
 
-- 2026-08-30: RLOpt `affine` parameterization implemented, unit-tested,
-  campaign frozen and plan-validated for both arms. Nothing submitted.
+- 2026-08-30: RLOpt `affine` parameterization implemented and unit-tested.
+  Both pretrain arms COMPLETE. Both interpolation probes COMPLETE. Both 5B
+  tracker chains submitted and running. 1B tracking scored, preliminary.
 
 ## Job log
 
 | date | arm | stage | job | outcome |
 |---|---|---|---|---|
-| | | | | |
+| 08-30 | affine | pretrain | 5598584 | COMPLETED, 1:37:08, 50k updates |
+| 08-30 | concat | pretrain | 5598585 | COMPLETED, 0:49:38, 50k updates |
+| 08-30 | affine | probe | 5598898 | COMPLETED, 44s (a100) |
+| 08-30 | concat | probe | 5598899 | COMPLETED, 34s (a100) |
+| 08-30 | affine | lowlevel1/2 | 5598889/90 | running |
+| 08-30 | concat | lowlevel1/2 | 5598891/92 | running |
+
+Two earlier probe attempts failed and are kept here because both were
+plumbing, not science: 5598872/5598875 died on `No module named
+'imitation_experiments'` (the container PYTHONPATH did not carry the
+experiment library), and 5598895/5598896 died on `No module named 'torch'`
+(a `scripts/` entrypoint must call `configure_cu130_bridge` before importing
+Torch under Kit's Python).

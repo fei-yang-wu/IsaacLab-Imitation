@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Score linear-closure-affine checkpoints on `bones_testbed4096_v1`.
+# Score past-chunk-affine-64d checkpoints on `bones_testbed4096_v1`.
 #
-# Both arms share ONE command channel (258-D hold-1 `sin_cos`, `root_qpos`
-# macro state) and ONE tracker regime, including the trained-in EMA action
-# filter. The filter lives in the ENV action term, so every row repeats
-# `env.actions.joint_pos.ema_alpha=0.65`; omitting it would score an
-# unfiltered policy.
+# Both arms share ONE command channel (66-D hold-1 `sin_cos`, `root_qpos`
+# macro state, 64-D code plus a 2-wide phase) and ONE tracker regime. There is
+# NO trained-in EMA action filter in this campaign, so no `ema_alpha` override
+# belongs on these rows; the only smoothness pressure is
+# `action_rate_l2 = -0.03` inside training.
 #
 # Each arm binds ITS OWN encoder from the mirror. The encoders differ in the
 # phi parameterization, which is the variable under test, so a crossed pair
@@ -17,7 +17,7 @@
 # reference-free `body_jerk_mps3` / `action_delta_l2` smoothness metrics.
 #
 #   ./eval.sh                          # every mirrored arm, clean + robust
-#   ARMS=affine ROWS=clean ./eval.sh
+#   ARMS=p5_affine ROWS=clean ./eval.sh
 #   FRAMES="750059520 1000243200 1250426880" ROWS=clean ./eval.sh   # bracket 1B
 #   ./eval.sh --report
 set -uo pipefail
@@ -25,21 +25,20 @@ CAMPAIGN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "${CAMPAIGN_DIR}" rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 
-MIRROR="${MIRROR:-${REPO_ROOT}/logs/linear_closure_affine_mirror}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/logs/linear_closure_affine_eval}"
+MIRROR="${MIRROR:-${REPO_ROOT}/logs/past_chunk_affine_64d_mirror}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/logs/past_chunk_affine_64d_eval}"
 REFERENCE_ARRAYS="${REFERENCE_ARRAYS:-/mnt/hsstorage/fwu91/bones_seed_ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1}"
 PERSIST_ID="${PERSIST_ID:-bones_seed_sonic_full_129785@e714bbff}"
 MAX_STEPS="${MAX_STEPS:-10000}"
 SEED="${SEED:-0}"
 ROWS="${ROWS:-clean robust}"
-EMA_ALPHA="${EMA_ALPHA:-0.65}"
 # Default board is the deciding 4,096-clip set. For the 124-clip calibration
 # board pass RANKS_JSON (the frozen artifact) and a SEPARATE OUTPUT_ROOT —
 # rows from different boards are different populations and must never share
 # a directory or a table column.
 BOARD="${BOARD:-bones_testbed4096_v1}"
 RANKS_JSON="${RANKS_JSON:-}"
-ARMS="${ARMS:-affine concat}"
+ARMS="${ARMS:-p5_concat p5_affine}"
 SCALED_CELLS="[2048,2048,1024,1024,512,512]"
 RUNTIME_BODY_NAMES="[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]"
 
@@ -118,7 +117,7 @@ for arm in ${ARMS}; do
             --output_json "${out}" \
             --label "${arm}_seed${SEED}_${row}_f${final}" \
             --task Isaac-Imitation-G1-v2 --algo IPMD \
-            --agent_entry_point rlopt_ipmd_tuned_cfg_entry_point \
+            --agent_entry_point rlopt_ipmd_tuned_fullbatch_cfg_entry_point \
             --randomization "${profile}" --action_sampling mode \
             --num_envs "${#ranks[@]}" --steps "${MAX_STEPS}" --seed 0 \
             --reference_start_frame 0 --reset_schedule sequential \
@@ -140,9 +139,9 @@ for arm in ${ARMS}; do
             env.data.macro_cache_device=cuda:0 \
             "env.data.runtime_cache_body_names=${RUNTIME_BODY_NAMES}" \
             env.command_interface.actor=latent \
-            env.command_interface.actor.dim=258 \
+            env.command_interface.actor.dim=66 \
             env.command_interface.encoder=single \
-            agent.ipmd.latent_dim=258 \
+            agent.ipmd.latent_dim=66 \
             agent.ipmd.command_source=hl_skill \
             "agent.ipmd.hl_skill_checkpoint_path=${encoder}" \
             agent.ipmd.hl_skill_horizon_steps=10 \
@@ -153,9 +152,8 @@ for arm in ${ARMS}; do
             agent.ipmd.latent_learning.command_phase_mode=sin_cos \
             agent.ipmd.latent_learning.command_phase_source=hold \
             agent.ipmd.latent_learning.command_phase_period=0 \
-            agent.ipmd.latent_learning.code_latent_dim=256 \
+            agent.ipmd.latent_learning.code_latent_dim=64 \
             agent.ipmd.hl_skill_finetune_enabled=false \
-            "env.actions.joint_pos.ema_alpha=${EMA_ALPHA}" \
             "env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]" \
             env.expert_macro_frame_stride=1 \
             env.expert_macro_anchor_mode=robot_heading \

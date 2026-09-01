@@ -20,6 +20,8 @@ wandb_group: endpoint-collapse-probe
 vars:
   task: Isaac-Imitation-G1-v2
   window_mode: suffix9
+  horizon: "10"
+  source_args: []
   submit_seed: 0
 
   pretrain_updates: 50000
@@ -45,7 +47,7 @@ vars:
     - --output_dir
     - ${vars.output_root}/encoder
     - --horizon_steps
-    - "10"
+    - ${vars.horizon}
     - --encoder_window_mode
     - ${vars.window_mode}
     - --transition_objective
@@ -116,7 +118,7 @@ arms:
     stages: &pretrain_only
       - name: pretrain
         executable: scripts/rlopt/train_hl_skill_diffsr.py
-        args: ${concat:${vars.pretrain_args},${vars.data_overrides}}
+        args: ${concat:${vars.pretrain_args},${vars.source_args},${vars.data_overrides}}
         time_limit: "03:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
@@ -137,4 +139,84 @@ arms:
   suffix9:
     vars:
       window_mode: suffix9
+    stages: *pretrain_only
+
+  # ---- Horizon sweep: the coherent window-size comparison ---------------
+  # A suffix arm hands the encoder a view that never occurs at deployment:
+  # it sees only late frames but must still predict a target a full horizon
+  # away, anchored at the window start. These arms move the horizon itself,
+  # so the encoder input, the endpoint target, and the next-chunk target all
+  # shrink together and every arm stays internally coherent.
+  #
+  # Raw losses are NOT comparable across these arms: the chunk target is
+  # horizon x 38 wide, so it changes size with the horizon. Compare
+  # `train/jepa_endpoint_z_explained` and `train/jepa_ntp_z_explained`
+  # instead -- 1 - real/shuffled-code loss, which is dimensionless.
+  #
+  # h10 is the same recipe as suffix9 and is re-declared here only so the
+  # sweep carries its own control row under matched logging.
+  h1:
+    vars:
+      horizon: "1"
+      # horizon 1 has no intermediate window at all, so this arm must use
+      # 'full' -- and then the single visible frame IS the endpoint target.
+      # It is a degenerate ceiling row (the code can copy the answer), not a
+      # member of the dose-response curve.
+      window_mode: full
+    stages: *pretrain_only
+
+  h2:
+    vars:
+      horizon: "2"
+      window_mode: intermediate
+    stages: *pretrain_only
+
+  h5:
+    vars:
+      horizon: "5"
+      window_mode: intermediate
+    stages: *pretrain_only
+
+  h10:
+    vars:
+      horizon: "10"
+      window_mode: intermediate
+    stages: *pretrain_only
+
+  # ---- phi's conditioning: give the SOURCE a past chunk ------------------
+  # Every arm above changes what the ENCODER sees. These two change what phi
+  # conditions on: `s[t-10..t]` instead of `s_t` alone. The macro state is
+  # root_qpos and carries no velocities, so a single frame cannot express
+  # which way the motion is already going. Measured on 2,998 held-out
+  # windows, a linear probe predicts s[t+10] from the past at R2 0.75 and
+  # leaves ~25% of the variance unexplained, so this does not starve z.
+  #
+  # Both arms are otherwise the round-4 `diffntp_chunk_h1_ee_wide` recipe,
+  # identical to h10/suffix9. phi/g/mu are pretrain-only heads, so neither
+  # arm changes the deployed command width.
+  #
+  # Read `train/jepa_endpoint_z_explained` and `train/jepa_ntp_z_explained`
+  # against h10: they measure what z adds ON TOP of the conditioning, which
+  # is the quantity that actually changes when phi gets the past.
+  srccur10:
+    vars:
+      horizon: "10"
+      window_mode: intermediate
+      # Anchor on s_t: the past reads as negative displacement, and the
+      # encoder's own input stays byte-identical to h10, so this encoder
+      # remains drop-in comparable and deployable.
+      source_args: ["--source_history_steps", "10", "--source_anchor", "current"]
+    stages: *pretrain_only
+
+  srcpast10:
+    vars:
+      horizon: "10"
+      window_mode: intermediate
+      # Anchor on the OLDEST past frame, making s[t-10..t+10] one macro window
+      # anchored at its first slot. s_t is no longer canonical, so the
+      # ENCODER's input distribution changes: this z is NOT comparable with
+      # the other arms, and no tracker can bind it until the frozen command
+      # sampler can anchor on a delayed robot heading. Pretrain diagnostic.
+      source_args:
+        ["--source_history_steps", "10", "--source_anchor", "past_start"]
     stages: *pretrain_only
