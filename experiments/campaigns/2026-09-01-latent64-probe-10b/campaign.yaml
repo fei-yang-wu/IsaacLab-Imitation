@@ -79,6 +79,10 @@ vars:
   persist_id: bones_seed_sonic_full_129785@e714bbff
   output_root: /data/latent64_probe_10b/${vars.arm}_seed${vars.seed}
 
+  # Ten-step proprio history on the ACTOR only; the critic stays single-frame,
+  # as in 2026-08-27-diffntp-history. Empty for every arm that does not take it.
+  history_args: []
+
   reward_args:
     - env.rewards.motion_ee_pos.weight=1.0
     - env.rewards.motion_global_anchor_pos_wide.weight=1.0
@@ -172,10 +176,10 @@ arms:
   z64_merged:
     vars:
       wandb_id: l64p-z64m
-    stages:
+    stages: &probe_stages
       - name: lowlevel1
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         time_limit: "15:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
@@ -184,3 +188,53 @@ arms:
           CLUSTER_WANDB_TAGS: bones-seed,129785,latent64-probe,${vars.arm},seed${vars.seed},lowlevel1
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
+
+  # ---- Encoder-side past chunk. One variable against `z64_merged`: phi reads
+  # ---- s[t-5..t] instead of s_t alone (`--source_history_steps 5
+  # ---- --source_anchor current`, 228-value source). The checkpoint is
+  # ---- p5_concat's, pretrained 2026-08-31 with the same merged head, the same
+  # ---- 50,000 updates at batch 8,192, LN, intermediate window, horizon 10 and
+  # ---- deterministic latent. It is a DIFFERENT pretrain run, so the
+  # ---- comparison also carries encoder-initialization noise, measured in
+  # ---- 2026-08-30-encoder-interface-500m as 0.0064 SR / 0.46 mm MPJPE-L /
+  # ---- 10.8 mm MPJPE-G across three replicates of one recipe.
+  enc_hist:
+    vars:
+      wandb_id: l64p-enchist
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt
+    stages: *probe_stages
+
+  # ---- Actor-side proprio history. Ten steps on projected_gravity,
+  # ---- base_ang_vel, joint_pos_rel, joint_vel_rel and last_action; the critic
+  # ---- keeps single frames.
+  # ----
+  # ---- 16,384 ENVIRONMENTS, NOT 20,480, and this is forced. The history
+  # ---- widens the actor observation from about 157 to about 994 values per
+  # ---- frame, and RLOpt holds `frames_per_batch` transitions in a
+  # ---- LazyTensorStorage on the training device with no CPU option. At 20,480
+  # ---- that left physics no room for its CUDA graph: jobs 5605194 and 5605202
+  # ---- both died with `Warp CUDA error 2: out of memory (in function
+  # ---- wp_cuda_graph_launch)` seven minutes in, on two different H200 nodes.
+  # ---- 16,384 is the count 2026-08-27-diffntp-history ran this history set at.
+  # ----
+  # ---- The environment count is therefore a SECOND difference against
+  # ---- `z64_merged`; `ctrl16k` is the matched control that removes it.
+  obs_hist:
+    vars:
+      wandb_id: l64p-obshist
+      train_num_envs: 16384
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *probe_stages
+
+  # ---- `z64_merged` at 16,384 environments and nothing else, so that
+  # ---- `obs_hist` has a one-variable control at its own batch size.
+  ctrl16k:
+    vars:
+      wandb_id: l64p-ctrl16k
+      train_num_envs: 16384
+    stages: *probe_stages
