@@ -135,18 +135,25 @@ from isaaclab.app import AppLauncher
 _RECOMMENDED_STYLE = "studio_light"
 _RECOMMENDED_SHOT = "hero_low"
 
+# The RTX path converges over the first few renders, so the opening frames of
+# a clip are visibly soft. Stills and strobe poses start after them.
+_DEFAULT_STILLS_OFFSET = 4
+
 parser = argparse.ArgumentParser(
     description="Render paper-ready policy-only videos for a tracking checkpoint."
 )
 parser.add_argument("--task", type=str, default="Isaac-Imitation-G1-v2")
 parser.add_argument("--algo", type=str, default="IPMD", choices=["PPO", "SAC", "IPMD"])
 parser.add_argument(
-    "--checkpoint", type=str, required=True, help="Path to model checkpoint (.pt)."
+    "--checkpoint",
+    type=str,
+    default=None,
+    help="Path to model checkpoint (.pt). Required unless --takes replays one.",
 )
 parser.add_argument(
     "--agent_entry_point",
     type=str,
-    required=True,
+    default=None,
     help=(
         "Gym registry agent-config entry point. Required: the tuned checkpoints "
         "do not load under the default architecture."
@@ -156,7 +163,7 @@ parser.add_argument(
     "--ranks",
     type=int,
     nargs="+",
-    required=True,
+    default=None,
     help="Trajectory ranks to render, one video each, in order.",
 )
 parser.add_argument("--start_step", type=int, default=0)
@@ -319,6 +326,81 @@ parser.add_argument(
         "distance tracks the camera-to-robot distance every frame."
     ),
 )
+parser.add_argument(
+    "--record_takes",
+    type=str,
+    default=None,
+    help=(
+        "Directory to write one motion take per rank into: the achieved root "
+        "pose and joint angles of every rendered frame. A take can be "
+        "re-rendered later with --takes, with no policy, no planner and no "
+        "physics, which is how a figure gets reframed or relit cheaply."
+    ),
+)
+parser.add_argument(
+    "--takes",
+    type=str,
+    nargs="+",
+    default=None,
+    help=(
+        "Motion takes to replay instead of driving a policy. Replaces --ranks "
+        "and needs no checkpoint: the robot is posed from the file, frame by "
+        "frame, and only the camera and the lighting are live."
+    ),
+)
+parser.add_argument(
+    "--gr00t_checkpoint",
+    type=str,
+    default=None,
+    help=(
+        "Language-conditioned GR00T head to drive the tracker with. Without "
+        "it the clip is the tracker following the frozen encoder's oracle "
+        "latents; with it the clip is the deployed planner stack."
+    ),
+)
+parser.add_argument(
+    "--gr00t_goal_features",
+    type=str,
+    default=None,
+    help="Cached Cosmos goal-feature table for --gr00t_checkpoint.",
+)
+parser.add_argument(
+    "--gr00t_goals",
+    type=str,
+    nargs="+",
+    default=None,
+    help=(
+        "Goal name per entry of --ranks, in the same order. The goal is "
+        "explicit and is never derived from the reference cursor."
+    ),
+)
+parser.add_argument(
+    "--gr00t_consumption",
+    type=str,
+    default="open_loop",
+    choices=["open_loop", "fresh"],
+)
+parser.add_argument("--gr00t_inference_steps", type=int, default=4)
+parser.add_argument("--gr00t_samples_per_publication", type=int, default=1)
+parser.add_argument(
+    "--gr00t_temporal_ensemble",
+    type=str,
+    default="none",
+    choices=["none", "exponential"],
+)
+parser.add_argument("--gr00t_temporal_ensemble_decay", type=float, default=0.5)
+parser.add_argument(
+    "--gr00t_consume_slots",
+    type=int,
+    default=None,
+    help="Slots consumed before the head is called again. None uses the head's own horizon.",
+)
+parser.add_argument(
+    "--state_history_steps",
+    type=int,
+    default=9,
+    help="Past frames in the causal planner observation, current frame excluded.",
+)
 parser.add_argument("--video_width", type=int, default=1920)
 parser.add_argument("--video_height", type=int, default=1080)
 parser.add_argument(
@@ -326,6 +408,16 @@ parser.add_argument(
     type=int,
     default=0,
     help="Also write every Nth captured frame as a lossless PNG; 0 disables.",
+)
+parser.add_argument(
+    "--stills_offset",
+    type=int,
+    default=_DEFAULT_STILLS_OFFSET,
+    help=(
+        "First captured frame written as a still. The RTX path needs a few "
+        "frames to converge, so frame 0 is visibly soft and is never the "
+        "frame a figure should use."
+    ),
 )
 parser.add_argument(
     "--stills_steps",
@@ -355,6 +447,66 @@ parser.add_argument(
         "figure, the way graphics papers show a continuous motion. Requires a "
         "locked camera (--shot sequence); 0 disables. Passing --shot sequence "
         "without this uses 6."
+    ),
+)
+parser.add_argument(
+    "--sequence_pose_steps",
+    type=str,
+    default=None,
+    help=(
+        "Comma-separated exact frames to draw in the composite, e.g. "
+        "'40,120,165'. Overrides the automatic even-distance sampling, which "
+        "spaces poses evenly along the path and so cannot dwell on the part "
+        "of a motion that carries its meaning -- the reach at floor level, "
+        "the turn. A single string, not nargs='+': a variadic int list has no "
+        "way to tell its last value apart from the first Hydra override that "
+        "follows it on the command line (physics=physx has no leading '--' "
+        "either), so it silently swallows one and fails to parse as an int."
+    ),
+)
+parser.add_argument(
+    "--sequence_spread",
+    type=str,
+    default="auto",
+    choices=["auto", "on", "off"],
+    help=(
+        "Lay the poses of an IN-PLACE motion out across the frame instead of "
+        "stacking them where the robot stood. 'auto' spreads only when the "
+        "robot travels less than the in-place threshold; 'on' always spreads; "
+        "'off' keeps every pose at its true image position."
+    ),
+)
+parser.add_argument(
+    "--straighten_takes",
+    type=str,
+    default="on",
+    choices=["on", "off"],
+    help=(
+        "Project a replayed take's root positions onto the straight line from "
+        "its first frame to its last, so the poses stand in a row. Render-only: "
+        "joint angles, orientation and height are untouched, and no measured "
+        "number ever comes from a take."
+    ),
+)
+parser.add_argument(
+    "--sequence_time_direction",
+    type=str,
+    default="right_to_left",
+    choices=["right_to_left", "left_to_right"],
+    help=(
+        "Which way time runs across a sequence figure. Every panel obeys it, "
+        "so a reader learns the direction once: a walking motion is framed "
+        "from the side that makes it travel that way, and a spread ladder is "
+        "ordered to match."
+    ),
+)
+parser.add_argument(
+    "--sequence_spread_pitch",
+    type=float,
+    default=0.0,
+    help=(
+        "Floor distance in metres between spread poses; 0 uses the built-in "
+        "pitch, which is what the in-place camera framing is sized for."
     ),
 )
 parser.add_argument(
@@ -681,11 +833,21 @@ _SEQUENCE_MIN_BLOB_PX = 80.0  # reject renderer speckle, keep thin shadows
 _SEQUENCE_MIN_BLOB_THICKNESS_PX = 6  # reject full-width scanline streaks
 _SEQUENCE_HORIZON_MARGIN_DEG = 2.0  # pitch headroom over half the vertical FOV
 _SEQUENCE_SETTLE_RENDERS = 4  # renders to let a visibility change land
+_SEQUENCE_PLATE_ATTEMPTS = 4  # re-renders of the plate to escape a banded one
 _SEQUENCE_SEAM_LIMIT = 1.0  # grey levels; a clean chase render measures 0.67
 _SEAM_WINDOW_ROWS = 21  # running-median span separating banding from gradient
 _FLOOR_EXTENT_M = 400.0  # ~8x the furthest fog end; keeps the depth range sane
 _FLOOR_THICKNESS_M = 0.02
-_SEQUENCE_MARGIN_M = 1.1  # keeps the end poses off the frame edge
+# The slab's top face would otherwise be coplanar with the physics grid plane
+# at z=0. That tie is resolved per frame and per camera, so a locked sequence
+# camera could render the grid instead of the studio floor while a chase camera
+# in the same process rendered the floor. A millimetre of lift settles it and
+# is invisible: the slab is a visual, and contact is with the plane at z=0.
+_FLOOR_LIFT_M = 0.001
+_SEQUENCE_MARGIN_M = (
+    2.2  # keeps the end poses AND their cast shadows off the frame edge
+)
+_SEQUENCE_POSE_PITCH_M = 0.85  # lateral room one spread pose needs, in metres
 _SEQUENCE_SUBJECT_HEIGHT_M = 2.1  # G1 plus headroom and a little floor
 
 # RTX distance fog. No numeric defaults are declared in any .kit file for this
@@ -812,9 +974,9 @@ def _spawn_studio_rig(env_cfg, style: dict[str, Any]) -> None:
                 metallic=style["floor"]["metallic"],
             ),
         ),
-        # Top face exactly at z=0.
+        # Top face a millimetre above z=0, see _FLOOR_LIFT_M.
         init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.0, 0.0, -0.5 * _FLOOR_THICKNESS_M)
+            pos=(0.0, 0.0, -0.5 * _FLOOR_THICKNESS_M + _FLOOR_LIFT_M)
         ),
     )
     sky = getattr(env_cfg.scene, "sky_light", None)
@@ -1256,7 +1418,10 @@ class _FollowCamera:
 
 
 def _frame_travel_path(
-    path: list[tuple[float, float]], lens: dict[str, Any], shot: dict[str, Any]
+    path: list[tuple[float, float]],
+    lens: dict[str, Any],
+    shot: dict[str, Any],
+    poses: int = _DEFAULT_SEQUENCE_POSES,
 ) -> dict[str, Any]:
     """Place a locked camera so the whole walked path fits the frame.
 
@@ -1272,29 +1437,57 @@ def _frame_travel_path(
         0.5 * (min(p[1] for p in path) + max(p[1] for p in path)),
     )
     if travel < _MIN_SEQUENCE_TRAVEL_M:
-        # An in-place motion has no direction to stand perpendicular to, and
-        # its poses will stack on top of each other in the composite whatever
-        # the camera does. Keep the preset and say so.
+        # An in-place motion has no direction to stand perpendicular to, so
+        # the preset azimuth stays. What it does need is a frame wide enough
+        # to hold the poses the composite will SPREAD sideways, because the
+        # robot never opens that space itself. Framing for the spread rather
+        # than for the stand is why this is not just the preset distance: the
+        # preset sits far enough back to fit a walk, which leaves the robot
+        # small and the figure mostly empty floor.
+        pitch_m = float(args_cli.sequence_spread_pitch) or _SEQUENCE_POSE_PITCH_M
+        span = max(1, int(poses) - 1) * pitch_m
+        distance = max(
+            (0.5 * span + _SEQUENCE_MARGIN_M)
+            / math.tan(math.radians(0.5 * lens["hfov_deg"])),
+            (0.5 * _SEQUENCE_SUBJECT_HEIGHT_M)
+            / math.tan(math.radians(0.5 * lens["vfov_deg"])),
+        )
+        pitch = max(
+            float(shot["pitch_deg"]),
+            0.5 * lens["vfov_deg"] + _SEQUENCE_HORIZON_MARGIN_DEG,
+        )
         print(
-            f"[SEQUENCE] the robot travels only {travel:.2f} m; poses will "
-            "overlap heavily. Keeping the preset camera."
+            f"[SEQUENCE] the robot travels only {travel:.2f} m; framing "
+            f"{poses} spread poses over {span:.2f} m at {distance:.2f} m."
         )
         return {
             "center": center,
             "azimuth_deg": shot["azimuth_deg"],
-            "distance": shot["distance"],
-            "height": shot["height"],
+            "distance": distance,
+            "height": shot["lookat_height"] + distance * math.tan(math.radians(pitch)),
             "lookat_height": shot["lookat_height"],
-            "pitch_deg": shot["pitch_deg"],
+            "pitch_deg": pitch,
             "travel_m": travel,
         }
 
     heading = math.degrees(math.atan2(end[1] - start[1], end[0] - start[0]))
-    azimuth = heading + 90.0
+    # Standing at heading+90 the walker crosses the frame right to left;
+    # heading-90 is the mirror. Picking the side is what makes every panel
+    # read in the same direction without mirroring any image.
+    azimuth = heading + (
+        90.0 if str(args_cli.sequence_time_direction) == "right_to_left" else -90.0
+    )
 
     # Fit the path across the frame, and the robot up it. Half-extents in
     # metres; the margins hold the end poses off the frame edge.
-    half_across = 0.5 * travel + _SEQUENCE_MARGIN_M
+    # Frame the SPREAD span, not just the walked one. A motion can travel far
+    # enough to have a direction and still leave its poses on top of each
+    # other -- a door opened on the spot walks about a metre -- and the
+    # composite will push those poses apart. Framing for the travel alone then
+    # pushes them out of the frame it just chose.
+    pitch_m = float(args_cli.sequence_spread_pitch) or _SEQUENCE_POSE_PITCH_M
+    spread_span = max(1, int(poses) - 1) * pitch_m
+    half_across = 0.5 * max(travel, spread_span) + _SEQUENCE_MARGIN_M
     half_up = 0.5 * _SEQUENCE_SUBJECT_HEIGHT_M
     distance = max(
         half_across / math.tan(math.radians(0.5 * lens["hfov_deg"])),
@@ -1331,12 +1524,15 @@ def _pose_indices(path: list[tuple[float, float]], count: int) -> list[int]:
     several near-identical poses and a gap.
     """
     count = max(2, int(count))
+    # The opening RTX frames have not converged, so the first pose starts after
+    # them; on a walking motion that costs a few centimetres of path.
+    first = min(int(args_cli.stills_offset), max(0, len(path) - count))
     steps = np.cumsum(
         [0.0] + [math.dist(path[i - 1], path[i]) for i in range(1, len(path))]
     )
-    if steps[-1] < _MIN_SEQUENCE_TRAVEL_M:  # in place: fall back to time
-        return sorted({int(round(t)) for t in np.linspace(0, len(path) - 1, count)})
-    wanted = np.linspace(0.0, float(steps[-1]), count)
+    if steps[-1] - steps[first] < _MIN_SEQUENCE_TRAVEL_M:  # in place: use time
+        return sorted({int(round(t)) for t in np.linspace(first, len(path) - 1, count)})
+    wanted = np.linspace(float(steps[first]), float(steps[-1]), count)
     return sorted({int(np.searchsorted(steps, w)) for w in wanted})
 
 
@@ -1421,8 +1617,23 @@ def _capture_plate(base_env, warmup: int = _SEQUENCE_SETTLE_RENDERS):
     robots = _robot_prims(get_current_stage())
     for prim in robots:
         UsdGeom.Imageable(prim).MakeInvisible()
-    plate = _settled_render(base_env, warmup=warmup)
-    score = _seam_score(plate)
+    # Re-assert the hide: the physics grid is made invisible once at startup,
+    # and on the FIRST clip that change had not landed by the time the plate
+    # was captured. The plate then showed the grid while every pose frame
+    # showed the studio floor, so differencing marked the whole frame as robot
+    # and the composite collapsed to a single pose on a grid.
+    _hide_grid_ground()
+    plate, score = None, float("inf")
+    for attempt in range(_SEQUENCE_PLATE_ATTEMPTS):
+        # Longer each time rather than long every time: the banding is a
+        # transient the renderer recovers from, so a second look usually
+        # costs a few frames and a clean plate is worth far more than they do.
+        candidate = _settled_render(base_env, warmup=warmup * (attempt + 1))
+        candidate_score = _seam_score(candidate)
+        if candidate_score < score:
+            plate, score = candidate, candidate_score
+        if score <= _SEQUENCE_SEAM_LIMIT:
+            break
     if score > _SEQUENCE_SEAM_LIMIT:
         print(
             f"[SEQUENCE] warning: the background plate shows {score:.1f}-level "
@@ -1455,7 +1666,137 @@ def _shadow_draw_order(poses: list, key_azimuth_deg: float) -> list:
     return sorted(poses, key=lambda p: p["xy"][0] * shadow[0] + p["xy"][1] * shadow[1])
 
 
-def _composite_sequence(plate, poses: list, *, threshold: int):
+def _pose_mask(frame, plate_i, *, threshold: int):
+    """The pixels of one pose: the robot and the shadow that grounds it.
+
+    Split out of `_composite_sequence` so a spread pass can measure where a
+    pose sits before deciding where to draw it.
+    """
+    import cv2
+
+    diff = np.abs(frame.astype(np.int16) - plate_i).max(axis=2)
+    mask = (diff > int(threshold)).astype(np.uint8)
+    # Bridge the gaps first. The robot's white shell sits within a few levels
+    # of the backdrop, so differencing finds its outline and its dark joints
+    # but drops the middle of a limb; closing rejoins the outline so the fill
+    # below has something continuous to work with.
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    mask = np.zeros_like(mask)
+    kept = []
+    for contour in contours:
+        # Area rejection rather than an opening: an opening eats the thin end
+        # of a cast shadow, which is exactly the part that grounds the pose.
+        # This drops renderer speckle and keeps the shadow.
+        if cv2.contourArea(contour) < _SEQUENCE_MIN_BLOB_PX:
+            continue
+        # The renderer intermittently returns whole scanlines that differ by
+        # tens of levels from their neighbours. Those streaks are full-frame
+        # wide and a couple of pixels tall, so they clear any area limit;
+        # thickness is what separates them from a robot or a shadow.
+        _, _, box_w, box_h = cv2.boundingRect(contour)
+        if min(box_w, box_h) < _SEQUENCE_MIN_BLOB_THICKNESS_PX:
+            continue
+        kept.append(contour)
+    if not kept:
+        return mask
+    # Everything that survives the filters and still sits away from the robot
+    # is renderer noise, and moving a pose turns such a patch into a visible
+    # rectangle of displaced background. The robot is the largest blob and its
+    # shadow touches its feet, so a box around the largest blob, generously
+    # grown, holds the pose and nothing else.
+    largest = max(kept, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest)
+    margin_x, margin_y = int(0.35 * w), int(0.35 * h)
+    x0, y0 = x - margin_x, y - margin_y
+    x1, y1 = x + w + margin_x, y + h + margin_y
+    for contour in kept:
+        cx, cy, cw, ch = cv2.boundingRect(contour)
+        if cx > x1 or cx + cw < x0 or cy > y1 or cy + ch < y0:
+            continue
+        cv2.drawContours(mask, [contour], -1, 1, thickness=cv2.FILLED)
+    return mask
+
+
+def _spread_offsets(
+    poses: list, framing: dict[str, Any], lens: dict[str, Any], width: int
+) -> tuple[list[int], float]:
+    """Pixel shifts that pull crowded poses apart along the frame.
+
+    Whether poses crowd is a question about the gap BETWEEN them, not about
+    how far the robot walked in total: a door opened on the spot travels about
+    a metre and still stacks six poses on one another, while a slow walk over
+    four metres separates them by itself. So each pose is projected onto the
+    camera's horizontal axis and the ladder is built from those positions.
+
+    A pose already standing clear of its neighbours barely moves, which is
+    what keeps a walk looking like a walk. An in-place motion has every pose
+    at one spot and is pushed out to the full pitch. Shifting the cut-outs
+    sideways is safe here and only here: the backdrop is a seamless cyclorama
+    with no horizontal feature to break, so a moved pose still stands on the
+    floor it was rendered on.
+
+    Returns the per-pose shifts in pixels, in the order `poses` is given, and
+    the smallest gap it found, in metres, so the caller can report it.
+    """
+    azimuth = math.radians(float(framing["azimuth_deg"]))
+    # The camera sits at `azimuth` looking back at the centre, so its
+    # horizontal image axis on the floor plane is perpendicular to that.
+    right = (-math.sin(azimuth), math.cos(azimuth))
+    center = framing["center"]
+    lateral = [
+        (pose["xy"][0] - center[0]) * right[0] + (pose["xy"][1] - center[1]) * right[1]
+        for pose in poses
+    ]
+    order = sorted(range(len(poses)), key=lambda i: poses[i]["order"])
+    chronological = [lateral[i] for i in order]
+    gaps = [
+        chronological[k + 1] - chronological[k] for k in range(len(chronological) - 1)
+    ]
+    smallest = min((abs(gap) for gap in gaps), default=0.0)
+
+    pitch = float(args_cli.sequence_spread_pitch) or _SEQUENCE_POSE_PITCH_M
+    spacing = max(pitch, sum(abs(gap) for gap in gaps) / max(1, len(gaps)))
+    direction = (
+        -1.0 if str(args_cli.sequence_time_direction) == "right_to_left" else 1.0
+    )
+    middle = 0.5 * (len(chronological) - 1)
+    origin = sum(chronological) / len(chronological)
+    targets = [origin + (k - middle) * spacing * direction for k in range(len(order))]
+
+    visible_m = (
+        2.0
+        * float(framing["distance"])
+        * math.tan(math.radians(0.5 * float(lens["hfov_deg"])))
+    )
+    px_per_m = width / max(visible_m, 1.0e-6)
+    offsets = [0] * len(poses)
+    for slot, pose_index in enumerate(order):
+        offsets[pose_index] = int(
+            round((targets[slot] - lateral[pose_index]) * px_per_m)
+        )
+    return offsets, smallest
+
+
+def _shift_horizontally(array, offset: int):
+    """Move an image or mask sideways, leaving the vacated edge empty."""
+    if offset == 0:
+        return array
+    out = np.zeros_like(array)
+    if offset > 0:
+        out[:, offset:] = array[:, : array.shape[1] - offset]
+    else:
+        out[:, : array.shape[1] + offset] = array[:, -offset:]
+    return out
+
+
+def _composite_sequence(
+    plate,
+    poses: list,
+    *,
+    threshold: int,
+    offsets: list[int] | None = None,
+):
     """Layer the poses onto the background plate in the given order.
 
     A pixel belongs to a pose when it differs from the plate, which picks up
@@ -1464,37 +1805,31 @@ def _composite_sequence(plate, poses: list, *, threshold: int):
     alpha (age) and the list is already in draw order (see
     ``_shadow_draw_order``); the two are deliberately independent, because the
     fade has to encode time while the layering has to encode geometry.
+
+    With ``spread`` the cut-outs are moved sideways to even spacing first, so
+    an in-place motion reads as a strip instead of one blurred robot. The
+    poses are then drawn left to right, because that shifted geometry, not the
+    original stand, is what the reader sees.
     """
     import cv2
 
     plate_i = plate.astype(np.int16)
     out = plate.astype(np.float32)
-    close_k = np.ones((7, 7), np.uint8)
-    for pose in poses:
+    masks = [_pose_mask(pose["frame"], plate_i, threshold=threshold) for pose in poses]
+    if offsets is None:
+        offsets = [0] * len(poses)
+        draw = list(range(len(poses)))
+    else:
+        # Painter's order follows the SHIFTED positions: whichever pose is
+        # drawn last wins its pixels, and once poses have moved the true stand
+        # no longer says which one overlaps which.
+        draw = sorted(range(len(poses)), key=lambda i: offsets[i])
+    for index in draw:
+        pose, mask = poses[index], masks[index]
         frame, alpha = pose["frame"], float(pose["alpha"])
-        diff = np.abs(frame.astype(np.int16) - plate_i).max(axis=2)
-        mask = (diff > int(threshold)).astype(np.uint8)
-        # Bridge the gaps first. The robot's white shell sits within a few
-        # levels of the backdrop, so differencing finds its outline and its
-        # dark joints but drops the middle of a limb; closing rejoins the
-        # outline so the fill below has something continuous to work with.
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_k)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        mask = np.zeros_like(mask)
-        for contour in contours:
-            # Area rejection rather than an opening: an opening eats the thin
-            # end of a cast shadow, which is exactly the part that grounds the
-            # pose. This drops renderer speckle and keeps the shadow.
-            if cv2.contourArea(contour) < _SEQUENCE_MIN_BLOB_PX:
-                continue
-            # The renderer intermittently returns whole scanlines that differ by
-            # tens of levels from their neighbours. Those streaks are full-frame
-            # wide and a couple of pixels tall, so they clear any area limit;
-            # thickness is what separates them from a robot or a shadow.
-            _, _, box_w, box_h = cv2.boundingRect(contour)
-            if min(box_w, box_h) < _SEQUENCE_MIN_BLOB_THICKNESS_PX:
-                continue
-            cv2.drawContours(mask, [contour], -1, 1, thickness=cv2.FILLED)
+        if offsets[index]:
+            frame = _shift_horizontally(frame, offsets[index])
+            mask = _shift_horizontally(mask, offsets[index])
         # Filling enclosed holes -- between the legs, under an arm -- is safe:
         # the frame and the plate are identical everywhere outside the robot
         # and its shadow, so compositing those pixels is the identity.
@@ -1633,19 +1968,32 @@ class _PaperRecordVideo(gym.wrappers.RecordVideo):
     """
 
     def __init__(
-        self, env, *, camera, stills_dir, stills_steps, stills_every, **kwargs
+        self,
+        env,
+        *,
+        camera,
+        stills_dir,
+        stills_steps,
+        stills_every,
+        stills_offset=0,
+        **kwargs,
     ):
         super().__init__(env, **kwargs)
         self._paper_camera = camera
         self._stills_dir = stills_dir
         self._stills_steps = set(int(s) for s in (stills_steps or ()))
         self._stills_every = max(0, int(stills_every))
+        self._stills_offset = max(0, int(stills_offset))
         self.still_paths: list[str] = []
 
     def _wants_still(self, index: int) -> bool:
         if index in self._stills_steps:
             return True
-        return self._stills_every > 0 and index % self._stills_every == 0
+        # The periodic series starts at the offset, not at frame 0: the first
+        # RTX frames of a clip have not converged and read soft on a page.
+        if self._stills_every <= 0 or index < self._stills_offset:
+            return False
+        return (index - self._stills_offset) % self._stills_every == 0
 
     def _capture_frame(self):
         self._paper_camera.update()
@@ -1799,6 +2147,194 @@ def _run_preview(*, env, base_env, env_cfg, camera, policy, output_dir: Path) ->
     print(f"[PREVIEW] summary: {summary_path}")
 
 
+def _take_state(base_env) -> tuple:
+    """The robot's pose right now: root pose (7) and joint positions.
+
+    Recorded per frame so the same motion can be re-rendered later without the
+    policy, the planner or the physics that produced it.
+    """
+    robot = base_env.robot
+    pose = robot.data.root_link_pose_w
+    pose = (pose.torch if hasattr(pose, "torch") else pose)[0].detach().cpu()
+    joints = robot.data.joint_pos
+    joints = (joints.torch if hasattr(joints, "torch") else joints)[0].detach().cpu()
+    return pose.numpy().copy(), joints.numpy().copy()
+
+
+def _write_take(path: Path, frames: list, provenance: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        root_pose=np.stack([frame[0] for frame in frames]),
+        joint_pos=np.stack([frame[1] for frame in frames]),
+        provenance=json.dumps(provenance),
+    )
+    print(f"[TAKE] wrote {path} ({len(frames)} frames)")
+
+
+def _load_take(path: Path) -> dict[str, Any]:
+    with np.load(path, allow_pickle=False) as data:
+        take = {
+            "root_pose": data["root_pose"],
+            "joint_pos": data["joint_pos"],
+            "provenance": json.loads(str(data["provenance"])),
+        }
+    return take
+
+
+def _straighten_take(take: dict[str, Any]) -> dict[str, Any]:
+    """Put a take's root positions on the straight line it walked overall.
+
+    A tracked walk wanders a few centimetres either side of its own heading,
+    which in a locked side-on frame reads as poses drifting toward and away
+    from the camera: they change size and stop sitting on one line. Projecting
+    the root onto the chord from first frame to last removes that without
+    touching a joint angle, an orientation or a height.
+
+    This is a presentation change and it is confined to the render: takes are
+    never a measurement, and the file on disk keeps the motion as it happened.
+    """
+    xy = take["root_pose"][:, :2]
+    span = xy[-1] - xy[0]
+    travel = float(np.linalg.norm(span))
+    if travel < _MIN_SEQUENCE_TRAVEL_M:
+        # An in-place motion has no line to speak of; pin the root instead, so
+        # the small drift under the feet does not show up as poses at
+        # different depths once the composite spreads them.
+        straight = np.repeat(xy.mean(axis=0, keepdims=True), xy.shape[0], axis=0)
+    else:
+        direction = span / travel
+        straight = xy[0] + np.outer((xy - xy[0]) @ direction, direction)
+    moved = float(np.abs(straight - xy).max())
+    root_pose = take["root_pose"].copy()
+    root_pose[:, :2] = straight
+    print(f"[TAKE] straightened the root path; largest move {moved * 100:.1f} cm")
+    return {**take, "root_pose": root_pose}
+
+
+def _pose_from_take(base_env, take: dict[str, Any], index: int) -> None:
+    """Put the robot exactly where the take says, without stepping physics.
+
+    Mirrors what the environment does for a kinematic replay: link-pose and
+    joint writers, then refresh the cached buffers, so anything that reads the
+    articulation afterwards -- the chase camera included -- sees the new pose
+    rather than the last simulated one.
+    """
+    robot = base_env.robot
+    device = base_env.device
+    ids = torch.arange(1, device=device)
+    root_pose = torch.as_tensor(
+        take["root_pose"][index], dtype=torch.float32, device=device
+    ).unsqueeze(0)
+    joint_pos = torch.as_tensor(
+        take["joint_pos"][index], dtype=torch.float32, device=device
+    ).unsqueeze(0)
+    zeros_root = torch.zeros((1, 6), dtype=torch.float32, device=device)
+    robot.write_root_link_pose_to_sim(root_pose, env_ids=ids)
+    robot.write_root_com_velocity_to_sim(zeros_root, env_ids=ids)
+    robot.write_joint_state_to_sim(joint_pos, torch.zeros_like(joint_pos), env_ids=ids)
+    # Hold the written pose against the one step below, instead of letting the
+    # actuators pull the robot back toward whatever target the reset left.
+    robot.set_joint_position_target(joint_pos, env_ids=ids)
+    base_env.scene.write_data_to_sim()
+    # The state write lands in the physics buffers immediately -- a readback
+    # matches the take to 0 rad -- but the RENDER reads link transforms that
+    # only refresh when the simulation steps. Without this step every frame
+    # renders the pose the last step produced, so a replayed clip shows a
+    # robot standing still while its joint data moves. The step is 20 ms from
+    # the exact take pose at zero velocity, and the next frame overwrites the
+    # state again, so nothing accumulates.
+    base_env.sim.step(render=False)
+    base_env.scene.update(dt=base_env.physics_dt)
+
+
+def _reset_planner(sampler) -> None:
+    """Clear the head's cached plan.
+
+    The sequence figure runs a clip twice -- once to learn the path, once to
+    capture it -- and the environment reset between them does not reach the
+    sampler. Without this the capture pass starts mid-plan, consuming slots
+    predicted from the previous pass's states, which shows up as a robot that
+    barely moves through a clip whose single-pass render is full of motion.
+    """
+    if sampler is None:
+        return
+    reset = getattr(sampler, "gr00t_reset", None)
+    if reset is not None:
+        reset(None)
+
+
+def _install_gr00t_planner(agent, env_cfg) -> Any:
+    """Replace the oracle latent source with the language-conditioned head.
+
+    Without this the clip shows the tracker following the frozen encoder's
+    oracle latents, which is the tracker's ceiling and not the deployed
+    system. The sampler keeps the frozen sampler's hold, phase and renewal
+    machinery; only the production of `z` moves to the GR00T head.
+    """
+    if args_cli.gr00t_checkpoint is None:
+        return None
+    if args_cli.gr00t_goal_features is None or args_cli.gr00t_goals is None:
+        raise SystemExit(
+            "--gr00t_checkpoint needs --gr00t_goal_features and --gr00t_goals."
+        )
+    if len(args_cli.gr00t_goals) != len(args_cli.ranks):
+        raise SystemExit(
+            f"--gr00t_goals has {len(args_cli.gr00t_goals)} entries for "
+            f"{len(args_cli.ranks)} ranks; pass one goal per rank, in order."
+        )
+    from imitation_experiments.planner.gr00t_latent_sampler import (  # noqa: PLC0415
+        Gr00tLatentCommandSampler,
+    )
+
+    agent_cfg = agent.config
+    causal_fn = agent._discover_env_method(
+        agent.env, "current_causal_planner_observation"
+    )
+    if causal_fn is None:
+        raise SystemExit(
+            "the environment exposes no current_causal_planner_observation; "
+            "the GR00T planner input is causal-only by contract."
+        )
+    sampler = Gr00tLatentCommandSampler(
+        causal_observation_fn=causal_fn,
+        state_history_steps=int(args_cli.state_history_steps),
+        gr00t_checkpoint=args_cli.gr00t_checkpoint,
+        goal_features_path=args_cli.gr00t_goal_features,
+        goal_name=str(args_cli.gr00t_goals[0]),
+        num_envs=int(env_cfg.scene.num_envs),
+        consumption=str(args_cli.gr00t_consumption),
+        num_inference_timesteps=int(args_cli.gr00t_inference_steps),
+        samples_per_publication=int(args_cli.gr00t_samples_per_publication),
+        consume_slots=(
+            None
+            if args_cli.gr00t_consume_slots is None
+            else int(args_cli.gr00t_consume_slots)
+        ),
+        temporal_ensemble=str(args_cli.gr00t_temporal_ensemble),
+        temporal_ensemble_decay=float(args_cli.gr00t_temporal_ensemble_decay),
+        env=agent.env,
+        checkpoint_path=str(agent_cfg.ipmd.hl_skill_checkpoint_path),
+        latent_dim=int(agent_cfg.ipmd.latent_dim),
+        latent_steps_min=int(agent_cfg.ipmd.latent_steps_min),
+        latent_steps_max=int(agent_cfg.ipmd.latent_steps_max),
+        horizon_steps=(
+            int(agent_cfg.ipmd.hl_skill_horizon_steps)
+            if int(agent_cfg.ipmd.hl_skill_horizon_steps) > 0
+            else None
+        ),
+        command_phase_mode=str(agent_cfg.ipmd.latent_learning.command_phase_mode),
+        code_latent_dim=int(agent_cfg.ipmd.latent_learning.code_latent_dim),
+        phase_period=int(agent_cfg.ipmd.latent_learning.code_period),
+        command_mode=str(agent_cfg.ipmd.hl_skill_command_mode),
+        discover_env_method=agent._discover_env_method,
+        device=agent._get_device(agent.config.device),
+    )
+    agent._hl_skill_command_sampler = sampler
+    print(f"[RENDER] GR00T latent command source: {sampler.gr00t_provenance}")
+    return sampler
+
+
 @hydra_task_config(args_cli.task, args_cli.agent_entry_point)
 def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     if bind_command_interface(agent_cfg, env_cfg) is None:
@@ -1849,9 +2385,24 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
     # A long ceiling; each clip is stopped manually at its reference's end.
     env_cfg.episode_length_s = 1.0e9
 
-    checkpoint_path = os.path.abspath(args_cli.checkpoint)
-    if not os.path.isfile(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    takes = list(args_cli.takes or [])
+    takes_loaded = [_load_take(Path(take)) for take in takes]
+    if str(args_cli.straighten_takes) == "on":
+        takes_loaded = [_straighten_take(take) for take in takes_loaded]
+    if takes:
+        if args_cli.ranks:
+            raise SystemExit("--takes replays saved motion; drop --ranks.")
+        print(f"[TAKE] replaying {len(takes)} saved take(s); no policy is loaded.")
+    elif not args_cli.ranks:
+        raise SystemExit("pass --ranks to drive a policy, or --takes to replay one.")
+
+    checkpoint_path = None
+    if not takes:
+        if args_cli.checkpoint is None:
+            raise SystemExit("--checkpoint is required unless --takes is given.")
+        checkpoint_path = os.path.abspath(args_cli.checkpoint)
+        if not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
     output_dir = Path(args_cli.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1877,15 +2428,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         f"fog={'on' if style['fog'] else 'off'}"
     )
 
-    num_trajectories = int(base_env.trajectory_manager._length.shape[0])
-    invalid = [r for r in args_cli.ranks if not 0 <= r < num_trajectories]
-    if invalid:
-        raise SystemExit(
-            f"Ranks {invalid} outside [0, {num_trajectories - 1}] for this source."
+    if takes:
+        longest = max(int(take["root_pose"].shape[0]) for take in takes_loaded)
+    else:
+        num_trajectories = int(base_env.trajectory_manager._length.shape[0])
+        invalid = [r for r in args_cli.ranks if not 0 <= r < num_trajectories]
+        if invalid:
+            raise SystemExit(
+                f"Ranks {invalid} outside [0, {num_trajectories - 1}] for this source."
+            )
+        longest = max(
+            int(base_env.trajectory_manager._length[int(r)].item())
+            for r in args_cli.ranks
         )
-    longest = max(
-        int(base_env.trajectory_manager._length[int(r)].item()) for r in args_cli.ranks
-    )
 
     # Built before the recorder: the recorder aims it from inside frame capture.
     camera = _FollowCamera(base_env, shot)
@@ -1896,6 +2451,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         stills_dir=str(output_dir / "stills") if want_stills else None,
         stills_steps=args_cli.stills_steps,
         stills_every=args_cli.stills_every,
+        stills_offset=int(args_cli.stills_offset),
         video_folder=str(output_dir / "videos"),
         step_trigger=lambda _step: False,  # every clip is started manually
         video_length=longest + 2,
@@ -1914,31 +2470,40 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         transform=Compose(RewardSum(), StepCounter(longest + 2)),
     )
 
-    agent = ALGORITHM_CLASS_MAP[args_cli.algo](env=env, config=agent_cfg)
+    # A take carries the achieved motion, so replaying one needs neither the
+    # tracker nor the head -- which is the whole point of recording it.
+    policy = None
+    gr00t_sampler = None
+    if not takes:
+        agent = ALGORITHM_CLASS_MAP[args_cli.algo](env=env, config=agent_cfg)
 
-    # Inference-only: strip optimizer state so param-group layout mismatches
-    # from differently-configured training runs cannot block the restore.
-    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if isinstance(payload, dict) and (
-        "optimizer_state_dict" in payload or "reward_optimizer_state_dict" in payload
-    ):
-        stripped = {
-            key: value
-            for key, value in payload.items()
-            if key not in ("optimizer_state_dict", "reward_optimizer_state_dict")
-        }
-        tmp = tempfile.NamedTemporaryFile(
-            prefix="paper_video_weights_", suffix=".pt", delete=False
-        )
-        tmp.close()
-        torch.save(stripped, tmp.name)
-        agent.load_model(tmp.name)
-        os.unlink(tmp.name)
-    else:
-        agent.load_model(checkpoint_path)
+        # Inference-only: strip optimizer state so param-group layout
+        # mismatches from differently-configured training runs cannot block
+        # the restore.
+        payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if isinstance(payload, dict) and (
+            "optimizer_state_dict" in payload
+            or "reward_optimizer_state_dict" in payload
+        ):
+            stripped = {
+                key: value
+                for key, value in payload.items()
+                if key not in ("optimizer_state_dict", "reward_optimizer_state_dict")
+            }
+            tmp = tempfile.NamedTemporaryFile(
+                prefix="paper_video_weights_", suffix=".pt", delete=False
+            )
+            tmp.close()
+            torch.save(stripped, tmp.name)
+            agent.load_model(tmp.name)
+            os.unlink(tmp.name)
+        else:
+            agent.load_model(checkpoint_path)
 
-    policy = agent.collector_policy
-    policy.eval()
+        policy = agent.collector_policy
+        policy.eval()
+
+        gr00t_sampler = _install_gr00t_planner(agent, env_cfg)
 
     if args_cli.preview:
         _run_preview(
@@ -1952,21 +2517,48 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         env.close()
         return
 
+    record_dir = Path(args_cli.record_takes) if args_cli.record_takes else None
+    if takes:
+        clips = [
+            {"rank": None, "take": take, "stem": path.stem}
+            for path, take in zip([Path(t) for t in takes], takes_loaded)
+        ]
+    else:
+        clips = [
+            {"rank": int(rank), "take": None, "stem": None} for rank in args_cli.ranks
+        ]
+
     results = []
 
-    for index, rank in enumerate(args_cli.ranks):
-        _force_trajectory_on_reset(
-            base_env, rank=int(rank), start_step=int(args_cli.start_step)
-        )
+    for index, clip in enumerate(clips):
+        rank, take = clip["rank"], clip["take"]
+        if take is None:
+            _force_trajectory_on_reset(
+                base_env, rank=int(rank), start_step=int(args_cli.start_step)
+            )
+            if gr00t_sampler is not None:
+                # One goal per clip, set before the reset that starts it, so
+                # the head reads the language of the motion this clip renders.
+                gr00t_sampler.set_goal_assignment(str(args_cli.gr00t_goals[index]))
         with torch.inference_mode():
             td = env.reset()
+        _reset_planner(gr00t_sampler)
         camera.reset()
 
-        dataset, motion, trajectory = base_env.trajectory_manager.get_env_traj_info(0)
-        clip_steps = int(base_env.trajectory_manager._length[int(rank)].item())
-        stem = _video_stem(int(rank), motion)
+        dataset = trajectory = None
+        if take is None:
+            dataset, motion, trajectory = base_env.trajectory_manager.get_env_traj_info(
+                0
+            )
+            clip_steps = int(base_env.trajectory_manager._length[int(rank)].item())
+        else:
+            motion = str(take["provenance"].get("motion", clip["stem"]))
+            clip_steps = int(take["root_pose"].shape[0])
+            _pose_from_take(base_env, take, 0)
+        stem = clip["stem"] if take is not None else _video_stem(int(rank), motion)
         print(
-            f"[RENDER] {index + 1}/{len(args_cli.ranks)} rank={rank} "
+            f"[RENDER] {index + 1}/{len(clips)} "
+            f"{'take' if take is not None else 'rank=' + str(rank)} "
             f"motion={motion!r} steps={clip_steps}"
         )
         plate = None
@@ -1976,8 +2568,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             # Pass 1 learns where the robot actually goes, so the locked camera
             # can be framed to it. The policy is deterministic and the reset is
             # pinned, so pass 2 retraces this path.
-            path = _walk_clip(env, base_env, camera, policy, td, clip_steps)
-            framing = _frame_travel_path(path, lens, shot)
+            path = (
+                _walk_clip(env, base_env, camera, policy, td, clip_steps)
+                if take is None
+                # A take already carries the path; replaying it just to
+                # measure it would be the one expensive thing a take exists
+                # to avoid.
+                else [(float(row[0]), float(row[1])) for row in take["root_pose"]]
+            )
+            framing = _frame_travel_path(path, lens, shot, poses=sequence_poses)
             camera.lock(framing)
             camera.update()
             # The three-point rig is placed relative to the camera azimuth, and
@@ -1985,17 +2584,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
             # apply it so key, fill, and rim keep their intended angles to the
             # shot -- and so the shadows run the way the draw order assumes.
             _apply_style_stage(env_cfg, style, framing["azimuth_deg"])
-            pose_at = set(_pose_indices(path, sequence_poses))
+            pose_at = (
+                {int(step) for step in args_cli.sequence_pose_steps.split(",")}
+                if args_cli.sequence_pose_steps
+                else set(_pose_indices(path, sequence_poses))
+            )
             print(
                 f"[SEQUENCE] travel {framing['travel_m']:.2f} m, camera locked "
                 f"at {framing['distance']:.2f} m / azimuth "
                 f"{framing['azimuth_deg']:.1f} deg, {len(pose_at)} poses"
             )
-            _force_trajectory_on_reset(
-                base_env, rank=int(rank), start_step=int(args_cli.start_step)
-            )
-            with torch.inference_mode():
-                td = env.reset()
+            if take is None:
+                _force_trajectory_on_reset(
+                    base_env, rank=int(rank), start_step=int(args_cli.start_step)
+                )
+                with torch.inference_mode():
+                    td = env.reset()
+                _reset_planner(gr00t_sampler)
+            else:
+                _pose_from_take(base_env, take, 0)
             camera.update()
             plate = _capture_plate(base_env)
 
@@ -2003,18 +2610,28 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         video_recorder.start_recording(stem)
 
         timestep = 0
+        recorded_frames: list = []
         while simulation_app.is_running():
-            with (
-                torch.inference_mode(),
-                set_exploration_type(InteractionType.DETERMINISTIC),
-            ):
-                td = policy(td)
-                # The camera is aimed inside the recorder's capture hook, which
-                # runs after the physics inside this step.
-                td = env.step(td)
-                td = step_mdp(
-                    td, exclude_reward=True, exclude_done=False, exclude_action=True
-                )
+            if take is None:
+                with (
+                    torch.inference_mode(),
+                    set_exploration_type(InteractionType.DETERMINISTIC),
+                ):
+                    td = policy(td)
+                    # The camera is aimed inside the recorder's capture hook,
+                    # which runs after the physics inside this step.
+                    td = env.step(td)
+                    td = step_mdp(
+                        td, exclude_reward=True, exclude_done=False, exclude_action=True
+                    )
+                if record_dir is not None:
+                    recorded_frames.append(_take_state(base_env))
+            else:
+                # Frame `timestep` of the take is the pose the recorder should
+                # capture, matching the live path where the capture happens
+                # after the step that produced it.
+                _pose_from_take(base_env, take, min(timestep, clip_steps - 1))
+                video_recorder._capture_frame()
             if timestep in pose_at and video_recorder.recorded_frames:
                 # Reuse the frame the recorder just captured. Never average
                 # several renders instead: this renderer converges tile by
@@ -2024,16 +2641,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
                         "frame": np.asarray(video_recorder.recorded_frames[-1]).copy(),
                         "xy": camera.root_xy(),
                         "alpha": 1.0,
+                        "order": len(pose_frames),
                     }
                 )
             timestep += 1
-            if bool(base_env.current_reference_is_final_frame()[0].item()):
+            if take is None and bool(
+                base_env.current_reference_is_final_frame()[0].item()
+            ):
                 break
-            if timestep >= clip_steps + 2:
+            if timestep >= clip_steps + (2 if take is None else 0):
                 break
 
         if video_recorder.recording:
             video_recorder.stop_recording()
+        if record_dir is not None and recorded_frames:
+            _write_take(
+                record_dir / f"{stem}.npz",
+                recorded_frames,
+                {
+                    "motion": motion,
+                    "rank": None if rank is None else int(rank),
+                    "checkpoint": checkpoint_path,
+                    "gr00t_checkpoint": args_cli.gr00t_checkpoint,
+                    "goal": (
+                        None
+                        if args_cli.gr00t_goals is None
+                        else str(args_cli.gr00t_goals[index])
+                    ),
+                    "physics": physics_name,
+                    "seed": int(args_cli.seed),
+                },
+            )
         video_path = output_dir / "videos" / f"{stem}.mp4"
         stills = video_recorder.still_paths[stills_before:]
 
@@ -2047,13 +2685,34 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
                 pose["alpha"] = alpha_min + (1.0 - alpha_min) * (pose_index / last_pose)
             # ...but layer by geometry, so no pose's shadow lands on the feet
             # of the pose it falls across.
+            # Poses crowd when the gap BETWEEN them is small, which a total
+            # travel distance does not tell you: a door opened on the spot
+            # walks a metre and still stacks its poses.
+            pitch = float(args_cli.sequence_spread_pitch) or _SEQUENCE_POSE_PITCH_M
+            # Draw order first, offsets second: the offsets are positional, so
+            # they have to be indexed against the list the compositor walks.
+            ordered = _shadow_draw_order(
+                pose_frames,
+                framing["azimuth_deg"] + float(style["key"]["azim_deg"]),
+            )
+            offsets, smallest_gap = _spread_offsets(
+                ordered, framing, lens, int(args_cli.video_width)
+            )
+            spread_mode = str(args_cli.sequence_spread)
+            spread = spread_mode == "on" or (
+                spread_mode == "auto" and smallest_gap < pitch
+            )
+            if spread:
+                print(
+                    f"[SEQUENCE] spreading {len(pose_frames)} poses: the "
+                    f"closest pair stands {smallest_gap:.2f} m apart against a "
+                    f"{pitch:.2f} m pitch."
+                )
             composite = _composite_sequence(
                 plate,
-                _shadow_draw_order(
-                    pose_frames,
-                    framing["azimuth_deg"] + float(style["key"]["azim_deg"]),
-                ),
+                ordered,
                 threshold=int(args_cli.sequence_threshold),
+                offsets=offsets if spread else None,
             )
             sequence_path = sequence_dir / f"{stem}.png"
             _write_png(composite, sequence_path)
@@ -2075,7 +2734,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg):
         )
         results.append(
             {
-                "trajectory_rank": int(rank),
+                "trajectory_rank": None if rank is None else int(rank),
                 "dataset": dataset,
                 "motion": motion,
                 "trajectory": trajectory,
