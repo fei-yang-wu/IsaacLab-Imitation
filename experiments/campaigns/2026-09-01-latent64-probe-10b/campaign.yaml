@@ -333,3 +333,26 @@ arms:
         - agent.ipmd.actor_learning_rate=2.0e-4
         - agent.optim.scheduler_kwargs.total_iters=${mul:3,${vars.max_iterations}}
     stages: *probe_stages
+
+  # ---- The constant channel's ONLY policy-side effect, reproduced without
+  # ---- the channel (2026-09-01). A constant-1 input column's weight gets the
+  # ---- bias gradient every step (verified on the z64_merged 500M
+  # ---- checkpoint: the cos column's Adam moments are bit-identical to the
+  # ---- first-layer bias's), so under Adam the effective first-layer bias of
+  # ---- the sin_cos arm moves at exactly 2x the rate of the no-phase arm's,
+  # ---- actor and critic. `agent.ipmd.first_layer_bias_lr_scale=2.0` puts
+  # ---- each network's first-layer bias in its own parameter group at 2x the
+  # ---- parent lr (RLOpt `ipmd.py`, new field), keeping the adaptive KL rule
+  # ---- and everything else as `nophase`. It does NOT reproduce the sqrt(2)
+  # ---- wider bias init. Trains: bias mobility is the lever and the phase
+  # ---- pair was a bias-lr knob in disguise. Stalls with `nophase` seed 1
+  # ---- also stalling: the cell needs the channel for a reason outside the
+  # ---- tracker network.
+  nophase_bias2x:
+    vars:
+      wandb_id: l64p-nopbias2x
+      phase_mode: none
+      command_dim: 64
+      optim_args:
+        - agent.ipmd.first_layer_bias_lr_scale=2.0
+    stages: *probe_stages

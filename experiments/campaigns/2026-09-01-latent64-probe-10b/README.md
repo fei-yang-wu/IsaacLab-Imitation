@@ -101,3 +101,19 @@ gone. Two things move against `nophase` (schedule shape, and the start value
 2e-4 instead of 1e-3), so a recovery is attributable to the schedule only if
 the control's own adaptive lr is accepted as the reference for the start
 value.
+
+## `nophase_linlr` result, and the two arms that split the remaining stories (2026-09-01)
+
+`nophase_linlr` held `train/lr` at 2.0e-4 (W&B) and did WORSE than `nophase`
+(ep_len 14 / 17 / 21 at 60-100M / 100-150M / 150-250M against 28 / 37 / 41,
+control 62 / 100 / 124), with KL climbing to 0.041 at the fixed lr. The
+learning rate is a symptom. The 500M checkpoints show the no-phase policy
+shrinking its z weights and the cos column of the control behaving as an
+exact second first-layer bias (Adam moments bit-identical to the bias's).
+Two arms, submitted together:
+
+- `nophase` at **seed 1**: breaks the perfect confound between "no constant
+  channel" and "the one seed-0 init at 157 inputs" that every no-phase stall
+  on record shares.
+- `nophase_bias2x`: `nophase` with `agent.ipmd.first_layer_bias_lr_scale=2.0`,
+  the channel's only deterministic policy-side effect, without the channel.
