@@ -593,7 +593,12 @@ def _skill_encoder_provenance(
                 or value.shape != other.shape
             ):
                 return None
-            worst = max(worst, float((other.detach().cpu() - value.cpu()).abs().max()))
+            # Cast before subtracting. A quantized encoder carries integer and
+            # boolean buffers -- a VQ codebook's cluster counts and dead-code
+            # mask -- and subtracting two bool tensors raises rather than
+            # returning a delta, which took out the whole evaluation.
+            delta = other.detach().cpu().float() - value.cpu().float()
+            worst = max(worst, float(delta.abs().max()))
         return worst
 
     provenance: dict[str, Any] = {

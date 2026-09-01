@@ -99,6 +99,7 @@ class Gr00tSkillCommandSampler:
         if missing:
             msg = f"goals {missing} are not in the feature cache {goal_names}."
             raise KeyError(msg)
+        self._gr00t_goal_vocabulary = goal_names
         self._gr00t_goal_names = assigned
         self._gr00t_goal_index = torch.tensor(
             [goal_names.index(name) for name in assigned],
@@ -228,6 +229,41 @@ class Gr00tSkillCommandSampler:
             "update": int(checkpoint.get("update", -1)),
             **self.gr00t_inference_provenance(),
         }
+
+    def set_goal_assignment(self, goal_name: str | Sequence[str]) -> None:
+        """Point the head at other goals without reloading it.
+
+        A run that renders one clip per motion inside a single process needs a
+        new goal for every clip, and the head weights are the expensive part.
+        This rewrites only the per-environment goal assignment, against the
+        same feature cache `configure_gr00t` read.
+        """
+        vocabulary = getattr(self, "_gr00t_goal_vocabulary", None)
+        if vocabulary is None:
+            msg = "configure_gr00t has to run before the goals can change."
+            raise RuntimeError(msg)
+        num_envs = int(self._gr00t_goal_index.numel())
+        assigned = (
+            [str(goal_name)] * num_envs
+            if isinstance(goal_name, str)
+            else [str(name) for name in goal_name]
+        )
+        if len(assigned) != num_envs:
+            msg = (
+                f"per-environment goal list has {len(assigned)} entries for "
+                f"{num_envs} environments."
+            )
+            raise ValueError(msg)
+        missing = sorted({name for name in assigned if name not in vocabulary})
+        if missing:
+            msg = f"goals {missing} are not in the feature cache {vocabulary}."
+            raise KeyError(msg)
+        self._gr00t_goal_names = assigned
+        self._gr00t_goal_index = torch.tensor(
+            [vocabulary.index(name) for name in assigned],
+            dtype=torch.long,
+            device=self._gr00t_goal_index.device,
+        )
 
     def gr00t_inference_provenance(self) -> dict[str, Any]:
         """Return the inference-time knobs that distinguish one arm from another.

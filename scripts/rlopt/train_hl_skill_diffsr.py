@@ -68,6 +68,33 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--source_history_steps",
+    type=int,
+    default=0,
+    help=(
+        "Past frames added to phi's conditioning on top of s_t. 0 (default) "
+        "reproduces every existing arm. The macro state carries no velocities, "
+        "so a single frame cannot express which way the motion is already "
+        "going; a past chunk supplies that. phi/g/mu are pretrain-only heads, "
+        "so this does not change the deployed command."
+    ),
+)
+parser.add_argument(
+    "--source_anchor",
+    type=str,
+    default="current",
+    choices=("current", "past_start"),
+    help=(
+        "Heading frame of the sampled window when --source_history_steps > 0. "
+        "'current' anchors on s_t, so the past reads as negative displacement "
+        "and the encoder input is unchanged from a history-free run. "
+        "'past_start' anchors on the OLDEST past frame, making one long macro "
+        "window; the encoder's input distribution changes and no tracker can "
+        "bind the result until the frozen sampler can anchor on a delayed "
+        "robot heading."
+    ),
+)
+parser.add_argument(
     "--transition_objective",
     type=str,
     default="endpoint",
@@ -608,6 +635,8 @@ def _build_trainer_config(
         macro_frame_stride=macro_frame_stride,
         macro_anchor_mode=macro_anchor_mode,
         encoder_window_mode=args_cli.encoder_window_mode,
+        source_history_steps=args_cli.source_history_steps,
+        source_anchor=args_cli.source_anchor,
         transition_objective=args_cli.transition_objective,
         reconstruction_target=args_cli.reconstruction_target,
         jepa_loss=args_cli.jepa_loss,

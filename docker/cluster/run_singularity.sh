@@ -618,6 +618,11 @@ case "${CLUSTER_PYTHON_EXECUTABLE}" in
     # fell through to the bare `/isaac-sim/python.sh` branch and died on
     # `No module named 'torch'` (the same failure as ICE job 5558033).
     scripts/viz/*.py) rlopt_pipeline=1; rlopt_eval=1 ;;
+    # Offline probes under `scripts/audit/` import torch, rlopt, and the
+    # experiment library, but never build an environment. They only need the
+    # CU130 runtime; the bare `/isaac-sim/python.sh` branch has no torch. They
+    # take no `--assert-kitless`, so they cannot use the training branch.
+    scripts/audit/probe_*.py) rlopt_pipeline=1; rlopt_eval=1 ;;
 esac
 case "${CLUSTER_PYTHON_EXECUTABLE}" in
     scripts/rlopt/train*.py|scripts/rlopt/eval*.py)

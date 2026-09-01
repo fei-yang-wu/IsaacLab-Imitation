@@ -33,6 +33,6 @@ env:
   CLUSTER_AUTO_SETUP_G1_DATA: "0"
   CLUSTER_APPEND_DEFAULT_G1_MANIFEST: "0"
   CLUSTER_G1_MANIFEST_REFRESH_POLICY: never
-  CLUSTER_EXTRA_PYTHONPATH_REL: IsaacLab/source/isaaclab:IsaacLab/source/isaaclab_tasks:IsaacLab/source/isaaclab_assets:IsaacLab/source/isaaclab_rl:IsaacLab/source/isaaclab_mimic:source/isaaclab_imitation:RLOpt:ImitationLearningTools
+  CLUSTER_EXTRA_PYTHONPATH_REL: IsaacLab/source/isaaclab:IsaacLab/source/isaaclab_tasks:IsaacLab/source/isaaclab_assets:IsaacLab/source/isaaclab_rl:IsaacLab/source/isaaclab_mimic:source/isaaclab_imitation:source/imitation_experiments:RLOpt:ImitationLearningTools
   REMOVE_CODE_COPY_AFTER_JOB: "false"
   REMOVE_OVERLAY_AFTER_JOB: "true"

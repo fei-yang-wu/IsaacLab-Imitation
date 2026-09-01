@@ -145,3 +145,62 @@ def test_stage_exclude_reaches_the_sbatch_directives(tmp_path) -> None:
         mem="160G",
     )
     assert "--exclude" not in "\n".join(_directive_lines(plain))
+
+
+def test_stage_partition_and_qos_override_the_profile(tmp_path) -> None:
+    """A stage's `partition` and `qos` must reach the sbatch directives.
+
+    Added 2026-08-30 for `encoder-interface-500m`: the `ice-gpu` H100 nodes
+    were full while `coe-gpu` held free ones, and only the profile could name
+    a partition, so no arm could move without a second profile file.
+    """
+    from imitation_experiments.pipeline.cluster.config import (
+        ClusterProfile,
+        ResolvedStage,
+        SlurmDefaults,
+    )
+    from imitation_experiments.pipeline.cluster.plan_cmd import _stage_directives
+    from imitation_experiments.pipeline.cluster.slurm import _directive_lines
+
+    profile = ClusterProfile(
+        name="ice",
+        login="ice",
+        control_root="/control",
+        data_dir="/data",
+        shared_sif_path="/sif/image.sif",
+        isaac_cache_dir="/cache",
+        slurm=SlurmDefaults(
+            gres="gpu:h100:1",
+            mem="96G",
+            qos="coe-ice",
+            partition="ice-gpu",
+            log_dir=str(tmp_path),
+        ),
+    )
+    base = dict(
+        name="lowlevel",
+        executable="scripts/rlopt/train.py",
+        args=(),
+        env={},
+        time_limit="15:59:00",
+        gres="gpu:h100:1",
+        mem="160G",
+        cpus_per_task=16,
+        exclude=None,
+        depends_on=None,
+        dependency_kind="afterok",
+    )
+
+    moved = ResolvedStage(**base, partition="coe-gpu", qos="coe-grade")
+    header = "\n".join(
+        _directive_lines(_stage_directives(profile, moved, job_name="probe"))
+    )
+    assert "--partition=coe-gpu" in header
+    assert "--qos=coe-grade" in header
+
+    default = ResolvedStage(**base, partition=None, qos=None)
+    header = "\n".join(
+        _directive_lines(_stage_directives(profile, default, job_name="probe"))
+    )
+    assert "--partition=ice-gpu" in header
+    assert "--qos=coe-ice" in header

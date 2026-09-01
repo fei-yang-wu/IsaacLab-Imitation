@@ -70,6 +70,28 @@ parser.add_argument(
     help="Recorded video length in steps. <=0 uses --max_steps / reference end.",
 )
 parser.add_argument(
+    "--video_track_env",
+    type=int,
+    default=-1,
+    help=(
+        "Environment index whose robot the recording camera follows. <0 keeps the "
+        "static world camera built from the viewer eye/lookat."
+    ),
+)
+parser.add_argument(
+    "--video_track_offset",
+    type=float,
+    nargs=3,
+    default=(3.0, 3.0, 1.8),
+    help="Camera position offset from the tracked robot root, in world axes (m).",
+)
+parser.add_argument(
+    "--video_track_height",
+    type=float,
+    default=0.8,
+    help="Height above the tracked robot root that the camera looks at (m).",
+)
+parser.add_argument(
     "--max_steps",
     type=int,
     default=0,
@@ -1230,6 +1252,55 @@ def _tensor_mean_std(values: Tensor, mask: Tensor) -> tuple[float, float]:
     )
 
 
+class _FollowCameraWrapper(gym.Wrapper):
+    """Move the recording camera with one environment's robot.
+
+    The Isaac Lab video recorder captures a camera that is static in world space,
+    so a walking robot leaves the frame. This wrapper repositions that camera
+    before every rendered frame, which keeps a single robot centred for figure
+    clips. It touches only the recorder camera: no simulation state, no metrics.
+    """
+
+    def __init__(
+        self,
+        env: Any,
+        env_index: int,
+        offset: tuple[float, float, float],
+        look_height: float,
+    ) -> None:
+        super().__init__(env)
+        self._env_index = env_index
+        self._offset = offset
+        self._look_height = look_height
+
+    def render(self, *args: Any, **kwargs: Any) -> Any:
+        self._follow()
+        return self.env.render(*args, **kwargs)
+
+    def _follow(self) -> None:
+        recorder = getattr(self.env.unwrapped, "video_recorder", None)
+        # A live Newton viewer overwrites the camera from its own state every
+        # frame, so following would fight it; headless runs have no viewer.
+        if (
+            recorder is None
+            or getattr(recorder, "_matched_visualizer", None) is not None
+        ):
+            return
+        capture = getattr(recorder, "_capture", None)
+        update_camera = getattr(capture, "update_camera", None)
+        if update_camera is None:
+            return
+        robot = self.env.unwrapped.scene["robot"]
+        root = robot.data.root_pos_w[self._env_index].detach().float().cpu().tolist()
+        eye = (
+            root[0] + self._offset[0],
+            root[1] + self._offset[1],
+            root[2] + self._offset[2],
+        )
+        target = (root[0], root[1], root[2] + self._look_height)
+        update_camera(eye, target)
+
+
 def _auto_reference_steps(raw_env: Any) -> int:
     tm = getattr(raw_env, "trajectory_manager", None)
     if tm is None:
@@ -2245,6 +2316,13 @@ def main(
     video_length = max(1, video_length)
 
     gym_env: Any = raw_gym_env
+    if args_cli.video and int(args_cli.video_track_env) >= 0:
+        gym_env = _FollowCameraWrapper(
+            gym_env,
+            env_index=int(args_cli.video_track_env),
+            offset=tuple(float(x) for x in args_cli.video_track_offset),
+            look_height=float(args_cli.video_track_height),
+        )
     if args_cli.video:
         video_kwargs = {
             "video_folder": str(log_dir / "videos" / "play"),
