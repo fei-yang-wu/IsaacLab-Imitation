@@ -1,48 +1,48 @@
-# 2026-09-01 - is the 64-D latent the reason? One arm, one variable, 10B.
+# 2026-09-01 - does a 64-D latent train under the 50B control's regime? 10B.
 #
-# CONTROL: `diffntp_chunk_50b` in `2026-08-31-diffntp-chunk-50b-fullbatch`
+# REFERENCE RUN: `diffntp_chunk_50b` in `2026-08-31-diffntp-chunk-50b-fullbatch`
 # (W&B run `diffntp-chunk-50b-s0-2026-09-01_08-48-21`, jobs 5601421-5601431).
-# Its `std1`-`std3` stages have COMPLETED the same 10B budget under the same
-# `random80_adaptive20` selection and the same termination curriculum, so this
-# arm reads directly against the control's own first 10B.
+# Its `std1`-`std3` completed 10B under the same `random80_adaptive20`
+# selection and termination curriculum, so this arm reads against that run at a
+# matched cumulative frame count.
 #
-# THE ONE VARIABLE: the latent width. The encoder is pretrained here with the
-# control's exact objective and settings -- `--jepa_loss sigreg_ebm
-# --jepa_ntp_head diff_chunk` (the two-head form), deterministic latent,
-# `--encoder_layer_norm`, `--encoder_window_mode intermediate`,
-# `--horizon_steps 10`, 50,000 updates at batch 8,192 -- and differs ONLY in
-# `--z_dim 64` instead of 256. The command is 66 wide (64 + the 2-wide sin_cos
-# phase) instead of 258. Every tracker field is copied from the control's
-# `std1` stage: `rlopt_ipmd_tuned_fullbatch_cfg_entry_point`, 20,480
-# environments x 24 rollout steps, `motion_ee_pos` 1.0,
-# `motion_global_anchor_pos_wide` 1.0, `action_rate_l2` -0.03,
-# `tracking_reward_points` 4.0, `reference_prefetch_mode=next`, no proprio
-# history, no weight decay, no critic schedule.
+# WHAT MOVES. Two things, not one, and this is a deliberate choice by the user
+# (2026-09-01): the latent width 256 -> 64, AND the pretrain head. The
+# reference run binds `diffntp_chunk_h1_ee_wide`, the TWO-HEAD form
+# (`--jepa_ntp_head diff_chunk` with separate endpoint and chunk heads). This
+# arm binds the star-v2 hub encoder, the MERGED single head
+# (`--jepa_ntp_chunk_span boundary_next --jepa_endpoint_coeff 0`), which is the
+# formulation the user wants carried forward. Everything else in that
+# encoder's pretrain matches the reference: `--jepa_loss sigreg_ebm`,
+# deterministic latent, `--encoder_layer_norm`, `--encoder_window_mode
+# intermediate`, `--horizon_steps 10`, 50,000 updates at batch 8,192, the same
+# 380-value `root_qpos` macro state, stride 1, `robot_heading` anchor.
+# `latest.pt.json` records `{"update": 50000}`, so the pretrain is complete.
 #
-# WHY A FRESH PRETRAIN. No 64-D two-head encoder exists to bind. The only one
-# ever made, `leader64_h1_nophase` in `2026-08-27-leader64-gate`, has left ICE
-# with its tree, and every other 64-D encoder on disk is the MERGED head
-# (`--jepa_ntp_chunk_span boundary_next --jepa_endpoint_coeff 0`), which would
-# move the head as well as the width. The pretrain took 45 minutes for the
-# comparable 64-D merged encoder, so it is a cheap first stage.
+# THEREFORE THIS ARM CANNOT ATTRIBUTE a difference against the reference run to
+# the width alone. The clean width comparison at the merged head is already
+# running and needs no job here: `hub` (64-D) against `g3_cont256` (256-D) in
+# `2026-08-30-latent-star-v2`, same head, same pretrain, 5B each. What this
+# arm adds is whether the merged 64-D interface trains under the 50B chain's
+# own tracker regime and budget, which star-v2 does not test (it runs the
+# sonic 0.8 -> 0.2 failure ramp at 5B).
 #
-# WHAT THIS DOES NOT SETTLE. `leader64_h1_nophase` was CANCELLED at 0.84B with
-# episode length plateaued at 50-62 and MPJPE-L flat near 51 mm, while its
-# 256-D control was at 166 / 42.6 mm by 0.17B. That arm carried NO phase
-# channel; this one keeps the control's `sin_cos` phase, which is why the two
-# are not the same test. If this arm reproduces that stall, the width is
-# implicated at the two-head form; if it trains, the earlier stall was the
-# phase or the run, not the width.
+# NO PRETRAIN STAGE. The hub encoder already exists at
+# /data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt, so this is one
+# job. Binding it also removes encoder-initialization noise against every
+# star-v2 row that shares it.
 #
-# The width question at the MERGED head is already in flight and needs no job
-# here: `hub` (64-D) against `g3_cont256` (256-D) in
-# `2026-08-30-latent-star-v2`, same head, 5B each.
+# THE PHASE CHANNEL IS INERT HERE. `command_phase_mode=sin_cos` with
+# `phase_source='hold'` at `code_period=1` publishes a constant: `phase =
+# (phase_period - latent_steps) / phase_period` is 0 on every step
+# (`hl_skill_diffsr.py`, and the config docstring says "Informationally dead at
+# code_period=1"). It is kept because the reference run keeps it; the command
+# is 66 wide against the reference's 258, and the 2 extra values are constants
+# in both.
 #
 # ONE SEGMENT, cap NOT shrunk. The stage carries the full 10B target and the
-# 15:59 walltime ends it whenever it ends. The control reached 10B across three
-# segments, so this arm reports whatever depth one segment buys; read it
-# against the control at the SAME cumulative frame count, never against the
-# control's 10B endpoint.
+# 15:59 walltime ends it. Read the result against the reference run at the SAME
+# cumulative frame count, never against its 10B endpoint.
 name: latent64-probe-10b
 profile: ice
 wandb_project: g1-bs-pareto
@@ -65,9 +65,8 @@ vars:
   hold: 1
   phase_mode: sin_cos
   command_mode: z
-  pretrain_updates: 50000
-  pretrain_batch_size: 8192
-  encoder_ckpt: ${vars.output_root}/encoder/checkpoints/latest.pt
+  # The star-v2 64-D merged hub encoder, pretrain complete at 50,000 updates.
+  encoder_ckpt: /data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt
 
   # --- Tracker scale: the control's 20,480 x 24 = 491,520 frames per batch ---
   train_num_envs: 20480
@@ -91,72 +90,6 @@ vars:
     - env.enable_termination_curriculum=true
     - env.termination_curriculum_start_frames=5000000
     - env.termination_curriculum_end_frames=30000000
-
-  pretrain_head:
-    - --task
-    - ${vars.task}
-    - --num_envs
-    - "16"
-    - --seed
-    - ${vars.seed}
-    - --device
-    - cuda:0
-    - --headless
-    - --assert-kitless
-    - --output_dir
-    - ${vars.output_root}/encoder
-    - --logger_backend
-    - wandb
-    - --wandb_project
-    - g1-bs-pareto
-    - --wandb_group
-    - latent64-probe-10b
-    - --wandb_run_name
-    - ${vars.wandb_arm}-pretrain-s${vars.seed}
-    - --horizon_steps
-    - "10"
-    - --encoder_window_mode
-    - ${vars.window_mode}
-    - --transition_objective
-    - jepa_ntp
-    - --jepa_loss
-    - sigreg_ebm
-    - --jepa_ntp_head
-    - diff_chunk
-    - --latent_mode
-    - deterministic
-    - --z_dim
-    - ${vars.z_dim}
-    - --encoder_layer_norm
-
-  pretrain_tail:
-    - --encoder_hidden_dims
-    - "2048"
-    - "1024"
-    - "512"
-    - "512"
-    - --encoder_activation
-    - silu
-    - --diffsr_feature_dim
-    - "256"
-    - --diffsr_embed_dim
-    - "1024"
-    - --diffsr_g_hidden_dims
-    - "1024"
-    - "1024"
-    - "512"
-    - --diffsr_mu_hidden_dims
-    - "1024"
-    - "1024"
-    - "512"
-    - --batch_size
-    - ${vars.pretrain_batch_size}
-    - --num_updates
-    - ${vars.pretrain_updates}
-    - --log_interval
-    - "1000"
-    - --eval_batches
-    - "4"
 
   lowlevel_head:
     - --task
@@ -232,26 +165,17 @@ shared_env:
 preflight:
   require_container_paths:
     - ${vars.ref_arrays}
+    - ${vars.encoder_ckpt}
   output_container_path: ${vars.output_root}
 
 arms:
-  z64:
+  z64_merged:
     vars:
-      wandb_id: l64p-z64
+      wandb_id: l64p-z64m
     stages:
-      - name: pretrain
-        executable: scripts/rlopt/train_hl_skill_diffsr.py
-        args: ${concat:${vars.pretrain_head},${vars.pretrain_tail},${vars.data_overrides}}
-        time_limit: "15:59:00"
-        gres: gpu:h200:1
-        cpus_per_task: 16
-        mem: 160G
-        env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,latent64-probe,${vars.arm},seed${vars.seed},pretrain
       - name: lowlevel1
         executable: scripts/rlopt/train.py
         args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
-        depends_on: pretrain
         time_limit: "15:59:00"
         gres: gpu:h200:1
         cpus_per_task: 16
