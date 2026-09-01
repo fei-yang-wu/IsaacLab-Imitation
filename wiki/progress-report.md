@@ -12,13 +12,43 @@ job chronology, and incident history stay in
 documents. Update this page whenever a campaign produces or invalidates a
 result, and stamp the section with the verification date.
 
-Last updated: 2026-08-25.
+Last updated: 2026-08-30.
 
 ---
 
 ## 1. Latent encoder experiments and ablations
 
-Verified: 2026-08-25 (new common eval subset evaluations complete).
+Verified: 2026-08-30 (latent-interface, leakage, conditioning, and smoothness
+status reviewed).
+
+### Current research focus
+
+The current latent-policy program has four linked workstreams:
+
+1. **Latent expressiveness and compositionality.** The affine bilinear head
+   constrains the denoising score to be affine in the skill latent. This gives
+   straight-line latent mixtures an exact product-of-conditionals
+   interpretation. The matched affine and concat pretraining probes support
+   the construction, but the tracker comparison is still running, one seed,
+   so mixed-latent executability is not established.
+2. **Information leakage in encoder learning.** The Tier-B suffix study finds
+   that two visible slots match or beat the nine-slot production encoder on
+   both endpoint and next-chunk pretraining losses. The result is preliminary
+   and applies to what the objective uses: it supports the claim that path
+   shape is not rewarded, not the stronger claim that the tracker does not
+   need intermediate states.
+3. **Past state chunk conditioning.** RLOpt now has pretraining support for
+   giving `phi` a past state chunk, with current-state and past-start anchors.
+   This is a design and wiring change only. The real pipeline smoke exposed a
+   remaining wide-`phi` evaluation path, so no tracking result or submission
+   exists yet.
+4. **Policy smoothness.** The from-scratch action-rate penalty is useful, but
+   it is not the complete solution. At matched 4.75B frames, the penalty
+   reduced jerk by about 34% with little SR cost in one seed. The trained-in
+   EMA action filter reached a lower 5B jerk record (166.8 versus base's
+   192.4), but also reduced clean SR and doubled robust MPJPE-G. These are
+   preliminary one-seed trade-offs; the active follow-up is the EMA
+   alpha/budget sweep.
 
 ### Question
 
@@ -177,7 +207,23 @@ shared oracle evaluator
 
 ## 2. Interface design experiments
 
-Verified: 2026-07-30.
+Verified: 2026-08-30 (paper ablation design reviewed).
+
+### Detailed ablation design for the paper
+
+The command-interface star is being rebuilt on the stronger
+`diffntp_chunk_h1_ee_wide` hub. The design census contains 62 rows: 16 already
+measured at the hub cell, one trained but unscored, and 45 new rows. A proposed
+cut line reduces the new work to 33 rows while retaining the objective,
+bottleneck, input/window, cadence, training-state, and seed claims needed for
+the paper. The star is prepared but not submitted.
+
+The paper-facing method ablation remains a separate controlled 2 x 2 study:
+endpoint DiffSR versus exact-window reconstruction, crossed with continuous
+256-D versus SONIC FSQ 64 x 32. It is prepared but has no research result yet.
+Every final row must report SR, success-only MPJPE-L, and success-only MPJPE-G
+together, with the same-board `sonic_v1_1` reference and explicit labels for
+one-seed, preliminary, incomplete, or diagnostic evidence.
 
 ### Question
 

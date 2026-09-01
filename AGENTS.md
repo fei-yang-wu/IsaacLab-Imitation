@@ -90,6 +90,18 @@ history, it belongs in `wiki/`, not in this file.
 - Ask the user when the status of a result is unclear. Invoke the
   `result-rigor` skill before citing a stored number, and the
   `experiment-campaign` skill when starting or extending a campaign.
+- Report a result as data, not as a reading. Give the table, the numbers, and
+  the qualification that belongs with them; stop there. Do not add which arm
+  "wins", what the numbers "mean", what changed against a previous claim, or a
+  recommendation. The user reads the numbers. Say which experiment would settle
+  an open question only when asked, or when the user is about to act on a
+  preliminary result.
+  Not: "the latent's win reverses on both new metrics, so latent-vs-explicit
+  holds only for root-relative posture." (unrequested reading)
+  Yes: the table, plus "single seed, 560 episodes, DR off".
+  This does not relax the qualification rule above: keep the qualification
+  inline and short, and keep any caveat that changes whether a number is
+  usable at all (different reduction, different protocol, different schema).
 - Define a new term, abbreviation, variant label, or metric shorthand in plain
   language before using it, and say what changes against the baseline. Restate
   it in later turns until the user adopts it.
