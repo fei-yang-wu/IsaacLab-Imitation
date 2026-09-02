@@ -21,6 +21,40 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Default encoder moves to the past-5 concat phi (user decision, 2026-09-02)
+
+User decision after the 3B rows and the five inspection clips per arm
+(`2026-09-01-latent64-probe-3b-eval/render_clips.sh`): `enc_hist`, the
+64-D merged hub encoder whose phi reads `s[t-5..t]` anchored at `s_t`
+(`--source_history_steps 5 --source_anchor current`, the `p5_concat`
+pretrain of `2026-08-30-past-chunk-affine-64d`), is the DEFAULT encoder for
+new campaigns. Everything else in the hub recipe is unchanged: merged
+`diffntp_chunk` head, 64-D, hold 1, sin/cos phase pair (constant at hold 1,
+kept), `robot_heading` anchor, `root_qpos` macro terms, horizon 10.
+Reference artifacts: ICE
+`/data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt`,
+workstation mirror `logs/latent64_probe_mirror/p5_concat_encoder/latest.pt`.
+
+What the decision rests on, stated as data: one seed, one 3B checkpoint of a
+10B run, `bones_testbed4096_v1` clean -- `enc_hist` 0.9111 / 23.44 / 122.25
+against the no-past control 0.9102 / 23.89 / 108.82 (SR and L inside the
+0.0064 / 0.46 mm replicate band; G 13.4 mm worse, above the 10.8 mm band),
+plus the clips. The past-chunk-vs-none question at 5B/10B stays open; the
+finished runs will add the 5B and final rows.
+
+Also decided: the ten-step actor history (`obs_hist`, 0.9026 / 25.09 /
+94.74 at 3B) is read as under-trained but promising, and as a weaker form of
+a recurrent actor; the next step on that axis is the LSTM actor, not a
+longer history. LSTM record: `2026-08-28-smooth-ablation-5b` arm `lstm`
+(256-D base, `agent.ppo.rnn_hidden_size=256`, 16,384 envs), 5B clean row
+0.9229 / 25.40 / 97.12 / jerk 242.9 against `base` 0.9570 / 23.68 / 86.68
+at 4.75B, robust 0.9048 / 27.72 / 149.51 against 0.9336 / 30.36 / 140.38;
+W&B `sm5b-lstm2-s0` trails `base` on ep_len at every matched window
+(142 vs 167 at 4-5B) at 0.89x the fps. First `lstm` run died on a
+buffer-shaping bug (fixed in RLOpt `c016496`); `evaluate_checkpoint`'s
+recurrent-state carry was flagged as qualification debt in the campaign
+README and its closure is not recorded there.
+
 ## latent64-probe arms scored at 3B: encoder past-chunk and actor history against the 64-D control (2026-09-02)
 
 `2026-09-01-latent64-probe-3b-eval`, ICE jobs 5607230 / 5607228 / 5607229,
