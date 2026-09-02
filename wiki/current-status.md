@@ -21,6 +21,28 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## latent64-probe arms scored at 3B: encoder past-chunk and actor history against the 64-D control (2026-09-02)
+
+`2026-09-01-latent64-probe-3b-eval`, ICE jobs 5607230 / 5607228 / 5607229,
+board `bones_testbed4096_v1` clean, `--randomization none`, evaluator
+arguments of `2026-08-31-star-v2-curves` verbatim. One seed (0), one
+checkpoint each (`model_step_3000238080`, 3B of a 10B budget, runs still
+training), so every row is preliminary. Rows are
+`/data/eval/latent64_probe_3b/<arm>_seed0_clean_f3000238080.json`; acc,
+jerk, and the action metrics are `successful_metrics.<key>.mean`.
+
+| arm | change vs control | SR | MPJPE-L | MPJPE-G | acc | jerk | action_delta | action_jerk |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `z64_merged` | control: 64-D merged hub + sin_cos, 50B-chain `std1` recipe | 0.9102 | 23.89 | 108.82 | 4.42 | 181.5 | 0.754 | 0.701 |
+| `enc_hist` | phi reads `s[t-5..t]` (`p5_concat` encoder) | 0.9111 | 23.44 | 122.25 | 4.48 | 181.7 | 0.752 | 0.692 |
+| `obs_hist` | ten-step actor history, 16,384 envs | 0.9026 | 25.09 | 94.74 | 5.08 | 226.1 | 0.908 | 0.954 |
+| `sonic_v1_1` | released reference, converged | 0.9888 | 26.73 | 187.7 | 3.45 | - | - | - |
+
+`obs_hist` differs from the control in two fields (history and environment
+count); `enc_hist` in one plus encoder-init noise (replicate band 0.0064 SR /
+0.46 mm L / 10.8 mm G). The no-phase arms were cancelled unscored; the user
+decision of 2026-09-01 is to keep the phase pair.
+
 ## The 64-D hold-1 phase pair decides training, and the code says it is a constant (2026-09-01)
 
 `2026-09-01-latent64-probe-10b`, W&B project `g1-bs-pareto`, group
