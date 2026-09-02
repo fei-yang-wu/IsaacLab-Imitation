@@ -53,3 +53,14 @@ crash and was resubmitted as 5607230). One seed, one checkpoint, preliminary.
 | `enc_hist` | 0.9111 | 23.44 | 122.25 | 4.48 | 181.7 | 0.752 | 0.692 |
 | `obs_hist` | 0.9026 | 25.09 | 94.74 | 5.08 | 226.1 | 0.908 | 0.954 |
 | `sonic_v1_1` (4096 board) | 0.9888 | 26.73 | 187.7 | 3.45 | - | - | - |
+
+## Inspection clips (2026-09-02)
+
+`./render_clips.sh` renders the three 3B trackers on their own frozen-encoder
+latents (the tracker ceiling, no planner), five ranks per arm chosen from the
+eval JSONs so agreement and disagreement are both on screen (see the script
+header), studio look, 1280x720, PhysX for the RTX camera. Inputs are the
+workstation mirror `logs/latent64_probe_mirror/` (checkpoints, eval JSONs, the
+`p5_concat` encoder) plus the star-v2 hub encoder mirror. Output:
+`logs/latent64_probe_mirror/clips/<arm>_3B/videos/rank-<rank>-<motion>.mp4`
+with stills every 50 steps. About four minutes per arm for all five clips.
