@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Studio-lit inspection clips of the three latent64-probe arms at 3B, driven
+# Studio-lit inspection clips of the latent64-probe / lstm-hub64 arms, driven
 # by the frozen encoder's own latents (the tracker's ceiling, not a planner).
 #
-#   ./render_clips.sh                      # all three arms, the five ranks below
+#   ./render_clips.sh                      # the three 3B arms, the five ranks below
+#   CKPT=latest ARMS="z64_merged enc_hist obs_hist z64_wd_clin lstm lstm_affine" ./render_clips.sh
 #   ARMS="obs_hist" RANKS="8550 13134" ./render_clips.sh
+#
+# CKPT=3B (default) renders `<arm>_3B.pt`; CKPT=latest renders
+# `<arm>_latest_f<frames>.pt` (2026-09-02: 9.5B / 9.5B / 8.5B / 7.0B / 4.5B /
+# 4.5B). `lstm*` arms build the recurrent actor (`agent.ppo.rnn_hidden_size`);
+# `lstm_affine` binds the past-5 affine encoder.
 #
 # Same interface overrides as the training campaign; PhysX because the Kit RTX
 # camera exists only there (every reported number stays on Newton).
@@ -14,6 +20,8 @@ cd "${REPO_ROOT}"
 MIRROR="${MIRROR:-${REPO_ROOT}/logs/latent64_probe_mirror}"
 HUB_ENCODER="${HUB_ENCODER:-${REPO_ROOT}/logs/latent_star_v2_mirror/hub_seed0/encoder/checkpoints/latest.pt}"
 P5_ENCODER="${P5_ENCODER:-${MIRROR}/p5_concat_encoder/latest.pt}"
+P5_AFFINE_ENCODER="${P5_AFFINE_ENCODER:-${MIRROR}/p5_affine_encoder/latest.pt}"
+CKPT="${CKPT:-3B}"
 REFERENCE_ARRAYS="${REFERENCE_ARRAYS:-/mnt/hsstorage/fwu91/bones_seed_ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1}"
 PERSIST_ID="${PERSIST_ID:-bones_seed_sonic_full_129785@e714bbff}"
 # Ranks in the 129,785-clip corpus, chosen from the 3B eval JSONs (2026-09-02):
@@ -29,12 +37,18 @@ SHOT="${SHOT:-hero_low}"
 VIDEO_WIDTH="${VIDEO_WIDTH:-1280}"
 VIDEO_HEIGHT="${VIDEO_HEIGHT:-720}"
 for arm in ${ARMS}; do
-    TRACKER="${MIRROR}/ckpt/${arm}_3B.pt"
+    if [ "${CKPT}" = "3B" ]; then
+        TRACKER="${MIRROR}/ckpt/${arm}_3B.pt"
+    else
+        TRACKER="$(ls "${MIRROR}"/ckpt/"${arm}"_latest_f*.pt 2>/dev/null | sort | tail -1)"
+    fi
     ENCODER="${HUB_ENCODER}"
     ARM_ARGS=()
     case "${arm}" in
-        z64_merged) ;;
+        z64_merged|z64_wd_clin) ;;
         enc_hist) ENCODER="${P5_ENCODER}" ;;
+        lstm) ENCODER="${P5_ENCODER}"; ARM_ARGS=(agent.ppo.rnn_hidden_size=256) ;;
+        lstm_affine) ENCODER="${P5_AFFINE_ENCODER}"; ARM_ARGS=(agent.ppo.rnn_hidden_size=256) ;;
         obs_hist)
             ARM_ARGS=(
                 env.observations.policy.projected_gravity.history_length=10
@@ -48,7 +62,7 @@ for arm in ${ARMS}; do
     for required in "${TRACKER}" "${ENCODER}" "${REFERENCE_ARRAYS}"; do
         [ -e "${required}" ] || { echo "missing input: ${required}" >&2; exit 1; }
     done
-    OUTPUT_DIR="${OUTPUT_ROOT:-${MIRROR}/clips}/${arm}_3B"
+    OUTPUT_DIR="${OUTPUT_ROOT:-${MIRROR}/clips}/${arm}_${CKPT}"
     echo "=== ${arm}: ${TRACKER} -> ${OUTPUT_DIR}"
     pixi run -e isaaclab python scripts/viz/render_paper_policy_video.py \
         --task Isaac-Imitation-G1-v2 --algo IPMD \
