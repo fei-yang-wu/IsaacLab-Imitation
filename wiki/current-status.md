@@ -21,6 +21,33 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Latest-checkpoint rows: the four 64-D arms and the two LSTM arms (2026-09-02)
+
+`2026-09-02-latest-eval`, `--final_only` on each real tree, star-v2 curves
+protocol (`bones_testbed4096_v1` clean, no randomization), one seed.
+Frames differ per row: the three `latent64-probe` single-segment arms
+ended on their 15:59 walltime (control 9.62B, `enc_hist` 9.60B, `obs_hist`
+8.52B; last saves 9.5B / 9.5B / 8.5B, the ICE SIGTERM checkpoint never
+fires), `z64_wd_clin` was at 7.0B, the LSTM arms at 4.5B of 10B.
+
+| arm | checkpoint | SR | MPJPE-L | MPJPE-G | acc | jerk | action_delta |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `z64_merged` (control) | 9.50B | 0.9292 | 23.25 | 93.09 | 4.25 | 174.9 | 0.780 |
+| `enc_hist` | 9.50B | 0.9304 | 22.57 | 101.66 | 4.39 | 185.8 | 0.802 |
+| `obs_hist` | 8.50B | 0.9233 | 23.84 | 84.21 | 4.79 | 213.6 | 0.897 |
+| `z64_wd_clin` | 7.00B | 0.9312 | 22.10 | 90.37 | 4.29 | 178.3 | 0.763 |
+| `lstm` | 4.50B | 0.8884 | 23.98 | 136.49 | 4.98 | 212.7 | 0.851 |
+| `lstm_affine` | 4.50B | 0.8840 | 25.51 | 145.46 | 5.11 | 220.3 | 0.895 |
+| `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
+
+Against the 3B rows of the same arms (0.9102 / 23.89 / 108.82 control,
+0.9111 / 23.44 / 122.25 `enc_hist`, 0.9026 / 25.09 / 94.74 `obs_hist`).
+`lstm` vs `lstm_affine` at matched 4.5B is one variable (phi
+parameterization) plus encoder-init noise; every other pair differs in
+frames. Inspection clips of all six checkpoints:
+`logs/latent64_probe_mirror/clips/<arm>_latest/videos/`, five ranks each
+(`2026-09-01-latent64-probe-3b-eval/render_clips.sh`, `CKPT=latest`).
+
 ## Default encoder moves to the past-5 concat phi (user decision, 2026-09-02)
 
 User decision after the 3B rows and the five inspection clips per arm
