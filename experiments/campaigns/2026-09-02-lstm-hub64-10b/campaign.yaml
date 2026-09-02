@@ -25,6 +25,14 @@
 # Arms: `lstm` (10B, two chained 15:59 segments), `lstm_affine` (10B, the
 # affine phi), `lstm_nophase` (500M, one segment: does the no-phase stall of
 # `latent64-probe-10b` reproduce with a recurrent actor and this recipe).
+# Placement (2026-09-02): `coe-gpu` / `coe-ice` (9 idle H200 nodes at the
+# resubmit) with two nodes excluded: `atl1-1-03-017-30-0`, where the first
+# `lstm` / `lstm_affine` jobs ran at ~70k fps (CPU fully allocated, 64 of 64,
+# six GPU jobs; the same node ran the eval and past-chunk jobs at half speed),
+# and `atl1-1-03-018-2-0`, where `lstm_nophase` (5607514) died at 20M with
+# `Warp CUDA error 2: out of memory` in the physics graph launch. First
+# submissions 5607509/10, 5607512/13, 5609488 were cancelled at <0.3B with no
+# checkpoint and their W&B chains dropped.
 name: lstm-hub64-10b
 profile: ice
 wandb_project: g1-bs-pareto
@@ -173,6 +181,9 @@ arms:
         executable: scripts/rlopt/train.py
         args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_uniform},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         time_limit: "15:59:00"
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
         gres: gpu:h200:1
         cpus_per_task: 16
         mem: 160G
@@ -186,6 +197,9 @@ arms:
         depends_on: lowlevel1
         dependency_kind: afterany
         time_limit: "15:59:00"
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
         gres: gpu:h200:1
         cpus_per_task: 16
         mem: 160G
@@ -215,10 +229,9 @@ arms:
         executable: scripts/rlopt/train.py
         args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_uniform},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         time_limit: "06:00:00"
-        # 5607514 died at 20M on atl1-1-03-018-2-0 with `Warp CUDA error 2:
-        # out of memory` in the physics graph launch while the two wider
-        # 10B arms ran clean on 017-30-0 at the same env count (2026-09-02).
-        exclude: atl1-1-03-018-2-0
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
         gres: gpu:h200:1
         cpus_per_task: 16
         mem: 160G
