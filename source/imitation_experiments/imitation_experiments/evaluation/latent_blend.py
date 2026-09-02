@@ -57,6 +57,8 @@ class BlendTrace:
     code_distance: list[float] = field(default_factory=list)
     target_root_speed: list[float] = field(default_factory=list)
     target_action_delta: list[float] = field(default_factory=list)
+    target_upright: list[float] = field(default_factory=list)
+    """``-projected_gravity_z`` in the base frame: 1 standing, ~0 lying."""
 
     def window(self, values: list[float], lo: int, hi: int) -> float | None:
         """Mean of ``values`` over steps in ``[lo, hi)``, ignoring NaNs."""
@@ -78,6 +80,12 @@ class BlendTrace:
             "code_distance_max": (
                 max(self.code_distance) if self.code_distance else None
             ),
+            "upright_min": (
+                min(v for v in self.target_upright if v == v)
+                if any(v == v for v in self.target_upright)
+                else None
+            ),
+            "fallen_steps": sum(1 for v in self.target_upright if v == v and v < 0.5),
         }
 
 
@@ -122,6 +130,7 @@ class LatentBlendSampler:
         observation carries them (the G1 v2 policy group does)."""
         speed = float("nan")
         delta = float("nan")
+        upright = float("nan")
         getter = getattr(td, "get", None)
         if callable(getter):
             # The G1 v2 policy group carries no base_lin_vel; the critic
@@ -141,8 +150,15 @@ class LatentBlendSampler:
                     if self._last_action is not None:
                         delta = float((current - self._last_action).norm().item())
                     self._last_action = current
+            grav = getter(("policy", "projected_gravity"), None)
+            if grav is not None:
+                grav = torch.as_tensor(grav).reshape(-1, grav.shape[-1])
+                if grav.shape[0] > self.target_env:
+                    # A history-stacked term ends with the newest frame.
+                    upright = float(-grav[self.target_env, -1].item())
         self.trace.target_root_speed.append(speed)
         self.trace.target_action_delta.append(delta)
+        self.trace.target_upright.append(upright)
 
     @torch.no_grad()
     def sample_for_step(self, td: Any, *, device: Any, dtype: Any) -> torch.Tensor:
