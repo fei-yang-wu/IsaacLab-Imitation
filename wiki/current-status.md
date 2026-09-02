@@ -21,6 +21,25 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Latent blend probe: walk -> jog convex mix on the affine and concat LSTM arms (2026-09-02)
+
+`2026-09-02-lstm-hub64-10b/blend_probe.sh` (`imitation_experiments.evaluation.latent_blend`,
+`evaluate_checkpoint --latent_blend_*`): env 0 tracks a walk, env 1 a jog,
+and env 0's published code becomes `(1 - a) z_walk + a z_jog` over a linear
+ramp, held afterwards. Reference-relative terminations off; uprightness from
+`projected_gravity`. `lstm_affine` (phi affine in z) against `lstm` (concat
+phi), both 4.5B, one seed, one run per cell, PhysX. No fall in any run.
+
+| run (arm, walk -> jog, ramp) | speed pre / ramp / post (m/s) | action delta pre / ramp / post, max in ramp | upright min | code distance pre / ramp / post |
+|---|---|---|---|---|
+| `lstm_affine`, 2389 -> 76357 fast, 150-200 | 0.68 / 1.05 / 1.07 | 0.892 / 1.332 / 1.319, 5.82 | 0.98 | 7.44 / 7.43 / 8.52 |
+| `lstm`, 2389 -> 76357 fast, 150-200 | 0.72 / 0.93 / 0.89 | 0.753 / 1.801 / 1.893, 4.65 | 0.97 | 9.98 / 11.40 / 12.97 |
+| `lstm_affine`, 2389 -> 30608 arc, 200-300 | 0.87 / 0.70 / 0.71 | 0.837 / 1.271 / 1.528, 3.83 | 0.98 | 9.50 / 9.94 / 6.32 |
+| `lstm`, 2389 -> 30608 arc, 200-300 | 0.88 / 0.73 / 1.06 | 0.991 / 1.551 / 1.324, 5.21 | 0.97 | 11.02 / 12.17 / 14.76 |
+
+Reference speeds in the post windows: fast jog 1.7-2.2 m/s, arc jog 1.12
+m/s, walk 0.84-0.92 m/s. Details and earlier passes in the campaign README.
+
 ## Latest-checkpoint rows: the four 64-D arms and the two LSTM arms (2026-09-02)
 
 `2026-09-02-latest-eval`, `--final_only` on each real tree, star-v2 curves
