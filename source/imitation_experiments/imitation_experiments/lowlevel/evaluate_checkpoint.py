@@ -283,6 +283,31 @@ parser.add_argument(
 )
 parser.add_argument("--video_dir", type=Path, default=None)
 parser.add_argument("--video_length", type=int, default=600)
+parser.add_argument(
+    "--video_follow_env",
+    type=int,
+    default=None,
+    help=(
+        "Chase the robot of this environment with the recording camera "
+        "(viewer origin on the asset root) instead of the static world view."
+    ),
+)
+parser.add_argument(
+    "--latent_blend_source_env",
+    type=int,
+    default=None,
+    help=(
+        "Composability probe: blend this environment's skill code into "
+        "--latent_blend_target_env's code, (1 - alpha) * target + alpha * source, "
+        "alpha ramping linearly from --latent_blend_start_step over "
+        "--latent_blend_ramp_steps control steps. Pin both environments to "
+        "different clips with --trajectory_ranks. hl_skill command source only."
+    ),
+)
+parser.add_argument("--latent_blend_target_env", type=int, default=0)
+parser.add_argument("--latent_blend_start_step", type=int, default=0)
+parser.add_argument("--latent_blend_ramp_steps", type=int, default=1)
+parser.add_argument("--latent_blend_final_alpha", type=float, default=1.0)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -544,6 +569,50 @@ def _as_torch(value: Any) -> Any:
     no-op.
     """
     return value.torch if hasattr(value, "torch") else value
+
+
+def _install_latent_blend(agent: Any) -> Any:
+    """Wrap the frozen hl_skill sampler with the composability blend, if asked."""
+    if args_cli.latent_blend_source_env is None:
+        return None
+    from imitation_experiments.evaluation.latent_blend import (  # noqa: PLC0415
+        BlendSchedule,
+        LatentBlendSampler,
+    )
+
+    base = getattr(agent, "_hl_skill_command_sampler", None)
+    if base is None:
+        raise ValueError(
+            "--latent_blend_source_env needs the hl_skill command source "
+            "(no frozen skill sampler on this agent)."
+        )
+    code_dim = int(agent.config.ipmd.latent_learning.code_latent_dim or 0)
+    if code_dim <= 0:
+        phase_dim = (
+            2
+            if str(agent.config.ipmd.latent_learning.command_phase_mode) == "sin_cos"
+            else 0
+        )
+        code_dim = int(agent.config.ipmd.latent_dim) - phase_dim
+    blend = LatentBlendSampler(
+        base,
+        target_env=int(args_cli.latent_blend_target_env),
+        source_env=int(args_cli.latent_blend_source_env),
+        schedule=BlendSchedule(
+            start_step=int(args_cli.latent_blend_start_step),
+            ramp_steps=int(args_cli.latent_blend_ramp_steps),
+            final_alpha=float(args_cli.latent_blend_final_alpha),
+        ),
+        code_dim=code_dim,
+    )
+    agent._hl_skill_command_sampler = blend
+    print(
+        f"[INFO] latent blend: env {blend.source_env} -> env {blend.target_env}, "
+        f"alpha 0 -> {blend.schedule.final_alpha} from step "
+        f"{blend.schedule.start_step} over {blend.schedule.ramp_steps} steps, "
+        f"code_dim={code_dim}"
+    )
+    return blend
 
 
 def _skill_encoder_provenance(
@@ -1503,6 +1572,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     _sync_env_window_params(env_cfg)
 
     env_cfg.scene.num_envs = int(args_cli.num_envs)
+    if args_cli.video_follow_env is not None:
+        follow = int(args_cli.video_follow_env)
+        if not 0 <= follow < int(args_cli.num_envs):
+            raise ValueError("--video_follow_env must index one of --num_envs.")
+        env_cfg.viewer.origin_type = "asset_root"
+        env_cfg.viewer.asset_name = "robot"
+        env_cfg.viewer.env_index = follow
+        env_cfg.viewer.eye = (2.6, 2.6, 1.6)
+        env_cfg.viewer.lookat = (0.0, 0.0, 0.7)
     env_cfg.seed = (
         args_cli.seed if args_cli.seed is not None else getattr(agent_cfg, "seed", None)
     )
@@ -1762,6 +1840,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
     agent = agent_class(env=env, config=agent_cfg)
+    latent_blend = None
     # One Isaac Sim start serves every cell: the arm fixes the interface, so
     # only the policy weights change between checkpoints.
     first_cell_ranks: torch.Tensor | None = None
@@ -1801,6 +1880,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             )
             if skill_encoder_provenance is not None:
                 print(f"[INFO] skill encoder: {skill_encoder_provenance}")
+            latent_blend = _install_latent_blend(agent)
             if l2t_policy_role == "teacher":
                 collector_policy = agent.teacher_policy
             elif l2t_policy_role == "student":
@@ -2131,9 +2211,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                     # robot's own acceleration magnitude, and `body_jerk_mps3`
                     # its finite difference — what "smooth" means physically,
                     # independent of what the clip does.
-                    body_acc = torch.linalg.vector_norm(actual_acc, dim=-1).mean(
-                        dim=-1
-                    )
+                    body_acc = torch.linalg.vector_norm(actual_acc, dim=-1).mean(dim=-1)
                     body_acc_cpu = body_acc.cpu()
                     _accumulate_metric(
                         metric_stats, "body_acc_mps2", body_acc_cpu, acceleration_mask
@@ -2150,9 +2228,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                         _accumulate_metric(
                             metric_stats, "body_jerk_mps3", body_jerk_cpu, jerk_mask
                         )
-                        _accumulate_per_env(
-                            "body_jerk_mps3", body_jerk_cpu, jerk_mask
-                        )
+                        _accumulate_per_env("body_jerk_mps3", body_jerk_cpu, jerk_mask)
                     previous_actual_acc = actual_acc.clone()
                     # Acc at this step is usable as a jerk operand next step
                     # only if the velocity pair behind it was valid and the
@@ -2267,6 +2343,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "metadata": {
                 "label": cell_label,
                 "video_dir": str(video_dir) if video_dir is not None else None,
+                "latent_blend": (
+                    {
+                        "target_env": latent_blend.target_env,
+                        "source_env": latent_blend.source_env,
+                        "start_step": latent_blend.schedule.start_step,
+                        "ramp_steps": latent_blend.schedule.ramp_steps,
+                        "final_alpha": latent_blend.schedule.final_alpha,
+                        **latent_blend.trace.summary(),
+                        "alpha": list(latent_blend.trace.alpha),
+                        "code_distance": list(latent_blend.trace.code_distance),
+                    }
+                    if latent_blend is not None
+                    else None
+                ),
                 "task": args_cli.task,
                 "algorithm": args_cli.algorithm,
                 "ipmd_l2t_policy_role": l2t_policy_role,
