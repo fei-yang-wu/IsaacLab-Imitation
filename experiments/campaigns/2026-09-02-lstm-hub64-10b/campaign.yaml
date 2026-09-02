@@ -218,12 +218,19 @@ arms:
 
   # Does the no-phase stall reproduce on this recipe? 500M is enough: the
   # 2026-09-01 stall separates from the control by 60-100M (ep_len 28 vs 62).
+  # 12,288 environments: at 16,384 this arm died twice at ~20M frames with
+  # `Warp CUDA error 2: out of memory` in the physics graph launch (5607514
+  # on 018-2-0, 5614418 on 014-2-0, clean GPUs at start) while the two
+  # 66-wide arms ran on at ~123 GB of 144 GB. Batch shape is therefore a
+  # second difference against `lstm`; the question this arm answers (does
+  # the no-phase interface stall on this recipe) survives it.
   lstm_nophase:
     vars:
       wandb_id: lh64-lstmnop
       phase_mode: none
       command_dim: 64
       frame_cap: 500000000
+      train_num_envs: 12288
     stages:
       - name: lowlevel1
         executable: scripts/rlopt/train.py
