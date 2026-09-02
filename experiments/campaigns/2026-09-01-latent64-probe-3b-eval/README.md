@@ -41,3 +41,15 @@ done
 
 Scored rows land in `/data/eval/latent64_probe_3b/<arm>_seed0_clean_f3000238080.json`
 on ICE (`/home/hice1/fwu91/scratch/Research/IsaacLab/data/eval/latent64_probe_3b/`).
+
+## Rows (2026-09-02)
+
+Jobs 5607230 / 5607228 / 5607229 (5607227 died in the flaky Kit startup
+crash and was resubmitted as 5607230). One seed, one checkpoint, preliminary.
+
+| arm | SR | MPJPE-L | MPJPE-G | acc | jerk | action_delta | action_jerk |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `z64_merged` | 0.9102 | 23.89 | 108.82 | 4.42 | 181.5 | 0.754 | 0.701 |
+| `enc_hist` | 0.9111 | 23.44 | 122.25 | 4.48 | 181.7 | 0.752 | 0.692 |
+| `obs_hist` | 0.9026 | 25.09 | 94.74 | 5.08 | 226.1 | 0.908 | 0.954 |
+| `sonic_v1_1` (4096 board) | 0.9888 | 26.73 | 187.7 | 3.45 | - | - | - |
