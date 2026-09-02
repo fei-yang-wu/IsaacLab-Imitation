@@ -124,6 +124,12 @@ def test_trace_records_target_speed_and_action_delta_from_the_observation():
     assert sampler.trace.target_action_delta[1] == pytest.approx(2.0)
     assert sampler.trace.window(sampler.trace.target_root_speed, 0, 1) == 5.0
     assert sampler.trace.window(sampler.trace.target_action_delta, 0, 2) == 2.0
+    # The critic key is the fallback when the policy group has no velocity.
+    td2 = _FakeTd(
+        {("critic", "base_lin_vel"): torch.tensor([[6.0, 8.0, 0.0], [0.0, 0.0, 0.0]])}
+    )
+    sampler.sample_for_step(td2, device="cpu", dtype=torch.float32)
+    assert sampler.trace.target_root_speed[-1] == pytest.approx(10.0)
     # An observation without those keys records NaN and does not raise.
     sampler.sample_for_step(None, device="cpu", dtype=torch.float32)
-    assert len(sampler.trace.target_root_speed) == 3
+    assert len(sampler.trace.target_root_speed) == 4
