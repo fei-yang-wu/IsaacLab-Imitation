@@ -1,0 +1,148 @@
+# 2026-09-01 -- latent64-probe-10b: the three trained arms scored at 3B.
+#
+# One job per arm, `eval_checkpoint_tree.py` on a tree that holds ONLY the 3B
+# milestone: `/data/latent64_probe_3b/<arm>_seed0/tracker/f3000238080/models/
+# model_step_3000238080.pt`, a relative symlink into the training tree under
+# `/data/latent64_probe_10b/` (see README). Board, row, randomization, and the
+# evaluator arguments are the star-v2 curves protocol verbatim
+# (`2026-08-31-star-v2-curves`), so these rows sit on the same board as every
+# star-v2 row: `bones_testbed4096_v1`, clean, `--randomization none`.
+#
+# Per-arm interface fields are copied from the TRAINING campaign
+# `2026-09-01-latent64-probe-10b`: 64-D merged hub encoder + sin_cos phase
+# (command 66) for all three; `enc_hist` binds the past-5 `p5_concat` encoder;
+# `obs_hist` adds the ten-step actor history on the five policy terms.
+name: latent64-probe-3b-eval
+profile: ice
+wandb_project: g1-bs-pareto
+wandb_group: latent64-probe-10b
+
+vars:
+  tree: /data/latent64_probe_3b/${vars.arm}_seed${vars.seed}
+  eval_root: /data/eval/latent64_probe_3b
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  encoder_ckpt: /data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt
+  history_args: []
+
+  head:
+    - --tree
+    - ${vars.tree}
+    - --output_root
+    - ${vars.eval_root}
+    - --arm
+    - ${vars.arm}
+    - --seed
+    - ${vars.seed}
+    - --row
+    - clean
+    - --board
+    - bones_testbed4096_v1
+    - "--"
+    - --task
+    - Isaac-Imitation-G1-v2
+    - --algo
+    - IPMD
+    - --agent_entry_point
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --randomization
+    - none
+    - --action_sampling
+    - mode
+    - --steps
+    - "10000"
+    - --seed
+    - ${vars.seed}
+    - --reference_start_frame
+    - "0"
+    - --reset_schedule
+    - sequential
+    - --skill_encoder_source
+    - pretrained
+    - --headless
+    - physics=newton_mjwarp
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - env.events.push_robot=null
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cuda:0
+    - env.data.reference_prefetch_mode=off
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+
+  interface:
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=66
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=66
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - agent.ipmd.latent_steps_min=1
+    - agent.ipmd.latent_steps_max=1
+    - agent.ipmd.latent_learning.code_period=1
+    - agent.ipmd.latent_learning.command_phase_mode=sin_cos
+    - agent.ipmd.latent_learning.command_phase_source=hold
+    - agent.ipmd.latent_learning.command_phase_period=0
+    - agent.ipmd.latent_learning.code_latent_dim=64
+    - env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]
+    - env.expert_macro_frame_stride=1
+    - env.expert_macro_anchor_mode=robot_heading
+
+  board_terms:
+    - env.terminations.anchor_pos.params.threshold=0.25
+    - env.terminations.anchor_pos.params.down_threshold=0.25
+    - env.terminations.anchor_ori.params.threshold=1.0
+    - env.terminations.ee_body_pos.params.threshold=0.25
+    - env.terminations.ee_body_pos.params.down_threshold=0.25
+    - env.terminations.foot_pos_xyz=null
+    - env.terminations.base_too_low=null
+    - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.policy.activation_fn=silu
+    - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.value_function.activation_fn=silu
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.encoder_ckpt}
+    - ${vars.tree}/tracker/f3000238080/models/model_step_3000238080.pt
+  output_container_path: ${vars.eval_root}
+
+arms:
+  z64_merged:
+    vars: {}
+    stages: &score_stages
+      - name: score
+        executable: scripts/rlopt/eval_checkpoint_tree.py
+        args: ${concat:${vars.head},${vars.interface},${vars.history_args},${vars.board_terms}}
+        time_limit: "02:00:00"
+        gres: gpu:h200:1
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_ISAAC_SIM_CACHE_DIR: /storage/ice-shared/vip-vwt/scratch-fwu91/isaac_cache_curves/l64p_${vars.arm}
+
+  enc_hist:
+    vars:
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt
+    stages: *score_stages
+
+  obs_hist:
+    vars:
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
