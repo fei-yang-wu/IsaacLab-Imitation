@@ -356,3 +356,19 @@ arms:
       optim_args:
         - agent.ipmd.first_layer_bias_lr_scale=2.0
     stages: *probe_stages
+
+  # ---- The optimizer extras on the control itself (2026-09-02). `z64_merged`
+  # ---- plus `optim.weight_decay=1e-2` and the linear critic decay to 1e-5
+  # ---- over the 10B cap (one segment, so `collector.total_frames` is the
+  # ---- whole budget and the ramp is monotone). Phase pair kept. One
+  # ---- variable pair against `z64_merged`; the two extras are not separated
+  # ---- from each other. `nophase_wd_clin` had carried the same pair on the
+  # ---- no-phase interface, which stalls with or without them.
+  z64_wd_clin:
+    vars:
+      wandb_id: l64p-z64wdcl
+      optim_args:
+        - agent.optim.weight_decay=1.0e-2
+        - agent.ipmd.critic_lr_schedule=linear
+        - agent.ipmd.critic_lr_final=1.0e-5
+    stages: *probe_stages
