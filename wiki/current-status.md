@@ -35,6 +35,12 @@ Reference artifacts: ICE
 `/data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt`,
 workstation mirror `logs/latent64_probe_mirror/p5_concat_encoder/latest.pt`.
 
+**No-phase stall reproduced on the LSTM recipe (2026-09-02):**
+`2026-09-02-lstm-hub64-10b` arm `lstm_nophase` (recurrent actor, past-5
+phi, uniform resets, weight decay + critic decay, 12,288 envs, 500M) sits at
+ep_len 44-65 / r_step 0.15 at 480-500M against `lstm`'s 173-179 / 0.19.
+Six no-phase 64-D hold-1 stalls across four recipes, none with the pair.
+
 What the decision rests on, stated as data: one seed, one 3B checkpoint of a
 10B run, `bones_testbed4096_v1` clean -- `enc_hist` 0.9111 / 23.44 / 122.25
 against the no-past control 0.9102 / 23.89 / 108.82 (SR and L inside the
