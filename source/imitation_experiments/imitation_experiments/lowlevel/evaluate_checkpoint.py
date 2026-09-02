@@ -2353,6 +2353,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                         **latent_blend.trace.summary(),
                         "alpha": list(latent_blend.trace.alpha),
                         "code_distance": list(latent_blend.trace.code_distance),
+                        "target_root_speed": list(latent_blend.trace.target_root_speed),
+                        "target_action_delta": list(
+                            latent_blend.trace.target_action_delta
+                        ),
                     }
                     if latent_blend is not None
                     else None
