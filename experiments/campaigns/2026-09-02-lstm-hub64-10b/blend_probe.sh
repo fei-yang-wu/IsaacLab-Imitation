@@ -31,6 +31,30 @@ RAMP="${RAMP:-100}"
 STEPS="${STEPS:-450}"
 ARMS="${ARMS:-lstm_affine lstm}"
 OUT_ROOT="${OUT_ROOT:-${MIRROR}/blend}"
+# TERMINATIONS=board judges env 0 against ITS OWN reference (the walk) with the
+# board's anchor / ee_body_pos terminations, which fire as soon as the blended
+# gait leaves the walk (v4, 2026-09-02: every run ended on ee_body_pos ~10-20
+# steps after the ramp). TERMINATIONS=fall_only (default) drops the
+# reference-relative terminations and keeps the env's fall detector
+# (base_too_low), so survival means "did not fall".
+TERMINATIONS="${TERMINATIONS:-fall_only}"
+if [ "${TERMINATIONS}" = "fall_only" ]; then
+    TERM_ARGS=(
+        env.terminations.anchor_pos=null
+        env.terminations.anchor_ori=null
+        env.terminations.ee_body_pos=null
+        env.terminations.foot_pos_xyz=null
+    )
+else
+    TERM_ARGS=(
+        env.terminations.anchor_pos.params.threshold=0.25
+        env.terminations.anchor_pos.params.down_threshold=0.25
+        env.terminations.anchor_ori.params.threshold=1.0
+        env.terminations.ee_body_pos.params.threshold=0.25
+        env.terminations.ee_body_pos.params.down_threshold=0.25
+        env.terminations.foot_pos_xyz=null env.terminations.base_too_low=null
+    )
+fi
 for arm in ${ARMS}; do
     TRACKER="$(ls "${MIRROR}"/ckpt/"${arm}"_latest_f*.pt 2>/dev/null | sort | tail -1)"
     ENCODER="${HUB_ENCODER}"; ARM_ARGS=()
@@ -44,7 +68,7 @@ for arm in ${ARMS}; do
     for required in "${TRACKER}" "${ENCODER}" "${REFERENCE_ARRAYS}"; do
         [ -e "${required}" ] || { echo "missing input: ${required}" >&2; exit 1; }
     done
-    OUT="${OUT_ROOT}/${arm}_r$(echo ${RANKS} | tr ' ' '-')_s${START}_r${RAMP}"
+    OUT="${OUT_ROOT}/${arm}_r$(echo ${RANKS} | tr ' ' '-')_s${START}_r${RAMP}_${TERMINATIONS}"
     mkdir -p "${OUT}"
     echo "=== ${arm}: ${TRACKER} -> ${OUT}"
     pixi run -e isaaclab python -m imitation_experiments.lowlevel.evaluate_checkpoint \
@@ -70,12 +94,7 @@ for arm in ${ARMS}; do
         env.command_interface.encoder=single \
         'env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]' \
         env.expert_macro_frame_stride=1 env.expert_macro_anchor_mode=robot_heading \
-        env.terminations.anchor_pos.params.threshold=0.25 \
-        env.terminations.anchor_pos.params.down_threshold=0.25 \
-        env.terminations.anchor_ori.params.threshold=1.0 \
-        env.terminations.ee_body_pos.params.threshold=0.25 \
-        env.terminations.ee_body_pos.params.down_threshold=0.25 \
-        env.terminations.foot_pos_xyz=null env.terminations.base_too_low=null \
+        "${TERM_ARGS[@]}" \
         agent.logger.backend= agent.ipmd.command_source=hl_skill \
         agent.ipmd.hl_skill_checkpoint_path="${ENCODER}" \
         agent.ipmd.hl_skill_finetune_enabled=false \
