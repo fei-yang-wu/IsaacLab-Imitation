@@ -173,6 +173,15 @@ vars:
   seg1_args:
     - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
 
+  # Resume segment for arms that cannot finish 10B in one 15:59 window. The
+  # cap stays 10B (the critic ramp and the budget both read it); the
+  # curriculum is over by 30M, so it is off here as in past-chunk.
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
 shared_env:
   CLUSTER_SIM_BACKEND: newton
 
@@ -372,3 +381,61 @@ arms:
         - agent.ipmd.critic_lr_schedule=linear
         - agent.ipmd.critic_lr_final=1.0e-5
     stages: *probe_stages
+
+  # ---- The combination (user, 2026-09-02): the control's std1 recipe with
+  # ---- every lever that scored at or above it stacked -- weight decay 1e-2 +
+  # ---- linear critic decay (`z64_wd_clin` 0.9312 / 22.10 / 90.37 at 7.0B),
+  # ---- the past-5 phi in its AFFINE form (`p5_affine`: past chunk as in
+  # ---- `enc_hist` 0.9304 / 22.57 / 101.66 at 9.5B, phi affine in z as in
+  # ---- `lstm_affine`), and the ten-step actor history (`obs_hist` 0.9233 /
+  # ---- 23.84 / 84.21 at 8.5B). MLP actor, sin_cos phase kept. 16,384
+  # ---- environments because the widened actor input OOMs at 20,480, and
+  # ---- two chained segments because 16,384 x ~150k fps does not reach 10B
+  # ---- in one 15:59 window. Four levers move at once against `z64_merged`;
+  # ---- nothing here attributes to one of them.
+  combo:
+    vars:
+      wandb_id: l64p-combo
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      train_num_envs: 16384
+      optim_args:
+        - agent.optim.weight_decay=1.0e-2
+        - agent.ipmd.critic_lr_schedule=linear
+        - agent.ipmd.critic_lr_final=1.0e-5
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages:
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent64-probe,${vars.arm},seed${vars.seed},lowlevel1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,latent64-probe,${vars.arm},seed${vars.seed},lowlevel2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
