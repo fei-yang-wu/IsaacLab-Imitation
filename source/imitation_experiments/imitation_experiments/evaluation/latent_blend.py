@@ -124,7 +124,11 @@ class LatentBlendSampler:
         delta = float("nan")
         getter = getattr(td, "get", None)
         if callable(getter):
+            # The G1 v2 policy group carries no base_lin_vel; the critic
+            # group does, and both ride in the same observation tensordict.
             vel = getter(("policy", "base_lin_vel"), None)
+            if vel is None:
+                vel = getter(("critic", "base_lin_vel"), None)
             if vel is not None:
                 vel = torch.as_tensor(vel).reshape(-1, vel.shape[-1])
                 if vel.shape[0] > self.target_env:
