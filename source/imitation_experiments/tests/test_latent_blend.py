@@ -124,6 +124,27 @@ def test_trace_records_target_speed_and_action_delta_from_the_observation():
     assert sampler.trace.target_action_delta[1] == pytest.approx(2.0)
     assert sampler.trace.window(sampler.trace.target_root_speed, 0, 1) == 5.0
     assert sampler.trace.window(sampler.trace.target_action_delta, 0, 2) == 2.0
+    # Upright comes from projected gravity: -g_z, the newest frame of a stack.
+    td_up = _FakeTd(
+        {
+            ("policy", "projected_gravity"): torch.tensor(
+                [[0.0, 0.0, -1.0], [0.0, 0.0, -1.0]]
+            )
+        }
+    )
+    sampler.sample_for_step(td_up, device="cpu", dtype=torch.float32)
+    assert sampler.trace.target_upright[-1] == pytest.approx(1.0)
+    td_down = _FakeTd(
+        {
+            ("policy", "projected_gravity"): torch.tensor(
+                [[0.9, 0.0, -0.1], [0.0, 0.0, -1.0]]
+            )
+        }
+    )
+    sampler.sample_for_step(td_down, device="cpu", dtype=torch.float32)
+    assert sampler.trace.target_upright[-1] == pytest.approx(0.1)
+    assert sampler.trace.summary()["fallen_steps"] == 1
+    assert sampler.trace.summary()["upright_min"] == pytest.approx(0.1)
     # The critic key is the fallback when the policy group has no velocity.
     td2 = _FakeTd(
         {("critic", "base_lin_vel"): torch.tensor([[6.0, 8.0, 0.0], [0.0, 0.0, 0.0]])}
@@ -132,4 +153,4 @@ def test_trace_records_target_speed_and_action_delta_from_the_observation():
     assert sampler.trace.target_root_speed[-1] == pytest.approx(10.0)
     # An observation without those keys records NaN and does not raise.
     sampler.sample_for_step(None, device="cpu", dtype=torch.float32)
-    assert len(sampler.trace.target_root_speed) == 4
+    assert len(sampler.trace.target_root_speed) == 6

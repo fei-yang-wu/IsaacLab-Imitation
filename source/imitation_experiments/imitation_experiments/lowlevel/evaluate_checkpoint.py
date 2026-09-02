@@ -2357,6 +2357,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                         "target_action_delta": list(
                             latent_blend.trace.target_action_delta
                         ),
+                        "target_upright": list(latent_blend.trace.target_upright),
                     }
                     if latent_blend is not None
                     else None
