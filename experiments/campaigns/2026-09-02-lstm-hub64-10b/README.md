@@ -35,3 +35,18 @@ for arm in lstm lstm_affine lstm_nophase; do
   # then the printed submit line
 done
 ```
+
+## `lstm_nophase` result (2026-09-02)
+
+Job 5614457 (12,288 envs) finished its 500M budget clean. Matched frames
+against `lstm` (16,384 envs), W&B/log rows:
+
+| frames | `lstm_nophase` ep_len / r_step | `lstm` ep_len / r_step |
+|---|---|---|
+| 310-330M | 46-49 / 0.14 | 99-147 / 0.17 |
+| 480-500M | 44-65 / 0.15 | 173-179 / 0.19 |
+
+Same stall signature as every no-phase 64-D hold-1 arm on record, now on a
+recurrent actor, the past-5 encoder, uniform resets, and the optimizer
+extras. Six stalls across four recipes without the constant (0, 1) pair;
+none with it. One seed; env count differs from `lstm`.
