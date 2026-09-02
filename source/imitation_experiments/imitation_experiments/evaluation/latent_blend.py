@@ -48,11 +48,20 @@ class BlendSchedule:
 
 @dataclass
 class BlendTrace:
-    """Per-step record: alpha and the distance between the two source codes."""
+    """Per-step record: alpha, the distance between the two source codes, and
+    what the target robot did (planar root speed and the size of its action
+    step), read from the policy observation the sampler is handed."""
 
     steps: list[int] = field(default_factory=list)
     alpha: list[float] = field(default_factory=list)
     code_distance: list[float] = field(default_factory=list)
+    target_root_speed: list[float] = field(default_factory=list)
+    target_action_delta: list[float] = field(default_factory=list)
+
+    def window(self, values: list[float], lo: int, hi: int) -> float | None:
+        """Mean of ``values`` over steps in ``[lo, hi)``, ignoring NaNs."""
+        picked = [v for s, v in zip(self.steps, values) if lo <= s < hi and v == v]
+        return sum(picked) / len(picked) if picked else None
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -66,9 +75,9 @@ class BlendTrace:
                 if self.code_distance
                 else None
             ),
-            "code_distance_max": max(self.code_distance)
-            if self.code_distance
-            else None,
+            "code_distance_max": (
+                max(self.code_distance) if self.code_distance else None
+            ),
         }
 
 
@@ -102,19 +111,44 @@ class LatentBlendSampler:
         self.code_dim = int(code_dim)
         self.step = 0
         self.trace = BlendTrace()
+        self._last_action: torch.Tensor | None = None
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal lookup fails, so our own fields stay ours.
         return getattr(self._base, name)
 
+    def _record_target_motion(self, td: Any) -> None:
+        """Root speed and the action step of the target robot, when the
+        observation carries them (the G1 v2 policy group does)."""
+        speed = float("nan")
+        delta = float("nan")
+        getter = getattr(td, "get", None)
+        if callable(getter):
+            vel = getter(("policy", "base_lin_vel"), None)
+            if vel is not None:
+                vel = torch.as_tensor(vel).reshape(-1, vel.shape[-1])
+                if vel.shape[0] > self.target_env:
+                    speed = float(vel[self.target_env, :2].norm().item())
+            act = getter(("policy", "last_action"), None)
+            if act is not None:
+                act = torch.as_tensor(act).reshape(-1, act.shape[-1])
+                if act.shape[0] > self.target_env:
+                    current = act[self.target_env].detach().float().cpu()
+                    if self._last_action is not None:
+                        delta = float((current - self._last_action).norm().item())
+                    self._last_action = current
+        self.trace.target_root_speed.append(speed)
+        self.trace.target_action_delta.append(delta)
+
     @torch.no_grad()
     def sample_for_step(self, td: Any, *, device: Any, dtype: Any) -> torch.Tensor:
         latents = self._base.sample_for_step(td, device=device, dtype=dtype)
         batch = int(latents.shape[0])
-        if batch <= max(self.target_env, self.source_env):
+        needed = max(self.target_env, self.source_env) + 1
+        if batch < needed:
             raise ValueError(
                 f"latent batch of {batch} cannot blend env {self.source_env} into "
-                f"env {self.target_env}; run at least {max(self.target_env, self.source_env) + 1} environments."
+                f"env {self.target_env}; run at least {needed} environments."
             )
         alpha = self.schedule.alpha(self.step)
         z_t = latents[self.target_env, : self.code_dim]
@@ -122,6 +156,7 @@ class LatentBlendSampler:
         self.trace.steps.append(self.step)
         self.trace.alpha.append(alpha)
         self.trace.code_distance.append(float((z_t - z_s).norm().item()))
+        self._record_target_motion(td)
         if alpha > 0.0:
             mixed = latents.clone()
             mixed[self.target_env, : self.code_dim] = (1.0 - alpha) * z_t + alpha * z_s

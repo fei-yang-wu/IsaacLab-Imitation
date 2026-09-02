@@ -85,3 +85,45 @@ def test_blend_refuses_a_batch_too_small_for_the_source_env():
     )
     with pytest.raises(ValueError, match="run at least 6 environments"):
         sampler.sample_for_step(None, device="cpu", dtype=torch.float32)
+
+
+class _FakeTd(dict):
+    def get(self, key, default=None):
+        return dict.get(self, key, default)
+
+
+def test_trace_records_target_speed_and_action_delta_from_the_observation():
+    sampler = LatentBlendSampler(
+        _FakeSampler(),
+        target_env=0,
+        source_env=1,
+        schedule=BlendSchedule(0, 1),
+        code_dim=4,
+    )
+    td0 = _FakeTd(
+        {
+            ("policy", "base_lin_vel"): torch.tensor(
+                [[3.0, 4.0, 9.0], [0.0, 0.0, 0.0]]
+            ),
+            ("policy", "last_action"): torch.tensor([[1.0, 0.0], [5.0, 5.0]]),
+        }
+    )
+    td1 = _FakeTd(
+        {
+            ("policy", "base_lin_vel"): torch.tensor(
+                [[0.0, 1.0, 9.0], [0.0, 0.0, 0.0]]
+            ),
+            ("policy", "last_action"): torch.tensor([[1.0, 2.0], [5.0, 5.0]]),
+        }
+    )
+    sampler.sample_for_step(td0, device="cpu", dtype=torch.float32)
+    sampler.sample_for_step(td1, device="cpu", dtype=torch.float32)
+    assert sampler.trace.target_root_speed == pytest.approx([5.0, 1.0])
+    first = sampler.trace.target_action_delta[0]
+    assert first != first  # NaN: no previous action yet
+    assert sampler.trace.target_action_delta[1] == pytest.approx(2.0)
+    assert sampler.trace.window(sampler.trace.target_root_speed, 0, 1) == 5.0
+    assert sampler.trace.window(sampler.trace.target_action_delta, 0, 2) == 2.0
+    # An observation without those keys records NaN and does not raise.
+    sampler.sample_for_step(None, device="cpu", dtype=torch.float32)
+    assert len(sampler.trace.target_root_speed) == 3
