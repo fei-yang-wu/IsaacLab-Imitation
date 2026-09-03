@@ -31,21 +31,20 @@ Rows are per (pair, setting) episodes; "post" is the window after the ramp
 0.5. Gait distance = mean |joint_t - joint_s| (rad) against the source robot at
 the same step. Settled = target speed within 15% of the source's post-window
 speed for 25 consecutive steps. Stride monotonicity counts only pairs with a
-finite stride estimate at every alpha. The a=0 held rows and the concat
-a=-0.5 row are missing one 20-pair chunk (the job's first evaluator process
-died in the Kit startup flake; resubmitted as 5627651-53). One seed per arm,
+finite stride estimate at every alpha. Every row now covers all 60 pairs
+(three 20-pair chunks were rerun after the Kit startup flake). One seed per arm,
 one tracker per phi, so encoder-init noise is not separated from the phi.
 
 Held mix (test 1):
 
 | arm | alpha | n | fall-free | speed post (m/s) | stride Hz | arm swing (rad) | action delta | gait distance to source |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| affine | 0.00 | 40 | 0.975 | 0.549 | 0.771 | 0.617 | 0.933 | 0.267 |
+| affine | 0.00 | 60 | 0.950 | 0.541 | 0.761 | 0.597 | 0.825 | 0.264 |
 | affine | 0.25 | 60 | 0.950 | 0.469 | 0.786 | 0.509 | 0.983 | 0.205 |
 | affine | 0.50 | 60 | 0.950 | 0.400 | 0.758 | 0.527 | 1.191 | 0.135 |
 | affine | 0.75 | 60 | 0.933 | 0.459 | 0.767 | 0.622 | 1.035 | 0.078 |
 | affine | 1.00 | 60 | 0.933 | 0.555 | 0.744 | 0.706 | 0.965 | 0.041 |
-| concat | 0.00 | 40 | 0.975 | 0.549 | 0.783 | 0.618 | 0.911 | 0.266 |
+| concat | 0.00 | 60 | 0.950 | 0.539 | 0.767 | 0.596 | 0.819 | 0.264 |
 | concat | 0.25 | 60 | 0.933 | 0.451 | 0.772 | 0.511 | 0.952 | 0.208 |
 | concat | 0.50 | 60 | 0.950 | 0.376 | 0.767 | 0.554 | 1.178 | 0.135 |
 | concat | 0.75 | 60 | 0.933 | 0.456 | 0.772 | 0.632 | 1.088 | 0.078 |
@@ -66,7 +65,7 @@ Extrapolation (test 3a):
 | affine | 1.25 | 60 | 0.917 | 0.684 | 1.456 | 0.070 |
 | affine | 1.50 | 60 | 0.800 | 0.777 | 2.134 | 0.106 |
 | affine | 2.00 | 60 | 0.300 | 0.860 | 3.888 | 0.189 |
-| concat | -0.50 | 40 | 0.625 | 0.607 | 2.054 | 0.349 |
+| concat | -0.50 | 60 | 0.683 | 0.595 | 1.834 | 0.343 |
 | concat | 1.25 | 60 | 0.883 | 0.728 | 1.671 | 0.074 |
 | concat | 1.50 | 60 | 0.767 | 0.981 | 2.553 | 0.117 |
 | concat | 2.00 | 60 | 0.050 | 0.799 | 3.864 | 0.217 |
