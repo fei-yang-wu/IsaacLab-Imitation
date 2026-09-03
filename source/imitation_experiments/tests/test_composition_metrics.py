@@ -210,3 +210,20 @@ def test_probe_plan_and_evaluator_args(tmp_path):
     assert args[args.index("--latent_blend_final_alpha") + 1] == "0.5"
     assert "env.terminations.ee_body_pos=null" in args
     assert args[-1] == "agent.ppo.rnn_hidden_size=256"
+
+
+def test_chunk_unique_never_repeats_a_rank_inside_a_process():
+    pairs = [
+        {"a": 1, "b": 2},
+        {"a": 1, "b": 3},
+        {"a": 4, "b": 2},
+        {"a": 5, "b": 6},
+        {"a": 7, "b": 8},
+    ]
+    chunks = chunk_unique(pairs, max_per_chunk=2)
+    for chunk in chunks:
+        ranks = [r for p in chunk for r in (p["a"], p["b"])]
+        assert len(ranks) == len(set(ranks))
+        assert len(chunk) <= 2
+    assert sum(len(c) for c in chunks) == len(pairs)
+    assert chunks[0] == [{"a": 1, "b": 2}, {"a": 5, "b": 6}]

@@ -219,6 +219,34 @@ def evaluator_args(
     return args
 
 
+def chunk_unique(
+    pairs: Sequence[dict[str, Any]], max_per_chunk: int
+) -> list[list[dict[str, Any]]]:
+    """Pack pairs into processes so that no clip rank repeats inside one
+    process (the evaluator pins one rank per environment and refuses
+    duplicates), each chunk holding at most ``max_per_chunk`` pairs."""
+    chunks: list[list[dict[str, Any]]] = []
+    used: list[set[int]] = []
+    for pair in pairs:
+        a, b = int(pair["a"]), int(pair["b"])
+        placed = False
+        for chunk, ranks in zip(chunks, used):
+            if (
+                len(chunk) < max_per_chunk
+                and a not in ranks
+                and b not in ranks
+                and a != b
+            ):
+                chunk.append(pair)
+                ranks.update((a, b))
+                placed = True
+                break
+        if not placed:
+            chunks.append([pair])
+            used.append({a, b})
+    return chunks
+
+
 def run_plan(
     arm: ArmConfig,
     pairs: Sequence[dict[str, Any]],
@@ -235,10 +263,7 @@ def run_plan(
 ) -> list[dict[str, Any]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     index: list[dict[str, Any]] = []
-    chunks = [
-        list(pairs[i : i + pairs_per_process])
-        for i in range(0, len(pairs), pairs_per_process)
-    ]
+    chunks = chunk_unique(pairs, pairs_per_process)
     for setting in plan.settings:
         for chunk_index, chunk in enumerate(chunks):
             out_json = out_dir / f"{arm.name}_{setting.label}_chunk{chunk_index}.json"
