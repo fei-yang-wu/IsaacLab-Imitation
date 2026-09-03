@@ -45,6 +45,49 @@ container's CU130 torch branch; the first submission 5627467-75 died on
 `/data/eval/composition_probe/<arm>/<test>/`; score with
 `python -m imitation_experiments.evaluation.composition_metrics`.
 
+## Composition probe, first rows: held mix and extrapolation, affine vs concat (2026-09-03)
+
+`2026-09-02-composition-probe` on the 10B `lstm` (concat phi) and
+`lstm_affine` (affine phi) checkpoints, 60 clip pairs, one seed, 300 steps,
+Newton, reference-relative terminations off, fall = uprightness below 0.5.
+Alpha 0 rows and the `lstm` alpha -0.5 row have 40 pairs (first-chunk Kit
+crash, refills running); handover rows pending.
+
+| test | alpha | arm | n | fall-free | speed post | stride Hz post | arm swing post | action delta post | gait dist to source | code dist |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| held | 0 | lstm | 40 | 0.975 | 0.549 | 0.783 | 0.618 | 0.911 | 0.266 | 11.1 |
+| held | 0 | lstm_affine | 40 | 0.975 | 0.549 | 0.771 | 0.617 | 0.933 | 0.267 | 8.4 |
+| held | 0.25 | lstm | 60 | 0.933 | 0.451 | 0.772 | 0.511 | 0.952 | 0.208 | 11.8 |
+| held | 0.25 | lstm_affine | 60 | 0.950 | 0.469 | 0.786 | 0.509 | 0.983 | 0.205 | 8.6 |
+| held | 0.5 | lstm | 60 | 0.950 | 0.376 | 0.767 | 0.554 | 1.178 | 0.135 | 12.5 |
+| held | 0.5 | lstm_affine | 60 | 0.950 | 0.400 | 0.758 | 0.527 | 1.191 | 0.135 | 8.8 |
+| held | 0.75 | lstm | 60 | 0.933 | 0.456 | 0.772 | 0.632 | 1.088 | 0.078 | 13.2 |
+| held | 0.75 | lstm_affine | 60 | 0.933 | 0.459 | 0.767 | 0.622 | 1.035 | 0.078 | 9.2 |
+| held | 1 | lstm | 60 | 0.933 | 0.557 | 0.733 | 0.697 | 0.961 | 0.041 | 13.7 |
+| held | 1 | lstm_affine | 60 | 0.933 | 0.555 | 0.744 | 0.706 | 0.965 | 0.041 | 9.2 |
+| extrapolate | -0.5 | lstm | 40 | 0.625 | 0.607 | 0.750 | 1.173 | 2.054 | 0.349 | 11.6 |
+| extrapolate | -0.5 | lstm_affine | 60 | 0.650 | 0.611 | 0.750 | 1.047 | 1.978 | 0.344 | 8.5 |
+| extrapolate | 1.25 | lstm | 60 | 0.883 | 0.728 | 0.756 | 0.773 | 1.671 | 0.074 | 13.7 |
+| extrapolate | 1.25 | lstm_affine | 60 | 0.917 | 0.684 | 0.747 | 0.808 | 1.456 | 0.070 | 9.3 |
+| extrapolate | 1.5 | lstm | 60 | 0.767 | 0.981 | 0.758 | 0.858 | 2.553 | 0.117 | 13.7 |
+| extrapolate | 1.5 | lstm_affine | 60 | 0.800 | 0.777 | 0.719 | 0.857 | 2.134 | 0.106 | 9.1 |
+| extrapolate | 2.0 | lstm | 60 | 0.050 | 0.799 | 0.697 | 1.124 | 3.864 | 0.217 | 13.5 |
+| extrapolate | 2.0 | lstm_affine | 60 | 0.300 | 0.860 | 0.739 | 1.038 | 3.888 | 0.189 | 8.8 |
+
+Per-pair monotonicity across the five alphas (fraction of consecutive
+alpha steps moving toward the alpha=1 value), pairs with all five alphas:
+`lstm` speed 0.76 / stride 0.93 (n=42 with a gait) / arm swing 0.86, fall-free
+at every alpha 55/60; `lstm_affine` speed 0.77 / stride 0.96 (n=47) / arm
+swing 0.82, fall-free at every alpha 56/60. Fall-free at alpha 0.5 by kind is
+identical on both arms: 10/10 on every kind except stand->wave 7/10.
+Source-robot speeds in the post window average 0.54 m/s (the source clips
+include turns, stands and crouches), so "speed post" at alpha 1 matches the
+source and the alpha 0.5 mix runs slower than both ends.
+
+Resolution: 60 pairs resolve about 15% relative on fall-free rate; the only
+gap above that is alpha 2.0 (0.05 vs 0.30). Encoder-init noise on these
+metrics is unmeasured.
+
 ## Final rows: `z64_wd_clin` at 9.5B, the LSTM pair at 10B (2026-09-02)
 
 `2026-09-02-latest-eval`, star-v2 curves protocol, one seed. `z64_wd_clin`
