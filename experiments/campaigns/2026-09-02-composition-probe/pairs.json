@@ -1,0 +1,559 @@
+{
+ "manifest": "/mnt/hsstorage/fwu91/bones_seed_ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1/reference_arrays_manifest.json",
+ "survivors": [
+  "logs/latent64_probe_mirror/eval/lstm_seed0_clean_f4500357120.json",
+  "logs/latent64_probe_mirror/eval/lstm_affine_seed0_clean_f4500357120.json"
+ ],
+ "min_frames": 320,
+ "seed": 0,
+ "pool_sizes": {
+  "walk": 12,
+  "jog": 16,
+  "turn": 14,
+  "stand": 20,
+  "wave": 7,
+  "crouch": 39
+ },
+ "pairs": [
+  {
+   "kind": "walk->jog",
+   "a": 33056,
+   "b": 108376,
+   "a_name": "walk_fast_forward_grab_normal_003_A006_M",
+   "b_name": "jog_ff_loop_180_R_003_A052",
+   "a_frames": 493,
+   "b_frames": 431
+  },
+  {
+   "kind": "walk->jog",
+   "a": 2389,
+   "b": 72648,
+   "a_name": "walk_forward_loop_001_A024_M",
+   "b_name": "jog_arc_cw_loop_001_A048",
+   "a_frames": 1041,
+   "b_frames": 337
+  },
+  {
+   "kind": "walk->jog",
+   "a": 82450,
+   "b": 124307,
+   "a_name": "walk_forward_loop_002_A023_M",
+   "b_name": "jog_forward_loop_002_A033_M",
+   "a_frames": 445,
+   "b_frames": 323
+  },
+  {
+   "kind": "walk->jog",
+   "a": 33056,
+   "b": 73806,
+   "a_name": "walk_fast_forward_grab_normal_003_A006_M",
+   "b_name": "jog_arc_cw_loop_003_A045",
+   "a_frames": 493,
+   "b_frames": 427
+  },
+  {
+   "kind": "walk->jog",
+   "a": 61657,
+   "b": 93848,
+   "a_name": "walk_forward_confident_003_A001_M",
+   "b_name": "jog_arc_cw_loop_R_001_A237",
+   "a_frames": 1142,
+   "b_frames": 384
+  },
+  {
+   "kind": "walk->jog",
+   "a": 84829,
+   "b": 70687,
+   "a_name": "walk_forward_loop_001_A026_M",
+   "b_name": "jog_avoid_bump_270_R_003_A188_M",
+   "a_frames": 784,
+   "b_frames": 329
+  },
+  {
+   "kind": "walk->jog",
+   "a": 82450,
+   "b": 54254,
+   "a_name": "walk_forward_loop_002_A023_M",
+   "b_name": "jog_forward_loop_001_A041",
+   "a_frames": 445,
+   "b_frames": 409
+  },
+  {
+   "kind": "walk->jog",
+   "a": 18272,
+   "b": 54254,
+   "a_name": "walk_forward_grab_relax_002_A005_M",
+   "b_name": "jog_forward_loop_001_A041",
+   "a_frames": 673,
+   "b_frames": 409
+  },
+  {
+   "kind": "walk->jog",
+   "a": 3219,
+   "b": 72648,
+   "a_name": "walk_forward_professional_impro_001_A002",
+   "b_name": "jog_arc_cw_loop_001_A048",
+   "a_frames": 1284,
+   "b_frames": 337
+  },
+  {
+   "kind": "walk->jog",
+   "a": 18272,
+   "b": 50104,
+   "a_name": "walk_forward_grab_relax_002_A005_M",
+   "b_name": "jog_forward_loop_003_A029",
+   "a_frames": 673,
+   "b_frames": 441
+  },
+  {
+   "kind": "walk->turn",
+   "a": 125483,
+   "b": 24280,
+   "a_name": "walk_forward_loop_003_A034_M",
+   "b_name": "walk_arc_cw_loop_R_wave_right_hand_270_R_turn_walk_270_R_002_A495",
+   "a_frames": 557,
+   "b_frames": 610
+  },
+  {
+   "kind": "walk->turn",
+   "a": 85258,
+   "b": 73213,
+   "a_name": "walk_forward_loop_002_A035_M",
+   "b_name": "turn_walk_270_001_A054_M",
+   "a_frames": 412,
+   "b_frames": 354
+  },
+  {
+   "kind": "walk->turn",
+   "a": 61657,
+   "b": 87640,
+   "a_name": "walk_forward_confident_003_A001_M",
+   "b_name": "turn_walk_270_R_walk_ff_loop_315_R_point_dir_horizontal_right_hand_head_000_head_front_R_002_A479_M",
+   "a_frames": 1142,
+   "b_frames": 488
+  },
+  {
+   "kind": "walk->turn",
+   "a": 3219,
+   "b": 73213,
+   "a_name": "walk_forward_professional_impro_001_A002",
+   "b_name": "turn_walk_270_001_A054_M",
+   "a_frames": 1284,
+   "b_frames": 354
+  },
+  {
+   "kind": "walk->turn",
+   "a": 33056,
+   "b": 73213,
+   "a_name": "walk_fast_forward_grab_normal_003_A006_M",
+   "b_name": "turn_walk_270_001_A054_M",
+   "a_frames": 493,
+   "b_frames": 354
+  },
+  {
+   "kind": "walk->turn",
+   "a": 84829,
+   "b": 89988,
+   "a_name": "walk_forward_loop_001_A026_M",
+   "b_name": "turn_walk_270_001_A053_M",
+   "a_frames": 784,
+   "b_frames": 387
+  },
+  {
+   "kind": "walk->turn",
+   "a": 14873,
+   "b": 87640,
+   "a_name": "walk_forward_loop_002_A021",
+   "b_name": "turn_walk_270_R_walk_ff_loop_315_R_point_dir_horizontal_right_hand_head_000_head_front_R_002_A479_M",
+   "a_frames": 597,
+   "b_frames": 488
+  },
+  {
+   "kind": "walk->turn",
+   "a": 61657,
+   "b": 77437,
+   "a_name": "walk_forward_confident_003_A001_M",
+   "b_name": "turn_walk_360_001_A058_M",
+   "a_frames": 1142,
+   "b_frames": 347
+  },
+  {
+   "kind": "walk->turn",
+   "a": 82450,
+   "b": 58218,
+   "a_name": "walk_forward_loop_002_A023_M",
+   "b_name": "walk_ff_loop_180_R_turn_walk_360_R_jog_arc_cw_loop_R_002_A486",
+   "a_frames": 445,
+   "b_frames": 456
+  },
+  {
+   "kind": "walk->turn",
+   "a": 2389,
+   "b": 114003,
+   "a_name": "walk_forward_loop_001_A024_M",
+   "b_name": "turn_jog_360_002_A058",
+   "a_frames": 1041,
+   "b_frames": 327
+  },
+  {
+   "kind": "walk->stand",
+   "a": 82450,
+   "b": 1959,
+   "a_name": "walk_forward_loop_002_A023_M",
+   "b_name": "idle_one_foot_left_003_A042",
+   "a_frames": 445,
+   "b_frames": 970
+  },
+  {
+   "kind": "walk->stand",
+   "a": 3219,
+   "b": 59695,
+   "a_name": "walk_forward_professional_impro_001_A002",
+   "b_name": "idle_turn_360_001_A175_M",
+   "a_frames": 1284,
+   "b_frames": 330
+  },
+  {
+   "kind": "walk->stand",
+   "a": 125483,
+   "b": 1959,
+   "a_name": "walk_forward_loop_003_A034_M",
+   "b_name": "idle_one_foot_left_003_A042",
+   "a_frames": 557,
+   "b_frames": 970
+  },
+  {
+   "kind": "walk->stand",
+   "a": 84829,
+   "b": 75972,
+   "a_name": "walk_forward_loop_001_A026_M",
+   "b_name": "idle_crawl_loop_003_A218",
+   "a_frames": 784,
+   "b_frames": 753
+  },
+  {
+   "kind": "walk->stand",
+   "a": 31865,
+   "b": 23000,
+   "a_name": "walk_forward_professional_003_A001_M",
+   "b_name": "idle_one_foot_left_004_A034_M",
+   "a_frames": 1388,
+   "b_frames": 813
+  },
+  {
+   "kind": "walk->stand",
+   "a": 125483,
+   "b": 35764,
+   "a_name": "walk_forward_loop_003_A034_M",
+   "b_name": "idle_crouch_right_loop_R_002_A194",
+   "a_frames": 557,
+   "b_frames": 793
+  },
+  {
+   "kind": "walk->stand",
+   "a": 125483,
+   "b": 9189,
+   "a_name": "walk_forward_loop_003_A034_M",
+   "b_name": "idle_to_idle_right_003_A148_M",
+   "a_frames": 557,
+   "b_frames": 368
+  },
+  {
+   "kind": "walk->stand",
+   "a": 14873,
+   "b": 107384,
+   "a_name": "walk_forward_loop_002_A021",
+   "b_name": "idle_right_to_spelling_idle_004_A184_M",
+   "a_frames": 597,
+   "b_frames": 432
+  },
+  {
+   "kind": "walk->stand",
+   "a": 14873,
+   "b": 23000,
+   "a_name": "walk_forward_loop_002_A021",
+   "b_name": "idle_one_foot_left_004_A034_M",
+   "a_frames": 597,
+   "b_frames": 813
+  },
+  {
+   "kind": "walk->stand",
+   "a": 13648,
+   "b": 99021,
+   "a_name": "walk_forward_confident_impro_001_A001",
+   "b_name": "idle_crouch_right_loop_R_003_A196",
+   "a_frames": 1364,
+   "b_frames": 509
+  },
+  {
+   "kind": "stand->wave",
+   "a": 74362,
+   "b": 6939,
+   "a_name": "idle_crawl_start_002_A129",
+   "b_name": "steet_taxi_wave_001_A427",
+   "a_frames": 518,
+   "b_frames": 434
+  },
+  {
+   "kind": "stand->wave",
+   "a": 9189,
+   "b": 17175,
+   "a_name": "idle_to_idle_right_003_A148_M",
+   "b_name": "wave_right_hand_000_R_talking_with_child_jog_ff_start_360_R_001_A478",
+   "a_frames": 368,
+   "b_frames": 518
+  },
+  {
+   "kind": "stand->wave",
+   "a": 92731,
+   "b": 17223,
+   "a_name": "idle_turn_360_001_A175",
+   "b_name": "wave_right_hand_360_R_walk_ff_start_225_R_point_dir_vertical_right_hand_head_000_head_front_R_001_A476",
+   "a_frames": 330,
+   "b_frames": 375
+  },
+  {
+   "kind": "stand->wave",
+   "a": 9255,
+   "b": 17175,
+   "a_name": "idle_crawl_right_loop_R_002_A216_M",
+   "b_name": "wave_right_hand_000_R_talking_with_child_jog_ff_start_360_R_001_A478",
+   "a_frames": 665,
+   "b_frames": 518
+  },
+  {
+   "kind": "stand->wave",
+   "a": 99021,
+   "b": 17175,
+   "a_name": "idle_crouch_right_loop_R_003_A196",
+   "b_name": "wave_right_hand_000_R_talking_with_child_jog_ff_start_360_R_001_A478",
+   "a_frames": 509,
+   "b_frames": 518
+  },
+  {
+   "kind": "stand->wave",
+   "a": 9255,
+   "b": 31349,
+   "a_name": "idle_crawl_right_loop_R_002_A216_M",
+   "b_name": "wave_right_hand_180_R_turn_walk_270_R_walk_ff_loop_225_R_001_A478_M",
+   "a_frames": 665,
+   "b_frames": 524
+  },
+  {
+   "kind": "stand->wave",
+   "a": 35764,
+   "b": 61973,
+   "a_name": "idle_crouch_right_loop_R_002_A194",
+   "b_name": "jog_arc_cw_stop_R_wave_right_hand_270_R_turn_walk_360_R_005_A477_M",
+   "a_frames": 793,
+   "b_frames": 492
+  },
+  {
+   "kind": "stand->wave",
+   "a": 99021,
+   "b": 14467,
+   "a_name": "idle_crouch_right_loop_R_003_A196",
+   "b_name": "steet_taxi_wave_001_A425",
+   "a_frames": 509,
+   "b_frames": 536
+  },
+  {
+   "kind": "stand->wave",
+   "a": 119403,
+   "b": 31349,
+   "a_name": "idle_one_foot_left_001_A031_M",
+   "b_name": "wave_right_hand_180_R_turn_walk_270_R_walk_ff_loop_225_R_001_A478_M",
+   "a_frames": 1353,
+   "b_frames": 524
+  },
+  {
+   "kind": "stand->wave",
+   "a": 107384,
+   "b": 17175,
+   "a_name": "idle_right_to_spelling_idle_004_A184_M",
+   "b_name": "wave_right_hand_000_R_talking_with_child_jog_ff_start_360_R_001_A478",
+   "a_frames": 432,
+   "b_frames": 518
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 87288,
+   "b": 3219,
+   "a_name": "crouch_ff_start_360_R_003_A244_M",
+   "b_name": "walk_forward_professional_impro_001_A002",
+   "a_frames": 428,
+   "b_frames": 1284
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 123495,
+   "b": 33056,
+   "a_name": "crouch_ff_stop_225_R_001_A248_M",
+   "b_name": "walk_fast_forward_grab_normal_003_A006_M",
+   "a_frames": 396,
+   "b_frames": 493
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 55255,
+   "b": 84829,
+   "a_name": "crouch_ff_loop_270_002_A145_M",
+   "b_name": "walk_forward_loop_001_A026_M",
+   "a_frames": 353,
+   "b_frames": 784
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 39462,
+   "b": 18272,
+   "a_name": "item_pick_up_crouch_idle_R_001_A548",
+   "b_name": "walk_forward_grab_relax_002_A005_M",
+   "a_frames": 347,
+   "b_frames": 673
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 23788,
+   "b": 14873,
+   "a_name": "yawn_R_walk_ff_start_360_R_crouch_idle_R_002_A474_M",
+   "b_name": "walk_forward_loop_002_A021",
+   "a_frames": 538,
+   "b_frames": 597
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 23788,
+   "b": 2389,
+   "a_name": "yawn_R_walk_ff_start_360_R_crouch_idle_R_002_A474_M",
+   "b_name": "walk_forward_loop_001_A024_M",
+   "a_frames": 538,
+   "b_frames": 1041
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 40810,
+   "b": 61657,
+   "a_name": "crouch_ff_stop_225_R_006_A194_M",
+   "b_name": "walk_forward_confident_003_A001_M",
+   "a_frames": 345,
+   "b_frames": 1142
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 14005,
+   "b": 3219,
+   "a_name": "crouch_ff_stop_270_002_A126_M",
+   "b_name": "walk_forward_professional_impro_001_A002",
+   "a_frames": 359,
+   "b_frames": 1284
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 19983,
+   "b": 13648,
+   "a_name": "squat_003_A361",
+   "b_name": "walk_forward_confident_impro_001_A001",
+   "a_frames": 423,
+   "b_frames": 1364
+  },
+  {
+   "kind": "crouch->walk",
+   "a": 10881,
+   "b": 3219,
+   "a_name": "crouch_ff_stop_225_R_002_A244",
+   "b_name": "walk_forward_professional_impro_001_A002",
+   "a_frames": 454,
+   "b_frames": 1284
+  },
+  {
+   "kind": "jog->turn",
+   "a": 97280,
+   "b": 126243,
+   "a_name": "jog_arc_cw_loop_001_A181",
+   "b_name": "turn_walk_270_R_jog_ff_loop_225_R_point_dir_vertical_right_hand_360_head_front_R_001_A484",
+   "a_frames": 557,
+   "b_frames": 367
+  },
+  {
+   "kind": "jog->turn",
+   "a": 72648,
+   "b": 87640,
+   "a_name": "jog_arc_cw_loop_001_A048",
+   "b_name": "turn_walk_270_R_walk_ff_loop_315_R_point_dir_horizontal_right_hand_head_000_head_front_R_002_A479_M",
+   "a_frames": 337,
+   "b_frames": 488
+  },
+  {
+   "kind": "jog->turn",
+   "a": 72261,
+   "b": 126243,
+   "a_name": "jog_arc_cw_loop_002_A181",
+   "b_name": "turn_walk_270_R_jog_ff_loop_225_R_point_dir_vertical_right_hand_360_head_front_R_001_A484",
+   "a_frames": 427,
+   "b_frames": 367
+  },
+  {
+   "kind": "jog->turn",
+   "a": 70687,
+   "b": 89988,
+   "a_name": "jog_avoid_bump_270_R_003_A188_M",
+   "b_name": "turn_walk_270_001_A053_M",
+   "a_frames": 329,
+   "b_frames": 387
+  },
+  {
+   "kind": "jog->turn",
+   "a": 108376,
+   "b": 89760,
+   "a_name": "jog_ff_loop_180_R_003_A052",
+   "b_name": "turn_walk_360_001_A061",
+   "a_frames": 431,
+   "b_frames": 332
+  },
+  {
+   "kind": "jog->turn",
+   "a": 72648,
+   "b": 77437,
+   "a_name": "jog_arc_cw_loop_001_A048",
+   "b_name": "turn_walk_360_001_A058_M",
+   "a_frames": 337,
+   "b_frames": 347
+  },
+  {
+   "kind": "jog->turn",
+   "a": 124307,
+   "b": 89988,
+   "a_name": "jog_forward_loop_002_A033_M",
+   "b_name": "turn_walk_270_001_A053_M",
+   "a_frames": 323,
+   "b_frames": 387
+  },
+  {
+   "kind": "jog->turn",
+   "a": 93848,
+   "b": 24280,
+   "a_name": "jog_arc_cw_loop_R_001_A237",
+   "b_name": "walk_arc_cw_loop_R_wave_right_hand_270_R_turn_walk_270_R_002_A495",
+   "a_frames": 384,
+   "b_frames": 610
+  },
+  {
+   "kind": "jog->turn",
+   "a": 76357,
+   "b": 89760,
+   "a_name": "jog_ff_loop_180_R_002_A045_M",
+   "b_name": "turn_walk_360_001_A061",
+   "a_frames": 825,
+   "b_frames": 332
+  },
+  {
+   "kind": "jog->turn",
+   "a": 50104,
+   "b": 77437,
+   "a_name": "jog_forward_loop_003_A029",
+   "b_name": "turn_walk_360_001_A058_M",
+   "a_frames": 441,
+   "b_frames": 347
+  }
+ ]
+}

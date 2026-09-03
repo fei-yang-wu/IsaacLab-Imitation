@@ -307,7 +307,23 @@ parser.add_argument(
 parser.add_argument("--latent_blend_target_env", type=int, default=0)
 parser.add_argument("--latent_blend_start_step", type=int, default=0)
 parser.add_argument("--latent_blend_ramp_steps", type=int, default=1)
-parser.add_argument("--latent_blend_final_alpha", type=float, default=1.0)
+parser.add_argument(
+    "--latent_blend_final_alpha",
+    type=float,
+    default=1.0,
+    help="Held alpha after the ramp; outside [0, 1] extrapolates along z_s - z_t.",
+)
+parser.add_argument(
+    "--latent_blend_layout",
+    choices=["single", "pairs", "triples"],
+    default="single",
+    help=(
+        "single: one (--latent_blend_target_env <- --latent_blend_source_env) "
+        "pair. pairs: environments (2i, 2i+1) as (target, source), every i. "
+        "triples: (3i, 3i+1, 3i+2) as (target, source, minus) for the additive "
+        "form z_t + a (z_s - z_m). pairs/triples need no source/target flags."
+    ),
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -573,11 +589,14 @@ def _as_torch(value: Any) -> Any:
 
 def _install_latent_blend(agent: Any) -> Any:
     """Wrap the frozen hl_skill sampler with the composability blend, if asked."""
-    if args_cli.latent_blend_source_env is None:
+    layout = str(args_cli.latent_blend_layout)
+    if layout == "single" and args_cli.latent_blend_source_env is None:
         return None
     from imitation_experiments.evaluation.latent_blend import (  # noqa: PLC0415
         BlendSchedule,
         LatentBlendSampler,
+        pair_specs,
+        triple_specs,
     )
 
     base = getattr(agent, "_hl_skill_command_sampler", None)
@@ -594,23 +613,35 @@ def _install_latent_blend(agent: Any) -> Any:
             else 0
         )
         code_dim = int(agent.config.ipmd.latent_dim) - phase_dim
+    schedule = BlendSchedule(
+        start_step=int(args_cli.latent_blend_start_step),
+        ramp_steps=int(args_cli.latent_blend_ramp_steps),
+        final_alpha=float(args_cli.latent_blend_final_alpha),
+    )
+    num_envs = int(args_cli.num_envs)
+    if layout == "pairs":
+        specs = pair_specs(num_envs)
+    elif layout == "triples":
+        specs = triple_specs(num_envs)
+    else:
+        specs = None
     blend = LatentBlendSampler(
         base,
+        specs=specs,
         target_env=int(args_cli.latent_blend_target_env),
-        source_env=int(args_cli.latent_blend_source_env),
-        schedule=BlendSchedule(
-            start_step=int(args_cli.latent_blend_start_step),
-            ramp_steps=int(args_cli.latent_blend_ramp_steps),
-            final_alpha=float(args_cli.latent_blend_final_alpha),
+        source_env=(
+            int(args_cli.latent_blend_source_env)
+            if args_cli.latent_blend_source_env is not None
+            else None
         ),
+        schedule=schedule,
         code_dim=code_dim,
     )
     agent._hl_skill_command_sampler = blend
     print(
-        f"[INFO] latent blend: env {blend.source_env} -> env {blend.target_env}, "
-        f"alpha 0 -> {blend.schedule.final_alpha} from step "
-        f"{blend.schedule.start_step} over {blend.schedule.ramp_steps} steps, "
-        f"code_dim={code_dim}"
+        f"[INFO] latent blend ({layout}): {len(blend.specs)} spec(s), "
+        f"alpha 0 -> {schedule.final_alpha} from step {schedule.start_step} "
+        f"over {schedule.ramp_steps} steps, code_dim={code_dim}"
     )
     return blend
 
@@ -2345,6 +2376,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 "video_dir": str(video_dir) if video_dir is not None else None,
                 "latent_blend": (
                     {
+                        **latent_blend.summary(),
+                        "traces": latent_blend.traces_as_dict(),
+                        # Flat keys of the first target, for the single-pair readers.
                         "target_env": latent_blend.target_env,
                         "source_env": latent_blend.source_env,
                         "start_step": latent_blend.schedule.start_step,
@@ -2353,11 +2387,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                         **latent_blend.trace.summary(),
                         "alpha": list(latent_blend.trace.alpha),
                         "code_distance": list(latent_blend.trace.code_distance),
-                        "target_root_speed": list(latent_blend.trace.target_root_speed),
-                        "target_action_delta": list(
-                            latent_blend.trace.target_action_delta
-                        ),
-                        "target_upright": list(latent_blend.trace.target_upright),
+                        "target_root_speed": list(latent_blend.trace.root_speed),
+                        "target_action_delta": list(latent_blend.trace.action_delta),
+                        "target_upright": list(latent_blend.trace.upright),
                     }
                     if latent_blend is not None
                     else None
