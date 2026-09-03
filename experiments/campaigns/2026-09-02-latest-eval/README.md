@@ -50,6 +50,7 @@ in two segments (resume from 8.5B). Earlier rows of the same arms: 7.0B
 | `z64_wd_clin` | 9.50B (walltime end) | 0.9395 | 21.74 | 83.84 | 4.28 | 180.1 | 0.771 |
 | `lstm` | 10.0B (final) | 0.9121 | 21.24 | 103.11 | 4.76 | 207.0 | 0.857 |
 | `lstm_affine` | 10.0B (final) | 0.9062 | 22.27 | 110.63 | 4.78 | 205.4 | 0.878 |
+| `combo` | 10.0B (final) | 0.9214 | 22.64 | 88.52 | 4.53 | 195.5 | 0.840 |
 | `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
 
 ## Final-checkpoint rows (2026-09-02 evening, jobs 5627493 / 5627487 / 5627490)
