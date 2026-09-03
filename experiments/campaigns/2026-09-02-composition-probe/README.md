@@ -99,3 +99,50 @@ median settling time among those is 26-37 steps for affine and 37-47 for
 concat. Resolution: 60 pairs resolve about 15% relative on a rate; the alpha
 2.0 extrapolation (0.05 vs 0.30) is the only gap above it. One seed per arm,
 encoder-init noise unmeasured on these metrics.
+
+## `combo` added (2026-09-03): a second affine tracker
+
+Jobs 5629658 / 5629659 / 5629660, all COMPLETED with no failed chunk
+(30 / 54 / 24). `combo` is the affine past-5 encoder on an MLP actor with
+ten-step history, weight decay and critic decay, 10B. Same 60 pairs.
+
+Handover, pooled over switch steps:
+
+| arm (phi) | ramp | n | fall-free | settled | settling median | peak action step | action delta post | gait dist |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| lstm (concat) | 0 | 180 | 0.928 | 0.217 | 41 | 5.26 | 1.43 | 0.064 |
+| lstm_affine (affine) | 0 | 180 | 0.933 | 0.206 | 26 | 4.54 | 1.35 | 0.067 |
+| combo (affine, MLP+hist) | 0 | 180 | 0.939 | 0.250 | 27 | 9.61 | 4.32 | 0.067 |
+| lstm | 10 | 180 | 0.928 | 0.222 | 37.5 | 4.77 | 1.35 | 0.059 |
+| lstm_affine | 10 | 180 | 0.933 | 0.228 | 28 | 4.34 | 1.29 | 0.061 |
+| combo | 10 | 180 | 0.950 | 0.233 | 32 | 7.89 | 3.97 | 0.061 |
+| lstm | 50 | 180 | 0.922 | 0.200 | 47 | 3.72 | 1.22 | 0.050 |
+| lstm_affine | 50 | 180 | 0.939 | 0.183 | 37 | 3.52 | 1.22 | 0.050 |
+| combo | 50 | 180 | 0.950 | 0.228 | 55 | 6.24 | 3.62 | 0.050 |
+
+Fall-free rate, held mix:
+
+| alpha | lstm | lstm_affine | combo |
+|---:|---:|---:|---:|
+| 0 | 0.950 | 0.950 | 0.950 |
+| 0.25 | 0.933 | 0.950 | 0.950 |
+| 0.5 | 0.950 | 0.950 | 0.950 |
+| 0.75 | 0.933 | 0.933 | 0.933 |
+| 1 | 0.933 | 0.933 | 0.933 |
+
+Fall-free rate, extrapolation:
+
+| alpha | lstm | lstm_affine | combo |
+|---:|---:|---:|---:|
+| -0.5 | 0.683 | 0.650 | 0.700 |
+| 1.25 | 0.883 | 0.917 | 0.933 |
+| 1.5 | 0.767 | 0.800 | 0.750 |
+| 2.0 | 0.050 | 0.300 | 0.300 |
+
+Monotonicity across the five held alphas (60 pairs each): speed 0.74 / 0.75 /
+0.73, stride 0.94 / 0.96 / 0.95, arm swing 0.84 / 0.80 / 0.82 for lstm /
+lstm_affine / combo; fall-free at every alpha 55 / 56 / 56 of 60. Code
+distance between the two skills is 11.2-13.7 under concat and 8.5-9.2 under
+both affine arms at every alpha. `combo`'s action-space numbers are on a
+different scale (its actor reads a ten-step history), so its action delta and
+peak step are comparable only to itself.

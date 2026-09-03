@@ -106,6 +106,59 @@ container's CU130 torch branch; the first submission 5627467-75 died on
 `/data/eval/composition_probe/<arm>/<test>/`; score with
 `python -m imitation_experiments.evaluation.composition_metrics`.
 
+## Composition probe: `combo` joins as a second affine tracker (2026-09-03)
+
+`2026-09-02-composition-probe` arms `combo_held` / `combo_handover` /
+`combo_extrapolate` (jobs 5629658-5629660) completed with no failed chunk.
+`combo` is the affine past-5 encoder on an MLP actor with the ten-step
+history plus the optimizer extras, 10B; same 60 pairs, one seed.
+
+Handover, pooled over switch steps (fall-free, settled rate, settling
+median in steps, peak action step, action delta post, gait distance):
+
+| arm (phi) | ramp | n | fall-free | settled | settling median | peak action step | action delta post | gait dist |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| lstm (concat) | 0 | 180 | 0.928 | 0.217 | 41 | 5.26 | 1.43 | 0.064 |
+| lstm_affine (affine) | 0 | 180 | 0.933 | 0.206 | 26 | 4.54 | 1.35 | 0.067 |
+| combo (affine, MLP+hist) | 0 | 180 | 0.939 | 0.250 | 27 | 9.61 | 4.32 | 0.067 |
+| lstm | 10 | 180 | 0.928 | 0.222 | 37.5 | 4.77 | 1.35 | 0.059 |
+| lstm_affine | 10 | 180 | 0.933 | 0.228 | 28 | 4.34 | 1.29 | 0.061 |
+| combo | 10 | 180 | 0.950 | 0.233 | 32 | 7.89 | 3.97 | 0.061 |
+| lstm | 50 | 180 | 0.922 | 0.200 | 47 | 3.72 | 1.22 | 0.050 |
+| lstm_affine | 50 | 180 | 0.939 | 0.183 | 37 | 3.52 | 1.22 | 0.050 |
+| combo | 50 | 180 | 0.950 | 0.228 | 55 | 6.24 | 3.62 | 0.050 |
+
+Fall-free rate, held mix:
+
+| alpha | lstm | lstm_affine | combo |
+|---:|---:|---:|---:|
+| 0 | 0.950 | 0.950 | 0.950 |
+| 0.25 | 0.933 | 0.950 | 0.950 |
+| 0.5 | 0.950 | 0.950 | 0.950 |
+| 0.75 | 0.933 | 0.933 | 0.933 |
+| 1 | 0.933 | 0.933 | 0.933 |
+
+Fall-free rate, extrapolation:
+
+| alpha | lstm | lstm_affine | combo |
+|---:|---:|---:|---:|
+| -0.5 | 0.683 | 0.650 | 0.700 |
+| 1.25 | 0.883 | 0.917 | 0.933 |
+| 1.5 | 0.767 | 0.800 | 0.750 |
+| 2.0 | 0.050 | 0.300 | 0.300 |
+
+Monotonicity across the five held alphas (60 pairs each): speed 0.74 / 0.75 /
+0.73, stride 0.94 / 0.96 / 0.95, arm swing 0.84 / 0.80 / 0.82 for lstm /
+lstm_affine / combo; fall-free at every alpha 55 / 56 / 56 of 60. Code
+distance between the two skills is 11.2-13.7 under concat and 8.5-9.2 under
+both affine arms at every alpha. `combo`'s action-space numbers are on a
+different scale (its actor reads a ten-step history), so its action delta and
+peak step are comparable only to itself.
+
+`combo`'s tracking row at its 10B checkpoint (same board and protocol as the
+other latest-eval rows): 0.9214 SR / 22.64 MPJPE-L / 88.52 MPJPE-G / acc
+4.53 / jerk 195.5 / action_delta 0.840.
+
 ## Composition probe COMPLETE: held mix, handover, extrapolation, affine vs concat (2026-09-03)
 
 `2026-09-02-composition-probe` on the 10B `lstm` (concat phi) and
