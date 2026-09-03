@@ -31,6 +31,19 @@ from typing import Any, Sequence
 from imitation_experiments.paths import REPO_ROOT
 
 RUN_EVALUATOR = REPO_ROOT / "scripts" / "rlopt" / "run_evaluator.py"
+ISAAC_PYTHON_SH = Path("/isaac-sim/python.sh")
+
+
+def default_python() -> str:
+    """The interpreter to spawn the evaluator with.
+
+    Inside the Isaac Lab container the parent was started through
+    ``/isaac-sim/python.sh`` (Kit's wrapper sets the library paths and the
+    Kit PYTHONPATH); spawning ``sys.executable`` directly skips that wrapper.
+    Elsewhere (the workstation pixi environment) ``sys.executable`` is right.
+    """
+    return str(ISAAC_PYTHON_SH) if ISAAC_PYTHON_SH.exists() else sys.executable
+
 
 BODY_NAMES = (
     "[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,"
@@ -350,7 +363,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--persist-id", default="bones_seed_sonic_full_129785@e714bbff")
     parser.add_argument("--physics", default="newton_mjwarp")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--python", default=sys.executable)
+    parser.add_argument(
+        "--python",
+        default=None,
+        help="interpreter for the evaluator (default: /isaac-sim/python.sh inside the container, else this interpreter)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
@@ -395,7 +412,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         seed=args.seed,
         pairs_per_process=args.pairs_per_process,
         dry_run=args.dry_run,
-        python=args.python,
+        python=args.python or default_python(),
     )
     failed = [e for e in index if str(e.get("status", "")).startswith("failed")]
     print(f"[PROBE] done: {len(index)} runs, {len(failed)} failed")

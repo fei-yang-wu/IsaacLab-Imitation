@@ -1,6 +1,7 @@
 # 2026-09-02 -- skill-composition probes: does the affine phi compose better?
 #
-# One job per (arm, test). Each job runs `scripts/rlopt/composition_probe.py`,
+# One job per (arm, test). Each job runs `scripts/rlopt/eval_composition_probe.py`
+# (the `eval*.py` name selects the container's CU130 torch branch),
 # which spawns one evaluator process per setting on the same 60 clip pairs
 # (`pairs.json`, drawn 2026-09-02 from clips both LSTM arms complete on the
 # 4,096 board at 4.5B, >= 320 frames, six category pairs x 10). Inside a
@@ -80,7 +81,7 @@ arms:
       test: held_alpha
     stages: &probe_stages
       - name: probe
-        executable: scripts/rlopt/composition_probe.py
+        executable: scripts/rlopt/eval_composition_probe.py
         args: ${vars.probe_args}
         time_limit: "06:00:00"
         gres: gpu:h200:1

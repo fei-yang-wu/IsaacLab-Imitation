@@ -24,7 +24,9 @@ arms complete on the 4,096 board at 4.5B, seed 0. A clip may recur across
 pairs; the driver packs pairs into processes so no rank repeats inside one
 process (the evaluator pins one rank per environment).
 
-Mechanics: `scripts/rlopt/composition_probe.py` ->
+Mechanics: `scripts/rlopt/eval_composition_probe.py` (the `eval*.py` name
+selects the container's CU130 torch branch; the first submission under
+another name died on an NCCL symbol) ->
 `imitation_experiments.evaluation.composition_probe` -> one
 `evaluate_checkpoint` process per setting through `scripts/rlopt/run_evaluator.py`,
 `--latent_blend_layout pairs`, reference-relative terminations off, Newton.
