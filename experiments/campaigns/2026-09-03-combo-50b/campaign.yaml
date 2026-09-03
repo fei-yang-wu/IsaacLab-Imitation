@@ -88,12 +88,47 @@ vars:
     - env.rewards.motion_global_anchor_pos_wide.weight=1.0
     - env.rewards.action_rate_l2.weight=-0.03
 
-  # The control's `select_std`: reset selection and curriculum verbatim.
-  select_std:
-    - env.command_interface.reference.selection=random80_adaptive20
+  # RESET SCHEDULE (user, 2026-09-03): ramp the reset mix from 80% uniform /
+  # 20% failure-drawn to 20% / 80%, so late training concentrates on the
+  # frames where the tracker terminates.
+  #
+  # The ramp drives `SonicAdaptiveResetSampler.uniform_sampling_rate` and is
+  # only legal under `selection=sonic`: `random80_adaptive20` puts the
+  # adaptive sampler INSIDE a random-trajectory wrapper that takes 80% of
+  # resets, so a ramp there would rescale the remaining 20% only (the
+  # `cont_det_hold1_resetramp` near-no-op of 2026-08-28, and the config
+  # refuses the combination). Switching to `sonic` therefore also drops the
+  # random first-half start frames: SONIC picks rank AND frame jointly from
+  # its bin distribution. That is a second change against the 10B `combo`
+  # row, which ran `random80_adaptive20` throughout.
+  #
+  # `_advance_adaptive_ratio_curriculum` reads `common_step_counter`, which
+  # RESTARTS every segment, so a ramp has to finish inside the segment that
+  # starts it. A segment buys about 8.6B at ~150k fps, so the ramp is split
+  # into two 4B stages: 0.8 -> 0.5 inside segment 1, 0.5 -> 0.2 inside
+  # segment 2, pinned 0.2 from segment 3. That reaches 20/80 by roughly 13B
+  # and holds it for the remaining 37B.
+  select_ramp1:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.5
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=4000000000
     - env.enable_termination_curriculum=true
     - env.termination_curriculum_start_frames=5000000
     - env.termination_curriculum_end_frames=30000000
+
+  select_ramp2:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.5
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=4000000000
+    - env.enable_termination_curriculum=false
+
+  select_hold:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.2
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+    - env.enable_termination_curriculum=false
 
   lowlevel_head:
     - --task
@@ -172,7 +207,6 @@ vars:
   # The curriculum is over by 30M, so it is off from segment 2 on.
   seg2_args:
     - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
-    - env.enable_termination_curriculum=false
     - --checkpoint
     - ${vars.output_root}/tracker
 
@@ -192,7 +226,7 @@ arms:
     stages:
       - name: lowlevel1
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_ramp1},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         time_limit: "15:59:00"
         gres: gpu:h200:1
         partition: coe-gpu
@@ -206,7 +240,7 @@ arms:
           WANDB_RESUME: allow
       - name: lowlevel2
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_ramp2},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel1
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -222,7 +256,7 @@ arms:
           WANDB_RESUME: allow
       - name: lowlevel3
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel2
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -238,7 +272,7 @@ arms:
           WANDB_RESUME: allow
       - name: lowlevel4
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel3
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -254,7 +288,7 @@ arms:
           WANDB_RESUME: allow
       - name: lowlevel5
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel4
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -270,7 +304,7 @@ arms:
           WANDB_RESUME: allow
       - name: lowlevel6
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel5
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -286,7 +320,7 @@ arms:
           WANDB_RESUME: allow
       - name: lowlevel7
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel6
         dependency_kind: afterany
         time_limit: "15:59:00"
