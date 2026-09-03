@@ -1,0 +1,125 @@
+# 2026-09-02 -- skill-composition probes: does the affine phi compose better?
+#
+# One job per (arm, test). Each job runs `scripts/rlopt/composition_probe.py`,
+# which spawns one evaluator process per setting on the same 60 clip pairs
+# (`pairs.json`, drawn 2026-09-02 from clips both LSTM arms complete on the
+# 4,096 board at 4.5B, >= 320 frames, six category pairs x 10). Inside a
+# process each pair is two environments (target, source); the target's
+# published code is z_t + a (z_s - z_t). Reference-relative terminations are
+# off (they fire on any gait change); uprightness is traced per step.
+#
+#   held_alpha:  a held from step 0 at {0, 0.25, 0.5, 0.75, 1}, 300 steps
+#   handover:    walk on, switch at {150, 160, 170} with ramps {0, 10, 50}, 300 steps
+#   extrapolate: a held at {-0.5, 1.25, 1.5, 2.0}
+#
+# Arms: `lstm` (concat phi) and `lstm_affine` (affine phi), both from
+# `2026-09-02-lstm-hub64-10b` at their newest checkpoint (10B, finished
+# 2026-09-02 ~20:00); `combo` (affine phi, MLP actor, ten-step history) when
+# its 10B run finishes. Newton physics, the scored backend. Score with
+# `python -m imitation_experiments.evaluation.composition_metrics --results <out>`.
+name: composition-probe
+profile: ice
+wandb_project: g1-bs-pareto
+wandb_group: composition-probe
+
+vars:
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  pairs: experiments/campaigns/2026-09-02-composition-probe/pairs.json
+  out_root: /data/eval/composition_probe
+  tree: /data/lstm_hub64_10b/${vars.tracker_arm}_seed0/tracker
+  encoder_ckpt: /data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt
+  actor_override: agent.ppo.rnn_hidden_size=256
+  test: held_alpha
+  steps: 300
+  pairs_per_process: 64
+
+  probe_args:
+    - --arm
+    - ${vars.tracker_arm}
+    - --checkpoint
+    - newest:${vars.tree}
+    - --encoder
+    - ${vars.encoder_ckpt}
+    - --override
+    - ${vars.actor_override}
+    - --pairs
+    - ${vars.pairs}
+    - --test
+    - ${vars.test}
+    - --steps
+    - ${vars.steps}
+    - --pairs-per-process
+    - ${vars.pairs_per_process}
+    - --out
+    - ${vars.out_root}/${vars.tracker_arm}
+    - --reference-arrays
+    - ${vars.ref_arrays}
+    - --persist-id
+    - ${vars.persist_id}
+    - --physics
+    - newton_mjwarp
+    - --seed
+    - "0"
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.encoder_ckpt}
+    - ${vars.tree}
+  output_container_path: ${vars.out_root}
+
+arms:
+  lstm_affine_held:
+    vars:
+      tracker_arm: lstm_affine
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      test: held_alpha
+    stages: &probe_stages
+      - name: probe
+        executable: scripts/rlopt/composition_probe.py
+        args: ${vars.probe_args}
+        time_limit: "06:00:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_ISAAC_SIM_CACHE_DIR: /storage/ice-shared/vip-vwt/scratch-fwu91/isaac_cache_curves/compose_${vars.arm}
+
+  lstm_held:
+    vars:
+      tracker_arm: lstm
+      test: held_alpha
+    stages: *probe_stages
+
+  lstm_affine_handover:
+    vars:
+      tracker_arm: lstm_affine
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      test: handover
+    stages: *probe_stages
+
+  lstm_handover:
+    vars:
+      tracker_arm: lstm
+      test: handover
+    stages: *probe_stages
+
+  lstm_affine_extrapolate:
+    vars:
+      tracker_arm: lstm_affine
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      test: extrapolate
+    stages: *probe_stages
+
+  lstm_extrapolate:
+    vars:
+      tracker_arm: lstm
+      test: extrapolate
+    stages: *probe_stages

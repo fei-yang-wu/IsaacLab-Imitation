@@ -336,7 +336,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=300)
     parser.add_argument(
-        "--alphas", type=float, nargs="*", default=[0.0, 0.25, 0.5, 0.75, 1.0]
+        "--alphas",
+        type=float,
+        nargs="*",
+        default=None,
+        help="held_alpha default 0 .25 .5 .75 1; extrapolate default -0.5 1.25 1.5 2.0",
     )
     parser.add_argument("--ramps", type=int, nargs="*", default=[0, 10, 50])
     parser.add_argument("--switch-steps", type=int, nargs="*", default=[150, 160, 170])
@@ -362,10 +366,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         agent_entry_point=args.agent_entry_point,
         extra_overrides=tuple(args.override),
     )
+    alphas = args.alphas
+    if alphas is None:
+        alphas = (
+            [-0.5, 1.25, 1.5, 2.0]
+            if args.test == "extrapolate"
+            else [0.0, 0.25, 0.5, 0.75, 1.0]
+        )
     plan = make_plan(
         args.test,
         steps=args.steps,
-        alphas=args.alphas,
+        alphas=alphas,
         ramps=args.ramps,
         switch_steps=args.switch_steps,
     )
