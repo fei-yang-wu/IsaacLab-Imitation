@@ -36,3 +36,18 @@ nine job starts died in the flaky Kit startup crash and were resubmitted.
 | `lstm` | 4.50B | 0.8884 | 23.98 | 136.49 | 4.98 | 212.7 | 0.851 |
 | `lstm_affine` | 4.50B | 0.8840 | 25.51 | 145.46 | 5.11 | 220.3 | 0.895 |
 | `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
+
+## Final rows (2026-09-02 evening, jobs 5627493 / 5627487 / 5627490)
+
+One seed, `bones_testbed4096_v1` clean. `z64_wd_clin` ended on its 15:59
+walltime at 9.62B (last save 9.5B). The LSTM arms finished their 10B budget
+in two segments (resume from 8.5B). Earlier rows of the same arms: 7.0B
+`z64_wd_clin` 0.9312 / 22.10 / 90.37; 4.5B `lstm` 0.8884 / 23.98 / 136.49;
+4.5B `lstm_affine` 0.8840 / 25.51 / 145.46.
+
+| arm | checkpoint | SR | MPJPE-L | MPJPE-G | acc | jerk | action_delta |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `z64_wd_clin` | 9.50B (walltime end) | 0.9395 | 21.74 | 83.84 | 4.28 | 180.1 | 0.771 |
+| `lstm` | 10.0B (final) | 0.9121 | 21.24 | 103.11 | 4.76 | 207.0 | 0.857 |
+| `lstm_affine` | 10.0B (final) | 0.9062 | 22.27 | 110.63 | 4.78 | 205.4 | 0.878 |
+| `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
