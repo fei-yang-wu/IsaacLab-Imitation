@@ -178,3 +178,17 @@ arms:
       actor_args:
         - agent.ppo.rnn_hidden_size=256
     stages: *score_stages
+
+  # The stacked arm (weight decay + critic decay + past-5 affine encoder +
+  # ten-step actor history, MLP actor), latent64-probe-10b, 10B in two
+  # segments (2026-09-03).
+  combo:
+    vars:
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
