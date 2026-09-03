@@ -21,6 +21,30 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Final rows: LSTM pair at 10B, `z64_wd_clin` at 9.5B; composition probe SUBMITTED (2026-09-02 evening)
+
+`2026-09-02-latest-eval`, one seed, `bones_testbed4096_v1` clean:
+
+| arm | checkpoint | SR | MPJPE-L | MPJPE-G | acc | jerk | action_delta |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `z64_wd_clin` | 9.50B (walltime end) | 0.9395 | 21.74 | 83.84 | 4.28 | 180.1 | 0.771 |
+| `lstm` | 10.0B (final) | 0.9121 | 21.24 | 103.11 | 4.76 | 207.0 | 0.857 |
+| `lstm_affine` | 10.0B (final) | 0.9062 | 22.27 | 110.63 | 4.78 | 205.4 | 0.878 |
+| `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
+
+Against the 64-D MLP control at 9.5B (0.9292 / 23.25 / 93.09) and
+`enc_hist` at 9.5B (0.9304 / 22.57 / 101.66). The LSTM pair is the only
+matched pair (same frames; phi parameterization plus encoder-init noise).
+
+Composition probe (`2026-09-02-composition-probe`): six ICE jobs
+5627479-5627486, `lstm` and `lstm_affine` at 10B x {held_alpha, handover,
+extrapolate} on 60 board-survivor clip pairs, Newton physics, driver
+`scripts/rlopt/eval_composition_probe.py` (the `eval*.py` name selects the
+container's CU130 torch branch; the first submission 5627467-75 died on
+`ncclDevCommDestroy` under the bare python branch). Rows land in
+`/data/eval/composition_probe/<arm>/<test>/`; score with
+`python -m imitation_experiments.evaluation.composition_metrics`.
+
 ## Latent blend probe: walk -> jog convex mix on the affine and concat LSTM arms (2026-09-02)
 
 `2026-09-02-lstm-hub64-10b/blend_probe.sh` (`imitation_experiments.evaluation.latent_blend`,
