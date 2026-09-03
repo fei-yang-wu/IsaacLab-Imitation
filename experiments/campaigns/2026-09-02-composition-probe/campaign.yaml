@@ -30,20 +30,23 @@ vars:
   out_root: /data/eval/composition_probe
   tree: /data/lstm_hub64_10b/${vars.tracker_arm}_seed0/tracker
   encoder_ckpt: /data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt
-  actor_override: agent.ppo.rnn_hidden_size=256
+  # `--override X` pairs, one list per actor family.
+  actor_overrides:
+    - --override
+    - agent.ppo.rnn_hidden_size=256
   test: held_alpha
   steps: 300
   pairs_per_process: 64
 
-  probe_args:
+  probe_head:
     - --arm
     - ${vars.tracker_arm}
     - --checkpoint
     - newest:${vars.tree}
     - --encoder
     - ${vars.encoder_ckpt}
-    - --override
-    - ${vars.actor_override}
+
+  probe_args:
     - --pairs
     - ${vars.pairs}
     - --test
@@ -82,7 +85,7 @@ arms:
     stages: &probe_stages
       - name: probe
         executable: scripts/rlopt/eval_composition_probe.py
-        args: ${vars.probe_args}
+        args: ${concat:${vars.probe_head},${vars.actor_overrides},${vars.probe_args}}
         time_limit: "06:00:00"
         gres: gpu:h200:1
         partition: coe-gpu
@@ -122,5 +125,45 @@ arms:
   lstm_extrapolate:
     vars:
       tracker_arm: lstm
+      test: extrapolate
+    stages: *probe_stages
+
+  # `combo` (2026-09-03): affine phi on an MLP actor with the ten-step
+  # history and the optimizer extras, 10B; a second affine tracker, and the
+  # affine-vs-concat question on a different actor family. Same pairs.
+  combo_held:
+    vars:
+      tracker_arm: combo
+      tree: /data/latent64_probe_10b/combo_seed0/tracker
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      actor_overrides: &combo_overrides
+        - --override
+        - env.observations.policy.projected_gravity.history_length=10
+        - --override
+        - env.observations.policy.base_ang_vel.history_length=10
+        - --override
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - --override
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - --override
+        - env.observations.policy.last_action.history_length=10
+      test: held_alpha
+    stages: *probe_stages
+
+  combo_handover:
+    vars:
+      tracker_arm: combo
+      tree: /data/latent64_probe_10b/combo_seed0/tracker
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      actor_overrides: *combo_overrides
+      test: handover
+    stages: *probe_stages
+
+  combo_extrapolate:
+    vars:
+      tracker_arm: combo
+      tree: /data/latent64_probe_10b/combo_seed0/tracker
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      actor_overrides: *combo_overrides
       test: extrapolate
     stages: *probe_stages
