@@ -40,7 +40,9 @@ for arm in ${ARMS}; do
     if [ "${CKPT}" = "3B" ]; then
         TRACKER="${MIRROR}/ckpt/${arm}_3B.pt"
     else
-        TRACKER="$(ls "${MIRROR}"/ckpt/"${arm}"_latest_f*.pt 2>/dev/null | sort | tail -1)"
+        # Numeric sort on the frame count: a plain sort puts f10000269312
+        # (10B) before f4500357120 (4.5B).
+        TRACKER="$(ls "${MIRROR}"/ckpt/"${arm}"_latest_f*.pt 2>/dev/null | sed -E 's/.*_f([0-9]+)\.pt/\1 &/' | sort -k1,1n | tail -1 | cut -d' ' -f2-)"
     fi
     ENCODER="${HUB_ENCODER}"
     ARM_ARGS=()
@@ -49,6 +51,15 @@ for arm in ${ARMS}; do
         enc_hist) ENCODER="${P5_ENCODER}" ;;
         lstm) ENCODER="${P5_ENCODER}"; ARM_ARGS=(agent.ppo.rnn_hidden_size=256) ;;
         lstm_affine) ENCODER="${P5_AFFINE_ENCODER}"; ARM_ARGS=(agent.ppo.rnn_hidden_size=256) ;;
+        combo)
+            ENCODER="${P5_AFFINE_ENCODER}"
+            ARM_ARGS=(
+                env.observations.policy.projected_gravity.history_length=10
+                env.observations.policy.base_ang_vel.history_length=10
+                env.observations.policy.joint_pos_rel.history_length=10
+                env.observations.policy.joint_vel_rel.history_length=10
+                env.observations.policy.last_action.history_length=10
+            ) ;;
         obs_hist)
             ARM_ARGS=(
                 env.observations.policy.projected_gravity.history_length=10
