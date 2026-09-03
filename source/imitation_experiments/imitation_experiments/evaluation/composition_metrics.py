@@ -219,6 +219,8 @@ def monotone_fraction(values_by_alpha: Sequence[tuple[float, float]]) -> float |
 def summary_rows(summary_path: Path) -> list[dict[str, Any]]:
     """Per-target rows from one evaluator summary JSON with a blend block."""
     payload = json.loads(Path(summary_path).read_text())
+    if not isinstance(payload, dict):
+        return []  # an index.json or other listing, not an evaluator summary
     meta = payload.get("metadata") or {}
     blend = meta.get("latent_blend")
     if not blend or "traces" not in blend:
