@@ -80,6 +80,19 @@ vars:
 
   # 100% uniform: the preset's random-trajectory branch at ratio 1.0, so the
   # SONIC adaptive failure sampler never draws. Curriculum as in std1.
+  # The 64-D control's `std1` reset regime: 80% uniform trajectory with a
+  # uniform first-half start, 20% the SONIC failure sampler, curriculum
+  # 5M-30M. `select_uniform` below is the same preset with the random branch
+  # at 1.0, so the failure sampler never draws.
+  select_std:
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+
+  # Which reset block an arm uses; `lstm_affine_std` swaps in `select_std`.
+  select_args: ${vars.select_uniform}
+
   select_uniform:
     - env.command_interface.reference.selection=random80_adaptive20
     - env.command_interface.reference.selection.random_trajectory_sampling_ratio=1.0
@@ -179,7 +192,7 @@ arms:
     stages: &two_segments
       - name: lowlevel1
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_uniform},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         time_limit: "15:59:00"
         partition: coe-gpu
         qos: coe-ice
@@ -193,7 +206,7 @@ arms:
           WANDB_RESUME: allow
       - name: lowlevel2
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_uniform},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
         depends_on: lowlevel1
         dependency_kind: afterany
         time_limit: "15:59:00"
@@ -234,7 +247,7 @@ arms:
     stages:
       - name: lowlevel1
         executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_uniform},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.actor_args},${vars.select_args},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
         time_limit: "06:00:00"
         partition: coe-gpu
         qos: coe-ice
@@ -246,3 +259,16 @@ arms:
           CLUSTER_WANDB_TAGS: bones-seed,129785,lstm-hub64,${vars.arm},seed${vars.seed},lowlevel1
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
+
+  # ---- The reset regime against `lstm_affine` (2026-09-03, user): the same
+  # ---- recurrent actor on the same affine encoder, with the CONTROL's
+  # ---- `random80_adaptive20` + 5M-30M curriculum instead of 100% uniform.
+  # ---- One variable against `lstm_affine`; it also makes `combo` (affine,
+  # ---- MLP + ten-step history, this same reset regime) differ from a
+  # ---- recurrent sibling in the actor alone.
+  lstm_affine_std:
+    vars:
+      wandb_id: lh64-lstmaffstd
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      select_args: ${vars.select_std}
+    stages: *two_segments
