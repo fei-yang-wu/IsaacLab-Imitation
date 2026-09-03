@@ -106,6 +106,37 @@ container's CU130 torch branch; the first submission 5627467-75 died on
 `/data/eval/composition_probe/<arm>/<test>/`; score with
 `python -m imitation_experiments.evaluation.composition_metrics`.
 
+## Robust rows and the composition tracking error on the 10B checkpoints (2026-09-03)
+
+Robust rows (`--randomization no_push`, same boards and trees as the clean
+rows), one seed:
+
+| arm | clean SR / L / G | robust SR / L / G | robust acc / jerk / adelta |
+|---|---|---|---|
+| `lstm` (concat) | 0.9121 / 21.24 / 103.11 | 0.9021 / 23.64 / 165.02 | 5.45 / 244.9 / 1.070 |
+| `lstm_affine` | 0.9062 / 22.27 / 110.63 | 0.8926 / 24.79 / 175.12 | 5.47 / 246.2 / 1.103 |
+| `combo` | 0.9214 / 22.64 / 88.52 | 0.9146 / 24.84 / 124.52 | 5.18 / 235.9 / 1.067 |
+
+Composition, the metric that is not saturated: joint distance to the robot
+tracking the commanded (source) clip, post window, and the fraction of the
+pair's alpha-0 distance closed (ideal = alpha):
+
+| arm | alpha 0.25 | 0.5 | 0.75 | 1.0 |
+|---|---|---|---|---|
+| `lstm` (concat) | 0.208 rad, 0.22 | 0.135, 0.50 | 0.078, 0.74 | 0.041, 0.91 |
+| `lstm_affine` | 0.205, 0.20 | 0.135, 0.49 | 0.078, 0.73 | 0.041, 0.91 |
+| `combo` | 0.212, 0.17 | 0.141, 0.47 | 0.082, 0.73 | 0.043, 0.91 |
+
+All three arms interpolate near-ideally in joint space and are identical to
+three decimals. Root speed lags the ideal and is where they differ: gap
+closed at alpha 0.5 is 0.36 concat / 0.40 affine / 0.25 combo. Handover
+post-switch distance to the commanded skill is 0.064-0.067 rad at ramp 0 and
+0.050 on all three at ramp 50. Fall-free rate saturates (0.93-0.95) and
+cannot separate the arms; the only unsaturated fall-free gap stays the alpha
+2.0 extrapolation (0.05 concat vs 0.30 both affine arms). Blend clips of all
+three 10B checkpoints, two configurations each, in
+`logs/latent64_probe_mirror/blend_10b/`.
+
 ## Composition probe: `combo` joins as a second affine tracker (2026-09-03)
 
 `2026-09-02-composition-probe` arms `combo_held` / `combo_handover` /

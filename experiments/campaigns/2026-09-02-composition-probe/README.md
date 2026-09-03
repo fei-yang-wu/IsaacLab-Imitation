@@ -146,3 +146,46 @@ distance between the two skills is 11.2-13.7 under concat and 8.5-9.2 under
 both affine arms at every alpha. `combo`'s action-space numbers are on a
 different scale (its actor reads a ten-step history), so its action delta and
 peak step are comparable only to itself.
+
+## Tracking error to the commanded skill (2026-09-03)
+
+Fall-free rate saturates at 0.93-0.95 on every arm and cannot separate them
+(user, 2026-09-03). The composition metric that can is the joint distance
+between the target robot and the robot tracking the SOURCE clip at the same
+step (radians, post window), with the fraction of the same pair's alpha-0
+distance closed; the ideal for a linear interpolation is alpha itself.
+
+| arm | alpha 0.25 | 0.5 | 0.75 | 1.0 |
+|---|---|---|---|---|
+| `lstm` (concat) | 0.208 rad, 0.22 | 0.135, 0.50 | 0.078, 0.74 | 0.041, 0.91 |
+| `lstm_affine` | 0.205, 0.20 | 0.135, 0.49 | 0.078, 0.73 | 0.041, 0.91 |
+| `combo` | 0.212, 0.17 | 0.141, 0.47 | 0.082, 0.73 | 0.043, 0.91 |
+
+Joint-space interpolation is near-ideal on all three arms and identical
+between them to three decimals. Root speed lags: the fraction of the speed
+gap closed at alpha 0.5 is 0.36 concat / 0.40 affine / 0.25 combo, and at
+0.75 it is 0.64 / 0.69 / 0.58 (medians, pairs whose endpoints differ by more
+than 0.05 m/s). Handover post-switch distance to the commanded skill: 0.064 /
+0.067 / 0.067 rad at ramp 0 and 0.050 on all three at ramp 50 (gap closed
+0.80 to 0.88).
+
+## Blend clips on the 10B checkpoints (2026-09-03)
+
+`blend_probe.sh` with `OUT_ROOT=logs/latent64_probe_mirror/blend_10b`, 1280x720,
+PhysX, chase camera off (static), reference-relative terminations off. No
+robot fell in any run.
+
+| run (10B checkpoint, walk 2389 into jog) | speed pre / ramp / post (m/s) | upright min |
+|---|---|---:|
+| `lstm` (concat), fast jog 76357, ramp 150-200 | 0.71 / 1.02 / 1.19 | 0.98 |
+| `lstm_affine` (affine), same | 0.71 / 1.04 / 1.31 | 0.96 |
+| `combo` (affine, MLP+history), same | 0.71 / 1.03 / 1.46 | 0.97 |
+| `lstm`, arc jog 30608, ramp 200-300 | 0.85 / 0.77 / 1.10 | 0.96 |
+| `lstm_affine`, same | 0.88 / 0.73 / 1.06 | 0.97 |
+| `combo`, same | 0.87 / 0.81 / 1.12 | 0.98 |
+
+Videos and an 8-frame contact sheet of the fast-jog runs:
+`logs/latent64_probe_mirror/blend_10b/<arm>_r2389-76357_s150_r50_fall_only/`
+(`video/<arm>_blend-step-0.mp4`, `contact_sheet.png`) and the arc-jog runs
+under `..._r2389-30608_s200_r100_fall_only/`. Reference speeds in the post
+windows: fast jog 1.7-2.2 m/s, arc jog 1.12, walk 0.84-0.92.

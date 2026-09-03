@@ -70,3 +70,14 @@ symlink tree at `/data/lstm_hub64_final/<arm>_seed0/tracker/f10000269312/`.
 | `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
 
 | `combo` | 10.0B (final) | 0.9214 | 22.64 | 88.52 | 4.53 | 195.5 | 0.840 |
+
+## Robust rows on the 10B checkpoints (2026-09-03, jobs 5630474 / 5630476 / 5630483)
+
+`--row robust --randomization no_push` (startup and reset randomization on,
+no push), same boards and trees as the clean rows. One seed.
+
+| arm | clean SR / L / G | robust SR / L / G | robust acc / jerk / adelta |
+|---|---|---|---|
+| `lstm` (concat) | 0.9121 / 21.24 / 103.11 | 0.9021 / 23.64 / 165.02 | 5.45 / 244.9 / 1.070 |
+| `lstm_affine` | 0.9062 / 22.27 / 110.63 | 0.8926 / 24.79 / 175.12 | 5.47 / 246.2 / 1.103 |
+| `combo` | 0.9214 / 22.64 / 88.52 | 0.9146 / 24.84 / 124.52 | 5.18 / 235.9 / 1.067 |
