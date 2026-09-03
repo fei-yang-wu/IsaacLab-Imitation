@@ -13,6 +13,7 @@ from imitation_experiments.evaluation import composition_pairs as cp
 from imitation_experiments.evaluation.composition_probe import (
     ArmConfig,
     Setting,
+    chunk_unique,
     evaluator_args,
     make_plan,
 )
