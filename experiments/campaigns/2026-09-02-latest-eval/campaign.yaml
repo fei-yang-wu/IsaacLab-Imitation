@@ -25,12 +25,21 @@ wandb_group: latest-eval
 
 vars:
   tree_root: /data/latent64_probe_10b
-  tree: ${vars.tree_root}/${vars.arm}_seed${vars.seed}
+  # The tracker this job scores; the control plane forces `vars.arm` to the
+  # ARM NAME, so a `*_robust` arm sets `eval_arm` to the tracker it scores
+  # and the output row keeps the tracker's name.
+  eval_arm: ${vars.arm}
+  tree: ${vars.tree_root}/${vars.eval_arm}_seed${vars.seed}
   eval_root: /data/eval/latest_eval
   actor_args: []
   ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
   persist_id: bones_seed_sonic_full_129785@e714bbff
   encoder_ckpt: /data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt
+  # `clean` is --randomization none; `robust` is the campaign board's
+  # robustness partner, --randomization no_push (startup and reset
+  # randomization on, no push), as in 2026-08-28-smooth-ablation-5b/eval.sh.
+  row: clean
+  randomization: none
   history_args: []
 
   head:
@@ -39,11 +48,11 @@ vars:
     - --output_root
     - ${vars.eval_root}
     - --arm
-    - ${vars.arm}
+    - ${vars.eval_arm}
     - --seed
     - ${vars.seed}
     - --row
-    - clean
+    - ${vars.row}
     - --board
     - bones_testbed4096_v1
     - --final_only
@@ -55,7 +64,7 @@ vars:
     - --agent_entry_point
     - rlopt_ipmd_tuned_cfg_entry_point
     - --randomization
-    - none
+    - ${vars.randomization}
     - --action_sampling
     - mode
     - --steps
@@ -191,4 +200,45 @@ arms:
         - env.observations.policy.joint_pos_rel.history_length=10
         - env.observations.policy.joint_vel_rel.history_length=10
         - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+
+  # ---- Robust rows on the finished 10B checkpoints (2026-09-03): the
+  # ---- board's robustness partner, `--randomization no_push`, on the same
+  # ---- boards and trees as the clean rows above. The clean rows are
+  # ---- lstm 0.9121 / lstm_affine 0.9062 / combo 0.9214.
+  lstm_robust:
+    vars:
+      eval_arm: lstm
+      tree_root: /data/lstm_hub64_final
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt
+      actor_args:
+        - agent.ppo.rnn_hidden_size=256
+      row: robust
+      randomization: no_push
+    stages: *score_stages
+
+  lstm_affine_robust:
+    vars:
+      eval_arm: lstm_affine
+      tree_root: /data/lstm_hub64_final
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      actor_args:
+        - agent.ppo.rnn_hidden_size=256
+      row: robust
+      randomization: no_push
+    stages: *score_stages
+
+  combo_robust:
+    vars:
+      eval_arm: combo
+      tree_root: /data/latent64_probe_final
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+      row: robust
+      randomization: no_push
     stages: *score_stages
