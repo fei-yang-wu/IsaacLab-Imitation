@@ -51,3 +51,19 @@ in two segments (resume from 8.5B). Earlier rows of the same arms: 7.0B
 | `lstm` | 10.0B (final) | 0.9121 | 21.24 | 103.11 | 4.76 | 207.0 | 0.857 |
 | `lstm_affine` | 10.0B (final) | 0.9062 | 22.27 | 110.63 | 4.78 | 205.4 | 0.878 |
 | `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
+
+## Final-checkpoint rows (2026-09-02 evening, jobs 5627493 / 5627487 / 5627490)
+
+One seed, `bones_testbed4096_v1` clean. The LSTM trees carry two run
+directories after the resume, so their evals score a milestone-layout
+symlink tree at `/data/lstm_hub64_final/<arm>_seed0/tracker/f10000269312/`.
+`z64_wd_clin`'s eval needed four submissions (three Kit startup crashes).
+
+| arm | checkpoint | SR | MPJPE-L | MPJPE-G | acc | jerk | action_delta |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `z64_wd_clin` | 9.50B (final) | 0.9395 | 21.74 | 83.84 | 4.28 | 180.1 | 0.771 |
+| `lstm` | 10.0B (final) | 0.9121 | 21.24 | 103.11 | 4.76 | 207.0 | 0.857 |
+| `lstm_affine` | 10.0B (final) | 0.9062 | 22.27 | 110.63 | 4.78 | 205.4 | 0.878 |
+| `z64_merged` (control) | 9.50B | 0.9292 | 23.25 | 93.09 | 4.25 | 174.9 | 0.780 |
+| `enc_hist` | 9.50B | 0.9304 | 22.57 | 101.66 | 4.39 | 185.8 | 0.802 |
+| `sonic_v1_1` | released | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
