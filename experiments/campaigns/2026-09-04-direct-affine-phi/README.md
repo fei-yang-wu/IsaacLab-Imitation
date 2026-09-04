@@ -74,3 +74,26 @@ only after explicit approval.
   `logs/direct_affine_phi64_smoke/`. This checks wiring, not H200 capacity at
   20,480 environments or convergence.
 - RLOpt commit: `e0d8a88`, published on `feat/direct-phi64-conditioning`.
+- Submitted 2026-09-04 after eight live ICE preflight checks passed. Workspace
+  commit `ed20123`; unrelated existing changes were included in the archived
+  workspace but were not committed. The control plane recorded no drift
+  between plan and submission. Archive SHA:
+  `fb11624344847732fdc0bf16b308e8874cf4c92866b11a8086a2a4108ae71f51`.
+
+| Stage | ICE job | Dependency | State at submission check |
+| --- | --- | --- | --- |
+| Encoder pretrain | 5697130 | none | RUNNING |
+| Tracker segment 1 | 5697131 | afterok:5697130 | PENDING |
+| Tracker segment 2 | 5697132 | afterany:5697131 | PENDING |
+
+Submission record:
+`logs/cluster_control/direct-affine-phi/direct-affine-phi-phi_lstm-s0-20260904-234437-d86a4691/submission-20260904-234515.json`.
+
+Exact submit command, run from the repository root using the installed Pixi
+environment (the `pixi` launcher was unavailable on PATH):
+
+```bash
+PYTHONPATH=source/imitation_experiments .pixi/envs/default/bin/python -m imitation_experiments.pipeline.cluster submit \
+  --plan logs/cluster_control/direct-affine-phi/direct-affine-phi-phi_lstm-s0-20260904-234437-d86a4691 \
+  --confirm d86a4691e29fece70bec94fa707c56a2c7220585032105f25f955985ef90760a
+```

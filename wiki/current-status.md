@@ -21,7 +21,7 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
-## Direct affine-phi LSTM tracker prepared (2026-09-04)
+## Direct affine-phi64 LSTM training submitted (2026-09-04)
 
 `2026-09-04-direct-affine-phi` contains one seed-0, 10B arm in W&B project
 `g1-bs-pareto`. It starts from the `lstm_affine_std` recipe: a 64-D latent,
@@ -42,8 +42,12 @@ The earlier HeadLinear-shaped plan
 is obsolete and was not submitted. All subsequent plans with feature width
 256 are also obsolete. The corrected campaign has a 50,000-update encoder
 pretrain followed by two chained 10B tracker stages on H200. The user
-authorized submission; W&B group `direct-affine-phi`. Local qualification
-and a fresh preflight precede launch.
+authorized submission; W&B group `direct-affine-phi`. The encoder job is
+running and both tracker segments are pending their dependencies. Validation:
+165 RLOpt tests, 18 control-plane tests, and an encoder-to-LSTM simulator
+smoke passed. The smoke checks wiring at 32 environments; production H200
+capacity at 20,480 environments is not yet measured. Eight live ICE preflight
+checks passed. The campaign README holds job IDs and the submission record.
 
 ## Composition probe scored: affine vs concat phi under held mixes, handovers, extrapolation (2026-09-02 night)
 
