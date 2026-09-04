@@ -1,0 +1,76 @@
+# Direct affine-phi LSTM tracker (2026-09-04)
+
+This campaign starts from the `lstm_affine_std` tracker recipe. The policy
+receives a trained 64-D affine feature `phi(s_history, z)` plus two phase values.
+The feature head is pretrained at width 64, and the tracker has 20,480
+environments as requested. Both changes are recorded for the comparison.
+
+The fixed recipe is:
+
+- 64-D continuous latent and a LayerNorm past-5 affine encoder;
+- `optim.weight_decay=1e-2` and a linear critic learning-rate schedule to
+  `1e-5`;
+- a 256-unit LSTM actor and a feed-forward critic;
+- `random80_adaptive20` resets and the 5M-to-30M termination curriculum;
+- hold 1, sine/cosine phase, 20,480 environments (4096 x 5), and 10B frames;
+- W&B project `g1-bs-pareto`.
+
+There is no explicit actor observation history. The LSTM carries the policy's
+temporal state. The frozen encoder uses its past five macro frames only to
+compute the 64-D affine feature. The policy command is
+`[phi(s_history, z); sin(phase); cos(phase)]`, with width 66. At hold 1 the
+phase is constant `[0, 1]`; it stays enabled by user decision. There is no
+learned projection after phi. The recurrent actor itself remains nonlinear.
+
+This is a head-to-head comparison with the existing HeadLinear result. It is
+not a matched one-variable ablation against HeadLinear.
+
+The RLOpt runtime now restores the trained `jepa_ntp` DiffSR head from the
+merged past-5 checkpoint and requires the six-frame source window. It refuses
+a merged checkpoint that has no trained head. The source contains six 38-D
+root_qpos frames (228 values), anchored on the current frame at stride 1.
+The five-tensor command-sampler return contract stays compatible with planner
+adapters, and z-only commands do not gather unused history.
+
+## Budget and stages
+
+The campaign contains one arm, `phi_lstm`, at seed 0. The first H200 job
+pretrains the encoder for 50,000 updates with batch size 8192. It uses the
+past-5 affine merged-head recipe with `diffsr_feature_dim=64`. Two tracker
+jobs follow, each carrying the full 10B frame target (20,346 iterations of
+20,480 x 24 frames). The first tracker requires successful pretraining; its
+successor uses `afterany` so a wall-time checkpoint resumes the global budget.
+
+Data: BONES-SEED 129,785 motions, persist id
+`bones_seed_sonic_full_129785@e714bbff`, reference arrays
+`/storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1`.
+Outputs: `/data/direct_affine_phi64/phi_lstm_seed0/`.
+
+W&B project: `g1-bs-pareto`; group: `direct-affine-phi`.
+
+## Plan
+
+From the repository root:
+
+```bash
+./experiments/campaigns/2026-09-04-direct-affine-phi/submit.sh phi_lstm 0
+```
+
+The wrapper validates, preflights, and freezes a plan. It does not submit.
+Review the printed plan and use its exact `submit --confirm <PLAN_SHA>` command
+only after explicit approval.
+
+## Status
+
+- 2026-09-04: corrected the campaign after the actor-history clarification.
+  All earlier plans for the 256-D feature are obsolete and were not submitted.
+- 2026-09-04: user authorized ICE submission with a 64-D feature, phase on,
+  20,480 environments, and 10B frames. Local qualification precedes submission.
+- Qualification: 165 RLOpt tests and 18 control-plane tests pass. A simulator
+  smoke completed two encoder updates at batch 8192, then two tracker
+  iterations with 32 environments and the production 24-step rollout. Saved
+  configuration confirms `latent_dim=66`, `code_latent_dim=64`, command mode
+  `phi`, LSTM size 256, and zero actor observation-history lengths. Logs:
+  `logs/direct_affine_phi64_smoke/`. This checks wiring, not H200 capacity at
+  20,480 environments or convergence.
+- RLOpt commit: `e0d8a88`, published on `feat/direct-phi64-conditioning`.

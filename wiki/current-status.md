@@ -21,6 +21,30 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Direct affine-phi LSTM tracker prepared (2026-09-04)
+
+`2026-09-04-direct-affine-phi` contains one seed-0, 10B arm in W&B project
+`g1-bs-pareto`. It starts from the `lstm_affine_std` recipe: a 64-D latent,
+weight decay, a linear critic learning-rate schedule, the LayerNorm past-5
+affine encoder, and a 256-unit LSTM actor. The actor receives
+`[phi(s_history,z); sin(phase); cos(phase)]`, with width 66. A fresh encoder
+pretrain sets the feature width to 64; no projection or truncation is added.
+The user set 20,480 environments (4096 x 5) and kept the constant hold-1 phase.
+
+The actor has no explicit observation-history stack. Its LSTM carries policy
+memory. The encoder's past five macro frames are used only to compute phi.
+RLOpt restores the trained merged `jepa_ntp` affine head and refuses a missing
+head. The command source contains six 38-D frames (228 values). The arm is a head-to-head comparison
+with HeadLinear, not a matched one-variable ablation against it.
+
+The earlier HeadLinear-shaped plan
+`5dfd8a90882408b86f7a39eb0d69f55c6e74712555bd25b60609dcc9dd1ed576`
+is obsolete and was not submitted. All subsequent plans with feature width
+256 are also obsolete. The corrected campaign has a 50,000-update encoder
+pretrain followed by two chained 10B tracker stages on H200. The user
+authorized submission; W&B group `direct-affine-phi`. Local qualification
+and a fresh preflight precede launch.
+
 ## Composition probe scored: affine vs concat phi under held mixes, handovers, extrapolation (2026-09-02 night)
 
 `2026-09-02-composition-probe`, `lstm_affine` vs `lstm` at 10B, 60 clip pairs,
