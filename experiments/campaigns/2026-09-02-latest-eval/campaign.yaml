@@ -242,3 +242,30 @@ arms:
       row: robust
       randomization: no_push
     stages: *score_stages
+
+  # ---- Mid-flight rows on the two live chains (2026-09-03). `--final_only`
+  # ---- takes whatever the deepest checkpoint is when the job starts, so
+  # ---- these are "where the run stands now" rows, not final ones. Both
+  # ---- trees still hold a single run directory, so no milestone-layout
+  # ---- symlink is needed yet; after their first resume they will.
+  combo50b_live:
+    vars:
+      eval_arm: combo
+      tree_root: /data/combo_50b
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+
+  lstm_affine_std_live:
+    vars:
+      eval_arm: lstm_affine_std
+      tree_root: /data/lstm_hub64_10b
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      actor_args:
+        - agent.ppo.rnn_hidden_size=256
+    stages: *score_stages
