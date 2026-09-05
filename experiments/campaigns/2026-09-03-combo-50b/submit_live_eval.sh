@@ -4,6 +4,10 @@
 #   ./submit_live_eval.sh            # submit if the newest checkpoint is unscored
 #   DRY_RUN=1 ./submit_live_eval.sh  # print what it would do
 #
+# Every path is an environment variable, so another chain reuses this script
+# through a wrapper that sets TRAIN_TREE, LIVE_ROOT, LIVE_TREE_ROOT, ARM and
+# EVAL_ARM. See 2026-09-04-direct-affine-phi/submit_live_eval.sh.
+#
 # Two mechanics this handles so a cron caller does not have to:
 #
 #  * The training tree grows a new run directory per resume, which
@@ -29,6 +33,8 @@ ARM="${ARM:-combo50b_live}"
 # name, so a row of this chain can never collide with the flat-mix `combo`
 # run's rows at the same frame count.
 EVAL_ARM="${EVAL_ARM:-combo50b}"
+# Container-side root of the milestone-layout tree the eval reads.
+LIVE_TREE_ROOT="${LIVE_TREE_ROOT:-/data/combo_50b_live}"
 DRY_RUN="${DRY_RUN:-0}"
 
 newest="$(timeout 90 ssh "${REMOTE}" "ls ${TRAIN_TREE}/*/models/model_step_*.pt 2>/dev/null | sed 's|.*/||' | sed -E 's/model_step_([0-9]+)\.pt/\1/' | sort -n | tail -1")"
@@ -54,7 +60,7 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 OUT="$(pixi run python -m imitation_experiments.pipeline.cluster plan \
     --campaign "${EVAL_CAMPAIGN}" --arm "${ARM}" --seed 0 \
-    --set vars.tree_root=/data/combo_50b_live 2>&1)" || { echo "${OUT}" | tail -20; exit 1; }
+    --set vars.tree_root="${LIVE_TREE_ROOT}" 2>&1)" || { echo "${OUT}" | tail -20; exit 1; }
 PLAN="$(echo "${OUT}" | grep 'local dir:' | awk '{print $NF}')"
 SHA="$(echo "${OUT}" | grep '^PLAN_SHA=' | cut -d= -f2)"
 [ -n "${PLAN}" ] || { echo "[LIVE-EVAL] plan failed"; echo "${OUT}" | tail -20; exit 1; }
