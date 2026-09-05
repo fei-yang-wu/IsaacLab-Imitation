@@ -28,7 +28,10 @@ Branch `feat/variable-horizon` (worktree `.claude/worktrees/varwin`, RLOpt
 `experiments/campaigns/2026-09-05-variable-window-5b/`. User decisions
 2026-09-05: W&B project `g1-bs-vw`, group `variable-window-5b`, 5B per arm
 (the `combo` control reads at its matched 5B checkpoint, not its 10B end).
-Job ids are in the campaign's `logs/cluster_control/` plan dirs.
+ICE jobs (pretrain / lowlevel1 / lowlevel2): `vw_padded` 5705909-11,
+`vw_sequence` 5705913-15, `vw_fixed_target` 5705918-20, `vw_stride`
+5705923/24/26, `vw_nested` 5705928-30, `vw_block` 5705957-59; coe-gpu H200,
+submitted 2026-09-05 from top-level `966624e`.
 
 What it is. The hub encoder reads one fixed 10-frame window. The extension
 draws a window size per pretrain row from a SET and lets the frozen sampler
