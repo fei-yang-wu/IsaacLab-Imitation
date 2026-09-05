@@ -21,13 +21,14 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
-## Variable-window encoders built, smoked, planned on the `combo` hub (2026-09-05)
+## Variable-window encoders SUBMITTED on the `combo` hub, 5B x 6 arms (2026-09-05)
 
 Branch `feat/variable-horizon` (worktree `.claude/worktrees/varwin`, RLOpt
 `14c8367`, top-level `12d1d0f`), campaign
-`experiments/campaigns/2026-09-05-variable-window-10b/`. NOT SUBMITTED: the
-W&B group name `variable-window-10b` and the 10B-per-arm budget await the
-user; the six `PLAN_SHA`s are in the worktree's `logs/cluster_control/`.
+`experiments/campaigns/2026-09-05-variable-window-5b/`. User decisions
+2026-09-05: W&B project `g1-bs-vw`, group `variable-window-5b`, 5B per arm
+(the `combo` control reads at its matched 5B checkpoint, not its 10B end).
+Job ids are in the campaign's `logs/cluster_control/` plan dirs.
 
 What it is. The hub encoder reads one fixed 10-frame window. The extension
 draws a window size per pretrain row from a SET and lets the frozen sampler
@@ -39,7 +40,7 @@ trunks `flat` (unchanged) / `padded` / `sequence`, one merged head per member
 `RLOpt/tests/test_hl_skill_variable_window.py`.
 
 Arms, each `combo` (past-5 affine phi, 64-D merged head, MLP actor with
-ten-step history, weight decay 1e-2, linear critic decay, 16,384 envs, 10B)
+ten-step history, weight decay 1e-2, linear critic decay, 16,384 envs, 5B)
 with only the encoder pretrain and its implied live policy moved:
 
 | arm | change | live |
