@@ -248,9 +248,15 @@ arms:
   # ---- these are "where the run stands now" rows, not final ones. Both
   # ---- trees still hold a single run directory, so no milestone-layout
   # ---- symlink is needed yet; after their first resume they will.
+  # `eval_arm: combo50b`, not `combo`: the flat-mix 10B run and this ramped
+  # 50B chain both produce a checkpoint at 10,000,269,312 frames, and under
+  # one arm name their rows collide on the same filename. The row
+  # `combo_seed0_clean_f10000269312.json` is the FLAT run (checked against
+  # metadata.checkpoint on 2026-09-05); every other `combo_seed0_clean_f*`
+  # row from 9B on is this chain.
   combo50b_live:
     vars:
-      eval_arm: combo
+      eval_arm: combo50b
       tree_root: /data/combo_50b
       encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
       history_args:
