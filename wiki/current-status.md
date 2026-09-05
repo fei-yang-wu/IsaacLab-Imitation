@@ -21,6 +21,53 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Variable-window encoders built, smoked, planned on the `combo` hub (2026-09-05)
+
+Branch `feat/variable-horizon` (worktree `.claude/worktrees/varwin`, RLOpt
+`14c8367`, top-level `12d1d0f`), campaign
+`experiments/campaigns/2026-09-05-variable-window-10b/`. NOT SUBMITTED: the
+W&B group name `variable-window-10b` and the 10B-per-arm budget await the
+user; the six `PLAN_SHA`s are in the worktree's `logs/cluster_control/`.
+
+What it is. The hub encoder reads one fixed 10-frame window. The extension
+draws a window size per pretrain row from a SET and lets the frozen sampler
+pick the window at rollout (`agent.ipmd.hl_skill_live_horizon`: a member,
+`base`, `episode`, `step`). RLOpt: `horizon_choices` / `stride_choices`,
+trunks `flat` (unchanged) / `padded` / `sequence`, one merged head per member
+(`horizon_target_mode=follow`) or one shared head (`fixed`), code layouts
+`flat` / `nested` / `block`. 44 tests in
+`RLOpt/tests/test_hl_skill_variable_window.py`.
+
+Arms, each `combo` (past-5 affine phi, 64-D merged head, MLP actor with
+ten-step history, weight decay 1e-2, linear critic decay, 16,384 envs, 10B)
+with only the encoder pretrain and its implied live policy moved:
+
+| arm | change | live |
+|---|---|---|
+| `vw_padded` | horizon set {2,5,10,15}, padded MLP + one-hot, head per h | 10 |
+| `vw_sequence` | same set, attention trunk (384 x 4 x 6 heads) | 10 |
+| `vw_fixed_target` | same set on the input, ONE head at s[t+10..t+20] | 10 |
+| `vw_stride` | stride set {1,2,3} on 10 frames, head per stride | 1 |
+| `vw_nested` | full window, head h reads a z prefix (16/32/48/64) | base |
+| `vw_block` | full window, head h reads its own 16-dim block | base |
+
+Four second-wave arms (`vw_padded_live_{step,episode,15,5}`) reuse
+`vw_padded`'s encoder and plan only after its pretrain writes `latest.pt`.
+
+Local smoke (real data plane, 4 updates at batch 8,192, one 128-frame
+tracker iteration at the live policy): six of six pass; `vw_sequence` needed
+batch 4,096 locally because the affine phi's pretrain peak is 90-92 GB on
+every arm and the 96 GB card has no room for the attention activations (the
+ICE H200 has 141 GB). Encoder checkpoints are 8-11 GB each (heads' AdamW
+state), so the output root is the shared 2 TB allocation.
+
+Evidence the design rests on (one seed each, 4096 board, DR off, original
+encoder): hub h10 0.9280 / 24.42 / 98.98 at 2B, `g4_h5` 0.9158 / 25.93 /
+96.84, `g4_h20` 0.5669 / 54.93 / 635; 500M screen h2 0.7891, h5 0.8677, h10
+0.8765 (replicate spread 0.0064 SR). The open question the campaign asks is
+whether one code space spans 2..15 without the long-window collapse, and
+whether a mixed-window rollout policy helps or hurts.
+
 ## Direct affine-phi64 LSTM training submitted (2026-09-04)
 
 `2026-09-04-direct-affine-phi` contains one seed-0, 10B arm in W&B project
