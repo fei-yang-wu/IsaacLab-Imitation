@@ -1,8 +1,8 @@
-# 2026-09-05 -- Variable-window skill encoders on the `combo` hub (10B)
+# 2026-09-05 -- Variable-window skill encoders on the `combo` hub (5B)
 
 Six encoders, each pretrained on a SET of window sizes instead of the hub's
 one fixed 10-frame window, each deployed under the `combo` tracker recipe at
-10B frames. The question: can one skill code serve several lookahead
+5B frames (user, 2026-09-05). The question: can one skill code serve several lookahead
 lengths, and does that change tracking against the fixed-window control?
 
 ## Control
@@ -16,10 +16,10 @@ seed, `bones_testbed4096_v1` clean at 10B: 0.9214 SR / 22.64 MPJPE-L /
 | encoder | past-5 affine phi (`--source_history_steps 5 --source_anchor current --diffsr_phi_parameterization affine`), merged head (`diff_chunk`, `boundary_next`, endpoint coeff 0), 64-D deterministic, LayerNorm, `intermediate` window, 50,000 updates at batch 8,192 |
 | command | `z` + sin/cos phase, width 66, hold 1 |
 | actor | MLP 2048/2048/1024/1024/512/512 silu, ten-step history on the five policy terms; critic single frame |
-| optimizer | `rlopt_ipmd_tuned_fullbatch_cfg_entry_point`, `optim.weight_decay=1e-2`, critic lr linear to 1e-5 over the 10B cap |
+| optimizer | `rlopt_ipmd_tuned_fullbatch_cfg_entry_point`, `optim.weight_decay=1e-2`, critic lr linear to 1e-5 over the frame cap |
 | resets | `random80_adaptive20`, termination curriculum 5M-30M |
 | rewards | motion_ee_pos 1.0, motion_global_anchor_pos_wide 1.0, tracking_reward_points 4.0, action_rate_l2 -0.03 |
-| scale | 16,384 x 24 = 393,216 frames per batch, 10B cap, two chained 15:59 segments |
+| scale | 16,384 x 24 = 393,216 frames per batch; here a 5B cap (combo ran 10B; read it at its 5B checkpoint), two chained 15:59 segments, checkpoints every 200M |
 
 ## Terms
 
@@ -40,12 +40,12 @@ seed, `bones_testbed4096_v1` clean at 10B: 0.9214 SR / 22.64 MPJPE-L /
 
 | arm | pretrain change vs the control | live | W&B id |
 |---|---|---|---|
-| `vw_padded` | horizon set; padded MLP trunk with a one-hot; one merged head per h | 10 | `vw10b-padded-s0` |
-| `vw_sequence` | horizon set; attention trunk over frame tokens (width 384, depth 4, heads 6), key-padded past h-1, mean-pooled | 10 | `vw10b-sequence-s0` |
-| `vw_fixed_target` | horizon set on the input only; ONE head at `s[t+10..t+20]` for every drawn h | 10 | `vw10b-fixedtgt-s0` |
-| `vw_stride` | stride set {1, 2, 3} on a 10-frame window (0.2 / 0.4 / 0.6 s), gathered in RLOpt from a stride-1 macro window; one head per stride | 1 | `vw10b-stride-s0` |
-| `vw_nested` | full 15-frame input, one code; the head for h reads the prefix `z[:16 * i]` (16 / 32 / 48 / 64 dims) | base | `vw10b-nested-s0` |
-| `vw_block` | full 15-frame input, one code; the head for h reads its own disjoint 16-dim block | base | `vw10b-block-s0` |
+| `vw_padded` | horizon set; padded MLP trunk with a one-hot; one merged head per h | 10 | `vw5b-padded-s0` |
+| `vw_sequence` | horizon set; attention trunk over frame tokens (width 384, depth 4, heads 6), key-padded past h-1, mean-pooled | 10 | `vw5b-sequence-s0` |
+| `vw_fixed_target` | horizon set on the input only; ONE head at `s[t+10..t+20]` for every drawn h | 10 | `vw5b-fixedtgt-s0` |
+| `vw_stride` | stride set {1, 2, 3} on a 10-frame window (0.2 / 0.4 / 0.6 s), gathered in RLOpt from a stride-1 macro window; one head per stride | 1 | `vw5b-stride-s0` |
+| `vw_nested` | full 15-frame input, one code; the head for h reads the prefix `z[:16 * i]` (16 / 32 / 48 / 64 dims) | base | `vw5b-nested-s0` |
+| `vw_block` | full 15-frame input, one code; the head for h reads its own disjoint 16-dim block | base | `vw5b-block-s0` |
 
 Each arm differs from `combo` in the encoder pretrain and in the live policy
 that pretrain implies, and in nothing else. The horizon arms deploy at 10 so
@@ -131,10 +131,10 @@ live policy: `vw_padded`, `vw_fixed_target`, `vw_stride`, `vw_nested`,
 ## Run
 
 ```bash
-./experiments/campaigns/2026-09-05-variable-window-10b/smoke.sh   # local wiring check
-./experiments/campaigns/2026-09-05-variable-window-10b/submit.sh vw_padded 0
+./experiments/campaigns/2026-09-05-variable-window-5b/smoke.sh   # local wiring check
+./experiments/campaigns/2026-09-05-variable-window-5b/submit.sh vw_padded 0
 # then the printed `submit --confirm <PLAN_SHA>` line
 ```
 
-Outputs: `/storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/<arm>_seed<seed>/{encoder,tracker}`.
-W&B project `g1-bs-pareto`, group `variable-window-10b`.
+Outputs: `/storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b/<arm>_seed<seed>/{encoder,tracker}`.
+W&B project `g1-bs-vw`, group `variable-window-5b`.

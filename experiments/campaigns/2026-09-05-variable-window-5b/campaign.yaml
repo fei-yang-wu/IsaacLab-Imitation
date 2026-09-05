@@ -1,4 +1,4 @@
-# 2026-09-05 - variable-window skill encoders on the `combo` hub, 10B each.
+# 2026-09-05 - variable-window skill encoders on the `combo` hub, 5B each.
 #
 # CONTROL: `combo` in `2026-09-01-latent64-probe-10b` (W&B `l64p-combo-s0`),
 # scored at 10B on `bones_testbed4096_v1` clean: 0.9214 SR / 22.64 MPJPE-L /
@@ -52,14 +52,17 @@
 # maximum horizon (15 for the horizon arms, 10 for `vw_stride`); the frozen
 # sampler hard-fails on a mismatch.
 #
-# Two chained 15:59 segments, `afterany`, each carrying the FULL 10B cap (the
-# critic ramp and the budget both read it). Checkpoints every 500M = 20 x 244
-# MB per arm; output on the shared 2 TB allocation, not the 300 GB home quota.
-name: variable-window-10b
+# Budget 5B per arm (user, 2026-09-05), so the control reads at its matched
+# 5B checkpoint, not its 10B endpoint. Two chained 15:59 segments, `afterany`,
+# each carrying the FULL 5B cap (the critic ramp and the budget both read it);
+# at combo's ~150k fps one segment reaches the cap and the second is slack.
+# Checkpoints every 200M = 25 x 244 MB per arm; output on the shared 2 TB
+# allocation, not the 300 GB home quota. W&B project `g1-bs-vw`, group
+# `variable-window-5b` (user, 2026-09-05).
+name: variable-window-5b
 profile: ice
-wandb_project: g1-bs-pareto
-# Group name: confirm with the user before submission.
-wandb_group: variable-window-10b
+wandb_project: g1-bs-vw
+wandb_group: variable-window-5b
 
 vars:
   task: Isaac-Imitation-G1-v2
@@ -94,13 +97,13 @@ vars:
   # --- Tracker scale: combo's 16,384 x 24 = 393,216 frames per batch ---
   train_num_envs: 16384
   rollout_steps: 24
-  frame_cap: 10000000000
+  frame_cap: 5000000000
   frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
   max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
 
   ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
   persist_id: bones_seed_sonic_full_129785@e714bbff
-  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/${vars.arm}_seed${vars.seed}
+  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b/${vars.arm}_seed${vars.seed}
 
   # combo's optimizer extras and actor history, verbatim.
   optim_args:
@@ -142,9 +145,9 @@ vars:
     - --logger_backend
     - wandb
     - --wandb_project
-    - g1-bs-pareto
+    - g1-bs-vw
     - --wandb_group
-    - variable-window-10b
+    - variable-window-5b
     - --wandb_run_name
     - ${vars.wandb_arm}-pretrain-s${vars.seed}
     - --horizon_steps
@@ -216,8 +219,8 @@ vars:
     - agent.logger.log_dir=${vars.output_root}/tracker
     - agent.logger.backend=wandb
     - agent.logger.video=false
-    - agent.logger.project_name=g1-bs-pareto
-    - agent.logger.group_name=variable-window-10b
+    - agent.logger.project_name=g1-bs-vw
+    - agent.logger.group_name=variable-window-5b
     - env.command_interface.actor=latent
     - env.command_interface.actor.dim=${vars.command_dim}
     - env.command_interface.encoder=single
@@ -243,7 +246,7 @@ vars:
     - agent.collector.frames_per_batch=${vars.rollout_steps}
     - agent.ipmd.expert_batch_size=24576
     - agent.loss.gamma=0.97
-    - agent.save_interval=500000000
+    - agent.save_interval=200000000
     - env.sim.physics.solver_cfg.njmax=320
     - env.sim.physics.solver_cfg.nconmax=200
     - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
@@ -268,7 +271,7 @@ vars:
   seg1_args:
     - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
 
-  # Resume segment. The cap stays 10B; the curriculum is over by 30M.
+  # Resume segment. The cap stays 5B; the curriculum is over by 30M.
   seg2_args:
     - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
     - env.enable_termination_curriculum=false
@@ -290,7 +293,7 @@ arms:
   # ---- at 10 = the control's window.
   vw_padded:
     vars:
-      wandb_id: vw10b-padded
+      wandb_id: vw5b-padded
       window_args:
         - --horizon_choices
         - "2"
@@ -310,7 +313,7 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},pretrain
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-5b,${vars.arm},seed${vars.seed},pretrain
       - name: lowlevel1
         executable: scripts/rlopt/train.py
         args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
@@ -322,7 +325,7 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel1
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-5b,${vars.arm},seed${vars.seed},lowlevel1
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
       - name: lowlevel2
@@ -337,7 +340,7 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel2
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-5b,${vars.arm},seed${vars.seed},lowlevel2
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
 
@@ -346,7 +349,7 @@ arms:
   # ---- depth 4, heads 6, about the MLP trunk's parameter count.
   vw_sequence:
     vars:
-      wandb_id: vw10b-sequence
+      wandb_id: vw5b-sequence
       window_args:
         - --horizon_choices
         - "2"
@@ -368,7 +371,7 @@ arms:
   # ---- code summarize" from the time scale of the target.
   vw_fixed_target:
     vars:
-      wandb_id: vw10b-fixedtgt
+      wandb_id: vw5b-fixedtgt
       window_args:
         - --horizon_choices
         - "2"
@@ -388,7 +391,7 @@ arms:
   # ---- macro window; one head per stride. Live at stride 1 = the control.
   vw_stride:
     vars:
-      wandb_id: vw10b-stride
+      wandb_id: vw5b-stride
       pretrain_horizon: "10"
       live_horizon: "1"
       window_args:
@@ -406,7 +409,7 @@ arms:
   # ---- truncation (`agent.ipmd.hl_skill_live_horizon=5` zeroes dims 32..63).
   vw_nested:
     vars:
-      wandb_id: vw10b-nested
+      wandb_id: vw5b-nested
       live_horizon: base
       window_args:
         - --horizon_choices
@@ -425,7 +428,7 @@ arms:
   # ---- `base` = every block; a single member keeps that block only.
   vw_block:
     vars:
-      wandb_id: vw10b-block
+      wandb_id: vw5b-block
       live_horizon: base
       window_args:
         - --horizon_choices
@@ -445,9 +448,9 @@ arms:
   # ---- live policy alone.
   vw_padded_live_step:
     vars:
-      wandb_id: vw10b-livestep
+      wandb_id: vw5b-livestep
       live_horizon: step
-      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
     stages: &vw_live_stages
       - name: lowlevel1
         executable: scripts/rlopt/train.py
@@ -459,7 +462,7 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel1
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-5b,${vars.arm},seed${vars.seed},lowlevel1
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
       - name: lowlevel2
@@ -474,27 +477,27 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel2
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-5b,${vars.arm},seed${vars.seed},lowlevel2
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
 
   vw_padded_live_episode:
     vars:
-      wandb_id: vw10b-liveep
+      wandb_id: vw5b-liveep
       live_horizon: episode
-      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
     stages: *vw_live_stages
 
   vw_padded_live15:
     vars:
-      wandb_id: vw10b-live15
+      wandb_id: vw5b-live15
       live_horizon: "15"
-      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
     stages: *vw_live_stages
 
   vw_padded_live5:
     vars:
-      wandb_id: vw10b-live5
+      wandb_id: vw5b-live5
       live_horizon: "5"
-      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
     stages: *vw_live_stages
