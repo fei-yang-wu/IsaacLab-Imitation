@@ -27,7 +27,14 @@ vars:
   pretrain_updates: 50000
   pretrain_batch_size: 8192
 
-  train_num_envs: 20480
+  # 16,384, not the 20,480 first submitted: at 20,480 the recurrent actor's
+  # BPTT activations plus the 491,520-frame rollout buffer leave physics no
+  # room and the run dies about 7 minutes in with `Warp CUDA error 2: out of
+  # memory` in `wp_cuda_graph_launch` (job 5697131, 2026-09-04; the same cell
+  # killed `2026-08-31-past-chunk-hist-50b` and `lstm_nophase`). Both LSTM
+  # arms of `2026-09-02-lstm-hub64-10b` run at 16,384, so this also matches
+  # the batch shape of `lstm_affine_std`, the nearest comparison row.
+  train_num_envs: 16384
   rollout_steps: 24
   frame_cap: 10000000000
   frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}

@@ -12,7 +12,7 @@ The fixed recipe is:
   `1e-5`;
 - a 256-unit LSTM actor and a feed-forward critic;
 - `random80_adaptive20` resets and the 5M-to-30M termination curriculum;
-- hold 1, sine/cosine phase, 20,480 environments (4096 x 5), and 10B frames;
+- hold 1, sine/cosine phase, 16,384 environments, and 10B frames;
 - W&B project `g1-bs-pareto`.
 
 There is no explicit actor observation history. The LSTM carries the policy's
@@ -97,3 +97,26 @@ PYTHONPATH=source/imitation_experiments .pixi/envs/default/bin/python -m imitati
   --plan logs/cluster_control/direct-affine-phi/direct-affine-phi-phi_lstm-s0-20260904-234437-d86a4691 \
   --confirm d86a4691e29fece70bec94fa707c56a2c7220585032105f25f955985ef90760a
 ```
+
+## First submission failed on GPU memory (2026-09-04)
+
+Jobs 5697130-5697132. The pretrain COMPLETED in 42:50 and its encoder is on
+disk at `/data/direct_affine_phi64/phi_lstm_seed0/encoder/checkpoints/latest.pt`
+(50,000 updates). The tracker died after 7:06:
+
+```
+RuntimeError: Graph launch error: Warp CUDA error 2: out of memory
+    (in function wp_cuda_graph_launch, warp.cu:3710)
+```
+
+raised from `newton_manager.step` -> `wp.capture_launch`, i.e. physics could
+not allocate its CUDA graph. At 20,480 environments the recurrent actor's BPTT
+activations plus the 491,520-frame rollout buffer take the room. `lowlevel2`
+then failed on `--checkpoint points at a tree with no model_step_<N>.pt file`,
+a cascade of the first failure, not a second fault.
+
+Fix: 16,384 environments, which both LSTM arms of `2026-09-02-lstm-hub64-10b`
+run at. The 10B frame target is unchanged; `max_iterations` recomputes to
+25,432. The resubmission plans only the tracker stages
+(`--only-stage lowlevel1,lowlevel2`) so the completed encoder is reused rather
+than pretrained again.
