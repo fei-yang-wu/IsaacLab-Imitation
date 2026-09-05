@@ -3669,7 +3669,7 @@ arms:
       - env.command_interface.encoder=single
       - agent.ipmd.latent_dim=66
       - agent.ipmd.command_source=hl_skill
-      - agent.ipmd.hl_skill_checkpoint_path=/storage/ice-shared/vip-vwt/scratch-fwu91/archived_data/latent_star_v2_checkpoints/g5_hold10_seed0/encoder/checkpoints/latest.pt
+      - agent.ipmd.hl_skill_checkpoint_path=/storage/ice-shared/vip-vwt/scratch-fwu91/archived_data/latent_star_v2_checkpoints/hub_seed0/encoder/checkpoints/latest.pt
       - agent.ipmd.hl_skill_horizon_steps=10
       - agent.ipmd.hl_skill_command_mode=z
       - agent.ipmd.hl_skill_finetune_enabled=false
@@ -3760,7 +3760,7 @@ arms:
       - env.command_interface.encoder=single
       - agent.ipmd.latent_dim=66
       - agent.ipmd.command_source=hl_skill
-      - agent.ipmd.hl_skill_checkpoint_path=/storage/ice-shared/vip-vwt/scratch-fwu91/archived_data/latent_star_v2_checkpoints/g5_hold5_seed0/encoder/checkpoints/latest.pt
+      - agent.ipmd.hl_skill_checkpoint_path=/storage/ice-shared/vip-vwt/scratch-fwu91/archived_data/latent_star_v2_checkpoints/hub_seed0/encoder/checkpoints/latest.pt
       - agent.ipmd.hl_skill_horizon_steps=10
       - agent.ipmd.hl_skill_command_mode=z
       - agent.ipmd.hl_skill_finetune_enabled=false
@@ -3851,7 +3851,7 @@ arms:
       - env.command_interface.encoder=single
       - agent.ipmd.latent_dim=64
       - agent.ipmd.command_source=hl_skill
-      - agent.ipmd.hl_skill_checkpoint_path=/storage/ice-shared/vip-vwt/scratch-fwu91/archived_data/latent_star_v2_checkpoints/g5_phase_none_h10_seed0/encoder/checkpoints/latest.pt
+      - agent.ipmd.hl_skill_checkpoint_path=/storage/ice-shared/vip-vwt/scratch-fwu91/archived_data/latent_star_v2_checkpoints/hub_seed0/encoder/checkpoints/latest.pt
       - agent.ipmd.hl_skill_horizon_steps=10
       - agent.ipmd.hl_skill_command_mode=z
       - agent.ipmd.hl_skill_finetune_enabled=false

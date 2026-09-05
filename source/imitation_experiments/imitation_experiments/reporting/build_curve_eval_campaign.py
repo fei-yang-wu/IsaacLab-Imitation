@@ -56,6 +56,24 @@ def _resolve(value: Any, merged: dict[str, Any], arm: str, seed: int) -> Any:
     return value
 
 
+def encoder_path(merged: dict[str, Any], arm: str, seed: int, tree_root: str) -> str:
+    """Where this arm's frozen encoder lives, inside the archived tree root.
+
+    Most arms pretrain their own, but the cadence arms bind the HUB's file
+    through a `${vars.hub_encoder}` indirection and never write one of their
+    own. Assuming `<arm>/encoder/checkpoints/latest.pt` makes those jobs die on
+    FileNotFoundError after paying for a full Isaac Sim start (2026-09-01).
+    """
+    raw = _resolve(merged.get("encoder_ckpt", ""), merged, arm, seed)
+    text = str(raw)
+    # The training campaign writes container paths under /data/<campaign>/;
+    # the curves read the archived copy instead.
+    marker = "/latent_star_v2/"
+    if marker in text:
+        return tree_root.rstrip("/") + "/" + text.split(marker, 1)[1]
+    return f"{tree_root}/{arm}_seed{seed}/encoder/checkpoints/latest.pt"
+
+
 def arm_stage(
     arm: str,
     merged: dict[str, Any],
@@ -144,7 +162,7 @@ def arm_stage(
     else:
         args += [
             "agent.ipmd.command_source=hl_skill",
-            f"agent.ipmd.hl_skill_checkpoint_path={tree}/encoder/checkpoints/latest.pt",
+            f"agent.ipmd.hl_skill_checkpoint_path={encoder_path(merged, arm, seed, tree_root)}",
             f"agent.ipmd.hl_skill_horizon_steps={int(merged['horizon'])}",
             f"agent.ipmd.hl_skill_command_mode={merged['command_mode']}",
             "agent.ipmd.hl_skill_finetune_enabled=false",
