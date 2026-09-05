@@ -1,0 +1,500 @@
+# 2026-09-05 - variable-window skill encoders on the `combo` hub, 10B each.
+#
+# CONTROL: `combo` in `2026-09-01-latent64-probe-10b` (W&B `l64p-combo-s0`),
+# scored at 10B on `bones_testbed4096_v1` clean: 0.9214 SR / 22.64 MPJPE-L /
+# 88.52 MPJPE-G, one seed. Its recipe is copied here field for field: the
+# past-5 AFFINE phi encoder (merged single head, 64-D, LayerNorm, intermediate
+# window, deterministic latent, 50,000 updates at batch 8,192), MLP actor with
+# the ten-step proprio history, full-batch / 3-epoch entry point,
+# optim.weight_decay=1e-2, linear critic decay to 1e-5, random80_adaptive20
+# resets with the 5M-30M termination curriculum, 16,384 x 24 frames per batch,
+# hold 1, sin_cos phase (a constant at hold 1, kept by user decision).
+#
+# WHAT MOVES: the encoder's window. Every arm pretrains its own encoder with a
+# SET of window sizes drawn per row and deploys it through the frozen sampler
+# under one live policy. The control's encoder reads one fixed 10-frame window
+# (s[t+1..t+9] visible, s[t+10] hidden) and denoises s[t+10..t+20]. Six arms,
+# one mechanism each; each arm therefore differs from `combo` in its encoder
+# pretrain PLUS the live window policy that pretrain implies, and in nothing
+# else. A new pretrain also carries encoder-initialization noise, measured in
+# 2026-08-30-encoder-interface-500m as 0.0064 SR / 0.46 mm MPJPE-L / 10.8 mm
+# MPJPE-G across three replicates of one recipe.
+#
+# Terms. "horizon set" = {2, 5, 10, 15}: a row drawn at h sees s[t+1..t+h-1]
+# and its head denoises s[t+h..t+2h]. "live policy" = which member the
+# tracker's frozen encoder uses at rollout (`agent.ipmd.hl_skill_live_horizon`):
+# a member value, `base` (max horizon / stride 1 / all blocks), `episode`
+# (one member per environment, redrawn at reset) or `step` (redrawn every
+# code renewal).
+#
+# | arm              | pretrain change                                     | live |
+# |------------------|-----------------------------------------------------|------|
+# | vw_padded        | horizon set, zero-masked MLP + one-hot, head per h  | 10   |
+# | vw_sequence      | same set, attention trunk over frame tokens         | 10   |
+# | vw_fixed_target  | same set on the input, ONE head at s[t+10..t+20]    | 10   |
+# | vw_stride        | stride set {1,2,3} on a 10-frame window, head per s | 1    |
+# | vw_nested        | full 15-window input; head h reads a z prefix       | base |
+# | vw_block         | full 15-window input; head h reads its own z block  | base |
+#
+# The horizon arms deploy at 10 so the tracker's command comes from the SAME
+# window as the control's; `vw_stride` deploys at stride 1 for the same
+# reason. `vw_nested` and `vw_block` have one code for every scale, so `base`
+# (the full code) is their deployable command. The live-policy question
+# (step / episode / 15 / 5 on the padded encoder) is the second wave: the
+# `vw_padded_live_*` arms below reuse `vw_padded`'s encoder and cannot be
+# planned until its pretrain has written latest.pt.
+#
+# `vw_sequence` is parameter-matched to the control's MLP trunk within ~15%
+# (width 384, depth 4, heads 6 vs the 2048/1024/512/512 MLP). Its per-step
+# cost at 16,384 environments is attention over <= 15 tokens.
+#
+# ONE VARIABLE, TWO STAGES. `hl_skill_horizon_steps` is the checkpoint's
+# maximum horizon (15 for the horizon arms, 10 for `vw_stride`); the frozen
+# sampler hard-fails on a mismatch.
+#
+# Two chained 15:59 segments, `afterany`, each carrying the FULL 10B cap (the
+# critic ramp and the budget both read it). Checkpoints every 500M = 20 x 244
+# MB per arm; output on the shared 2 TB allocation, not the 300 GB home quota.
+name: variable-window-10b
+profile: ice
+wandb_project: g1-bs-pareto
+# Group name: confirm with the user before submission.
+wandb_group: variable-window-10b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  agent_entry: rlopt_ipmd_tuned_fullbatch_cfg_entry_point
+
+  # --- Latent interface: the combo hub ---
+  z_dim: 64
+  command_dim: 66
+  code_latent_dim: 64
+  window_mode: intermediate
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  hold: 1
+  phase_mode: sin_cos
+  command_mode: z
+
+  # --- The variable: the encoder's window set and its live policy ---
+  # Checkpoint maximum horizon; also the sampler's assertion.
+  pretrain_horizon: "15"
+  window_args: []
+  live_horizon: "10"
+
+  # --- Encoder pretraining (combo: past-5 affine phi, merged head) ---
+  source_args: ["--source_history_steps", "5", "--source_anchor", "current"]
+  phi_parameterization: affine
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+  encoder_ckpt: ${vars.output_root}/encoder/checkpoints/latest.pt
+
+  # --- Tracker scale: combo's 16,384 x 24 = 393,216 frames per batch ---
+  train_num_envs: 16384
+  rollout_steps: 24
+  frame_cap: 10000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/${vars.arm}_seed${vars.seed}
+
+  # combo's optimizer extras and actor history, verbatim.
+  optim_args:
+    - agent.optim.weight_decay=1.0e-2
+    - agent.ipmd.critic_lr_schedule=linear
+    - agent.ipmd.critic_lr_final=1.0e-5
+  history_args:
+    - env.observations.policy.projected_gravity.history_length=10
+    - env.observations.policy.base_ang_vel.history_length=10
+    - env.observations.policy.joint_pos_rel.history_length=10
+    - env.observations.policy.joint_vel_rel.history_length=10
+    - env.observations.policy.last_action.history_length=10
+
+  reward_args:
+    - env.rewards.motion_ee_pos.weight=1.0
+    - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    - env.rewards.action_rate_l2.weight=-0.03
+
+  # combo's `select_std`: reset selection and curriculum verbatim.
+  select_std:
+    - env.command_interface.reference.selection=random80_adaptive20
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+
+  pretrain_head:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bs-pareto
+    - --wandb_group
+    - variable-window-10b
+    - --wandb_run_name
+    - ${vars.wandb_arm}-pretrain-s${vars.seed}
+    - --horizon_steps
+    - ${vars.pretrain_horizon}
+    - --encoder_window_mode
+    - ${vars.window_mode}
+    - --transition_objective
+    - jepa_ntp
+    - --jepa_loss
+    - sigreg_ebm
+    - --jepa_ntp_head
+    - diff_chunk
+    - --jepa_ntp_chunk_span
+    - boundary_next
+    - --jepa_endpoint_coeff
+    - "0"
+    - --diffsr_phi_parameterization
+    - ${vars.phi_parameterization}
+    - --latent_mode
+    - deterministic
+    - --z_dim
+    - ${vars.z_dim}
+    - --encoder_layer_norm
+
+  pretrain_tail:
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - ${vars.agent_entry}
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bs-pareto
+    - agent.logger.group_name=variable-window-10b
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=${vars.command_dim}
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=${vars.command_dim}
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=${vars.pretrain_horizon}
+    - agent.ipmd.hl_skill_live_horizon=${vars.live_horizon}
+    - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - agent.ipmd.latent_steps_min=${vars.hold}
+    - agent.ipmd.latent_steps_max=${vars.hold}
+    - agent.ipmd.latent_learning.code_period=${vars.hold}
+    - agent.ipmd.latent_learning.command_phase_mode=${vars.phase_mode}
+    - agent.ipmd.latent_learning.code_latent_dim=${vars.code_latent_dim}
+
+  tuned_core:
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.data.reference_prefetch_mode=next
+
+  # No `agent.loss.mini_batch_size` here: the fullbatch entry point owns it.
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+
+  # Resume segment. The cap stays 10B; the curriculum is over by 30M.
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.enable_termination_curriculum=false
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+  output_container_path: ${vars.output_root}
+
+arms:
+  # ---- Idea 1. The horizon set {2,5,10,15} drawn per row. The encoder is the
+  # ---- control's MLP over the window padded to 14 visible slots, slots past
+  # ---- h-1 zeroed, plus a 4-way one-hot of h. One merged head per h. Live
+  # ---- at 10 = the control's window.
+  vw_padded:
+    vars:
+      wandb_id: vw10b-padded
+      window_args:
+        - --horizon_choices
+        - "2"
+        - "5"
+        - "10"
+        - "15"
+        - --horizon_encoder
+        - padded
+    stages: &vw_stages
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.window_args},${vars.source_args},${vars.pretrain_tail},${vars.data_overrides}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},pretrain
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        depends_on: pretrain
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # ---- Idea 3. Same set; the trunk is attention over frame tokens (state +
+  # ---- up to 14 visible frames), key-padded past h-1, mean-pooled. Width 384,
+  # ---- depth 4, heads 6, about the MLP trunk's parameter count.
+  vw_sequence:
+    vars:
+      wandb_id: vw10b-sequence
+      window_args:
+        - --horizon_choices
+        - "2"
+        - "5"
+        - "10"
+        - "15"
+        - --horizon_encoder
+        - sequence
+        - --sequence_width
+        - "384"
+        - --sequence_depth
+        - "4"
+        - --sequence_heads
+        - "6"
+    stages: *vw_stages
+
+  # ---- Idea 2. Input length varies, the target does not: one head denoising
+  # ---- s[t+10..t+20] for every drawn h. Separates "how much future must the
+  # ---- code summarize" from the time scale of the target.
+  vw_fixed_target:
+    vars:
+      wandb_id: vw10b-fixedtgt
+      window_args:
+        - --horizon_choices
+        - "2"
+        - "5"
+        - "10"
+        - "15"
+        - --horizon_encoder
+        - padded
+        - --horizon_target_mode
+        - fixed
+        - --horizon_fixed_target_steps
+        - "10"
+    stages: *vw_stages
+
+  # ---- Idea 4. Fixed frame count, variable duration: 10 frames at stride
+  # ---- 1, 2 or 3 (0.2 / 0.4 / 0.6 s), gathered in RLOpt from a stride-1
+  # ---- macro window; one head per stride. Live at stride 1 = the control.
+  vw_stride:
+    vars:
+      wandb_id: vw10b-stride
+      pretrain_horizon: "10"
+      live_horizon: "1"
+      window_args:
+        - --stride_choices
+        - "1"
+        - "2"
+        - "3"
+        - --horizon_encoder
+        - padded
+    stages: *vw_stages
+
+  # ---- Idea 5. One code from the full 15-frame window; the head for h reads
+  # ---- the prefix z[: 64 * i/4] (16 / 32 / 48 / 64 dims for 2 / 5 / 10 / 15).
+  # ---- Live `base` = the full code; a shorter horizon at rollout is a
+  # ---- truncation (`agent.ipmd.hl_skill_live_horizon=5` zeroes dims 32..63).
+  vw_nested:
+    vars:
+      wandb_id: vw10b-nested
+      live_horizon: base
+      window_args:
+        - --horizon_choices
+        - "2"
+        - "5"
+        - "10"
+        - "15"
+        - --horizon_input_mode
+        - full
+        - --horizon_code_layout
+        - nested
+    stages: *vw_stages
+
+  # ---- Idea 6. One code from the full window; the head for h reads its own
+  # ---- disjoint 16-dim block, so the tracker sees four scales at once. Live
+  # ---- `base` = every block; a single member keeps that block only.
+  vw_block:
+    vars:
+      wandb_id: vw10b-block
+      live_horizon: base
+      window_args:
+        - --horizon_choices
+        - "2"
+        - "5"
+        - "10"
+        - "15"
+        - --horizon_input_mode
+        - full
+        - --horizon_code_layout
+        - block
+    stages: *vw_stages
+
+  # ---- SECOND WAVE: the live-policy axis on the padded encoder. No pretrain
+  # ---- stage; the encoder is `vw_padded`'s, so these plan only after that
+  # ---- pretrain has written latest.pt. Each differs from `vw_padded` in the
+  # ---- live policy alone.
+  vw_padded_live_step:
+    vars:
+      wandb_id: vw10b-livestep
+      live_horizon: step
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+    stages: &vw_live_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_std},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,variable-window-10b,${vars.arm},seed${vars.seed},lowlevel2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  vw_padded_live_episode:
+    vars:
+      wandb_id: vw10b-liveep
+      live_horizon: episode
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+    stages: *vw_live_stages
+
+  vw_padded_live15:
+    vars:
+      wandb_id: vw10b-live15
+      live_horizon: "15"
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+    stages: *vw_live_stages
+
+  vw_padded_live5:
+    vars:
+      wandb_id: vw10b-live5
+      live_horizon: "5"
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_10b/vw_padded_seed${vars.seed}/encoder/checkpoints/latest.pt
+    stages: *vw_live_stages
