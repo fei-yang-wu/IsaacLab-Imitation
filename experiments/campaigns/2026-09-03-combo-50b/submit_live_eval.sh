@@ -25,11 +25,15 @@ LIVE_ROOT="${LIVE_ROOT:-${DATA}/combo_50b_live/combo_seed0/tracker}"
 EVAL_DIR="${EVAL_DIR:-${DATA}/eval/latest_eval}"
 EVAL_CAMPAIGN="${EVAL_CAMPAIGN:-experiments/campaigns/2026-09-02-latest-eval/campaign.yaml}"
 ARM="${ARM:-combo50b_live}"
+# The eval row is named by `vars.eval_arm` (combo50b), NOT by the campaign arm
+# name, so a row of this chain can never collide with the flat-mix `combo`
+# run's rows at the same frame count.
+EVAL_ARM="${EVAL_ARM:-combo50b}"
 DRY_RUN="${DRY_RUN:-0}"
 
 newest="$(timeout 90 ssh "${REMOTE}" "ls ${TRAIN_TREE}/*/models/model_step_*.pt 2>/dev/null | sed 's|.*/||' | sed -E 's/model_step_([0-9]+)\.pt/\1/' | sort -n | tail -1")"
 [ -n "${newest}" ] || { echo "[LIVE-EVAL] no checkpoint under ${TRAIN_TREE}"; exit 0; }
-if timeout 90 ssh "${REMOTE}" "test -s ${EVAL_DIR}/combo_seed0_clean_f${newest}.json"; then
+if timeout 90 ssh "${REMOTE}" "test -s ${EVAL_DIR}/${EVAL_ARM}_seed0_clean_f${newest}.json"; then
     echo "[LIVE-EVAL] f${newest} already scored; nothing to do"
     exit 0
 fi
@@ -60,4 +64,4 @@ if [ "${DRY_RUN}" = "1" ]; then
 fi
 pixi run python -m imitation_experiments.pipeline.cluster submit \
     --plan "${PLAN}" --confirm "${SHA}" | grep -E 'job |refusing|ERROR'
-echo "[LIVE-EVAL] scored row will land at ${EVAL_DIR}/combo_seed0_clean_f${newest}.json"
+echo "[LIVE-EVAL] scored row will land at ${EVAL_DIR}/${EVAL_ARM}_seed0_clean_f${newest}.json"
