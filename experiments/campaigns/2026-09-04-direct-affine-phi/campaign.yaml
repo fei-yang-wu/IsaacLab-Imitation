@@ -34,7 +34,7 @@ vars:
   # killed `2026-08-31-past-chunk-hist-50b` and `lstm_nophase`). Both LSTM
   # arms of `2026-09-02-lstm-hub64-10b` run at 16,384, so this also matches
   # the batch shape of `lstm_affine_std`, the nearest comparison row.
-  train_num_envs: 16384
+  train_num_envs: 12288
   rollout_steps: 24
   frame_cap: 10000000000
   frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}

@@ -12,7 +12,7 @@ The fixed recipe is:
   `1e-5`;
 - a 256-unit LSTM actor and a feed-forward critic;
 - `random80_adaptive20` resets and the 5M-to-30M termination curriculum;
-- hold 1, sine/cosine phase, 16,384 environments, and 10B frames;
+- hold 1, sine/cosine phase, 12,288 environments, and 10B frames;
 - W&B project `g1-bs-pareto`.
 
 There is no explicit actor observation history. The LSTM carries the policy's
@@ -115,8 +115,17 @@ activations plus the 491,520-frame rollout buffer take the room. `lowlevel2`
 then failed on `--checkpoint points at a tree with no model_step_<N>.pt file`,
 a cascade of the first failure, not a second fault.
 
-Fix: 16,384 environments, which both LSTM arms of `2026-09-02-lstm-hub64-10b`
-run at. The 10B frame target is unchanged; `max_iterations` recomputes to
-25,432. The resubmission plans only the tracker stages
-(`--only-stage lowlevel1,lowlevel2`) so the completed encoder is reused rather
-than pretrained again.
+First fix, 16,384 environments, FAILED the same way (job 5698695, 10:25,
+OOM after iteration 77). The phi command path costs more GPU memory than a
+z-only command: the frozen encoder gathers a six-frame 228-value source
+window per environment per step and the restored DiffSR head runs on it.
+Throughput at 16,384 was 135k fps against 149k for the z-only LSTM arms, the
+same signal. Second fix: 12,288 environments, the demotion `lstm_nophase`
+needed for the identical failure. The 10B frame target is unchanged;
+`max_iterations` recomputes to 33,908. Batch shape now differs from
+`lstm_affine_std` (16,384), so that comparison carries a batch-size
+difference as well as the command representation.
+
+Every resubmission plans only the tracker stages
+(`--only-stage lowlevel1,lowlevel2`) so the completed encoder is reused
+rather than pretrained again.
