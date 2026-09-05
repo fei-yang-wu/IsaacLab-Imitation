@@ -231,6 +231,76 @@ parser.add_argument(
         "only H for endpoint objectives and every step for occupancy/chain."
     ),
 )
+parser.add_argument(
+    "--horizon_choices",
+    type=int,
+    nargs="*",
+    default=None,
+    help=(
+        "Variable-window encoder: the horizon SET, strictly increasing, whose "
+        "maximum must equal --horizon_steps. Each pretrain row draws one member. "
+        "Empty (default) keeps the fixed window."
+    ),
+)
+parser.add_argument(
+    "--horizon_input_mode",
+    type=str,
+    default="sample",
+    choices=("sample", "full"),
+    help=(
+        "Under --horizon_choices: 'sample' feeds the encoder the drawn horizon's "
+        "visible window; 'full' always feeds the maximum window and lets the "
+        "drawn horizon pick the target head only."
+    ),
+)
+parser.add_argument(
+    "--horizon_encoder",
+    type=str,
+    default="padded",
+    choices=("padded", "sequence"),
+    help="Trunk under a variant set: zero-masked MLP with a variant one-hot, or attention over frame tokens.",
+)
+parser.add_argument(
+    "--horizon_target_mode",
+    type=str,
+    default="follow",
+    choices=("follow", "fixed"),
+    help=(
+        "'follow': one merged head per horizon in the set, each denoising its own "
+        "s[t+h..t+2h]; 'fixed': one head at --horizon_fixed_target_steps for every input length."
+    ),
+)
+parser.add_argument(
+    "--horizon_fixed_target_steps",
+    type=int,
+    default=0,
+    help="Target horizon of the single head under --horizon_target_mode fixed (0 = --horizon_steps).",
+)
+parser.add_argument(
+    "--horizon_code_layout",
+    type=str,
+    default="flat",
+    choices=("flat", "nested", "block"),
+    help=(
+        "How per-horizon heads read z: all dims (flat), a growing prefix per horizon "
+        "(nested), or a disjoint block per horizon (block). Non-flat layouts require "
+        "--horizon_input_mode full."
+    ),
+)
+parser.add_argument(
+    "--stride_choices",
+    type=int,
+    nargs="*",
+    default=None,
+    help=(
+        "Variable-duration encoder: the frame-stride SET (must contain 1). Each row "
+        "draws one stride and gathers its --horizon_steps-frame window at that "
+        "spacing. Mutually exclusive with --horizon_choices."
+    ),
+)
+parser.add_argument("--sequence_width", type=int, default=256)
+parser.add_argument("--sequence_depth", type=int, default=2)
+parser.add_argument("--sequence_heads", type=int, default=4)
 parser.add_argument("--z_dim", type=int, default=256, help="Skill latent dimension.")
 parser.add_argument(
     "--latent_mode",
@@ -651,6 +721,16 @@ def _build_trainer_config(
         jepa_context_chunks=args_cli.jepa_context_chunks,
         jepa_target_encoder_mode=args_cli.jepa_target_encoder_mode,
         transition_offsets=tuple(args_cli.transition_offsets or ()),
+        horizon_choices=tuple(args_cli.horizon_choices or ()),
+        horizon_input_mode=args_cli.horizon_input_mode,
+        horizon_encoder=args_cli.horizon_encoder,
+        horizon_target_mode=args_cli.horizon_target_mode,
+        horizon_fixed_target_steps=args_cli.horizon_fixed_target_steps,
+        horizon_code_layout=args_cli.horizon_code_layout,
+        stride_choices=tuple(args_cli.stride_choices or ()),
+        sequence_width=args_cli.sequence_width,
+        sequence_depth=args_cli.sequence_depth,
+        sequence_heads=args_cli.sequence_heads,
         z_dim=args_cli.z_dim,
         latent_mode=args_cli.latent_mode,
         reg_coeff=args_cli.reg_coeff,
