@@ -54,6 +54,53 @@ def test_pretrained_arm_binds_its_own_encoder_and_hl_skill_source(tmp_path):
     assert args[args.index("--tree") + 1] == f"{TREE}/hub_seed0"
 
 
+def test_an_arm_that_binds_a_parent_encoder_points_at_that_parent(tmp_path):
+    # The regression this guards: the cadence arms reuse the hub's encoder and
+    # never write one of their own, so assuming <arm>/encoder/... made those
+    # jobs die on FileNotFoundError after a full Isaac Sim start (2026-09-01).
+    doc = {
+        "name": "train",
+        "vars": {
+            "task": "T",
+            "z_dim": 64,
+            "command_dim": 66,
+            "code_latent_dim": 64,
+            "hold": 1,
+            "horizon": 10,
+            "phase_mode": "sin_cos",
+            "phase_source": "hold",
+            "phase_period": 0,
+            "command_mode": "z",
+            "macro_terms": "[m]",
+            "stride": 1,
+            "anchor_mode": "robot_heading",
+            "route": "pretrained",
+            "extra_args": [],
+            "encoder_ckpt": "${vars.output_root}/encoder/checkpoints/latest.pt",
+            "hub_encoder": "/data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt",
+        },
+        "arms": {
+            "hub": {"vars": {}},
+            "g5_hold5": {"vars": {"hold": 5, "encoder_ckpt": "${vars.hub_encoder}"}},
+        },
+    }
+    path = tmp_path / "campaign.yaml"
+    path.write_text(yaml.safe_dump(doc))
+    text = build(path, TREE, EVAL, 0)
+
+    reuse = _args(text, "g5_hold5")
+    assert (
+        f"agent.ipmd.hl_skill_checkpoint_path={TREE}/hub_seed0/encoder/checkpoints/latest.pt"
+        in reuse
+    ), "a cadence arm must bind the HUB's encoder, not its own missing one"
+
+    own = _args(text, "hub")
+    assert (
+        f"agent.ipmd.hl_skill_checkpoint_path={TREE}/hub_seed0/encoder/checkpoints/latest.pt"
+        in own
+    )
+
+
 def test_posterior_arm_switches_entry_point_and_encoder_source(tmp_path):
     path = _training_campaign(
         tmp_path,

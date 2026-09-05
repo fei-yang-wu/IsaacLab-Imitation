@@ -19,10 +19,18 @@ REPO_ROOT="$(git -C "${CAMPAIGN_DIR}" rev-parse --show-toplevel)"
 cd "${REPO_ROOT}"
 REMOTE_HOST="${REMOTE_HOST:-ice}"
 
-mapfile -t all < <(pixi run python -c "
+# The loop reads `all`. An ARMS override must be copied into it: an earlier
+# version had no branch here at all, so `ARMS=... ./submit_all.sh` looked like
+# it worked and silently submitted every arm instead of the eleven asked for
+# (2026-09-01).
+if [[ -n "${ARMS:-}" ]]; then
+    read -r -a all <<< "${ARMS}"
+else
+    mapfile -t all < <(pixi run python -c "
 import yaml
 print('\n'.join(yaml.safe_load(open('${CAMPAIGN_DIR}/campaign.yaml'))['arms']))
 ")
+fi
 
 # Skip ONLY arms with a job in the queue right now. A COMPLETED job is NOT a
 # reason to skip: it may have scored a different board, and re-running is cheap
