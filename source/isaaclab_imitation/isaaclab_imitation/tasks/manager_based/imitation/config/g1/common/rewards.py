@@ -499,3 +499,30 @@ class G1V2TunedRewardsCfg(G1SonicRewardsCfg):
             "std": 0.15,
         },
     )
+
+
+@configclass
+class G1V3ComboRewardsCfg(G1V2TunedRewardsCfg):
+    """`-G1-v3` tracking weights: the `combo` recipe (2026-09-03).
+
+    A SUBCLASS of the v2 tuned weights, which stay frozen for `-G1-v2`. Four
+    weights move, all of them the overrides every campaign since
+    `merged64_pen_ramp_5b` (2026-08-28) has passed on the command line:
+
+    * ``motion_ee_pos`` 0.0 -> 1.0 and ``motion_global_anchor_pos_wide``
+      0.0 -> 1.0: the `ee x wide` cell of the pareto-stack mechanism square.
+    * ``tracking_reward_points`` 2.0 -> 4.0: the tuned recipe's value.
+    * ``action_rate_l2`` -0.1 -> -0.03: the from-scratch smoothness penalty
+      (about -34% action jerk at no success-rate cost at a matched 4.75B).
+
+    ``feet_acc`` keeps its -2.5e-6 (SONIC parity, in-tree since 2026-08-28).
+    """
+
+    def __post_init__(self):
+        post_init = getattr(super(), "__post_init__", None)
+        if callable(post_init):
+            post_init()
+        self.motion_ee_pos.weight = 1.0
+        self.motion_global_anchor_pos_wide.weight = 1.0
+        self.tracking_reward_points.weight = 4.0
+        self.action_rate_l2.weight = -0.03

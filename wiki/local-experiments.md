@@ -1,6 +1,6 @@
 # Running Experiments Locally
 
-The current default G1 pipeline, on a workstation. Status: 2026-08-03.
+The current default G1 pipeline, on a workstation. Status: 2026-09-06 (defaults moved to `-G1-v3`).
 
 One script runs both stages:
 
@@ -17,12 +17,12 @@ the scale differs. `DRY_RUN=1` prints both commands and runs nothing.
 
 | | value | why it is this |
 |---|---|---|
-| task | `Isaac-Imitation-G1-v2` | highest-numbered `-G1-vN`; the older ids stay registered for frozen reproductions only |
-| agent | `rlopt_ipmd_tuned_cfg_entry_point` | the tuned/scaled recipe from the 2026-08-02 screen: 4.6x return/min at matched 100M |
-| encoder | `--latent-mode deterministic`, horizon 10, `z_dim` 256 | det-SR; discrete variants (fsq/vq/categorical) exist but are not the default |
-| command width | **258** = `z_dim` + 2 | the `sin_cos` phase. Dropping it is catastrophic — episode length 21 against 144 |
+| task | `Isaac-Imitation-G1-v3` (2026-09-06, the `combo` recipe; `-G1-v2` frozen) | highest-numbered `-G1-vN`; the older ids stay registered for frozen reproductions only |
+| agent | `rlopt_ipmd_cfg_entry_point` of `-G1-v3` = `G1ImitationComboRLOptIPMDConfig` (full batch, 3 epochs, weight decay 1e-2, linear critic decay, release-size nets) | the `combo` recipe (2026-09-03); `rlopt_ipmd_tuned_cfg_entry_point` stays the frozen 2026-08-02 recipe |
+| encoder | past-5 affine phi, merged head, horizon 10, `z_dim` 64 (`p5_affine`, `2026-08-30-past-chunk-affine-64d`); pass its `latest.pt` as `agent.ipmd.hl_skill_checkpoint_path` | det-SR; the encoder is an artifact, never a repo default |
+| command width | **66** = `z_dim` 64 + 2 | the `sin_cos` phase, constant at hold 1 and kept: every no-phase 64-D hold-1 arm stalled |
 | terminations | **instantaneous** | the registered protocol every oracle-qualification number is stated against |
-| physics | `newton_mjwarp`, njmax 288 / nconmax 200 | the mjwarp-aligned solver settings the cluster trains on |
+| physics | `newton_mjwarp`, njmax 320 / nconmax 200 (v3; v2 keeps 288) | the mjwarp-aligned solver settings the cluster trains on |
 
 The tuned recipe is selected **by entry point**, never by copying its fields.
 It is a separate registered class, so earlier runs keep resolving what they

@@ -838,6 +838,33 @@ class G1V2ObservationCfg:
     reward_input: RewardInputUnitCfg = RewardInputUnitCfg()
 
 
+@configclass
+class G1V3ObservationCfg(G1V2ObservationCfg):
+    """The v3 surface: v2's groups with the `combo` actor history.
+
+    Ten-step histories on the five actor proprio terms (projected gravity,
+    base angular velocity, relative joint position and velocity, last action):
+    the `obs_hist` lever of `2026-09-01-latent64-probe-10b`, passed until now
+    as five ``env.observations.policy.<term>.history_length=10`` overrides.
+    The critic stays single-frame, and the command terms are untouched. The
+    actor observation grows from about 157 to about 994 values per frame,
+    which is why the recipe's environment count is 16,384 and not 20,480.
+    """
+
+    def __post_init__(self):
+        post_init = getattr(super(), "__post_init__", None)
+        if callable(post_init):
+            post_init()
+        for term in (
+            self.policy.projected_gravity,
+            self.policy.base_ang_vel,
+            self.policy.joint_pos_rel,
+            self.policy.joint_vel_rel,
+            self.policy.last_action,
+        ):
+            term.history_length = 10
+
+
 # ---------------------------------------------------------------------------
 # Command-term pruning / whitelist constants and anchor tables.
 # ---------------------------------------------------------------------------

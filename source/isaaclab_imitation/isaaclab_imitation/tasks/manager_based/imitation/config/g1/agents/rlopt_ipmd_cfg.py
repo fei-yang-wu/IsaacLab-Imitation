@@ -999,6 +999,68 @@ class G1ImitationTunedFullBatchLinearLRRLOptIPMDConfig(
 
 
 @configclass
+class G1ImitationComboRLOptIPMDConfig(G1ImitationTunedFullBatchRLOptIPMDConfig):
+    """The `combo` recipe (2026-09-03), the default of `Isaac-Imitation-G1-v3`.
+
+    Select with ``--agent rlopt_ipmd_combo_cfg_entry_point`` on any v2 task, or
+    take it as `-G1-v3`'s default. A NEW class rather than an edit to the
+    full-batch one, for the reason every class above gives: the campaigns that
+    resolve that contract stay reproducible.
+
+    What moves against ``G1ImitationTunedFullBatchRLOptIPMDConfig``, and the
+    override each replaces (`2026-09-01-latent64-probe-10b` arm `combo`,
+    promoted to the `combo-50b` chain):
+
+    * networks: the release-size 2048/2048/1024/1024/512/512 silu MLPs for
+      actor and critic (``agent.policy.num_cells``, ``agent.value_function.*``).
+    * ``optim.weight_decay`` 0 -> 1e-2 (AdamW no longer behaving as Adam).
+    * ``ipmd.critic_lr_schedule`` constant -> linear, ``critic_lr_final`` 1e-5:
+      the critic lr decays 1e-3 -> 1e-5 over ``collector.total_frames``, which
+      is the segment's own ``--max_iterations`` -- so every chained segment
+      must carry the FULL frame cap, or the critic lr jumps back up.
+    * the 64-D merged-head latent command: ``ipmd.latent_dim`` 66,
+      ``code_latent_dim`` 64, hold 1 (``latent_steps_min/max`` 1,
+      ``code_period`` 1), ``command_phase_mode`` sin_cos (a constant at hold
+      1, kept because every no-phase 64-D hold-1 arm stalled),
+      ``hl_skill_horizon_steps`` 10, ``hl_skill_command_mode`` z, no finetune.
+    * ``ipmd.expert_batch_size`` 24,576.
+
+    ``collector.frames_per_batch`` stays 24 per environment and ``loss.gamma``
+    0.97 from the tuned base. The recipe's environment count is 16,384 (the
+    ten-step actor history OOMs the Newton graph at 20,480); pass it with
+    ``--num_envs``. ``hl_skill_checkpoint_path`` has no default: point it at
+    the past-5 affine merged-head encoder (``p5_affine``,
+    `2026-08-30-past-chunk-affine-64d`) or training refuses to start.
+
+    Evidence, one seed, `bones_testbed4096_v1` clean: `combo` 0.9214 / 22.64 /
+    88.52 at 10B against `z64_merged` 0.9292 / 23.25 / 93.09 at 9.5B; it
+    stacks four levers, so no row attributes to one of them.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+        assert self.value_function is not None
+        self.policy.num_cells = [2048, 2048, 1024, 1024, 512, 512]
+        self.value_function.num_cells = [2048, 2048, 1024, 1024, 512, 512]
+        self.policy.activation_fn = "silu"
+        self.value_function.activation_fn = "silu"
+        self.optim.weight_decay = 1.0e-2
+        self.ipmd.critic_lr_schedule = "linear"
+        self.ipmd.critic_lr_final = 1.0e-5
+        self.ipmd.expert_batch_size = 24576
+        self.ipmd.latent_dim = 66
+        self.ipmd.hl_skill_horizon_steps = 10
+        self.ipmd.hl_skill_command_mode = "z"
+        self.ipmd.hl_skill_finetune_enabled = False
+        self.ipmd.latent_steps_min = 1
+        self.ipmd.latent_steps_max = 1
+        self.ipmd.latent_learning.code_period = 1
+        self.ipmd.latent_learning.command_phase_mode = "sin_cos"
+        self.ipmd.latent_learning.code_latent_dim = 64
+        self.sync_input_keys()
+
+
+@configclass
 class G1ImitationLatentSonicReleaseRLOptIPMDConfig(
     G1ImitationLatentSonicRLOptIPMDConfig
 ):
