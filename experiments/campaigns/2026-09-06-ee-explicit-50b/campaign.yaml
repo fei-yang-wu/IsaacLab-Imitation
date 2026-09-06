@@ -1,0 +1,356 @@
+# 2026-09-06 -- the explicit END-EFFECTOR interface on the `combo-50b` hub.
+#
+# CONTROL: `combo` in `2026-09-03-combo-50b` (W&B `c50b-combo-s0`, project
+# g1-bs-pareto), the 50B chain of the stacked 64-D recipe. This campaign is
+# that yaml with ONE block swapped: the actor command. Everything else --
+# tracker networks, ten-step actor history, full-batch/3-epoch entry point,
+# weight decay 1e-2, linear critic decay, the two-stage sonic reset ramp, the
+# termination curriculum, rewards, 16,384 x 24 frames per batch, seven
+# chained 15:59 segments at the full 50B cap, 1B checkpoints -- is verbatim,
+# so a row reads against `combo` at the same cumulative frame count.
+#
+# WHAT THE ACTOR SEES. The explicit interface: the reference's CURRENT frame
+# published directly, no encoder, no code. `combo` sends a 64-D code plus
+# phase (66). The historical explicit row (`root_qpos_explicit`, 2026-08-05
+# recipe, 7.6B) sent joint angles plus root pose (29 + 3 + 6 = 38). This
+# campaign's `ee_explicit` row sends the VLA-style end-effector command
+# instead of joint angles:
+#
+#   ee_pos   4 bodies x 3   left/right ankle_roll_link, left/right wrist_yaw_link,
+#                           position in the torso_link frame            12
+#   ee_ori   4 bodies x 6   the same bodies' rot6d orientation           24
+#   root_pos 3              pelvis position in the torso frame            3
+#   root_ori 6              pelvis rot6d                                  6
+#                                                                        45 total
+#
+# `root_qpos_explicit` is the same recipe with the joint-angle explicit
+# command (38), so EE-vs-qpos is one variable inside this campaign and each is
+# one variable against `combo`. Both keep the critic on the full-body trio
+# (`reference.critic_components=[joint_qpos_qvel,root_pos,root_ori]`), which
+# is what the latent hub's critic reads by default, so only the ACTOR's
+# command moves.
+#
+# Explicit arms have no encoder: the `hl_skill_*` / `latent_learning` lines
+# are gone, `agent.ipmd.use_latent_command=false`, and the agent's
+# `command_components` names the same component tuple as the env actor. The
+# `expert_macro_state_terms` data override is harmless and kept so the data
+# plane is byte-identical.
+#
+# Budget and segments: identical to `combo-50b`; cancel later segments to
+# stop early. W&B project g1-bs-pareto (same as the hub, so curves overlay),
+# group `ee-explicit-50b` (user to confirm).
+name: ee-explicit-50b
+profile: ice
+wandb_project: g1-bs-pareto
+wandb_group: ee-explicit-50b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+
+  # --- The variable: the actor's explicit command, one component tuple ---
+  components: "[ee_pos,ee_ori,root_pos,root_ori]"
+  command_space: ee
+  interface_args:
+    - env.command_interface.actor=explicit
+    - env.command_interface.actor.components=${vars.components}
+    - env.command_interface.reference.critic_components=[joint_qpos_qvel,root_pos,root_ori]
+    - agent.ipmd.use_latent_command=false
+    - agent.command_space=${vars.command_space}
+    - agent.command_components=${vars.components}
+    - agent.ipmd.command_source=random
+
+  # Tracker agent entry point. `nophase_linlr` swaps it for the linear-lr
+  # variant (2026-09-01); every other arm keeps the promoted full-batch one.
+  agent_entry: rlopt_ipmd_tuned_fullbatch_cfg_entry_point
+
+  # --- The variable ---
+  z_dim: 64
+  command_dim: 66
+  code_latent_dim: 64
+
+  # --- Everything else is the control's interface ---
+  window_mode: intermediate
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+  hold: 1
+  phase_mode: sin_cos
+  command_mode: z
+  # The star-v2 64-D merged hub encoder, pretrain complete at 50,000 updates.
+  encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+
+  # --- Tracker scale: the control's 20,480 x 24 = 491,520 frames per batch ---
+  train_num_envs: 16384
+  rollout_steps: 24
+  frame_cap: 50000000000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_50b/${vars.arm}_seed${vars.seed}
+
+  # Optimizer extras from 2026-08-30-optimizer-ablation-5b. Empty on every arm
+  # that does not take them; the reference 50B chain carries neither, so the
+  # defaults are optim.weight_decay=0 (AdamW behaving as Adam) and
+  # ipmd.critic_lr_schedule='constant' pinned at critic_learning_rate=1e-3.
+  optim_args:
+    - agent.optim.weight_decay=1.0e-2
+    - agent.ipmd.critic_lr_schedule=linear
+    - agent.ipmd.critic_lr_final=1.0e-5
+
+  # Ten-step proprio history on the ACTOR only; the critic stays single-frame,
+  # as in 2026-08-27-diffntp-history. Empty for every arm that does not take it.
+  history_args:
+    - env.observations.policy.projected_gravity.history_length=10
+    - env.observations.policy.base_ang_vel.history_length=10
+    - env.observations.policy.joint_pos_rel.history_length=10
+    - env.observations.policy.joint_vel_rel.history_length=10
+    - env.observations.policy.last_action.history_length=10
+
+  reward_args:
+    - env.rewards.motion_ee_pos.weight=1.0
+    - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    - env.rewards.action_rate_l2.weight=-0.03
+
+  # RESET SCHEDULE (user, 2026-09-03): ramp the reset mix from 80% uniform /
+  # 20% failure-drawn to 20% / 80%, so late training concentrates on the
+  # frames where the tracker terminates.
+  #
+  # The ramp drives `SonicAdaptiveResetSampler.uniform_sampling_rate` and is
+  # only legal under `selection=sonic`: `random80_adaptive20` puts the
+  # adaptive sampler INSIDE a random-trajectory wrapper that takes 80% of
+  # resets, so a ramp there would rescale the remaining 20% only (the
+  # `cont_det_hold1_resetramp` near-no-op of 2026-08-28, and the config
+  # refuses the combination). Switching to `sonic` therefore also drops the
+  # random first-half start frames: SONIC picks rank AND frame jointly from
+  # its bin distribution. That is a second change against the 10B `combo`
+  # row, which ran `random80_adaptive20` throughout.
+  #
+  # `_advance_adaptive_ratio_curriculum` reads `common_step_counter`, which
+  # RESTARTS every segment, so a ramp has to finish inside the segment that
+  # starts it. A segment buys about 8.6B at ~150k fps, so the ramp is split
+  # into two 4B stages: 0.8 -> 0.5 inside segment 1, 0.5 -> 0.2 inside
+  # segment 2, pinned 0.2 from segment 3. That reaches 20/80 by roughly 13B
+  # and holds it for the remaining 37B.
+  select_ramp1:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.8
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.5
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=4000000000
+    - env.enable_termination_curriculum=true
+    - env.termination_curriculum_start_frames=5000000
+    - env.termination_curriculum_end_frames=30000000
+
+  select_ramp2:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.5
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=0.2
+    - env.command_interface.reference.selection.adaptive_ratio_ramp_frames=4000000000
+    - env.enable_termination_curriculum=false
+
+  select_hold:
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=0.2
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+    - env.enable_termination_curriculum=false
+
+  lowlevel_head:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - ${vars.agent_entry}
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bs-pareto
+    - agent.logger.group_name=ee-explicit-50b
+
+  tuned_core:
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.data.reference_prefetch_mode=next
+
+  lowlevel_tail:
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=1000000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  seg1_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+
+  # Resume segment for arms that cannot finish 10B in one 15:59 window. The
+  # cap stays 10B (the critic ramp and the budget both read it); the
+  # curriculum is over by 30M, so it is off here as in past-chunk.
+  # Every resume keeps the FULL 50B cap: `_apply_critic_lr_schedule` reads
+  # `collector.total_frames`, which is the segment's own `--max_iterations`,
+  # so a smaller cap on a later segment would push the critic lr back up.
+  # The curriculum is over by 30M, so it is off from segment 2 on.
+  seg2_args:
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+  output_container_path: ${vars.output_root}
+
+arms:
+  ee_explicit:
+    vars:
+      wandb_id: ee50b-ee
+    stages: &explicit_stages
+      - name: lowlevel1
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_ramp1},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg1_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_ramp2},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel2
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel3
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel4
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel3
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel4
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel5
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel4
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel5
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel6
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel5
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel6
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel7
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel6
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel7
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+
+  # The joint-angle explicit command (29 + 3 + 6 = 38) on the same recipe:
+  # the 2026-08-05 `root_qpos_explicit` row re-done under `combo-50b`.
+  root_qpos_explicit:
+    vars:
+      wandb_id: ee50b-rootqpos
+      components: "[joint_qpos,root_pos,root_ori]"
+      command_space: root_qpos
+    stages: *explicit_stages
