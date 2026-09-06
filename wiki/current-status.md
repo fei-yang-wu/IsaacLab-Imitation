@@ -21,6 +21,22 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Variable-window campaign: all six arms trained to 5B (2026-09-06)
+
+`2026-09-05-variable-window-5b`: every arm's pretrain (50,000 updates) and
+tracker reached the 5B cap with exit 0 and 25 checkpoints at 200M under
+`/storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b/<arm>_seed0/tracker/<run>/models/`.
+Tracker wall time in segment 1: `vw_fixed_target` 9:28, `vw_nested` 9:29,
+`vw_block` 9:32, `vw_padded` 9:32, `vw_stride` 10:33, `vw_sequence` 13:22
+(the attention encoder costs about 40% of tracker throughput at 16,384
+environments). Each slack segment resumed at 5,000,134,656 / 5,000,134,656
+and exited in about 6.5 min. NOT SCORED: no evaluation rows exist yet. Next:
+the 4096-board clean rows at the 5B checkpoint plus the curve points, then
+the train-policy x eval-policy matrix (`agent.ipmd.hl_skill_live_horizon`
+override at eval), and the second-wave live-policy arms
+(`vw_padded_live_*`), which can now be planned because `vw_padded`'s
+encoder exists.
+
 ## Variable-window encoders SUBMITTED on the `combo` hub, 5B x 6 arms (2026-09-05)
 
 Branch `feat/variable-horizon` (worktree `.claude/worktrees/varwin`, RLOpt
