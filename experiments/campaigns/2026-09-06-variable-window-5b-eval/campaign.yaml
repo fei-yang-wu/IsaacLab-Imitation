@@ -1,0 +1,322 @@
+# 2026-09-06 -- variable-window-5b scored at the 5B checkpoint, plus the
+# live-policy matrix, against `combo` at its matched 5B checkpoint.
+#
+# Board, row, randomization and evaluator arguments are the star-v2 curves
+# protocol verbatim (`2026-09-02-latest-eval`): bones_testbed4096_v1, 4096
+# clips, --randomization none, sequential resets, 10,000 steps, mode actions.
+#
+# Rows. `clean` = the arm's TRAIN live policy (padded/sequence/fixed_target
+# at 10, stride at 1, nested/block at `base`). `live<h>` rows re-score the
+# SAME 5B tracker with the frozen encoder at another member of its set
+# (`agent.ipmd.hl_skill_live_horizon`), which is the train-policy x
+# eval-policy matrix. Only the live policy moves between an arm's rows.
+#
+# Control: `combo` from latent64-probe-10b at model_step_5000134656 (same
+# tracker recipe and reset regime as the six arms; its 10B endpoint is NOT
+# the matched row). The tree is a one-checkpoint mirror on ice-shared whose
+# symlink resolves inside the container (/data bind).
+#
+# sonic_v1_1 on this board: 0.9888 / 26.73 / 187.7 (released reference).
+name: variable-window-5b-eval
+profile: ice
+wandb_project: g1-bs-vw
+wandb_group: variable-window-5b-eval
+
+vars:
+  tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/variable_window_5b
+  eval_arm: ${vars.arm}
+  tree: ${vars.tree_root}/${vars.eval_arm}_seed${vars.seed}
+  eval_root: /storage/ice-shared/vip-vwt/scratch-fwu91/eval/variable_window_5b
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  encoder_ckpt: ${vars.tree_root}/${vars.eval_arm}_seed${vars.seed}/encoder/checkpoints/latest.pt
+  row: clean
+  randomization: none
+  # Checkpoint maximum horizon (the sampler's assertion) and the live policy.
+  horizon: "15"
+  live: "10"
+  history_args:
+    - env.observations.policy.projected_gravity.history_length=10
+    - env.observations.policy.base_ang_vel.history_length=10
+    - env.observations.policy.joint_pos_rel.history_length=10
+    - env.observations.policy.joint_vel_rel.history_length=10
+    - env.observations.policy.last_action.history_length=10
+
+  head:
+    - --tree
+    - ${vars.tree}
+    - --output_root
+    - ${vars.eval_root}
+    - --arm
+    - ${vars.eval_arm}
+    - --seed
+    - ${vars.seed}
+    - --row
+    - ${vars.row}
+    - --board
+    - bones_testbed4096_v1
+    - --final_only
+    - "--"
+    - --task
+    - Isaac-Imitation-G1-v2
+    - --algo
+    - IPMD
+    - --agent_entry_point
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --randomization
+    - ${vars.randomization}
+    - --action_sampling
+    - mode
+    - --steps
+    - "10000"
+    - --seed
+    - ${vars.seed}
+    - --reference_start_frame
+    - "0"
+    - --reset_schedule
+    - sequential
+    - --skill_encoder_source
+    - pretrained
+    - --headless
+    - physics=newton_mjwarp
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - env.events.push_robot=null
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cuda:0
+    - env.data.reference_prefetch_mode=off
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+
+  interface:
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=66
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=66
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=${vars.horizon}
+    - agent.ipmd.hl_skill_live_horizon=${vars.live}
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - agent.ipmd.latent_steps_min=1
+    - agent.ipmd.latent_steps_max=1
+    - agent.ipmd.latent_learning.code_period=1
+    - agent.ipmd.latent_learning.command_phase_mode=sin_cos
+    - agent.ipmd.latent_learning.command_phase_source=hold
+    - agent.ipmd.latent_learning.command_phase_period=0
+    - agent.ipmd.latent_learning.code_latent_dim=64
+    - env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]
+    - env.expert_macro_frame_stride=1
+    - env.expert_macro_anchor_mode=robot_heading
+
+  board_terms:
+    - env.terminations.anchor_pos.params.threshold=0.25
+    - env.terminations.anchor_pos.params.down_threshold=0.25
+    - env.terminations.anchor_ori.params.threshold=1.0
+    - env.terminations.ee_body_pos.params.threshold=0.25
+    - env.terminations.ee_body_pos.params.down_threshold=0.25
+    - env.terminations.foot_pos_xyz=null
+    - env.terminations.base_too_low=null
+    - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.policy.activation_fn=silu
+    - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.value_function.activation_fn=silu
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.encoder_ckpt}
+    - ${vars.tree}/tracker
+  output_container_path: ${vars.eval_root}
+
+arms:
+  # ---- Core rows at the arm's train live policy (row `clean`).
+  vw_padded:
+    vars:
+      horizon: "15"
+      live: "10"
+    stages: &score_stages
+      - name: score
+        executable: scripts/rlopt/eval_checkpoint_tree.py
+        args: ${concat:${vars.head},${vars.interface},${vars.history_args},${vars.board_terms}}
+        time_limit: "02:00:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-013-26-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_ISAAC_SIM_CACHE_DIR: /storage/ice-shared/vip-vwt/scratch-fwu91/isaac_cache_curves/vw5b_${vars.arm}
+  vw_sequence:
+    vars:
+      horizon: "15"
+      live: "10"
+    stages: *score_stages
+  vw_fixed_target:
+    vars:
+      horizon: "15"
+      live: "10"
+    stages: *score_stages
+  vw_stride:
+    vars:
+      horizon: "10"
+      live: "1"
+    stages: *score_stages
+  vw_nested:
+    vars:
+      horizon: "15"
+      live: "base"
+    stages: *score_stages
+  vw_block:
+    vars:
+      horizon: "15"
+      live: "base"
+    stages: *score_stages
+  # ---- Control: combo at its matched 5B checkpoint (one-checkpoint mirror
+  # ---- tree; the symlink targets /data/latent64_probe_10b/... inside the
+  # ---- container). Fixed 10-frame encoder, live policy `base`.
+  combo:
+    vars:
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/eval_trees/variable_window_5b
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      horizon: "10"
+      live: base
+    stages: *score_stages
+
+  # ---- Live-policy matrix: the same 5B tracker and encoder, the frozen
+  # ---- encoder at another member of its set. Row `live<member>`.
+  vw_padded_live2:
+    vars:
+      eval_arm: vw_padded
+      row: live2
+      horizon: "15"
+      live: "2"
+    stages: *score_stages
+  vw_padded_live5:
+    vars:
+      eval_arm: vw_padded
+      row: live5
+      horizon: "15"
+      live: "5"
+    stages: *score_stages
+  vw_padded_live15:
+    vars:
+      eval_arm: vw_padded
+      row: live15
+      horizon: "15"
+      live: "15"
+    stages: *score_stages
+  vw_sequence_live2:
+    vars:
+      eval_arm: vw_sequence
+      row: live2
+      horizon: "15"
+      live: "2"
+    stages: *score_stages
+  vw_sequence_live5:
+    vars:
+      eval_arm: vw_sequence
+      row: live5
+      horizon: "15"
+      live: "5"
+    stages: *score_stages
+  vw_sequence_live15:
+    vars:
+      eval_arm: vw_sequence
+      row: live15
+      horizon: "15"
+      live: "15"
+    stages: *score_stages
+  vw_fixed_target_live2:
+    vars:
+      eval_arm: vw_fixed_target
+      row: live2
+      horizon: "15"
+      live: "2"
+    stages: *score_stages
+  vw_fixed_target_live5:
+    vars:
+      eval_arm: vw_fixed_target
+      row: live5
+      horizon: "15"
+      live: "5"
+    stages: *score_stages
+  vw_fixed_target_live15:
+    vars:
+      eval_arm: vw_fixed_target
+      row: live15
+      horizon: "15"
+      live: "15"
+    stages: *score_stages
+  vw_stride_live2:
+    vars:
+      eval_arm: vw_stride
+      row: live2
+      horizon: "10"
+      live: "2"
+    stages: *score_stages
+  vw_stride_live3:
+    vars:
+      eval_arm: vw_stride
+      row: live3
+      horizon: "10"
+      live: "3"
+    stages: *score_stages
+  vw_nested_live2:
+    vars:
+      eval_arm: vw_nested
+      row: live2
+      horizon: "15"
+      live: "2"
+    stages: *score_stages
+  vw_nested_live5:
+    vars:
+      eval_arm: vw_nested
+      row: live5
+      horizon: "15"
+      live: "5"
+    stages: *score_stages
+  vw_nested_live10:
+    vars:
+      eval_arm: vw_nested
+      row: live10
+      horizon: "15"
+      live: "10"
+    stages: *score_stages
+  vw_block_live2:
+    vars:
+      eval_arm: vw_block
+      row: live2
+      horizon: "15"
+      live: "2"
+    stages: *score_stages
+  vw_block_live5:
+    vars:
+      eval_arm: vw_block
+      row: live5
+      horizon: "15"
+      live: "5"
+    stages: *score_stages
+  vw_block_live10:
+    vars:
+      eval_arm: vw_block
+      row: live10
+      horizon: "15"
+      live: "10"
+    stages: *score_stages
+  vw_block_live15:
+    vars:
+      eval_arm: vw_block
+      row: live15
+      horizon: "15"
+      live: "15"
+    stages: *score_stages
