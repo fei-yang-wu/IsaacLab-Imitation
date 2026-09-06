@@ -59,7 +59,9 @@ second arm so EE-vs-qpos is one variable. User decision: a 10B chain (three
 segments, the hub's reset schedule, 500M checkpoints), read against
 `combo-50b` at 10B; output on ice-shared, W&B project `g1-bs-pareto`, group
 `ee-explicit-10b`. Both arms plan and preflight clean; the EE arm trains
-one 64-env iteration locally. SUBMITTED 2026-09-06, job ids below.
+one 64-env iteration locally. SUBMITTED 2026-09-06 from `171ef7b`: `ee_explicit`
+5714550 / 5714551 / 5714552, `root_qpos_explicit` 5714553 / 5714554 /
+5714555 (lowlevel1 / 2 / 3, coe-gpu H200).
 
 ## Direct affine-phi64 LSTM training submitted (2026-09-04)
 
