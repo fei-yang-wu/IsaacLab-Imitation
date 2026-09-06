@@ -216,9 +216,12 @@ performance.
   control, and its half-minibatch sibling at the same 3 epochs COLLAPSED, so
   read the class docstring before citing the recipe.
 - **G1 task versioning**: "the default" is the highest-numbered
-  `Isaac-Imitation-G1-vN`. A breaking recipe change registers `vN+1`; a
-  superseded `vN` keeps its exact old kwargs forever and simply stops being
-  cited. Update the versioning comment in `config/g1/__init__.py` and this line
+  `Isaac-Imitation-G1-vN`; since 2026-09-06 that is `-G1-v3`, the `combo`
+  recipe (combo rewards, ten-step actor history, 66-wide latent command,
+  sonic reset ramp, `G1ImitationComboRLOptIPMDConfig`). A breaking recipe
+  change registers `vN+1`; a superseded `vN` keeps its exact old kwargs
+  forever and simply stops being cited. `-G1-v2` is frozen from that date.
+  Update the versioning comment in `config/g1/__init__.py` and this line
   when the default moves.
 - **DiffSR binding**: a qualification must prove the selected skill
   checkpoint's `skill_encoder_state_dict` is tensor-identical to the encoder
