@@ -30,7 +30,11 @@ Tracker wall time in segment 1: `vw_fixed_target` 9:28, `vw_nested` 9:29,
 `vw_block` 9:32, `vw_padded` 9:32, `vw_stride` 10:33, `vw_sequence` 13:22
 (the attention encoder costs about 40% of tracker throughput at 16,384
 environments). Each slack segment resumed at 5,000,134,656 / 5,000,134,656
-and exited in about 6.5 min. NOT SCORED: no evaluation rows exist yet. Next:
+and exited in about 6.5 min. Evaluation SUBMITTED 2026-09-06 10:30:
+`2026-09-06-variable-window-5b-eval`, 25 ICE jobs 5712186-5712222 (six
+`clean` rows at the train live policy, `combo` at its matched 5B checkpoint
+through a one-checkpoint mirror tree, and 18 `live<m>` matrix rows), outputs
+`/storage/ice-shared/vip-vwt/scratch-fwu91/eval/variable_window_5b/`. Next:
 the 4096-board clean rows at the 5B checkpoint plus the curve points, then
 the train-policy x eval-policy matrix (`agent.ipmd.hl_skill_live_horizon`
 override at eval), and the second-wave live-policy arms
