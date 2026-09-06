@@ -85,6 +85,10 @@ so no page becomes orphaned.
 
 ## Evidence and history
 
+- [Variable-Window Skill Encoders](variable-window-encoders.md): one encoder
+  for several reference-window lengths; six mechanisms at 5B on the `combo`
+  hub with the live-policy matrix. PARKED 2026-09-06; the attention trunk
+  (`vw_sequence`) is the named future extension.
 - [SONIC Release Checkpoint (Tier 2)](sonic-release-checkpoint-tier2.md):
   running NVIDIA's public SONIC G1 tracker inside our environment, and what it
   scores there.

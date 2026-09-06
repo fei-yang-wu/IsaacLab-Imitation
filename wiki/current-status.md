@@ -21,6 +21,16 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Variable-window line PARKED; `vw_sequence` named the future extension (2026-09-06)
+
+User decision after reading the 5B rows: the attention trunk is the way to
+read a variable-length window, and `vw_sequence` is the arm to promote to a
+longer budget, but not in this work. Nothing from the program enters the
+paper; no further job is planned. Record and future-work list:
+[variable-window-encoders.md](variable-window-encoders.md). Code stays on
+`feat/variable-horizon` (worktree `.claude/worktrees/varwin`, RLOpt
+`14c8367`), unmerged; the fixed-window path is byte-identical to `dev`.
+
 ## Variable-window 5B rows scored, with the live-policy matrix (2026-09-06)
 
 `2026-09-06-variable-window-5b-eval`, ICE jobs 5712186-5712233 (three Kit

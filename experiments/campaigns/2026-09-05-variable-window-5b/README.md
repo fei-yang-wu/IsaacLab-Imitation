@@ -128,6 +128,12 @@ live policy: `vw_padded`, `vw_fixed_target`, `vw_stride`, `vw_nested`,
 96 GB card, see above. Per-member eval keys (`train/jepa_ntp_loss_eval/h5`,
 `train/z_effective_rank/h5`) appear in every log.
 
+## Decision (2026-09-06)
+
+PARKED by the user after the 5B rows (`2026-09-06-variable-window-5b-eval`).
+`vw_sequence` is the named future extension for a longer budget. Record:
+`wiki/variable-window-encoders.md`.
+
 ## Run
 
 ```bash
