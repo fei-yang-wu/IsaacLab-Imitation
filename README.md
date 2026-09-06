@@ -276,11 +276,25 @@ DRY_RUN=1 bash scripts/rlopt/run_local_v2_pipeline.sh
 TOTAL_FRAMES=10000000 bash scripts/rlopt/run_local_v2_pipeline.sh
 ```
 
-Defaults: task `Isaac-Imitation-G1-v2`, agent
+Defaults of the local pipeline script: task `Isaac-Imitation-G1-v2`, agent
 `rlopt_ipmd_tuned_cfg_entry_point`, encoder horizon 10 / `z_dim` 256 (published
 command width **258**, including the `sin_cos` phase), `newton_mjwarp` with
 njmax 288 / nconmax 200, 4096 envs, 50M frames, and **instantaneous
 terminations** — the persistence window is opt-in via `TERMINATION_WINDOW=N`.
+
+The repository default task is **`Isaac-Imitation-G1-v3`** (2026-09-06): the
+`combo` recipe as class defaults. Its `rlopt_ipmd_cfg_entry_point` is
+`G1ImitationComboRLOptIPMDConfig` (full batch, 3 epochs, weight decay 1e-2,
+linear critic decay to 1e-5, release-size networks, 64-D merged-head latent
+command plus phase = 66, hold 1) and its environment carries the combo
+rewards, the ten-step actor history, the sonic reset ramp 0.8 -> 0.2 over
+4B frames, the 5M-30M termination curriculum, `next` prefetch, and Newton
+njmax 320. Two things stay per run: the encoder checkpoint
+(`agent.ipmd.hl_skill_checkpoint_path`, the past-5 affine merged-head
+encoder `p5_affine` from `experiments/campaigns/2026-08-30-past-chunk-affine-64d`)
+and `--num_envs 16384` (the actor history OOMs the Newton graph at 20,480).
+`-G1-v2` stays registered with its exact kwargs for every run recorded
+before that date.
 
 Budget guidance: ~10M frames for routine debugging, at most ~50M for a serious
 local check, and do not run 100M locally. Local runs qualify code; the cluster
@@ -318,15 +332,21 @@ has not succeeded. MPJPE-L is micro-averaged over successful motions only, as in
 SONIC's evaluator. The repo-local `sonic-success-eval` skill contains the
 launch and validation checklist.
 
-Train a G1 imitation policy with RLOpt IPMD:
+Train a G1 imitation policy with RLOpt IPMD on the default (`combo`) recipe:
 
 ```bash
 python scripts/rlopt/train.py \
-    --task Isaac-Imitation-G1-v2 \
+    --task Isaac-Imitation-G1-v3 \
     --algo IPMD \
     --headless \
-    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json
+    --num_envs 16384 \
+    env.data.manifest=./data/lafan1/manifests/g1_lafan1_manifest.json \
+    agent.ipmd.hl_skill_checkpoint_path=/absolute/path/to/p5_affine/encoder/checkpoints/latest.pt
 ```
+
+Training refuses to start without the encoder checkpoint. The frozen
+`Isaac-Imitation-G1-v2` id reproduces every run recorded before 2026-09-06
+with the overrides its campaign passed.
 
 The task runs at **50 Hz control** (200 Hz physics, `sim.dt=0.005`,
 `decimation=4`). That is a protocol decision every reward, termination

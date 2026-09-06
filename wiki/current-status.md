@@ -21,6 +21,45 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## `Isaac-Imitation-G1-v3`: the `combo` recipe is the default; explicit EE arm planned (2026-09-06)
+
+User decisions: (1) `combo` is the repository default; (2) re-run the
+explicit interface in its end-effector form on the `combo-50b` hub. Branch
+`feat/combo-default` (worktree `.claude/worktrees/combo-default`).
+
+**v3 default.** Per the versioning contract a NEW id, `Isaac-Imitation-G1-v3`
+(`config/g1/imitation_g1_env_v3.py`), so `-G1-v2` is frozen from today.
+Environment-side class defaults that every campaign since 2026-09-01 passed as
+overrides: `G1V3ComboRewardsCfg` (motion_ee_pos 1.0, motion_global_anchor_pos_wide
+1.0, tracking_reward_points 4.0, action_rate_l2 -0.03), `G1V3ObservationCfg`
+(ten-step history on the five actor proprio terms, critic single-frame),
+66-wide latent actor command, reset selection sonic with the uniform share
+ramped 0.8 -> 0.2 over 4B, termination curriculum 5M-30M, `next` prefetch,
+Newton njmax 320 (`G1V3PhysicsCfg`). Agent side
+`G1ImitationComboRLOptIPMDConfig` = full batch, 3 epochs, release-size nets,
+`optim.weight_decay=1e-2`, linear critic decay to 1e-5, 64-D merged-head
+latent wiring at hold 1 with the phase pair; registered as v3's
+`rlopt_ipmd_cfg_entry_point` and as `rlopt_ipmd_combo_cfg_entry_point` on v2.
+Not defaults: the encoder checkpoint (`agent.ipmd.hl_skill_checkpoint_path`,
+the `p5_affine` merged-head encoder; training refuses to start without it)
+and `--num_envs 16384`. Tests: `test_combo_default_config.py` (7) plus the
+layout contract regenerated with the v3 entry (v2 rows unchanged, 30 pass).
+Local smoke: v3 with no recipe overrides trains one 64-env iteration; without
+the encoder path it refuses with
+`ipmd.hl_skill_checkpoint_path is required when ipmd.command_source='hl_skill'`.
+README, AGENTS.md, and `wiki/local-experiments.md` name v3.
+
+**Explicit EE arm.** `experiments/campaigns/2026-09-06-ee-explicit-50b/`:
+the `combo-50b` yaml with the actor block swapped for
+`env.command_interface.actor=explicit` on `[ee_pos,ee_ori,root_pos,root_ori]`
+(four EE bodies x (3 + rot6d) + pelvis pose in the torso frame = 45 values,
+current frame) and the critic pinned to the full-body trio the latent hub's
+critic reads; `root_qpos_explicit` (joint angles + root pose, 38) is the
+second arm so EE-vs-qpos is one variable. Same seven-segment 50B chain,
+output on ice-shared, W&B project `g1-bs-pareto`. Both arms plan and
+preflight clean; the EE arm trains one 64-env iteration locally. NOT
+SUBMITTED: group name and the 50B budget await the user.
+
 ## Direct affine-phi64 LSTM training submitted (2026-09-04)
 
 `2026-09-04-direct-affine-phi` contains one seed-0, 10B arm in W&B project

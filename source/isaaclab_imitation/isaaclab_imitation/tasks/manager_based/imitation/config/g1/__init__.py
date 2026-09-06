@@ -210,6 +210,9 @@ _SONIC_OFFICIAL_FSQ_V2_TASK_KWARGS = {
 # ---------------------------------------------------------------------------
 # Current defaults.
 #
+# `-G1-v3` (2026-09-06) is the current default: the `combo` recipe, registered
+# as a NEW id per the convention below, so `-G1-v2` is frozen from that date.
+#
 # WHAT `-G1-v2` MEANS AS OF 2026-08-04 -- both changed IN PLACE, by explicit
 # decision, rather than by registering a `-v3`:
 #   * rewards: `G1V2TunedRewardsCfg` (motion_body_pos std 0.05 w2.0,
@@ -259,6 +262,14 @@ _CURRENT_V2_IPMD_TUNED_FULLBATCH_LINEARLR_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationTunedFullBatchLinearLRRLOptIPMDConfig"
 )
 
+# The `combo` recipe (2026-09-03): full batch + weight decay 1e-2 + linear
+# critic decay + the 64-D merged-head latent command, release-size networks.
+# THE DEFAULT agent of `-G1-v3` below, and selectable on the v2 tasks as
+# `rlopt_ipmd_combo_cfg_entry_point`.
+_CURRENT_IPMD_COMBO_ENTRY_POINT = (
+    f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationComboRLOptIPMDConfig"
+)
+
 _CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT = (
     f"{agents.__name__}.rlopt_ipmd_cfg:G1ImitationPosteriorRootQposRLOptIPMDConfig"
 )
@@ -294,6 +305,46 @@ gym.register(
         # pair them with `env.command_interface.actor=explicit` plus
         # `agent.ipmd.use_latent_command=false`, or use the `-Explicit-v2`
         # pin below. The default stays IPMD on the latent command.
+        "rlopt_ppo_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig"
+        ),
+        "rlopt_sac_cfg_entry_point": (
+            f"{agents.__name__}.rlopt_sac_cfg:G1ImitationRLOptSACConfig"
+        ),
+        "rlopt_ipmd_l2t_cfg_entry_point": (_CURRENT_V2_IPMD_L2T_ENTRY_POINT),
+        "rlopt_ipmd_tuned_cfg_entry_point": (_CURRENT_V2_IPMD_TUNED_ENTRY_POINT),
+        "rlopt_ipmd_tuned_fullbatch_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_ENTRY_POINT
+        ),
+        "rlopt_ipmd_tuned_fullbatch_linearlr_cfg_entry_point": (
+            _CURRENT_V2_IPMD_TUNED_FULLBATCH_LINEARLR_ENTRY_POINT
+        ),
+        "rlopt_ipmd_posterior_root_qpos_cfg_entry_point": (
+            _CURRENT_V2_IPMD_POSTERIOR_ROOT_QPOS_ENTRY_POINT
+        ),
+        "rlopt_ipmd_combo_cfg_entry_point": (_CURRENT_IPMD_COMBO_ENTRY_POINT),
+    },
+)
+
+# THE DEFAULT (2026-09-06 onward): the `combo` recipe. `-G1-v3` is the v2
+# environment with the recipe's environment-side overrides as class defaults
+# (`imitation_g1_env_v3.ImitationG1V3EnvCfg`: combo rewards, ten-step actor
+# history, 66-wide latent command, sonic reset ramp 0.8 -> 0.2 over 4B,
+# termination curriculum 5M-30M, `next` prefetch, njmax 320) and the combo
+# agent as its `rlopt_ipmd_cfg_entry_point`. `-G1-v2` keeps its exact kwargs
+# below and stays the id to cite for every run recorded before this date.
+# The encoder checkpoint is not a default: pass
+# `agent.ipmd.hl_skill_checkpoint_path` (the `p5_affine` merged-head encoder).
+gym.register(
+    id="Isaac-Imitation-G1-v3",
+    entry_point="isaaclab_imitation.envs:ImitationRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        **_LATENT_STABLE_TASK_KWARGS,
+        "env_cfg_entry_point": (f"{__name__}.imitation_g1_env_v3:ImitationG1V3EnvCfg"),
+        "rlopt_cfg_entry_point": (_CURRENT_IPMD_COMBO_ENTRY_POINT),
+        "rlopt_ipmd_cfg_entry_point": (_CURRENT_IPMD_COMBO_ENTRY_POINT),
+        "rlopt_ipmd_combo_cfg_entry_point": (_CURRENT_IPMD_COMBO_ENTRY_POINT),
         "rlopt_ppo_cfg_entry_point": (
             f"{agents.__name__}.rlopt_ppo_cfg:G1ImitationRLOptPPOConfig"
         ),

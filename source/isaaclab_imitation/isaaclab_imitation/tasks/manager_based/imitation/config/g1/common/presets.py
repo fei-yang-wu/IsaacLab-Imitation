@@ -9,6 +9,8 @@ Each preset resolves per launch-time ``physics=...`` selection (default is
 PhysX); see Isaac Lab's ``PresetCfg``.
 """
 
+import copy
+
 from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
 from isaaclab_newton.sensors import ContactSensorCfg as NewtonContactSensorCfg
 from isaaclab_physx.physics import PhysxCfg
@@ -79,6 +81,18 @@ class G1ImitationPhysicsCfg(PresetCfg):
 
 
 @configclass
+class G1V3PhysicsCfg(G1ImitationPhysicsCfg):
+    """`-G1-v3` physics presets: the v2 alternatives with Newton's constraint
+    budget raised to ``njmax=320``, the value every cluster campaign since
+    2026-08-28 has passed as ``env.sim.physics.solver_cfg.njmax=320`` (288
+    ran out at 16,384+ environments). PhysX is unchanged."""
+
+    # `configclass` turns class attributes into dataclass fields, so the
+    # parent's alternative is read from an instance, copied, and re-budgeted.
+    newton_mjwarp = copy.deepcopy(G1ImitationPhysicsCfg().newton_mjwarp)
+    newton_mjwarp.solver_cfg.njmax = 320
+
+
 class G1ImitationRobotCfg(PresetCfg):
     """One preconverted G1 USD contract shared by both physics backends."""
 
