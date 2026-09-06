@@ -28,7 +28,9 @@ Branch `feat/variable-horizon` (worktree `.claude/worktrees/varwin`, RLOpt
 `experiments/campaigns/2026-09-05-variable-window-5b/`. User decisions
 2026-09-05: W&B project `g1-bs-vw`, group `variable-window-5b`, 5B per arm
 (the `combo` control reads at its matched 5B checkpoint, not its 10B end).
-ICE jobs (pretrain / lowlevel1 / lowlevel2): `vw_padded` 5705909-11,
+ICE jobs (pretrain / lowlevel1 / lowlevel2): `vw_padded` 5708730-32
+(first chain 5705909-11 CANCELLED: the pretrain hung on atl1-1-03-013-26-0
+after the macro-cache load, zero updates in 4.6 h, node now excluded),
 `vw_sequence` 5705913-15, `vw_fixed_target` 5705918-20, `vw_stride`
 5705923/24/26, `vw_nested` 5705928-30, `vw_block` 5705957-59; coe-gpu H200,
 submitted 2026-09-05 from top-level `966624e`.
