@@ -21,6 +21,38 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Variable-window 5B rows scored, with the live-policy matrix (2026-09-06)
+
+`2026-09-06-variable-window-5b-eval`, ICE jobs 5712186-5712233 (three Kit
+boot crashes retried, all 25 rows landed), `bones_testbed4096_v1` clean,
+`--randomization none`, 4096 clips, one seed, every tracker at its 5B
+checkpoint, star-v2 curves evaluator arguments verbatim. Rows mirrored to
+`.claude/worktrees/varwin/logs/variable_window_5b_eval/` and on ice-shared
+`eval/variable_window_5b/`. Replicate band of one recipe: 0.0064 SR /
+0.46 mm L / 10.8 mm G. `clean` = the arm's train live policy; `live<m>` =
+the same 5B tracker with the frozen encoder at member m.
+
+| arm | row | SR | MPJPE-L | MPJPE-G | acc | jerk |
+|---|---|---:|---:|---:|---:|---:|
+| combo (control, 5B ckpt of the 10B run) | clean | 0.9009 | 24.27 | 101.24 | 4.82 | 212.2 |
+| vw_padded | clean (10) | 0.8938 | 24.52 | 91.52 | 4.86 | 214.9 |
+| vw_sequence | clean (10) | 0.9058 | 23.47 | 101.87 | 4.83 | 211.2 |
+| vw_fixed_target | clean (10) | 0.8896 | 25.48 | 82.30 | 4.66 | 200.4 |
+| vw_stride | clean (1) | 0.9001 | 24.50 | 117.24 | 4.79 | 208.1 |
+| vw_nested | clean (base) | 0.8857 | 26.43 | 130.71 | 4.82 | 209.2 |
+| vw_block | clean (base) | 0.8125 | 34.36 | 182.80 | 4.66 | 196.2 |
+| vw_padded | live2 / live5 / live15 | 0.0530 / 0.4448 / 0.0000 | 132.17 / 75.92 / - | 815 / 443 / - | | |
+| vw_sequence | live2 / live5 / live15 | 0.6628 / 0.8257 / 0.0654 | 46.55 / 35.85 / 135.59 | 253 / 150 / 1556 | | |
+| vw_fixed_target | live2 / live5 / live15 | 0.6389 / 0.7949 / 0.8828 | 44.75 / 34.98 / 28.21 | 151 / 96 / 112 | | |
+| vw_stride | live2 / live3 | 0.5930 / 0.4075 | 47.13 / 65.36 | 171 / 252 | | |
+| vw_nested | live2 / live5 / live10 | 0.4500 / 0.5649 / 0.6118 | 70.85 / 54.86 / 51.47 | 532 / 399 / 256 | | |
+| vw_block | live2 / live5 / live10 / live15 | 0.3706 / 0.2065 / 0.2219 / 0.1724 | 80.10 / 81.42 / 77.00 / 87.02 | 460 / 1071 / 1402 / 1123 | | |
+
+`vw_padded` live15 has zero successes out of 4096 (MPJPE undefined); not
+re-run. `combo`'s 10B endpoint (0.9214 / 22.64 / 88.52) is a different
+frame count and is not the matched row. sonic_v1_1 on this board: 0.9888 /
+26.73 / 187.7.
+
 ## Variable-window campaign: all six arms trained to 5B (2026-09-06)
 
 `2026-09-05-variable-window-5b`: every arm's pretrain (50,000 updates) and
