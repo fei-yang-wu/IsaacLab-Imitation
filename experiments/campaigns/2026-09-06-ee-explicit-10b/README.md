@@ -15,7 +15,7 @@ full-batch / 3-epoch entry point, `optim.weight_decay=1e-2`, linear critic
 decay to 1e-5, the two-stage sonic reset ramp (0.8 -> 0.5 in segment 1, 0.5
 -> 0.2 in segment 2, pinned 0.2 after), termination curriculum 5M-30M,
 rewards, 16,384 x 24 frames per batch, seven chained 15:59 segments at the
-full 50B cap, 1B checkpoints.
+full cap. Budget (user, 2026-09-06): a 10B chain, three segments (the hub's first two ramp stages plus a slack segment), checkpoints every 500M, read against `combo-50b` at its 10B checkpoint.
 
 ## Arms
 
@@ -57,7 +57,7 @@ data override stays so the data plane is byte-identical to the hub's.
 
 ## Read
 
-Score at the hub's 1B checkpoints on `bones_testbed4096_v1` clean (the
+Score at the 500M checkpoints on `bones_testbed4096_v1` clean (the
 star-v2 evaluator arguments) against `combo` at the same frame count; the
 existing `combo` rows in `latest_eval` cover 9B-16B. Explicit arms evaluate
 without `--skill_encoder_source` and with the same interface overrides.
@@ -65,10 +65,10 @@ without `--skill_encoder_source` and with the same interface overrides.
 ## Run
 
 ```bash
-./experiments/campaigns/2026-09-06-ee-explicit-50b/submit.sh ee_explicit 0
-./experiments/campaigns/2026-09-06-ee-explicit-50b/submit.sh root_qpos_explicit 0
+./experiments/campaigns/2026-09-06-ee-explicit-10b/submit.sh ee_explicit 0
+./experiments/campaigns/2026-09-06-ee-explicit-10b/submit.sh root_qpos_explicit 0
 # then each printed `submit --confirm <PLAN_SHA>` line
 ```
 
-Outputs: `/storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_50b/<arm>_seed0/tracker`.
-W&B project `g1-bs-pareto` (with the hub), group `ee-explicit-50b`.
+Outputs: `/storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_10b/<arm>_seed0/tracker`.
+W&B project `g1-bs-pareto` (with the hub), group `ee-explicit-10b`.

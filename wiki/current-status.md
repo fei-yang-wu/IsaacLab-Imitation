@@ -49,16 +49,17 @@ the encoder path it refuses with
 `ipmd.hl_skill_checkpoint_path is required when ipmd.command_source='hl_skill'`.
 README, AGENTS.md, and `wiki/local-experiments.md` name v3.
 
-**Explicit EE arm.** `experiments/campaigns/2026-09-06-ee-explicit-50b/`:
+**Explicit EE arm.** `experiments/campaigns/2026-09-06-ee-explicit-10b/`:
 the `combo-50b` yaml with the actor block swapped for
 `env.command_interface.actor=explicit` on `[ee_pos,ee_ori,root_pos,root_ori]`
 (four EE bodies x (3 + rot6d) + pelvis pose in the torso frame = 45 values,
 current frame) and the critic pinned to the full-body trio the latent hub's
 critic reads; `root_qpos_explicit` (joint angles + root pose, 38) is the
-second arm so EE-vs-qpos is one variable. Same seven-segment 50B chain,
-output on ice-shared, W&B project `g1-bs-pareto`. Both arms plan and
-preflight clean; the EE arm trains one 64-env iteration locally. NOT
-SUBMITTED: group name and the 50B budget await the user.
+second arm so EE-vs-qpos is one variable. User decision: a 10B chain (three
+segments, the hub's reset schedule, 500M checkpoints), read against
+`combo-50b` at 10B; output on ice-shared, W&B project `g1-bs-pareto`, group
+`ee-explicit-10b`. Both arms plan and preflight clean; the EE arm trains
+one 64-env iteration locally. SUBMITTED 2026-09-06, job ids below.
 
 ## Direct affine-phi64 LSTM training submitted (2026-09-04)
 

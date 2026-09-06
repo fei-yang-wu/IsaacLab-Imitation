@@ -36,13 +36,16 @@
 # `expert_macro_state_terms` data override is harmless and kept so the data
 # plane is byte-identical.
 #
-# Budget and segments: identical to `combo-50b`; cancel later segments to
-# stop early. W&B project g1-bs-pareto (same as the hub, so curves overlay),
-# group `ee-explicit-50b` (user to confirm).
-name: ee-explicit-50b
+# Budget (user, 2026-09-06): a 10B chain, read against `combo-50b` at its
+# 10B checkpoint. Same reset schedule as the hub's first three segments
+# (ramp 0.8 -> 0.5 over 4B in segment 1, 0.5 -> 0.2 over 4B in segment 2,
+# pinned 0.2 in the slack segment 3); at ~150k fps segment 2 reaches the
+# cap and segment 3 resumes at the cap and exits. Checkpoints every 500M. W&B project g1-bs-pareto (same as the hub, so curves overlay),
+# group `ee-explicit-10b` (user to confirm).
+name: ee-explicit-10b
 profile: ice
 wandb_project: g1-bs-pareto
-wandb_group: ee-explicit-50b
+wandb_group: ee-explicit-10b
 
 vars:
   task: Isaac-Imitation-G1-v2
@@ -83,13 +86,13 @@ vars:
   # --- Tracker scale: the control's 20,480 x 24 = 491,520 frames per batch ---
   train_num_envs: 16384
   rollout_steps: 24
-  frame_cap: 50000000000
+  frame_cap: 10000000000
   frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
   max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
 
   ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
   persist_id: bones_seed_sonic_full_129785@e714bbff
-  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_50b/${vars.arm}_seed${vars.seed}
+  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_10b/${vars.arm}_seed${vars.seed}
 
   # Optimizer extras from 2026-08-30-optimizer-ablation-5b. Empty on every arm
   # that does not take them; the reference 50B chain carries neither, so the
@@ -175,7 +178,7 @@ vars:
     - agent.logger.backend=wandb
     - agent.logger.video=false
     - agent.logger.project_name=g1-bs-pareto
-    - agent.logger.group_name=ee-explicit-50b
+    - agent.logger.group_name=ee-explicit-10b
 
   tuned_core:
     - env.rewards.tracking_reward_points.weight=4.0
@@ -185,7 +188,7 @@ vars:
     - agent.collector.frames_per_batch=${vars.rollout_steps}
     - agent.ipmd.expert_batch_size=24576
     - agent.loss.gamma=0.97
-    - agent.save_interval=1000000000
+    - agent.save_interval=500000000
     - env.sim.physics.solver_cfg.njmax=320
     - env.sim.physics.solver_cfg.nconmax=200
     - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
@@ -233,7 +236,7 @@ preflight:
 arms:
   ee_explicit:
     vars:
-      wandb_id: ee50b-ee
+      wandb_id: ee10b-ee
     stages: &explicit_stages
       - name: lowlevel1
         executable: scripts/rlopt/train.py
@@ -246,7 +249,7 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel1
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-10b,${vars.arm},seed${vars.seed},lowlevel1
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
       - name: lowlevel2
@@ -262,7 +265,7 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel2
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-10b,${vars.arm},seed${vars.seed},lowlevel2
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
       - name: lowlevel3
@@ -278,71 +281,7 @@ arms:
         cpus_per_task: 16
         mem: 160G
         env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel3
-          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
-          WANDB_RESUME: allow
-      - name: lowlevel4
-        executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
-        depends_on: lowlevel3
-        dependency_kind: afterany
-        time_limit: "15:59:00"
-        gres: gpu:h200:1
-        partition: coe-gpu
-        qos: coe-ice
-        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-        cpus_per_task: 16
-        mem: 160G
-        env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel4
-          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
-          WANDB_RESUME: allow
-      - name: lowlevel5
-        executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
-        depends_on: lowlevel4
-        dependency_kind: afterany
-        time_limit: "15:59:00"
-        gres: gpu:h200:1
-        partition: coe-gpu
-        qos: coe-ice
-        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-        cpus_per_task: 16
-        mem: 160G
-        env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel5
-          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
-          WANDB_RESUME: allow
-      - name: lowlevel6
-        executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
-        depends_on: lowlevel5
-        dependency_kind: afterany
-        time_limit: "15:59:00"
-        gres: gpu:h200:1
-        partition: coe-gpu
-        qos: coe-ice
-        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-        cpus_per_task: 16
-        mem: 160G
-        env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel6
-          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
-          WANDB_RESUME: allow
-      - name: lowlevel7
-        executable: scripts/rlopt/train.py
-        args: ${concat:${vars.lowlevel_head},${vars.interface_args},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
-        depends_on: lowlevel6
-        dependency_kind: afterany
-        time_limit: "15:59:00"
-        gres: gpu:h200:1
-        partition: coe-gpu
-        qos: coe-ice
-        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-        cpus_per_task: 16
-        mem: 160G
-        env:
-          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-50b,${vars.arm},seed${vars.seed},lowlevel7
+          CLUSTER_WANDB_TAGS: bones-seed,129785,ee-explicit-10b,${vars.arm},seed${vars.seed},lowlevel3
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
 
@@ -350,7 +289,7 @@ arms:
   # the 2026-08-05 `root_qpos_explicit` row re-done under `combo-50b`.
   root_qpos_explicit:
     vars:
-      wandb_id: ee50b-rootqpos
+      wandb_id: ee10b-rootqpos
       components: "[joint_qpos,root_pos,root_ori]"
       command_space: root_qpos
     stages: *explicit_stages
