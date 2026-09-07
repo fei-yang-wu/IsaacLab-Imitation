@@ -1,0 +1,265 @@
+# 2026-09-06 -- code width against phi width, on the dynamics loss.
+#
+# The question (user, 2026-09-06): is `diffsr_feature_dim` the constraint, and
+# can a WIDE code be paired with a NARROW phi? Two deployment reasons pin phi
+# at 64: it matches the command width SONIC takes, and a 258-wide command makes
+# planner prediction much harder. The code `z_dim` carries no such constraint,
+# because it is never published -- `_command_code_dim_for_mode`
+# (RLOpt/rlopt/agent/hl_skill_diffsr.py:1507-1515) returns `diffsr_feature_dim`
+# under `command_mode=phi` and `z_dim` only under `command_mode=z`.
+#
+# The two knobs are independent: the encoder never sees `feature_dim`, and
+# `_build_diffsr` passes `action_dim=z_dim` (phi's INPUT) beside
+# `feature_dim=diffsr_feature_dim` (phi's OUTPUT).
+#
+# What the existing points already say, all `--source_history_steps 5`, concat,
+# 50,000 updates, `train/jepa_ntp_loss_eval`:
+#   z64 f64   8.505 (and 8.675 on a second pass of the identical config)
+#   z64 f256  7.471
+# so phi width costs 13.8% while a code widened from 64 to 256 at f256 bought
+# 0.041 against a 0.171 repeat spread (latent_star_v2 hub / g3_cont128 /
+# g3_cont256 -- but those ran `source_history_steps=0`, so they are NOT on this
+# line). This campaign puts every cell on ONE line.
+#
+# Grid: z_dim x diffsr_feature_dim over {64, 128, 256}, nine cells, two seeds
+# each. `z256_f64` is the deployment cell the user asked for: a wide code read
+# out through a 64-wide phi.
+#
+# The loss is comparable across `feature_dim`: `compute_loss` reduces as
+# `.pow(2).sum(-1).mean()` (RLOpt/rlopt/agent/ipmd/module.py:404), summing over
+# `next_obs_dim = horizon_steps * state_dim` and averaging over the batch only,
+# so `feature_dim` never enters the reduction. It IS the rank of the bilinear
+# predictor `eps_pred = phi^T mu`, so a gap is a capacity result. Early-training
+# values are NOT comparable: `forward_eps` is an unnormalized `bmm`, so at
+# initialization the prediction scales like sqrt(feature_dim). Read the
+# converged eval value, not the curve head.
+#
+# Pretrain only. No tracker stage: this campaign measures the representation,
+# not the policy. H100 (user, 2026-09-06); the pretrain is a 16-environment
+# kitless job and does not need an H200.
+name: diffsr-width-ablation
+profile: ice
+wandb_project: g1-bs-pareto
+wandb_group: diffsr-width
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+
+  # Per-arm; the grid overrides both.
+  z_dim: 64
+  feature_dim: 64
+  phi_param: concat
+
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  stride: 1
+  anchor_mode: robot_heading
+
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  # On ice-shared, NOT the 300 GB /data quota: eighteen encoders at about
+  # 1.7 GB each (latest.pt plus best.pt) would be 31 GB of it.
+  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/diffsr_width/${vars.arm}_seed${vars.seed}
+
+  pretrain_args:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bs-pareto
+    - --wandb_group
+    - diffsr-width
+    - --wandb_run_name
+    - ${vars.wandb_arm}-s${vars.seed}
+    - --horizon_steps
+    - "10"
+    - --encoder_window_mode
+    - intermediate
+    - --transition_objective
+    - jepa_ntp
+    - --jepa_loss
+    - sigreg_ebm
+    - --jepa_ntp_head
+    - diff_chunk
+    - --jepa_ntp_chunk_span
+    - boundary_next
+    - --jepa_endpoint_coeff
+    - "0"
+    - --diffsr_phi_parameterization
+    - ${vars.phi_param}
+    - --source_history_steps
+    - "5"
+    - --source_anchor
+    - current
+    - --latent_mode
+    - deterministic
+    - --z_dim
+    - ${vars.z_dim}
+    - --encoder_layer_norm
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+    - --diffsr_feature_dim
+    - ${vars.feature_dim}
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  data_overrides:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+  output_container_path: ${vars.output_root}
+
+arms:
+  z64_f64:
+    vars: {z_dim: 64, feature_dim: 64}
+    stages: &pretrain_only
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_args},${vars.data_overrides}}
+        time_limit: "03:00:00"
+        gres: gpu:h100:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0,atl1-1-03-010-30-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffsr-width,${vars.arm},seed${vars.seed},pretrain
+  z64_f128:
+    vars: {z_dim: 64, feature_dim: 128}
+    stages: *pretrain_only
+  z64_f256:
+    vars: {z_dim: 64, feature_dim: 256}
+    stages: *pretrain_only
+  z128_f64:
+    vars: {z_dim: 128, feature_dim: 64}
+    stages: *pretrain_only
+  z128_f128:
+    vars: {z_dim: 128, feature_dim: 128}
+    stages: *pretrain_only
+  z128_f256:
+    vars: {z_dim: 128, feature_dim: 256}
+    stages: *pretrain_only
+  # The deployment cell: a wide code read out through a SONIC-width phi.
+  z256_f64:
+    vars: {z_dim: 256, feature_dim: 64}
+    stages: *pretrain_only
+  z256_f128:
+    vars: {z_dim: 256, feature_dim: 128}
+    stages: *pretrain_only
+  z256_f256:
+    vars: {z_dim: 256, feature_dim: 256}
+    stages: *pretrain_only
+
+  # --- Saturation sweep (user, 2026-09-07). At z64 concat the curve was still
+  # bending at 256: 8.505 (f64) -> 8.160 (f128) -> 7.472 (f256), the second
+  # step gaining MORE than the first. These carry it to 2048.
+  #
+  # Cost scales through mu's output layer, `Linear(512, feature_dim *
+  # next_obs_dim)` with next_obs_dim = (horizon_steps + 1) * state_dim = 418
+  # under `chunk_span=boundary_next`: about 55M parameters at f256, 110M at
+  # f512, 219M at f1024, 438M at f2048. Hence the longer walltime and the
+  # larger memory request at the wide end. `feature_dim` buys rank AND
+  # parameters together, so this measures whether widening phi helps, not why.
+  z64_f512:
+    vars: {z_dim: 64, feature_dim: 512}
+    stages: &wide_pretrain
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_args},${vars.data_overrides}}
+        time_limit: "08:00:00"
+        gres: gpu:h100:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0,atl1-1-03-010-30-0
+        cpus_per_task: 16
+        mem: 240G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffsr-width,${vars.arm},seed${vars.seed},pretrain
+  z64_f1024:
+    vars: {z_dim: 64, feature_dim: 1024}
+    stages: *wide_pretrain
+  # f2048 ran out of memory on an 80 GB H100 (job 5716520, 26.12 GiB request
+  # with 10.69 GiB free), so it takes an H200's 141 GB instead.
+  z64_f2048:
+    vars: {z_dim: 64, feature_dim: 2048}
+    stages:
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_args},${vars.data_overrides}}
+        time_limit: "08:00:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0,atl1-1-03-010-30-0
+        cpus_per_task: 16
+        mem: 240G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,diffsr-width,${vars.arm},seed${vars.seed},pretrain
+
+  # --- The affine line on this campaign, so concat-vs-affine is one variable
+  # inside one campaign rather than across three. Affine makes phi exactly
+  # linear in z (`phi(s, sum_i w_i z_i) = sum_i w_i phi(s, z_i)` when the
+  # weights sum to 1, module.py:79-85), which is the property the EBM reading
+  # wants; the cross-campaign points put it 0.155 behind concat at f256 and
+  # inside noise at f64.
+  aff_z64_f64:
+    vars: {z_dim: 64, feature_dim: 64, phi_param: affine}
+    stages: *wide_pretrain
+  aff_z64_f256:
+    vars: {z_dim: 64, feature_dim: 256, phi_param: affine}
+    stages: *wide_pretrain
+  aff_z64_f512:
+    vars: {z_dim: 64, feature_dim: 512, phi_param: affine}
+    stages: *wide_pretrain

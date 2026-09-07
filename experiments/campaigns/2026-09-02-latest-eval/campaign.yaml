@@ -44,6 +44,10 @@ vars:
   # `z` sends the raw code; `phi` sends the encoder's phi(s_history, z).
   # Only `direct-affine-phi` trained on the phi channel.
   command_mode: z
+  # Critic observation channels. Empty on every arm whose critic keeps the
+  # latent; `critic-no-latent` drops the actor channel, and the EVAL must
+  # rebuild the same critic or the strict state-dict restore fails.
+  critic_args: []
 
   head:
     - --tree
@@ -145,7 +149,7 @@ arms:
     stages: &score_stages
       - name: score
         executable: scripts/rlopt/eval_checkpoint_tree.py
-        args: ${concat:${vars.head},${vars.interface},${vars.actor_args},${vars.history_args},${vars.board_terms}}
+        args: ${concat:${vars.head},${vars.interface},${vars.actor_args},${vars.history_args},${vars.critic_args},${vars.board_terms}}
         time_limit: "02:00:00"
         gres: gpu:h200:1
         partition: coe-gpu
@@ -314,4 +318,25 @@ arms:
       command_mode: phi
       actor_args:
         - agent.ppo.rnn_hidden_size=256
+    stages: *score_stages
+
+  # Mid-flight row on the critic-no-latent arm (2026-09-07). One change against
+  # its own recipe: `critic_channels=[reference]` removes `latent_command` from
+  # the critic group. Its encoder is its own past-5 CONCAT pretrain at
+  # feature_dim 64, and the policy is conditioned on phi, so both the encoder
+  # path and `command_mode` differ from every other arm here.
+  nolatent_live:
+    vars:
+      eval_arm: nolatent
+      tree_root: /data/critic_no_latent_live
+      encoder_ckpt: /data/critic_no_latent_10b/nolatent_seed0/encoder/checkpoints/latest.pt
+      command_mode: phi
+      critic_args:
+        - env.command_interface.critic_channels=[reference]
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=5
+        - env.observations.policy.base_ang_vel.history_length=5
+        - env.observations.policy.joint_pos_rel.history_length=5
+        - env.observations.policy.joint_vel_rel.history_length=5
+        - env.observations.policy.last_action.history_length=5
     stages: *score_stages
