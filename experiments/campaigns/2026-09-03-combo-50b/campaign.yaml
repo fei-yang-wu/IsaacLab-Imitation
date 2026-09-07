@@ -334,3 +334,40 @@ arms:
           CLUSTER_WANDB_TAGS: bones-seed,129785,combo-50b,${vars.arm},seed${vars.seed},lowlevel7
           WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
           WANDB_RESUME: allow
+
+      # Segments 8 and 9 (2026-09-06). The declared seven segments reached only
+      # 40.55B of the 50B cap: segments 3 and 4 both died on the non-finite
+      # guard at 16.127B and 16.271B, so two segments bought 0.15B between
+      # them. These two resume from the 40.0B checkpoint and carry the SAME
+      # 50B cap, so `_apply_critic_lr_schedule` keeps reading the full budget.
+      # Plan them alone with `--only-stage lowlevel8` / `lowlevel9`.
+      - name: lowlevel8
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,combo-50b,${vars.arm},seed${vars.seed},lowlevel8
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: lowlevel9
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.seg2_args}}
+        depends_on: lowlevel8
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,combo-50b,${vars.arm},seed${vars.seed},lowlevel9
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
