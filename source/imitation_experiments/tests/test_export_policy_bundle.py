@@ -454,3 +454,20 @@ def test_fsq_export_requires_skill_checkpoint(tmp_path):
                 "silu",
             ]
         )
+
+
+def test_combo_history_contract_round_trip(tmp_path):
+    checkpoint = _checkpoint(tmp_path, width=996, mask_false_span=66)
+    payload = torch.load(checkpoint, weights_only=False)
+    payload['hl_skill_command_sampler_state_dict']['skill_encoder_state_dict'] = _encoder_state(z_dim=64)
+    torch.save(payload, checkpoint)
+    output = _export(tmp_path, checkpoint, '--preset', 'combo64_history10_v1')
+    manifest = json.loads((output / 'manifest.json').read_text())
+    contract = json.loads((output / 'obs_contract.json').read_text())
+    assert contract['total_width'] == 996
+    assert [t['history_length'] for t in contract['terms']] == [1, 10, 10, 10, 10, 10]
+    assert [t['width'] for t in contract['terms']] == [66, 3, 3, 29, 29, 29]
+    assert manifest['command']['hold_steps'] == 1
+    assert manifest['command']['encoder_trigger'] == 'every_control_tick'
+    assert manifest['command']['z_dim'] == 64
+    assert epb.verify_bundle_dir(output)['policy_max_abs_err'] < 1e-6
