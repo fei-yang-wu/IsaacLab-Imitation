@@ -102,6 +102,31 @@ The checked-in config pins the completed 5B tracker and encoder hashes. A real
 run remains blocked until the corrected 500-control-step, `[0, 200]`-start
 qualification passes.
 
+## Star-v2 convergence figures
+
+[`plot_star_v2_convergence.py`](plot_star_v2_convergence.py) draws the
+convergence curves of the star-v2 command-interface ablation: one figure per
+ablation group with success rate, MPJPE-L, and MPJPE-G against environment
+frames, plus a success-rate overview of all groups. It reads
+`logs/report/star_v2_curves/star_v2_curve_points.csv` (built by
+`logs/report/star_v2_curves/export_curve_points.py` from the scored rows),
+joins the dense early-phase rerun (checkpoints every 9.83M to 0.2B) onto the
+200M grid of the original runs, and drops the arms named in `EXCLUDE_ARMS`
+(collapsed or diverged), printing them on every run. Hue names a family of
+arms and line style the variant inside it, so a panel needs at most six hues;
+the palette is blue-anchored and colorblind-checked. The font is IBM Plex
+Sans when installed under `~/.local/share/fonts/`.
+
+```bash
+pixi run python experiments/paper/plot_star_v2_convergence.py            # log x
+pixi run python experiments/paper/plot_star_v2_convergence.py --xscale linear
+```
+
+Outputs land in `logs/report/star_v2_curves/paper/`: the figures as PDF and
+PNG, `star_v2_convergence_figure_data.csv` with exactly the drawn points, and
+`star_v2_convergence_meta.json` with the palette, exclusions, and join
+statistics.
+
 ## Results page
 
 [`build_report.sh`](build_report.sh) with [`conf/report.yaml`](conf/report.yaml)
