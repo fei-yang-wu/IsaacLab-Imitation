@@ -50,8 +50,10 @@ for arm in ${ARMS}; do
         z64_merged|z64_wd_clin) ;;
         enc_hist) ENCODER="${P5_ENCODER}" ;;
         lstm) ENCODER="${P5_ENCODER}"; ARM_ARGS=(agent.ppo.rnn_hidden_size=256) ;;
-        lstm_affine) ENCODER="${P5_AFFINE_ENCODER}"; ARM_ARGS=(agent.ppo.rnn_hidden_size=256) ;;
-        combo)
+        lstm_affine|lstm_affine_std) ENCODER="${P5_AFFINE_ENCODER}"; ARM_ARGS=(agent.ppo.rnn_hidden_size=256) ;;
+        combo|combo50b)
+            # `combo50b` is the ramped 50B chain (2026-09-03-combo-50b); it
+            # shares the combo recipe, so only the checkpoint file differs.
             ENCODER="${P5_AFFINE_ENCODER}"
             ARM_ARGS=(
                 env.observations.policy.projected_gravity.history_length=10
