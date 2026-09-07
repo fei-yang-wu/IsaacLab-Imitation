@@ -150,3 +150,30 @@ def test_load_curves_on_an_empty_or_missing_dir(tmp_path, count):
     if count:
         target.mkdir()
     assert load_curves(target) == {}
+
+
+def test_shared_origin_is_prepended_to_every_arm(tmp_path):
+    from imitation_experiments.reporting.ablation_curves import with_shared_origin
+
+    _row(tmp_path, "untrained", 0, 0.0, None, None)
+    _row(tmp_path, "hub", 200048640, 0.5, 40.0, 300.0)
+    _row(tmp_path, "g2_mlp", 200048640, 0.4, 45.0, 320.0)
+    curves = with_shared_origin(load_curves(tmp_path), "untrained")
+    assert "untrained" not in curves
+    assert curves["hub"].frames == [0, 200048640]
+    assert curves["hub"].values["success_rate"] == [0.0, 0.5]
+    # MPJPE is success-only: an untrained policy has none, and the figure must
+    # not invent one.
+    assert curves["g2_mlp"].values["mpjpe_local_mm"] == [None, 45.0]
+
+
+def test_shared_origin_refuses_a_missing_or_multi_row_origin(tmp_path):
+    from imitation_experiments.reporting.ablation_curves import with_shared_origin
+
+    _row(tmp_path, "hub", 200048640, 0.5, 40.0, 300.0)
+    with pytest.raises(ValueError, match="no scored row"):
+        with_shared_origin(load_curves(tmp_path), "untrained")
+    _row(tmp_path, "untrained", 0, 0.0, None, None)
+    _row(tmp_path, "untrained", 200048640, 0.1, None, None)
+    with pytest.raises(ValueError, match="exactly one row"):
+        with_shared_origin(load_curves(tmp_path), "untrained")

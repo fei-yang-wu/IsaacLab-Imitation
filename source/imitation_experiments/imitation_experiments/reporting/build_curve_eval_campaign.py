@@ -83,7 +83,11 @@ def arm_stage(
     cache_root: str,
     board: str,
     row: str,
+    encoder_root: str | None = None,
 ) -> dict[str, Any]:
+    """One `score` stage. `encoder_root` lets the encoder files live in a
+    different tree than the checkpoints, which is the case for a rerun that
+    reuses the original run's archived encoders."""
     posterior = str(merged.get("route", "pretrained")) == "posterior"
     tree = f"{tree_root}/{arm}_seed{seed}"
     z_dim = int(merged["z_dim"])
@@ -162,7 +166,8 @@ def arm_stage(
     else:
         args += [
             "agent.ipmd.command_source=hl_skill",
-            f"agent.ipmd.hl_skill_checkpoint_path={encoder_path(merged, arm, seed, tree_root)}",
+            "agent.ipmd.hl_skill_checkpoint_path="
+            + encoder_path(merged, arm, seed, encoder_root or tree_root),
             f"agent.ipmd.hl_skill_horizon_steps={int(merged['horizon'])}",
             f"agent.ipmd.hl_skill_command_mode={merged['command_mode']}",
             "agent.ipmd.hl_skill_finetune_enabled=false",
@@ -225,6 +230,9 @@ def build(
     cache_root: str = "/storage/ice-shared/vip-vwt/scratch-fwu91/isaac_cache_curves",
     board: str = "bones_testbed4096_v1",
     row: str = "clean",
+    encoder_root: str | None = None,
+    name: str = "star-v2-curves",
+    wandb_group: str = "latent-star-v2",
 ) -> str:
     arms = load_campaign_arms(campaign_path)
     base = yaml.safe_load(campaign_path.read_text())["vars"]
@@ -236,15 +244,23 @@ def build(
             "vars": {},
             "stages": [
                 arm_stage(
-                    arm, merged, tree_root, eval_root, seed, cache_root, board, row
+                    arm,
+                    merged,
+                    tree_root,
+                    eval_root,
+                    seed,
+                    cache_root,
+                    board,
+                    row,
+                    encoder_root=encoder_root,
                 )
             ],
         }
     doc = {
-        "name": "star-v2-curves",
+        "name": name,
         "profile": "ice",
         "wandb_project": "g1-bs-ablation",
-        "wandb_group": "latent-star-v2",
+        "wandb_group": wandb_group,
         "vars": {"eval_root": eval_root},
         "shared_env": {"CLUSTER_SIM_BACKEND": "newton"},
         "preflight": {
@@ -277,6 +293,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--board", default="bones_testbed4096_v1")
     parser.add_argument("--row", default="clean")
+    parser.add_argument(
+        "--encoder-root",
+        default=None,
+        help="tree root holding the encoder files when it differs from --tree-root",
+    )
+    parser.add_argument("--name", default="star-v2-curves")
+    parser.add_argument("--wandb-group", default="latent-star-v2")
+    parser.add_argument(
+        "--cache-root",
+        default="/storage/ice-shared/vip-vwt/scratch-fwu91/isaac_cache_curves",
+        help="per-arm Isaac Sim cache dirs live under here; keep campaigns apart",
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     text = build(
@@ -284,8 +312,12 @@ def main(argv: list[str] | None = None) -> int:
         args.tree_root,
         args.eval_root,
         args.seed,
+        cache_root=args.cache_root,
         board=args.board,
         row=args.row,
+        encoder_root=args.encoder_root,
+        name=args.name,
+        wandb_group=args.wandb_group,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(text)

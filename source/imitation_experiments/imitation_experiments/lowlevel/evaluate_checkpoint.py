@@ -78,6 +78,18 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--untrained_policy",
+    action="store_true",
+    default=False,
+    help=(
+        "Score the freshly initialized agent instead of a checkpoint: the "
+        "actor weights are the training start (seeded by --seed), while the "
+        "command interface, including a pretrained skill encoder, is built "
+        "exactly as for a trained cell. Requires --output_json and no "
+        "--checkpoint. Gives the frame-0 point of a convergence curve."
+    ),
+)
+parser.add_argument(
     "--policy_only_checkpoint",
     action="store_true",
     default=False,
@@ -1495,9 +1507,25 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # One cell = one (checkpoint, output json) pair. `--checkpoint` keeps the
     # single-cell contract every existing launcher uses; `--checkpoints` adds
     # the budget axis in one process.
-    if (args_cli.checkpoint is None) == (args_cli.checkpoints is None):
+    if args_cli.untrained_policy:
+        if args_cli.checkpoint is not None or args_cli.checkpoints is not None:
+            raise ValueError("--untrained_policy takes no checkpoint.")
+        if args_cli.output_json is None:
+            raise ValueError("--untrained_policy requires --output_json.")
+        if args_cli.policy_only_checkpoint:
+            raise ValueError(
+                "--untrained_policy cannot be combined with --policy_only_checkpoint."
+            )
+        if args_cli.certify_streamed_vanilla_equivalence:
+            raise ValueError(
+                "--untrained_policy cannot be combined with "
+                "--certify_streamed_vanilla_equivalence."
+            )
+    elif (args_cli.checkpoint is None) == (args_cli.checkpoints is None):
         raise ValueError("Pass exactly one of --checkpoint or --checkpoints.")
-    if args_cli.checkpoints is not None:
+    if args_cli.untrained_policy:
+        cells = [(None, args_cli.output_json)]
+    elif args_cli.checkpoints is not None:
         if args_cli.output_jsons is None or len(args_cli.output_jsons) != len(
             args_cli.checkpoints
         ):
@@ -1512,7 +1540,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     else:
         cells = [(args_cli.checkpoint.expanduser().resolve(), args_cli.output_json)]
     for path, _ in cells:
-        if not path.is_file():
+        if path is not None and not path.is_file():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
     if len(cells) > 1:
         # Both paths write one summary and stop, so they have no meaning for a
@@ -1773,11 +1801,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 f"{current_episode_length_s:.3f} -> {required_episode_length_s:.3f}"
             )
 
-    output_root = (
-        args_cli.output_json.expanduser().resolve().parent
-        if args_cli.output_json is not None
-        else checkpoint_path.parent / "evaluation"
-    )
+    if args_cli.output_json is not None:
+        output_root = args_cli.output_json.expanduser().resolve().parent
+    else:
+        # Validated above: an untrained cell always names its output file.
+        assert checkpoint_path is not None
+        output_root = checkpoint_path.parent / "evaluation"
     env_cfg.log_dir = str(output_root)
 
     agent_cfg.env.num_envs = int(args_cli.num_envs)
@@ -1876,7 +1905,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # only the policy weights change between checkpoints.
     first_cell_ranks: torch.Tensor | None = None
     for cell_index, (checkpoint_path, output_json_target) in enumerate(cells):
-        print(f"[INFO] Loading checkpoint: {checkpoint_path}")
+        if checkpoint_path is None:
+            print("[INFO] Untrained policy: scoring the initialized agent.")
+        else:
+            print(f"[INFO] Loading checkpoint: {checkpoint_path}")
         # A list of cells shares one `--label`, so the row is named after the
         # output file it lands in, the way the campaign launchers name theirs.
         cell_label = args_cli.label
@@ -1892,7 +1924,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             args_cli.policy_only_checkpoint
             or low_level_command_mode == "streamed_vanilla"
         )
-        if policy_only_checkpoint:
+        if checkpoint_path is None:
+            # The agent above is the training start: random actor and critic
+            # under the agent config's init, with the arm's command interface
+            # (and pretrained encoder, when the route has one) already built.
+            collector_policy = agent.collector_policy
+            collector_policy.eval()
+        elif policy_only_checkpoint:
             frozen_tracker = load_frozen_low_level_tracker(
                 agent,
                 checkpoint_path,
@@ -1929,6 +1967,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 atol=float(args_cli.equivalence_atol),
             )
             result["low_level_tracker"] = tracker_provenance
+            # Validated above: the certificate never runs on an untrained cell.
+            assert checkpoint_path is not None
             result["checkpoint"] = str(checkpoint_path)
             result["checkpoint_sha256"] = _file_sha256(checkpoint_path)
             result["motion_manifest"] = (
@@ -2397,7 +2437,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 "task": args_cli.task,
                 "algorithm": args_cli.algorithm,
                 "ipmd_l2t_policy_role": l2t_policy_role,
-                "checkpoint": str(checkpoint_path),
+                "checkpoint": str(checkpoint_path)
+                if checkpoint_path is not None
+                else None,
+                "untrained_policy": checkpoint_path is None,
                 "motion_manifest": str(motion_manifest)
                 if motion_manifest is not None
                 else None,
@@ -2543,6 +2586,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
         output_json = output_json_target
         if output_json is None:
+            # Validated above: an untrained cell always names its output file.
+            assert checkpoint_path is not None
             label = cell_label or command_space
             output_json = checkpoint_path.parent / "evaluation" / f"{label}_eval.json"
         output_json = output_json.expanduser().resolve()
