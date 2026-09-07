@@ -254,10 +254,17 @@ class Preset:
     encoder_state_dim: int | None = None
     horizon_steps: int | None = None
     quantizer: str = "none"
+    encoder_trigger: str = "on_acceptance"
+    proprio_history_length: int = 1
+
+    def history_length(self, name: str) -> int:
+        if any(name == term_name for term_name, _, _ in _PROPRIO_TERMS):
+            return self.proprio_history_length
+        return 1
 
     @property
     def total_width(self) -> int:
-        return sum(width for _, width, _ in self.terms)
+        return sum(width * self.history_length(name) for name, width, _ in self.terms)
 
     @property
     def phase_dim(self) -> int:
@@ -265,6 +272,18 @@ class Preset:
 
 
 PRESETS = {
+    "combo64_history10_v1": Preset(
+        name="combo64_history10_v1",
+        interface="latent",
+        terms=[("latent_command", 66, False), *_PROPRIO_TERMS],
+        z_dim=64,
+        phase_mode="sin_cos",
+        default_hold_steps=1,
+        encoder_state_dim=38,
+        horizon_steps=10,
+        proprio_history_length=10,
+        encoder_trigger="every_control_tick",
+    ),
     "l2t_student_v2": Preset(
         name="l2t_student_v2",
         interface="latent",
@@ -742,14 +761,15 @@ def export_bundle(args: argparse.Namespace) -> Path:
     for name, width, normalize in preset.terms:
         if role != "student":
             break
-        span = mask[cursor : cursor + width]
+        flat_width = width * preset.history_length(name)
+        span = mask[cursor : cursor + flat_width]
         uniform = bool(span.all()) or bool((~span).all())
         if not uniform or normalize != bool(span.all()):
             raise ValueError(
                 f"normalize mask disagrees with preset at term {name}: "
                 f"preset={normalize}, span all={bool(span.all())} any={bool(span.any())}"
             )
-        cursor += width
+        cursor += flat_width
 
     encoder = None
     encoder_provenance: dict = {}
@@ -975,7 +995,9 @@ def export_bundle(args: argparse.Namespace) -> Path:
     isaac_to_sdk = [sdk_names.index(name) for name in G1_ISAAC_JOINT_NAMES]
     obs_contract = {
         "terms": [
-            _observation_term(name, width, normalize)
+            _observation_term(
+                name, width, normalize, history_length=preset.history_length(name)
+            )
             for name, width, normalize in preset.terms
         ],
         "total_width": preset.total_width if role == "student" else in_features,
@@ -1015,6 +1037,7 @@ def export_bundle(args: argparse.Namespace) -> Path:
             "window_steps": window_steps,
             "horizon_steps": encoder_provenance["horizon_steps"],
             "encoder_window_mode": encoder_provenance["encoder_window_mode"],
+            "encoder_trigger": preset.encoder_trigger,
             "macro_frame_stride": encoder_provenance["macro_frame_stride"],
             "macro_anchor_mode": encoder_provenance["macro_anchor_mode"],
             "activation": encoder_provenance["encoder_activation"],
