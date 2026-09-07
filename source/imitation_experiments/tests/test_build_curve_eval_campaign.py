@@ -232,3 +232,45 @@ def test_each_arm_gets_a_private_isaac_cache(tmp_path):
     }
     assert caches == {"a": "/cache/a", "b": "/cache/b"}
     assert len(set(caches.values())) == len(caches)
+
+
+def test_encoder_root_separates_encoder_files_from_checkpoint_trees(tmp_path):
+    # A densely checkpointed rerun trains new trackers against the ORIGINAL
+    # run's archived encoders, so the checkpoints and the encoder files live in
+    # different roots.
+    arms = {
+        "hub": {"vars": {}},
+        "g5_hold5": {
+            "vars": {"encoder_ckpt": "${vars.hub_encoder}"},
+        },
+    }
+    path = _training_campaign(tmp_path, arms)
+    doc = yaml.safe_load(path.read_text())
+    doc["vars"]["hub_encoder"] = (
+        "/data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt"
+    )
+    doc["vars"]["encoder_ckpt"] = "${vars.output_root}/encoder/checkpoints/latest.pt"
+    path.write_text(yaml.safe_dump(doc))
+    text = build(
+        path,
+        "/shared/early",
+        EVAL,
+        0,
+        encoder_root="/shared/archive",
+        name="star-v2-early-curves",
+        wandb_group="latent-star-v2-early",
+    )
+    for arm in ("hub", "g5_hold5"):
+        args = _args(text, arm)
+        assert args[args.index("--tree") + 1] == f"/shared/early/{arm}_seed0"
+    assert (
+        "agent.ipmd.hl_skill_checkpoint_path=/shared/archive/hub_seed0/encoder/checkpoints/latest.pt"
+        in _args(text, "hub")
+    )
+    assert (
+        "agent.ipmd.hl_skill_checkpoint_path=/shared/archive/hub_seed0/encoder/checkpoints/latest.pt"
+        in _args(text, "g5_hold5")
+    )
+    head = yaml.safe_load(text)
+    assert head["name"] == "star-v2-early-curves"
+    assert head["wandb_group"] == "latent-star-v2-early"

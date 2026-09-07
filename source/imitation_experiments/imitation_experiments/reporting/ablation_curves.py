@@ -97,6 +97,45 @@ def load_curves(
     return curves
 
 
+def with_shared_origin(
+    curves: Mapping[str, Curve], origin_arm: str
+) -> dict[str, Curve]:
+    """Prepend `origin_arm`'s single point to every other arm.
+
+    The origin is an untrained policy scored on the same board, so every curve
+    starts from one common point instead of from its first 200M checkpoint. A
+    metric the origin does not have (MPJPE is success-only, and an untrained
+    policy may succeed nowhere) stays None there, so that panel's line simply
+    starts at the first real checkpoint rather than at an invented value.
+    """
+    origin = curves.get(origin_arm)
+    if origin is None:
+        raise ValueError(f"no scored row for origin arm {origin_arm!r}")
+    if len(origin.frames) != 1:
+        raise ValueError(
+            f"origin arm {origin_arm!r} must have exactly one row, "
+            f"found {len(origin.frames)}"
+        )
+    out: dict[str, Curve] = {}
+    for arm, curve in curves.items():
+        if arm == origin_arm:
+            continue
+        if curve.frames and curve.frames[0] <= origin.frames[0]:
+            raise ValueError(
+                f"{arm} already has a row at or before the origin frame "
+                f"{origin.frames[0]}"
+            )
+        out[arm] = Curve(
+            arm=arm,
+            frames=list(origin.frames) + list(curve.frames),
+            values={
+                key: list(origin.values[key]) + list(curve.values[key])
+                for key in curve.values
+            },
+        )
+    return out
+
+
 def section_arms(arms: Mapping[str, Mapping[str, Any]]) -> dict[int, list[str]]:
     grouped: dict[int, list[str]] = {}
     for arm, spec in arms.items():
@@ -175,6 +214,14 @@ def main(argv: list[str] | None = None) -> int:
         default=SCREEN_FRAMES,
         help="cut every curve here so it matches the table budget; 0 disables",
     )
+    parser.add_argument(
+        "--origin-arm",
+        default=None,
+        help=(
+            "arm name of an untrained-policy row (one file, frame 0) whose "
+            "point is prepended to every curve as the shared starting point"
+        ),
+    )
     args = parser.parse_args(argv)
 
     curves = load_curves(
@@ -185,6 +232,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     if not curves:
         parser.error(f"no scored rows under {args.eval_dir}")
+    if args.origin_arm:
+        curves = with_shared_origin(curves, args.origin_arm)
     arms_spec = load_campaign_arms(args.campaign)
     labels = {a: str(v.get("paper_label", a)) for a, v in arms_spec.items()}
     grouped = section_arms(arms_spec)
