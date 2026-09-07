@@ -21,6 +21,244 @@ and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
 
+## Recurrent (LSTM) actor: PARKED (2026-09-06)
+
+User decision: stop the recurrent-actor axis. No new LSTM arm is submitted. The
+machinery stays in-tree and off by default (`agent.ppo.rnn_hidden_size`).
+
+What the decision rests on, stated as data. Every row is one seed, one pass,
+one checkpoint, board `bones_testbed4096_v1`, `--randomization none` unless
+marked robust.
+
+Matched pair at 5B, `2026-08-28-smooth-ablation-5b`, 256-D two-head hub. Same
+encoder file, same SONIC 0.8 to 0.2 reset ramp, same 16,384 environments, same
+5,000,134,656 frames, seed 0. The one difference is the actor: a 256-unit LSTM
+on single-frame observations against an MLP with a ten-step observation
+history.
+
+| arm | SR | MPJPE-L mm | MPJPE-G mm | acc | jerk | action_delta |
+|---|---|---|---|---|---|---|
+| lstm | 0.9229 | 25.40 | 97.12 | 5.376 | 242.74 | 1.050 |
+| hist | 0.9290 | 27.73 | 94.45 | 5.201 | 242.62 | 1.038 |
+| sonic_v1_1 | 0.9888 | 26.73 | 187.7 | 3.45 | - | - |
+
+Robust rows, `--randomization no_push`: lstm 0.9048 / 27.72 / 149.51 against
+hist 0.9116 / 30.58 / 152.42.
+
+Matched pair at 10B, `lstm_affine_std` (`2026-09-02-lstm-hub64-10b`) against
+`combo` (`2026-09-01-latent64-probe-10b`). Same `p5_affine` encoder file, same
+weight decay 1e-2 and linear critic decay, same `random80_adaptive20` resets
+with the 5M-30M curriculum, same 16,384 environments, same 10,000,269,312
+frames, seed 0, same actor contrast: lstm_affine_std 0.9180 / 23.14 / 112.42
+against combo 0.9214 / 22.64 / 88.52. That row lives only in
+`/data/eval/latest_eval/` on ICE and in W&B `lh64-lstmaffstd-s0`; it is not in
+this repository.
+
+The three 10B arms of `2026-09-02-lstm-hub64-10b`: lstm 0.9121 / 21.24 /
+103.11 (robust 0.9021 / 23.64 / 165.02), lstm_affine 0.9062 / 22.27 / 110.63,
+lstm_affine_std 0.9180 / 23.14 / 112.42. `lstm_nophase` never left 500M and
+ended collapsed at episode length 43.6, so it carries no row.
+
+Against the measured bands: on success rate and MPJPE-L the 5B pair sits inside
+the replicate band of 0.0064 SR and 0.46 mm, measured from three pretrains of
+one MLP recipe at 500M (`2026-08-30-encoder-interface-500m`). Its MPJPE-L gap
+of 2.33 mm (8.4%) is above that band but below `base`'s own 13.7% swing between
+two checkpoints 250M frames apart. Smoothness is indistinguishable in that pair
+(jerk 242.74 against 242.62). The 10B pair's MPJPE-G gap of 23.90 mm (27.0%) is
+outside every band on record, including the about 15% rule in AGENTS.md.
+
+What this does NOT establish, and why the parking is a scope decision rather
+than a null result:
+
+1. No matched "recurrence against no temporal context" pair exists. Both
+   matched pairs put the LSTM against an MLP that already carries a ten-step
+   observation history, so they compare two ways to supply temporal context.
+2. `agent.ppo.rnn_hidden_size` is not only a network swap. It also switches
+   PPO minibatches from shuffled flat rows to time-contiguous `[env, T]` BPTT
+   sequences and adds `InitTracker` plus the LSTM `TensorDictPrimer` to the
+   environment.
+3. Batch shape cannot be matched. BPTT activations run out of memory at
+   20,480 environments, so every recurrent arm ran at 12,288 or 16,384 while
+   the plain-MLP controls ran at 20,480. The frame grids step by 393,216
+   against 491,520 per iteration, so a recurrent arm and a 20,480-environment
+   control never land on the same frame count.
+4. No LSTM checkpoint was ever scored twice, so the recurrent rows have no
+   measured repeat spread of their own. Every band quoted above was measured
+   on non-recurrent arms.
+5. The evaluator debt is still open. `evaluate_checkpoint`'s step loop is
+   `policy(td); step_mdp(td)`, which carries `("next", recurrent_state_*)`
+   forward, but nobody has verified the reset-time zeroing. Only the recurrent
+   rows use that path.
+6. MPJPE is success-only and the success sets differ (about 3,621 to 3,920 of
+   4,096). A lower-SR arm drops the hardest clips, which lowers its MPJPE.
+
+`phi_lstm` (`2026-09-04-direct-affine-phi`, 10B complete, 0.8474 / 22.92 /
+65.97) is the recurrent arm with the lowest MPJPE-G in the set and the lowest
+SR. Three variables separate it from `combo` (phi conditioning, affine
+encoder, recurrent actor), so it attributes nothing on its own.
+
+Reviving this needs: a matched pair that moves the actor alone against an MLP
+with NO observation history, at one batch shape, with repeated seeds, and with
+the recurrent-state reset zeroing in `evaluate_checkpoint` verified first.
+
+Campaigns: `experiments/campaigns/2026-08-28-smooth-ablation-5b/`,
+`experiments/campaigns/2026-09-02-lstm-hub64-10b/`,
+`experiments/campaigns/2026-09-04-direct-affine-phi/`.
+
+## direct-affine-phi 10B COMPLETE; combo-50b past 30B (2026-09-06)
+
+`experiments/campaigns/2026-09-04-direct-affine-phi/` finished its 10B budget.
+Job 5699181 ended COMPLETED 0:0 at exactly 10,000,171,008 frames in 6:34:50,
+after 5699180 timed out at 7.32B and resumed from the 7B checkpoint. The arm
+is a 256-unit LSTM actor whose command is the past-5 affine encoder's
+phi(s_history, z) rather than the code z
+(`agent.ipmd.hl_skill_command_mode=phi`, `env.command_interface.actor.dim=66`),
+at 12,288 environments after physics ran out of memory in
+`wp_cuda_graph_launch` at 20,480 and again at 16,384.
+
+Final row, `bones_testbed4096_v1`, seed 0, `--randomization none`, one seed:
+SR 0.8474, MPJPE-L 22.92 mm, MPJPE-G 65.97 mm, acc 4.789 m/s^2, jerk
+205.65 m/s^3, action_delta_l2 0.8813. Survival 313.76 steps; terminations
+3,472 `reference_finished`, 418 `ee_body_pos`, 180 `anchor_ori`, 50
+`anchor_pos`, 0 `time_out`. Mid-flight rows at 3.5B/6.5B/7B/8B/9B are in
+`/data/eval/latest_eval/phi_lstm_seed0_clean_f*.json`.
+
+`experiments/campaigns/2026-09-03-combo-50b/` (the same affine encoder on the
+`z` channel, plus weight decay, linear critic decay, and a ten-step actor
+observation history) is at 30.52B of 50B in segment 6 of seven. Segments 3 and
+4 both died on `RuntimeError: Training went non-finite` at 16.127B and 16.271B;
+segment 5 cleared that band from the 16B checkpoint and nothing has recurred.
+Segment 7 is the last declared segment, so at about 150k fps and a 15:59
+walltime the chain ends near 41B, roughly 9B short of the cap.
+
+Mid-flight rows land every 1B through
+`experiments/campaigns/2026-09-03-combo-50b/submit_live_eval.sh` and, for the
+phi arm, the matching launcher in its own campaign directory; both relink the
+newest checkpoint into a milestone-layout tree so a resumed tree does not
+raise `AmbiguousTree`.
+
+## Paper convergence figures for star-v2 (2026-09-07)
+
+`experiments/paper/plot_star_v2_convergence.py` is the paper figure script
+for the star-v2 curves: six per-group figures (success rate, MPJPE-L,
+MPJPE-G, IEEE double-column width) and a success-rate overview, log x by
+default so the dense early phase is readable, log y on the MPJPE panels,
+the hub as a navy reference line in every panel, a faint rule at 0.2B where
+the dense rerun joins the 200M grid. Default coloring (user choice
+2026-09-07): arms RANKED inside each group by success rate at 2B and colored
+along one blue ramp, deep blue (best) to light blue to gray-blue (worst),
+legend in rank order with the 2B value; line style still names the variant
+(continuous / FSQ / VQ, EMA / stop-grad / online target, hold 5 / hold 10).
+`--color-by family` gives the earlier six-hue palette (validated for
+colorblind separation in legend order). IBM Plex Sans installed under
+`~/.local/share/fonts/IBMPlexSans/` (OFL, from the IBM Plex GitHub release).
+Excluded as divergent, printed on every run: `g3_vq64` (SR 0.00),
+`g1_recon_vq` (0.05 at 2B, rerun disagrees at the join),
+`g5_phase_none_h10` (flat at 0.37). Drawn points saved to
+`logs/report/star_v2_curves/paper/star_v2_convergence_figure_data.csv`
+(1,229 rows) with the palette and exclusions in `..._meta.json`.
+
+## Star-v2 curve evaluation complete to 2B; all-arm figure and CSV (2026-09-05)
+
+All 44 star-v2 arms have the 10 clean rows at 200M to 2B on
+`bones_testbed4096_v1` (seed 0, `--randomization none`). The local mirror
+`logs/latent_star_v2_curves/` matches ICE (1,005 rows, newest 2026-09-01
+12:47). Star-v2 training finished on 2026-09-01. Beyond 2B, nine arms hold
+archived checkpoints that no job has scored: `g1_post_pgrecon_ae` (scored to
+3.4B of 5B), `g2_dsrsig` (2.4B), `g2_lejepa_ema` (2.8B), `g2_mlp` (3.8B),
+`g2_phi_bilinear` (4.6B), `g3_cont128` (2.4B), `g3_multicat_gumbel` (2.0B),
+`g4_h5` (2.0B), `g6_dyn` (2.0B of 4.0B). Re-running `submit_all.sh` for those
+arms scores the tail. `g1_recon_vq` (2.6B), `g3_vq64` (2.0B), `g4_h20` (3.4B),
+and `g4_anchor_robot` (4.8B) stopped training early and are fully scored.
+
+Outputs in `logs/report/star_v2_curves/`: `star_v2_curve_points.csv` (965
+rows: arm, paper label, section, frames, SR, MPJPE-L, MPJPE-G, successful
+count, source JSON), `export_curve_points.py` (rebuilds the CSV),
+`plot_curves.py` (all-arm figure, one panel row per ablation group, hub in
+black in every row, cut at 2B by default, `--max-b 5` for the whole axis),
+`star_v2_all_arms_convergence.{png,pdf}`, and the per-section figures from
+`imitation_experiments.reporting.ablation_curves`. One seed per arm.
+
+## Star-v2 early-phase dense rerun SUBMITTED (2026-09-05)
+
+`experiments/campaigns/2026-09-05-star-v2-early-dense/`, W&B project
+`g1-bs-ablation`, group `latent-star-v2-early` (user confirmed), run ids
+`lsv2e-<arm>-s0`. Every one of the 44 star-v2 arms trains again for 200M
+frames (407 iterations) with `agent.save_interval=9830400` (20 iterations,
+20 checkpoints), one 3 h H200 segment each, output on
+`/storage/ice-shared/vip-vwt/scratch-fwu91/latent_star_v2_early/` (off the
+300 GB scratch quota; about 188 GB of checkpoints). No pretrain stage: each
+tracker binds the ORIGINAL run's archived encoder, so the encoder is the
+tensor the original tracker trained against. The reset ramp and termination
+curriculum key off the step counter, so the first 200M frames follow the
+original schedule.
+
+Why: the original campaign saved every 200M, so every curve jumped from the
+untrained origin (SR 0.0137) to near its plateau at the first point, and no
+evaluation can recover a checkpoint that was never written.
+
+The rerun is a fresh training run. Its curve joins the 200M-grid curve at
+200M only up to run-to-run noise; figures draw its points with hollow
+markers. Config generated by
+`imitation_experiments.pipeline.derive_early_phase_campaign` (7 tests);
+`build_curve_eval_campaign` gained `--encoder-root`, `--name`,
+`--wandb-group`, `--cache-root` (1 test) and `eval_campaign.yaml` is already
+generated for the scoring pass (`/data/eval/star_v2_early_curves`). All 44
+plans passed the eight ICE preflight checks. Job ids in the campaign README.
+Working tree was dirty at submit (drift recorded).
+
+**DONE 2026-09-06.** Training: 44 of 44 jobs COMPLETED, each arm 20
+checkpoints in one run directory, deepest 196,608,000 frames (20 x
+9,830,400; the 200,048,640 cap falls between saves), 183 GB on ice-shared.
+Scoring: 880 of 880 rows (20 per arm, all 44 arms), jobs 5715172-5715282
+plus retries. Eight jobs died in the flaky Kit startup crash (21-31 s, exit
+139 in the carb crash reporter, before any scoring work) and every one
+succeeded on resubmission. Rows mirrored to
+`logs/latent_star_v2_early_curves/`.
+
+**The rerun agrees with the original run at the 200M join.** Comparing each
+arm's 196.6M rerun point against its 200M original point, over the 43 arms
+that have both: median absolute success-rate difference 0.0088, 90th
+percentile 0.0219. One arm disagrees by far more: `g1_recon_vq`
+("Recon. (offline, VQ)") reads 0.345 in the rerun against 0.016 in the
+original, with MPJPE-L 40.6% lower. Both bound the SAME archived encoder,
+so that arm's collapse did not reproduce under a different tracker RNG
+realization. Single seed each; the arm's other numbers stay as recorded.
+
+Figures and CSV rebuilt: `logs/report/star_v2_curves/`. The CSV holds 1,846
+rows with a `run` column (`original` 966, `early` 880). `plot_curves.py`
+draws the rerun points hollow, defaults to log y on the MPJPE panels
+(`--linear-mpjpe` reverts) because the early phase widens that range about
+50-fold, and takes `--min-successful` to drop MPJPE points backed by few
+surviving environments. MPJPE-G rises to a transient peak near 0.05-0.1B
+before falling; that peak is not a small-sample artifact, since points with
+about 1,300 successful environments still read above 600 mm.
+
+## Untrained-policy origin for the curves (2026-09-05)
+
+`--untrained_policy` in `imitation_experiments.lowlevel.evaluate_checkpoint`
+scores the freshly initialized agent (actor at init, seed 0) with the arm's
+command interface built as for a trained cell. Launcher:
+`experiments/campaigns/2026-08-31-star-v2-curves/eval_untrained_local.sh`
+(hub evaluator arguments, local mirrors). Row:
+`logs/latent_star_v2_curves/untrained_seed0_clean_f0.json`, same board and
+protocol as the curve cells, one run.
+
+| policy | SR | MPJPE-L (success-only) | MPJPE-G (success-only) | successful envs | mean survival (steps) |
+|---|---:|---:|---:|---:|---:|
+| untrained | 0.0137 | 140.31 | 657.48 | 56 of 4096 | 39.6 |
+
+MPJPE is success-only, so the origin's MPJPE rests on 56 envs (the clips an
+untrained actor survives). Frame-weighted over all 4,096 envs the same run
+gives MPJPE-L 84.86 / MPJPE-G 220.12; that is a different reduction and is
+kept in the CSV as `*_all_envs`, not on the curves. Terminations:
+`ee_body_pos` 3569, `anchor_ori` 415, `anchor_pos` 212.
+
+`ablation_curves --origin-arm untrained` and `plot_curves.py` (default on,
+`--no-origin` to drop) prepend this point to every arm. The actor init is
+not bit-identical to any arm's own training start (construction order
+differs), so the arm is named `untrained`, not `hub`.
+
 ## Direct affine-phi64 LSTM training submitted (2026-09-04)
 
 `2026-09-04-direct-affine-phi` contains one seed-0, 10B arm in W&B project
