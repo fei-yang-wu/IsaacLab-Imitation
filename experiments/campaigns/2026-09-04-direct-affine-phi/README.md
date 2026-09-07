@@ -1,4 +1,4 @@
-# Direct affine-phi LSTM tracker (2026-09-04)
+# Direct affine-phi LSTM tracker (2026-09-04) -- PARKED 2026-09-06
 
 This campaign starts from the `lstm_affine_std` tracker recipe. The policy
 receives a trained 64-D affine feature `phi(s_history, z)` plus two phase values.
@@ -129,3 +129,22 @@ difference as well as the command representation.
 Every resubmission plans only the tracker stages
 (`--only-stage lowlevel1,lowlevel2`) so the completed encoder is reused
 rather than pretrained again.
+
+## PARKED -- recurrent actor stopped (2026-09-06)
+
+The 10B budget finished on 2026-09-06: job 5699181 COMPLETED at exactly
+10,000,171,008 frames in 6:34:50, after 5699180 timed out at 7.32B and resumed
+from the 7B checkpoint.
+
+Final row, board `bones_testbed4096_v1`, `--randomization none`, seed 0, one
+pass: SR 0.8474, MPJPE-L 22.92 mm, MPJPE-G 65.97 mm, acc 4.789 m/s^2, jerk
+205.65 m/s^3, action_delta_l2 0.8813. Survival 313.76 steps; terminations 3,472
+`reference_finished`, 418 `ee_body_pos`, 180 `anchor_ori`, 50 `anchor_pos`, 0
+`time_out`. That MPJPE-G is the lowest of any arm in this comparison set and
+the SR is the lowest; three variables separate this arm from `combo` (phi
+conditioning, affine encoder, recurrent actor), so it attributes nothing on its
+own.
+
+User decision, 2026-09-06: the recurrent-actor axis is parked. No new LSTM arm
+is submitted. See `wiki/current-status.md`, section "Recurrent (LSTM) actor:
+PARKED (2026-09-06)", for the matched pairs and the confounds.

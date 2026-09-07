@@ -1,4 +1,4 @@
-# 2026-09-02 -- LSTM actor on the new default hub
+# 2026-09-02 -- LSTM actor on the new default hub -- PARKED 2026-09-06
 
 Three arms, W&B project `g1-bs-pareto`, group `lstm-hub64-10b`, seed 0.
 The recipe is the user's 2026-09-02 base (see the `campaign.yaml` header):
@@ -77,3 +77,33 @@ Earlier passes: v2/v3 blended into a jog clip that stops at frame 300 and a
 walk clip that stands for its first 2 s (both arms held 450/450, speeds
 uninformative); v4 kept the board terminations and every run ended on
 `ee_body_pos` 10-20 steps after the ramp.
+
+## PARKED -- recurrent actor stopped (2026-09-06)
+
+User decision: stop the recurrent-actor axis. No new LSTM arm is submitted, and
+the machinery stays in-tree and off by default (`agent.ppo.rnn_hidden_size`).
+
+Final rows for this campaign, board `bones_testbed4096_v1`, seed 0, one pass
+per checkpoint, at the 10B cap (10,000,269,312 frames):
+
+| arm | row | SR | MPJPE-L mm | MPJPE-G mm |
+|---|---|---|---|---|
+| lstm | clean | 0.9121 | 21.24 | 103.11 |
+| lstm | robust | 0.9021 | 23.64 | 165.02 |
+| lstm_affine | clean | 0.9062 | 22.27 | 110.63 |
+| lstm_affine_std | clean | 0.9180 | 23.14 | 112.42 |
+
+`lstm_nophase` never left 500M and ended collapsed at episode length 43.6, so
+it has no row.
+
+`lstm_affine_std` against `combo` (`2026-09-01-latent64-probe-10b`) is the one
+pair in this campaign that moves the actor alone: same `p5_affine` encoder
+file, same weight decay and linear critic decay, same resets, same 16,384
+environments, same frame count, seed 0. combo scores 0.9214 / 22.64 / 88.52,
+so MPJPE-G differs by 23.90 mm (27.0%).
+
+The full record of what the pairs do and do not establish, including the
+confounds that stop this from being read as a null, is in
+`wiki/current-status.md`, section "Recurrent (LSTM) actor: PARKED
+(2026-09-06)". The recurrent-state qualification debt noted above is still
+open and would have to be closed before any revival.
