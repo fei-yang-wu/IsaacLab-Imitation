@@ -1,6 +1,6 @@
 ---
 name: bones-seed-dataset
-description: BONES-SEED dataset workflow for this IsaacLab-Imitation repo, including Hugging Face access, Skynet data paths, metadata counts, G1 archive layout, trajectory shortlists, CSV extraction, G1 joint-order validation, root/unit conversion, NPZ export, manifest/language sidecar generation, MiniLM language embeddings, and safe full-dataset Zarr/replay-cache reuse. Use when the user mentions BONES-SEED, bones seed, bones-studio/seed, G1 CSV/NPZ conversion, language-conditioned planner dataset prep, dataset metadata/joint-order issues, or the 129k cache.
+description: Prepare or inspect BONES-SEED G1 trajectories, manifests, language features, and replay caches.
 ---
 
 # BONES-SEED Dataset

@@ -1,6 +1,6 @@
 ---
 name: ec-deployment
-description: Run the Embodied-Control deployment rehearsal rig for a G1 tracker — export a policy bundle, run the MuJoCo or DDS plant, measure MPJPE, and read the R0-R2 timing certificates. Use when the user mentions Embodied-Control, EC, the tracker runtime, policy bundles, sim2sim or hardware rehearsal, DDS, unitree_sdk2, MuJoCo native evaluation, SLO or tick certificates, or asks to deploy a checkpoint outside Isaac.
+description: Export G1 tracker bundles and perform Embodied-Control MuJoCo or DDS rehearsals and timing checks.
 ---
 
 # Embodied-Control deployment rig
