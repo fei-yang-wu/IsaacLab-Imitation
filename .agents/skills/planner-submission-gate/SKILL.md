@@ -1,6 +1,6 @@
 ---
 name: planner-submission-gate
-description: Run the fail-closed audits that must pass before a planner run is submitted or its numbers are reported — encoder/checkpoint binding, DiffSR latent qualification, and the BONES-SEED or Phase-4 submission validators. Use before submitting a planner job, before Isaac evaluation of a latent arm, when pairing a policy with a skill encoder, when a qualification or audit JSON is requested, or when the user asks whether a checkpoint pair is valid.
+description: Validate encoder binding and oracle qualification before planner submission or latent evaluation.
 ---
 
 # Planner submission gate
