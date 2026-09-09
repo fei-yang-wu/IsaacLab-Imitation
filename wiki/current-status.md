@@ -1,5 +1,24 @@
 # Project Live Status
 
+## Action01 55B packaged for EC (2026-09-09)
+
+Final action01 checkpoint published and pinned as `action01_55b` at HF
+`832f85896c08494d9a229dca0bcc828182a188ac`. Native async MuJoCo deployment13
+rehearsal: 9/13 SONIC successes, no runtime faults, all 13 videos recorded.
+This is separate from the Isaac benchmark and the subsequent 10B continuation.
+[Release provenance and artifacts](../experiments/campaigns/2026-09-08-combo50b-smooth-ft5b/README.md#action01-55b-ec-release-2026-09-09).
+
+## Combo 50B smoothness fine-tune complete (2026-09-09)
+
+User-provided completion: action01, antishake4, ema08 and normfix seed 0 all
+reached 55,000,301,568 cumulative frames (+5B); all 52 evaluation cells across
+latest/3B/4B/5B are complete. Single seed per arm, no repeats: between-arm gaps
+are not resolvable. Latest is frame-unmatched; the 3B board is normfix-only,
+with its pin 155,136 frames below the exact boundary. SR covers all motions;
+MPJPE covers successful motions only. About 8 of about 50 eval jobs hit the
+pre-existing Kit startup crash; all recovered by resubmission.
+[Completion record, results, job IDs and caveats](../experiments/campaigns/2026-09-08-combo50b-smooth-ft5b/README.md).
+
 ## SONIC-sized combo decoder + DAgger submitted (2026-09-08)
 
 Original qualification `5738762` failed CUDA OOM; its blocked chain was

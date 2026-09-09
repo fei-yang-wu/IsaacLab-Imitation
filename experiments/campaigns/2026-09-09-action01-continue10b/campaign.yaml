@@ -1,4 +1,4 @@
-name: combo50b-smooth-ft5b
+name: combo-action01-continue10b
 profile: ice
 wandb_project: g1-bs-pareto
 wandb_group: combo50b-smooth-ft5b
@@ -19,12 +19,12 @@ vars:
   encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
   train_num_envs: 16384
   rollout_steps: 24
-  frame_cap: 55000166912
+  frame_cap: 65000301568
   frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
   max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
   ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
   persist_id: bones_seed_sonic_full_129785@e714bbff
-  output_root: /data/combo50b_smooth_ft5b/${vars.arm}_seed${vars.seed}
+  output_root: /data/combo_action01_continue10b/${vars.arm}_seed${vars.seed}
   optim_args:
   - agent.optim.weight_decay=1.0e-2
   - agent.ipmd.critic_lr_schedule=constant
@@ -127,7 +127,7 @@ vars:
   - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
   - --checkpoint
   - ${vars.output_root}/tracker
-  resume_checkpoint: /data/combo_50b/combo_seed0/tracker/2026-09-07_15-16-57_wandb-c50b-combo-s0-a4644b/models/model_step_50000166912.pt
+  resume_checkpoint: /data/combo50b_smooth_ft5b/action01_seed0/tracker/2026-09-08_15-57-43_wandb-c50bsft-action01-s0-3637ed/models/model_step_55000301568.pt
   smooth_args: []
   time_limit: '15:59:00'
   gres: gpu:h200:1
@@ -146,6 +146,7 @@ arms:
     vars:
       smooth_args:
       - env.rewards.action_rate_l2.weight=-0.1
+      - agent.ppo.update_normalizers_after_rollout=false
     stages:
     - name: finetune1
       executable: scripts/rlopt/train.py
@@ -158,7 +159,7 @@ arms:
       cpus_per_task: ${vars.cpus}
       mem: ${vars.mem}
       env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
+        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed},continue10b
         WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
         WANDB_RESUME: allow
     - name: finetune2
@@ -172,112 +173,7 @@ arms:
       cpus_per_task: ${vars.cpus}
       mem: ${vars.mem}
       env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
-        WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
-        WANDB_RESUME: allow
-      depends_on: finetune1
-      dependency_kind: afterany
-  antishake4:
-    vars:
-      smooth_args:
-      - env.rewards.anti_shake_ang_vel.weight=-0.02
-    stages:
-    - name: finetune1
-      executable: scripts/rlopt/train.py
-      args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.smooth_args},${vars.seg1_args}}
-      time_limit: ${vars.time_limit}
-      gres: ${vars.gres}
-      partition: coe-gpu
-      qos: coe-ice
-      exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-      cpus_per_task: ${vars.cpus}
-      mem: ${vars.mem}
-      env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
-        WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
-        WANDB_RESUME: allow
-    - name: finetune2
-      executable: scripts/rlopt/train.py
-      args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.smooth_args},${vars.seg2_args}}
-      time_limit: ${vars.time_limit}
-      gres: ${vars.gres}
-      partition: coe-gpu
-      qos: coe-ice
-      exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-      cpus_per_task: ${vars.cpus}
-      mem: ${vars.mem}
-      env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
-        WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
-        WANDB_RESUME: allow
-      depends_on: finetune1
-      dependency_kind: afterany
-  ema08:
-    vars:
-      smooth_args:
-      - env.actions.joint_pos.ema_alpha=0.8
-    stages:
-    - name: finetune1
-      executable: scripts/rlopt/train.py
-      args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.smooth_args},${vars.seg1_args}}
-      time_limit: ${vars.time_limit}
-      gres: ${vars.gres}
-      partition: coe-gpu
-      qos: coe-ice
-      exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-      cpus_per_task: ${vars.cpus}
-      mem: ${vars.mem}
-      env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
-        WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
-        WANDB_RESUME: allow
-    - name: finetune2
-      executable: scripts/rlopt/train.py
-      args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.smooth_args},${vars.seg2_args}}
-      time_limit: ${vars.time_limit}
-      gres: ${vars.gres}
-      partition: coe-gpu
-      qos: coe-ice
-      exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-      cpus_per_task: ${vars.cpus}
-      mem: ${vars.mem}
-      env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
-        WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
-        WANDB_RESUME: allow
-      depends_on: finetune1
-      dependency_kind: afterany
-  normfix:
-    vars:
-      smooth_args:
-      - agent.ppo.update_normalizers_after_rollout=true
-    stages:
-    - name: finetune1
-      executable: scripts/rlopt/train.py
-      args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.smooth_args},${vars.seg1_args}}
-      time_limit: ${vars.time_limit}
-      gres: ${vars.gres}
-      partition: coe-gpu
-      qos: coe-ice
-      exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-      cpus_per_task: ${vars.cpus}
-      mem: ${vars.mem}
-      env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
-        WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
-        WANDB_RESUME: allow
-    - name: finetune2
-      executable: scripts/rlopt/train.py
-      args: ${concat:${vars.lowlevel_head},${vars.tuned_core},${vars.reward_args},${vars.optim_args},${vars.history_args},${vars.select_hold},${vars.lowlevel_tail},${vars.data_overrides},${vars.smooth_args},${vars.seg2_args}}
-      time_limit: ${vars.time_limit}
-      gres: ${vars.gres}
-      partition: coe-gpu
-      qos: coe-ice
-      exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
-      cpus_per_task: ${vars.cpus}
-      mem: ${vars.mem}
-      env:
-        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed}
+        CLUSTER_WANDB_TAGS: bones-seed,combo50b-smooth-ft5b,${vars.arm},seed${vars.seed},continue10b
         WANDB_RUN_ID: c50bsft-${dash:${vars.arm}}-s${vars.seed}
         WANDB_RESUME: allow
       depends_on: finetune1
