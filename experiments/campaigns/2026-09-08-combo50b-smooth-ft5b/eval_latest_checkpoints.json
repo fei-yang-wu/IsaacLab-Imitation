@@ -1,0 +1,26 @@
+{
+  "action01": {
+    "frames": 51500285952,
+    "checkpoint": "/data/combo50b_smooth_ft5b/action01_seed0/tracker/2026-09-08_15-57-43_wandb-c50bsft-action01-s0-3637ed/models/model_step_51500285952.pt",
+    "tree": "/data/combo50b_smooth_eval_pinned_20260908/action01_seed0",
+    "bytes": 244035805
+  },
+  "antishake4": {
+    "frames": 51500285952,
+    "checkpoint": "/data/combo50b_smooth_ft5b/antishake4_seed0/tracker/2026-09-08_16-03-53_wandb-c50bsft-antishake4-s0-b3a47d/models/model_step_51500285952.pt",
+    "tree": "/data/combo50b_smooth_eval_pinned_20260908/antishake4_seed0",
+    "bytes": 244035805
+  },
+  "ema08": {
+    "frames": 51500285952,
+    "checkpoint": "/data/combo50b_smooth_ft5b/ema08_seed0/tracker/2026-09-08_16-05-07_wandb-c50bsft-ema08-s0-9ae0e3/models/model_step_51500285952.pt",
+    "tree": "/data/combo50b_smooth_eval_pinned_20260908/ema08_seed0",
+    "bytes": 244035805
+  },
+  "normfix": {
+    "frames": 50500337664,
+    "checkpoint": "/data/combo50b_smooth_ft5b/normfix_seed0/tracker/2026-09-08_17-59-04_wandb-c50bsft-normfix-s0-e38be5/models/model_step_50500337664.pt",
+    "tree": "/data/combo50b_smooth_eval_pinned_20260908/normfix_seed0",
+    "bytes": 244035805
+  }
+}
