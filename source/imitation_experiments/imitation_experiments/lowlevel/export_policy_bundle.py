@@ -254,10 +254,19 @@ class Preset:
     encoder_state_dim: int | None = None
     horizon_steps: int | None = None
     quantizer: str = "none"
+    # Per-term observation history, term name -> history_length. A term absent
+    # here is single-frame. The trained actor sees each term as a contiguous
+    # [history_length, width] block, oldest first, which is both what Isaac
+    # Lab's CircularBuffer flattens to and what the EC ObservationAssembler
+    # writes (`lowlevel/observation.py`, `history_order="oldest_first"`).
+    history: dict[str, int] = dataclasses.field(default_factory=dict)
+
+    def term_history(self, name: str) -> int:
+        return int(self.history.get(name, 1))
 
     @property
     def total_width(self) -> int:
-        return sum(width for _, width, _ in self.terms)
+        return sum(width * self.term_history(name) for name, width, _ in self.terms)
 
     @property
     def phase_dim(self) -> int:
@@ -299,6 +308,22 @@ PRESETS = {
         encoder_state_dim=38,
         horizon_steps=10,
         quantizer="fsq",
+    ),
+    # The combo recipe (Isaac-Imitation-G1-v3 on feat/combo-default; combo-50b
+    # and its action-rate finetunes on dev): a 64-D continuous code plus the
+    # sin/cos phase pair, hold 1, and a TEN-step history on every proprio term.
+    # Input width 66 + 10 * 93 = 996. The encoder is the past-5 affine DiffSR
+    # (`p5_affine_seed0`), frozen; `--skill-checkpoint` supplies its config.
+    "combo_v3": Preset(
+        name="combo_v3",
+        interface="latent",
+        terms=[("latent_command", 66, False), *_PROPRIO_TERMS],
+        z_dim=64,
+        phase_mode="sin_cos",
+        default_hold_steps=1,
+        encoder_state_dim=38,
+        horizon_steps=10,
+        history={name: 10 for name, _, _ in _PROPRIO_TERMS},
     ),
     "explicit_v2": Preset(
         name="explicit_v2",
@@ -742,14 +767,14 @@ def export_bundle(args: argparse.Namespace) -> Path:
     for name, width, normalize in preset.terms:
         if role != "student":
             break
-        span = mask[cursor : cursor + width]
+        span = mask[cursor : cursor + width * preset.term_history(name)]
         uniform = bool(span.all()) or bool((~span).all())
         if not uniform or normalize != bool(span.all()):
             raise ValueError(
                 f"normalize mask disagrees with preset at term {name}: "
                 f"preset={normalize}, span all={bool(span.all())} any={bool(span.any())}"
             )
-        cursor += width
+        cursor += width * preset.term_history(name)
 
     encoder = None
     encoder_provenance: dict = {}
@@ -975,7 +1000,9 @@ def export_bundle(args: argparse.Namespace) -> Path:
     isaac_to_sdk = [sdk_names.index(name) for name in G1_ISAAC_JOINT_NAMES]
     obs_contract = {
         "terms": [
-            _observation_term(name, width, normalize)
+            _observation_term(
+                name, width, normalize, history_length=preset.term_history(name)
+            )
             for name, width, normalize in preset.terms
         ],
         "total_width": preset.total_width if role == "student" else in_features,
