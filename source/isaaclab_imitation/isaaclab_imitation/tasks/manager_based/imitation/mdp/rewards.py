@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import torch
 
 from isaaclab.assets import Articulation
-from isaaclab.managers import SceneEntityCfg
+from isaaclab.managers import ManagerTermBase, RewardTermCfg, SceneEntityCfg
 from isaaclab.utils.math import quat_apply, quat_apply_inverse
 from isaaclab_imitation.envs import ImitationRLEnv
 
@@ -427,3 +427,45 @@ def body_angular_velocity_excess_l2(
         torch.linalg.vector_norm(angular_velocity_w, dim=-1) - threshold
     )
     return torch.mean(excess.square(), dim=-1)
+
+
+class action_acc_l2(ManagerTermBase):
+    """Penalize the second difference of the raw action, summed over joints.
+
+    Returns ``sum_j (a_t - 2 a_{t-1} + a_{t-2})^2``. The first difference
+    (``action_rate_l2``) taxes every change, a smooth ramp included. The second
+    difference taxes tick-to-tick ALTERNATION and leaves a constant-velocity ramp
+    free, which is the quantity the deployment grades as foot dither (the
+    second-difference residual of the commanded target at 50 Hz).
+
+    ``ActionManager`` keeps only ``action`` and ``prev_action``, so this term
+    carries its own ``a_{t-2}`` buffer. On reset the buffer is set to the
+    environment's current action so a new episode's first two steps score
+    zero rather than a spurious jump from the previous episode.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ImitationRLEnv) -> None:
+        super().__init__(cfg, env)
+        self._prev_prev_action: torch.Tensor | None = None
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if self._prev_prev_action is None:
+            return
+        action = self._env.action_manager.action
+        if env_ids is None:
+            self._prev_prev_action.copy_(action)
+        else:
+            self._prev_prev_action[env_ids] = action[env_ids]
+
+    def __call__(self, env: ImitationRLEnv) -> torch.Tensor:
+        action = env.action_manager.action
+        prev_action = env.action_manager.prev_action
+        if self._prev_prev_action is None:
+            # First call: no a_{t-2} yet, so the second difference is defined
+            # as zero and the buffer starts from the previous action.
+            self._prev_prev_action = prev_action.clone()
+        second_difference = action - 2.0 * prev_action + self._prev_prev_action
+        penalty = torch.sum(torch.square(second_difference), dim=1)
+        # Roll the buffer AFTER scoring: next step's a_{t-2} is this step's a_{t-1}.
+        self._prev_prev_action.copy_(prev_action)
+        return penalty
