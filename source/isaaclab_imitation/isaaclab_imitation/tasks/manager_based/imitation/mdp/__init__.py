@@ -64,6 +64,7 @@ from .actions import (
     EMAJointPositionActionCfg,
 )
 from .rewards import (
+    action_acc_l2,
     body_angular_velocity_excess_l2,
     energy_consumption,
     mpjpe_relative_body_pos_m,
@@ -110,6 +111,7 @@ from .terminations import (
 
 
 __all__ = [
+    "action_acc_l2",
     "ChunkActorCommand",
     "ChunkCommandCfg",
     "ExplicitActorCommand",

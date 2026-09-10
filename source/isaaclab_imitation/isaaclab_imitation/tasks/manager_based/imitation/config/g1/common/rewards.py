@@ -22,6 +22,10 @@ class G1RewardsCfg:
     """Reward terms aligned to the 29-DoF tracking environment."""
 
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1.0e-1)
+    # Second difference of the raw action (2026-09-10). Weight 0.0 keeps every
+    # existing arm byte-identical; the smoothness ablation sets it through
+    # `env.rewards.action_acc_l2.weight`.
+    action_acc_l2 = RewTerm(func=mdp.action_acc_l2, weight=0.0)
     joint_limit = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
