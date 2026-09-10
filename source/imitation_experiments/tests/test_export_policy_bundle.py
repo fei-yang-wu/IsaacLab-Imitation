@@ -454,3 +454,48 @@ def test_fsq_export_requires_skill_checkpoint(tmp_path):
                 "silu",
             ]
         )
+
+
+def test_combo_preset_width_counts_history() -> None:
+    """The combo actor sees ten frames of every proprio term.
+
+    Input width is 66 + 10 * (3 + 3 + 29 + 29 + 29) = 996. A width that ignores
+    history rejects every combo checkpoint at the exporter's first gate.
+    """
+    from imitation_experiments.lowlevel.export_policy_bundle import PRESETS
+
+    preset = PRESETS["combo_v3"]
+    assert preset.total_width == 996
+    assert preset.term_history("latent_command") == 1
+    for name in (
+        "projected_gravity",
+        "base_ang_vel",
+        "joint_pos_rel",
+        "joint_vel_rel",
+        "last_action",
+    ):
+        assert preset.term_history(name) == 10
+    assert preset.z_dim == 64 and preset.phase_mode == "sin_cos"
+    assert preset.default_hold_steps == 1
+    assert preset.quantizer == "none"
+
+
+def test_history_free_presets_are_unchanged() -> None:
+    from imitation_experiments.lowlevel.export_policy_bundle import PRESETS
+
+    assert PRESETS["fsq64_v2"].total_width == 66 + 93
+    assert PRESETS["l2t_student_v2"].total_width == 258 + 93
+    for name, preset in PRESETS.items():
+        if name != "combo_v3":
+            assert preset.history == {}, name
+
+
+def test_observation_term_records_history_length() -> None:
+    from imitation_experiments.lowlevel.export_policy_bundle import (
+        _observation_term,
+    )
+
+    term = _observation_term("joint_pos_rel", 29, True, history_length=10)
+    assert term["history_length"] == 10
+    assert term["history_order"] == "oldest_first"
+    assert term["reset_fill"] == "repeat_first"
