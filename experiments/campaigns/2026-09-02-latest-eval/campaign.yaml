@@ -494,6 +494,7 @@ arms:
         - env.observations.policy.joint_pos_rel.history_length=10
         - env.observations.policy.joint_vel_rel.history_length=10
         - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
   combo50b_capability124:
     vars:
       eval_arm: combo50b
