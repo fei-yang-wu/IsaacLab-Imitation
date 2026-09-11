@@ -377,14 +377,27 @@ parser.add_argument(
     "--diffsr_phi_parameterization",
     type=str,
     default="concat",
-    choices=("concat", "bilinear", "affine"),
+    choices=("concat", "bilinear", "affine", "identity"),
     help=(
         "DiffSR phi(s,z) parameterization. 'concat' is the newer simple-concat "
         "path; 'bilinear' restores the legacy matrix F(s) with g(z)^T F(s); "
         "'affine' uses that matrix form with a single linear g(z) = A z + b, "
         "which makes phi and the diffusion score field affine in z, so a "
         "latent interpolation grounds to the geometric mixture of the endpoint "
-        "conditionals."
+        "conditionals. 'identity' sets phi(s, z) = z (requires "
+        "--diffsr_feature_dim == --z_dim); with --diffsr_mu_conditioning pair "
+        "the denoiser becomes <z, E(s, s', t)>, the product-of-experts form."
+    ),
+)
+parser.add_argument(
+    "--diffsr_mu_conditioning",
+    type=str,
+    default="next",
+    choices=("next", "pair"),
+    help=(
+        "What the DiffSR denoiser mu sees. 'next': mu(s', t), the default. "
+        "'pair': mu(s, s', t), so each row of mu is a joint expert field over "
+        "the transition pair."
     ),
 )
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
@@ -676,6 +689,7 @@ def _build_trainer_config(
         diffsr_feature_dim=args_cli.diffsr_feature_dim,
         diffsr_embed_dim=args_cli.diffsr_embed_dim,
         diffsr_phi_parameterization=args_cli.diffsr_phi_parameterization,
+        diffsr_mu_conditioning=args_cli.diffsr_mu_conditioning,
         **(
             {"diffsr_f_hidden_dims": tuple(args_cli.diffsr_f_hidden_dims)}
             if args_cli.diffsr_f_hidden_dims
