@@ -88,3 +88,17 @@ def test_reset_clears_the_buffer_for_reset_envs_only() -> None:
     # reset env: a_{t-2} was overwritten with 3.0 (the action at reset time),
     # a_{t-1} = 3.0, a_t = 4.0 -> 4 - 6 + 3 = 1 per joint, squared, x2 joints
     assert torch.isclose(out[1], torch.tensor(2.0), atol=1e-6), out
+
+
+def test_torque_and_energy_terms_are_registered_off() -> None:
+    """The v2 reward set carries `joint_torques_l2` and `energy_consumption`
+    at weight 0.0 so existing rows stay byte-identical until a campaign
+    turns them on."""
+    from isaaclab_imitation.tasks.manager_based.imitation.config.g1.common.rewards import (
+        G1SonicRewardsCfg,
+    )
+
+    cfg = G1SonicRewardsCfg()
+    assert cfg.joint_torques_l2.weight == 0.0
+    assert cfg.joint_torques_l2.func.__name__ == "joint_torques_l2"
+    assert cfg.energy_consumption.weight == 0.0

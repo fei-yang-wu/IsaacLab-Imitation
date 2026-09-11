@@ -26,6 +26,12 @@ class G1RewardsCfg:
     # existing arm byte-identical; the smoothness ablation sets it through
     # `env.rewards.action_acc_l2.weight`.
     action_acc_l2 = RewTerm(func=mdp.action_acc_l2, weight=0.0)
+    # Squared applied joint torque, all joints (isaaclab's `joint_torques_l2`,
+    # re-exported through `mdp`; Newton fills `applied_torque` for implicit
+    # actuators). Not a SONIC term. Weight 0.0 keeps every existing arm
+    # byte-identical; the 2026-09-10 energy/torque ablation sets it through
+    # `env.rewards.joint_torques_l2.weight`.
+    joint_torques_l2 = RewTerm(func=mdp.joint_torques_l2, weight=0.0)
     joint_limit = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
