@@ -60,6 +60,9 @@ ARCHIVE_EXCLUDES: tuple[str, ...] = (
     # workstation reads these, no cluster job does.
     "./external/Embodied-Control/assets",
     "./external/Embodied-Control/notebooks",
+    # Plant rehearsal outputs (per-episode videos, plant logs): workstation
+    # only, never read by a cluster job.
+    "./external/Embodied-Control/artifacts",
 )
 
 # A workspace archive is source code. 400 MB is far above the real figure
