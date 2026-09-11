@@ -42,6 +42,9 @@ so no page becomes orphaned.
 
 ## Active work
 
+- [Combo Latent Semantic Analysis Plan](combo-latent-semantic-analysis-plan.md):
+  proposed paired raw-window and frozen combo-encoder study, with broad
+  BONES-SEED sampling, PCA/t-SNE, clustering, and cross-family semantic probes.
 - [Linear Closure Problem Statement](linear-closure-problem-statement.md):
   self-contained, shareable statement of the skill-latent linear-closure
   problem — the bilinear score, the closure definition, the chosen affine

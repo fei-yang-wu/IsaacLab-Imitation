@@ -570,6 +570,12 @@ def train(
     )
 
     agent_class = ALGORITHM_CLASS_MAP[args_cli.algorithm]
+    if getattr(getattr(agent_cfg, "dagger", None), "enabled", False):
+        if args_cli.algorithm != "IPMD":
+            raise ValueError("DAgger warm start currently requires the IPMD entrypoint")
+        from rlopt.agent.ipmd.ipmd_dagger import IPMDDagger
+
+        agent_class = IPMDDagger
     agent = agent_class(
         env=env,
         config=agent_cfg,  # type: ignore

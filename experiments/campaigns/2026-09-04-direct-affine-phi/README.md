@@ -148,3 +148,60 @@ own.
 User decision, 2026-09-06: the recurrent-actor axis is parked. No new LSTM arm
 is submitted. See `wiki/current-status.md`, section "Recurrent (LSTM) actor:
 PARKED (2026-09-06)", for the matched pairs and the confounds.
+
+## Phi-conditioning diagnostic (2026-09-07)
+
+Recomputed all available clean-board checkpoint rows using the canonical
+per-episode, survival-step-weighted reduction. Raw JSON mirrors, executable
+analysis script and complete output are under `logs/phi_conditioning_eval/`.
+All rows passed ordered canonical rank, full completion and zero-timeout
+checks. This is one seed per recipe, with unmatched architecture/encoder/
+critic inputs and training batch sizes; it cannot identify a phi causal effect.
+The recurrent evaluator qualification caveat remains.
+
+Full-board final rows (SR / success-only MPJPE-L / MPJPE-G): phi_lstm
+0.8474 / 22.92 / 65.99 mm; nolatent 0.9043 / 23.20 / 79.16 mm;
+z-conditioned lstm_affine_std 0.9180 / 23.14 / 112.43 mm;
+z-conditioned combo MLP 0.9214 / 22.65 / 88.52 mm. Minor differences
+from older rows are canonical reduction differences.
+
+To test success-set selection, restrict errors to the intersection of each
+pair's successful trajectory ranks. This is a diagnostic subset, not a new
+headline board or a causal control. Errors retain survival-step weighting.
+
+| Pair, A / B | Shared successes | Only A / only B succeed | Shared MPJPE-L A / B (mm) | Shared MPJPE-G A / B (mm) |
+| --- | ---: | ---: | ---: | ---: |
+| phi_lstm / nolatent | 3434 | 37 / 270 | 22.44 / 21.44 | 63.35 / 61.52 |
+| phi_lstm / z lstm_affine_std | 3454 | 17 / 306 | 22.77 / 20.89 | 65.62 / 75.28 |
+| nolatent / z combo MLP | 3660 | 44 / 114 | 23.03 / 21.71 | 78.14 / 72.89 |
+
+The phi_lstm-vs-nolatent global-error advantage disappears on shared
+successes. The nolatent-vs-combo advantage reverses. Phi_lstm retains
+12.8% lower global error than the z LSTM on their shared successes, but
+has 9.0% higher local error and succeeds on 289 fewer motions overall.
+That retained global difference accompanies lower root XY error
+(56.1 vs 66.2 mm), consistent with less translation drift on this subset.
+It does not establish phi as the cause.
+
+Nolatent retains lower body jerk than combo on shared successes:
+179.27 vs 192.42 m/s³ (6.8% lower), while action delta differs by 1.1%
+(0.825 vs 0.834). Phi_lstm is not smoother than z LSTM on their shared
+successes: jerk 205.47 vs 193.80 m/s³; action delta 0.880 vs 0.837.
+
+Learning trajectory: phi_lstm at 3.5B, 8B, 9B, 10B gives
+0.8101/25.96/85.67, 0.8459/23.71/68.64, 0.8496/23.33/68.14,
+0.8474/22.92/65.99 (SR/L/G). Late training improves pose errors without
+consistent success gains. Nolatent at 8.5B, 9B, 10B gives
+0.9014/23.86/83.74, 0.8979/23.85/85.73, 0.9043/23.20/79.16;
+this sparse one-pass tail does not establish convergence.
+
+Failure flags at 10B: phi_lstm has 418 EE-height, 180 root-orientation,
+and 50 root-height failures; z LSTM has 267, 65, 20. Nolatent has
+305, 82, 27; combo has 265, 54, 22. Flags can overlap and must not
+be summed as disjoint failures.
+
+A causal phi test needs separate trackers trained with z versus phi from
+the same frozen encoder, identical MLP/history, critic inputs, rewards,
+reset schedule and batch size, with repeated seeds/evaluations. Switching
+an existing actor's command at evaluation time would break its trained
+interface. No new training was submitted for this analysis.

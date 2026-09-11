@@ -1,6 +1,6 @@
 ---
 name: sonic-success-eval
-description: Evaluate IsaacLab-Imitation low-level G1 checkpoints with the official SONIC motion-success criterion and success-only MPJPE-L, pick the right board and randomization profile for a paper-facing row, and apply the repo's planner metric standard (root-relative MPJPE plus fall-only survival). Use when the user asks for SONIC success rate, paper-compatible SR, push-disabled or foot-position-disabled evaluation, checkpoint comparison by completed motions, MPJPE-L computed only on successful trajectories, which SONIC paper number a result may be compared against, or which two numbers a planner evaluation must report.
+description: Score G1 checkpoints with SONIC success and tracking metrics under a specified evaluation protocol.
 ---
 
 # SONIC success evaluation

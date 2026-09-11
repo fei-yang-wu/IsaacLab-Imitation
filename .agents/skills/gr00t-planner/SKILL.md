@@ -1,6 +1,6 @@
 ---
 name: gr00t-planner
-description: Train, collect data for, evaluate, and deploy the verbatim GR00T N1.7 action head as the language-conditioned high-level planner in this repo. Covers the collect - prepare - cache - train - evaluate pipeline, its Hydra configs, the arm matrix (chunk / z256 / FSQ pre-quant, mocap vs rollout), temporal ensembling, and the two known parity defects. Use when the user mentions GR00T, N1.7, the action head, gr00t_head, chunk or latent planner targets, fsq64 or z256 planner arms, goal features, Cosmos text features, temporal ensembling, RTC, or the language planner campaigns.
+description: Collect data, train, and evaluate the repository GR00T language planner and its command adapters.
 ---
 
 # GR00T planner

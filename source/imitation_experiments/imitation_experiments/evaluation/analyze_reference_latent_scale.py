@@ -21,9 +21,11 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 
-from imitation_experiments.capacity.measure_encoder_noise_contraction import (
-    SkillEncoder,
+from rlopt.agent.hl_skill_diffsr import (
+    HighLevelSkillDiffSRConfig,
+    _encoder_window_steps,
 )
+from rlopt.agent.hl_skill_encoder import build_skill_encoder
 from imitation_experiments.evaluation.analyze_cross_motion_latent_structure import (
     AggregatedPublications,
     _open_array,
@@ -100,7 +102,14 @@ def root_qpos_expert_windows(
     anchor_pos_w: np.ndarray,
     anchor_quat_xyzw: np.ndarray,
 ) -> np.ndarray:
-    """Build frame-interleaved H10 expert packets in frame-zero anchor space."""
+    """Build combo H10 packets in the expert heading-anchor frame.
+
+    Combo's ``robot_heading`` contract removes the anchor's XY origin and yaw
+    while preserving absolute height and roll/pitch relative to gravity.  The
+    older scale analysis used the full anchor pose, which silently removed
+    those quantities and therefore did not feed the combo encoder's input
+    distribution.
+    """
     joint_pos = np.asarray(joint_pos, dtype=np.float64)
     anchor_pos_w = np.asarray(anchor_pos_w, dtype=np.float64)
     anchor_quat_xyzw = np.asarray(anchor_quat_xyzw, dtype=np.float64)
@@ -112,9 +121,22 @@ def root_qpos_expert_windows(
         raise ValueError("Anchor quaternions are not aligned [N,10,4].")
 
     rotation = _xyzw_to_matrix(anchor_quat_xyzw)
-    center_inverse = np.swapaxes(rotation[:, 0], -1, -2)
+    # Build a yaw-only frame from the first anchor quaternion.  The origin is
+    # [x, y, 0], so the relative position retains absolute height.
+    x, y, z, w = np.moveaxis(anchor_quat_xyzw[:, 0], -1, 0)
+    yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    cosine, sine = np.cos(yaw), np.sin(yaw)
+    heading = np.zeros_like(rotation[:, 0])
+    heading[:, 0, 0] = cosine
+    heading[:, 0, 1] = -sine
+    heading[:, 1, 0] = sine
+    heading[:, 1, 1] = cosine
+    heading[:, 2, 2] = 1.0
+    center_inverse = np.swapaxes(heading, -1, -2)
+    origin = anchor_pos_w[:, :1].copy()
+    origin[..., 2] = 0.0
     relative_pos = np.einsum(
-        "nij,ntj->nti", center_inverse, anchor_pos_w - anchor_pos_w[:, :1]
+        "nij,ntj->nti", center_inverse, anchor_pos_w - origin
     )
     relative_rotation = np.einsum("nij,ntjk->ntik", center_inverse, rotation)
     # Isaac Lab's quat_to_rot6d_flat takes the first two matrix rows.
@@ -187,19 +209,44 @@ def _publication_plan(
     return rows
 
 
-def _load_encoder(path: Path) -> SkillEncoder:
+def _load_encoder(path: Path) -> torch.nn.Module:
+    """Restore the checkpoint's configured encoder architecture exactly."""
     blob = torch.load(path, map_location="cpu", weights_only=False)
-    state = blob.get("skill_encoder_state_dict")
-    if not isinstance(state, dict):
-        raise ValueError(f"{path} has no skill_encoder_state_dict.")
-    width = int(state["net.0.weight"].shape[1])
-    if width != ENCODER_WINDOW_STEPS * ROOT_QPOS_FRAME_WIDTH:
-        raise ValueError(f"Expected a 380-wide root_qpos encoder, got {width}.")
-    return SkillEncoder(state)
+    if "config" not in blob or "skill_encoder_state_dict" not in blob:
+        raise ValueError(f"{path} is not an hl_skill_diffsr checkpoint.")
+    config = HighLevelSkillDiffSRConfig.from_dict(blob["config"])
+    state = blob["skill_encoder_state_dict"]
+    first_weight = next(value for key, value in state.items() if key.endswith("0.weight"))
+    window_steps = _encoder_window_steps(config)
+    state_dim, remainder = divmod(int(first_weight.shape[1]), window_steps + 1)
+    if remainder:
+        raise ValueError(f"Encoder input width {first_weight.shape[1]} is incompatible with {window_steps} visible steps.")
+    encoder = build_skill_encoder(
+        state_dim=state_dim,
+        window_steps=window_steps,
+        z_dim=config.z_dim,
+        hidden_dims=config.encoder_hidden_dims,
+        spec=config.latent_spec(),
+        activation=config.encoder_activation,
+        layer_norm=config.encoder_layer_norm,
+    )
+    encoder.load_state_dict(state, strict=True)
+    encoder.eval()
+    encoder.requires_grad_(False)
+    if int(config.horizon_steps) != ENCODER_WINDOW_STEPS:
+        raise ValueError(
+            f"Expected horizon_steps={ENCODER_WINDOW_STEPS}, got {config.horizon_steps}."
+        )
+    if str(config.macro_anchor_mode) != "robot_heading":
+        raise ValueError(
+            "Combo semantic analysis requires macro_anchor_mode='robot_heading', "
+            f"got {config.macro_anchor_mode!r}."
+        )
+    return encoder
 
 
 def _encode(
-    encoder: SkillEncoder,
+    encoder: torch.nn.Module,
     frames: np.ndarray,
     *,
     batch_size: int,
@@ -210,7 +257,12 @@ def _encode(
     outputs: list[torch.Tensor] = []
     for start in range(0, int(flat.shape[0]), batch_size):
         with torch.inference_mode():
-            outputs.append(encoder(flat[start : start + batch_size].to(device)).cpu())
+            batch = flat[start : start + batch_size].to(device)
+            state = batch[:, :ROOT_QPOS_FRAME_WIDTH]
+            future = batch[:, ROOT_QPOS_FRAME_WIDTH:].reshape(
+                batch.shape[0], ENCODER_WINDOW_STEPS - 1, ROOT_QPOS_FRAME_WIDTH
+            )
+            outputs.append(encoder(state, future).cpu())
     return torch.cat(outputs).numpy().astype(np.float32, copy=False)
 
 
@@ -280,6 +332,7 @@ def main() -> None:
     )
     kinematics = load_reference_kinematics(root, publications)
     latent_features, latent_pca = _pca_features(latent)
+    raw_features, raw_pca = _pca_features(frames.reshape(frames.shape[0], -1))
     kinematic_features, kinematic_pca = _pca_features(kinematics.descriptor)
     retrieval, neighbor_rows = analyze_cross_motion_retrieval(
         publications,
@@ -288,9 +341,22 @@ def main() -> None:
         seed=args.seed,
         bootstrap_samples=args.bootstrap_samples,
     )
+    raw_retrieval, raw_neighbor_rows = analyze_cross_motion_retrieval(
+        publications,
+        raw_features,
+        kinematic_features,
+        seed=args.seed,
+        bootstrap_samples=args.bootstrap_samples,
+    )
     clustering, assignments = analyze_clustering(
         publications,
         latent_features,
+        seed=args.seed,
+        max_clusters=args.max_kmeans_clusters,
+    )
+    raw_clustering, raw_assignments = analyze_clustering(
+        publications,
+        raw_features,
         seed=args.seed,
         max_clusters=args.max_kmeans_clusters,
     )
@@ -302,6 +368,18 @@ def main() -> None:
         latent_features,
         retrieval,
         plot_clustering,
+        seed=args.seed,
+        perplexity=args.tsne_perplexity,
+        iterations=args.tsne_iterations,
+    )
+    raw_plot_clustering = dict(raw_clustering)
+    raw_plot_clustering["_hdbscan_labels"] = raw_assignments["hdbscan"].tolist()
+    raw_tsne, raw_tsne_trust = _plot_summary(
+        output_dir / "reference_scale_raw_summary.png",
+        publications,
+        raw_features,
+        raw_retrieval,
+        raw_plot_clustering,
         seed=args.seed,
         perplexity=args.tsne_perplexity,
         iterations=args.tsne_iterations,
@@ -332,6 +410,8 @@ def main() -> None:
                 "reference_length": row["reference_length"],
                 "tsne_1": float(tsne[index_row, 0]),
                 "tsne_2": float(tsne[index_row, 1]),
+                "raw_tsne_1": float(raw_tsne[index_row, 0]),
+                "raw_tsne_2": float(raw_tsne[index_row, 1]),
                 **{
                     name: float(kinematics.summary[index_row, summary_index])
                     for summary_index, name in enumerate(kinematics.summary_names)
@@ -340,10 +420,13 @@ def main() -> None:
         )
     _write_csv(output_dir / "publications.csv", publication_rows)
     _write_csv(output_dir / "cross_motion_neighbors.csv", neighbor_rows)
+    _write_csv(output_dir / "raw_cross_motion_neighbors.csv", raw_neighbor_rows)
     _write_csv(output_dir / "kmeans_sweep.csv", clustering["kmeans"])
+    _write_csv(output_dir / "raw_kmeans_sweep.csv", raw_clustering["kmeans"])
     np.savez_compressed(
         output_dir / "canonical_latents.npz",
         latent=latent,
+        raw_window=frames.reshape(frames.shape[0], -1),
         motion_name=publications.motion_names,
         reference_step=publications.reference_steps,
     )
@@ -373,12 +456,14 @@ def main() -> None:
             "publications": len(plan),
         },
         "latent_pca": latent_pca,
+        "raw_pca": raw_pca,
         "kinematic_pca": kinematic_pca,
-        "retrieval": retrieval,
-        "clustering": clustering,
+        "retrieval": {"latent_vs_kinematic": retrieval, "raw_vs_kinematic": raw_retrieval},
+        "clustering": {"latent": clustering, "raw": raw_clustering},
         "tsne": {
             "role": "visualization only; no retrieval or clustering uses t-SNE",
-            "trustworthiness_k10": tsne_trust,
+            "latent_trustworthiness_k10": tsne_trust,
+            "raw_trustworthiness_k10": raw_tsne_trust,
         },
     }
     (output_dir / "analysis.json").write_text(
