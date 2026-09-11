@@ -150,6 +150,25 @@ Specialist skills remain; redundant style packages, the merged Skynet alias,
 and the generic Hugging Face CLI copy were retired. Personal working style
 remains in the user-level Codex AGENTS.md. No experiment protocol or code changed.
 
+## Merged 64-D encoder with no latent regularizer SUBMITTED (2026-09-11)
+
+`experiments/campaigns/2026-09-11-z64-merged-noreg-10b/`, one arm
+`z64_merged_noreg`, W&B `g1-bs-pareto` / group `latent64-probe-10b` beside
+its control `z64_merged`. The hub encoder recipe pretrained with
+`--jepa_sigreg_coeff 0 --reg_coeff 0`, so the objective is the diffusion
+next-chunk loss over raw frames alone (no SIGReg, no L2 on z; the merged
+`diff_chunk` head never had an EMA-token term in its loss), then the probe's
+`z64_merged` 10B tracker stage verbatim. Jobs 5761655 (pretrain), 5761656,
+5761657. Output on ice-shared (scratch at 269 of 300 GB). Fresh pretrain, so
+the pair carries encoder-init noise. Nothing measured.
+
+Correction recorded the same day: `p5_affine` (the combo-50b encoder) and
+the star-v2 hub train the next-chunk term against RAW frames, not the EMA
+target token. `jepa_token_pred_coeff` defaults to 0 and no production
+campaign sets it; the EMA encoder's token enters only diagnostics. The
+target-mode arms (`g2_online`, `g2_sg`, LeJEPA family) are the ones where the
+EMA token is in the loss, via the `mlp`/token heads.
+
 ## Recurrent (LSTM) actor: PARKED (2026-09-06)
 
 User decision: stop the recurrent-actor axis. No new LSTM arm is submitted. The
