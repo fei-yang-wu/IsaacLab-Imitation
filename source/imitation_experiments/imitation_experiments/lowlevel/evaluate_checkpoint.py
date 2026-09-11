@@ -182,6 +182,44 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
+    "--keep_obs_noise",
+    action="store_true",
+    help=(
+        "Keep the environment's observation corruption (the training-time "
+        "uniform noise on the proprio terms) instead of switching it off for "
+        "the evaluation. Off is the board protocol; on reproduces what the "
+        "policy sees under sensor noise, e.g. for dither comparisons against "
+        "the plant."
+    ),
+)
+parser.add_argument(
+    "--dump_trace",
+    type=Path,
+    default=None,
+    help=(
+        "Write a per-step NPZ trace of one environment: raw robot state, every "
+        "policy observation term, the published latent command, the expert "
+        "macro window exactly as the live encoder saw it, and the action. The "
+        "Embodied-Control replay harness rebuilds the same tick from the same "
+        "robot state and reports where the two pipelines diverge."
+    ),
+)
+parser.add_argument(
+    "--dump_trace_env",
+    type=int,
+    default=0,
+    help="Environment index recorded by --dump_trace.",
+)
+parser.add_argument(
+    "--dump_trace_horizon",
+    type=int,
+    default=10,
+    help=(
+        "Macro horizon used to rebuild the encoder window for --dump_trace; "
+        "must equal agent.ipmd.hl_skill_horizon_steps."
+    ),
+)
+parser.add_argument(
     "--dataset_path",
     type=Path,
     default=None,
@@ -291,6 +329,31 @@ parser.add_argument(
         "slower than headless evaluation, so pair it with a small --num_envs "
         "and pinned --trajectory_ranks; the metrics it writes are still the "
         "protocol's, so a rendered run stays comparable."
+    ),
+)
+parser.add_argument(
+    "--action_lowpass_alpha",
+    type=float,
+    default=1.0,
+    help=(
+        "First-order low-pass on the action at INFERENCE: "
+        "a_t <- (1 - alpha) * a_{t-1} + alpha * pi(s_t). 1.0 is off. The "
+        "filter runs BEFORE the action metrics and before env.step, so "
+        "action_delta_l2 measures what the actuator received; per-environment "
+        "state is re-seeded on reset so no filter memory crosses an episode."
+    ),
+)
+parser.add_argument("--command_stats_width", type=int, default=66)
+parser.add_argument(
+    "--command_stats_json",
+    type=Path,
+    default=None,
+    help=(
+        "Write per-dimension statistics of the PUBLISHED command to this path: "
+        "min, max, mean, std and absolute quantiles over every live step. Use "
+        "it to place a quantizer's levels over the range the encoder actually "
+        "occupies -- FSQ's tanh bound assumes unit scale and saturates outside "
+        "it."
     ),
 )
 parser.add_argument("--video_dir", type=Path, default=None)
@@ -1260,6 +1323,118 @@ def _command_metrics(
     return metrics
 
 
+def _as_torch(value: object) -> torch.Tensor:
+    """Unwrap an Isaac Lab ProxyArray (``.torch``) or pass a tensor through."""
+    return getattr(value, "torch", value)  # type: ignore[return-value]
+
+
+class _TraceDumper:
+    """Per-step record of one environment for the Embodied-Control replay.
+
+    Everything the deployment runtime would have to reproduce from the robot
+    state alone is stored next to what Isaac actually produced from it: the
+    observation terms, the latent command, the macro window the frozen
+    encoder consumed, and the action. Body poses are world-frame XYZW, the
+    Isaac Lab 3.0 convention.
+    """
+
+    def __init__(
+        self, path: Path, base_env: ImitationEnv, *, env_index: int, horizon_steps: int
+    ) -> None:
+        self.path = Path(path)
+        self.base_env = base_env
+        self.env_index = int(env_index)
+        self.horizon_steps = int(horizon_steps)
+        self.rows: dict[str, list] = {}
+        self.static: dict[str, object] = {}
+        asset = base_env.scene["robot"]
+        data = asset.data
+        self.static["joint_names"] = list(data.joint_names)
+        self.static["body_names"] = list(data.body_names)
+        self.static["default_joint_pos"] = (
+            _as_torch(data.default_joint_pos)[self.env_index].detach().cpu().numpy()
+        )
+        self.static["horizon_steps"] = self.horizon_steps
+        self.static["env_index"] = self.env_index
+
+    def _push(self, key: str, value: object) -> None:
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        self.rows.setdefault(key, []).append(value)
+
+    def capture(self, td: object, step_index: int) -> None:
+        e = self.env_index
+        base_env = self.base_env
+        self._push("step", int(step_index))
+        asset = base_env.scene["robot"]
+        data = asset.data
+        self._push("joint_pos", _as_torch(data.joint_pos)[e])
+        self._push("joint_vel", _as_torch(data.joint_vel)[e])
+        self._push("projected_gravity_b", _as_torch(data.projected_gravity_b)[e])
+        self._push("root_ang_vel_b", _as_torch(data.root_ang_vel_b)[e])
+        self._push("root_pos_w", _as_torch(data.root_pos_w)[e])
+        self._push("root_quat_w", _as_torch(data.root_quat_w)[e])
+        self._push("body_pos_w", _as_torch(data.body_pos_w)[e])
+        self._push("body_quat_w", _as_torch(data.body_quat_w)[e])
+        self._push("root_lin_vel_w", _as_torch(data.root_lin_vel_w)[e])
+        self._push("root_ang_vel_w", _as_torch(data.root_ang_vel_w)[e])
+        # What the actuators actually did with the previous action: the joint
+        # position target the action term wrote, and the torque telemetry.
+        for attr in (
+            "joint_pos_target",
+            "applied_torque",
+            "computed_torque",
+            "joint_acc",
+        ):
+            value = getattr(data, attr, None)
+            if value is not None:
+                self._push(attr, _as_torch(value)[e])
+        term = base_env.action_manager.get_term("joint_pos")
+        self._push("processed_actions", term.processed_actions[e])
+        self._push("raw_actions", term.raw_actions[e])
+        # Reference cursor and the macro window as the live encoder saw it.
+        plane = getattr(base_env, "expert_data_plane", None)
+        if plane is not None:
+            tm = plane.trajectory_manager
+            self._push("traj_rank", int(tm.env_traj_rank[e].item()))
+            self._push("local_step", int(tm.env_step[e].item()))
+            env_ids = torch.tensor([e], device=base_env.device, dtype=torch.long)
+            batch = plane.current_expert_macro_transition_batch(
+                horizon_steps=self.horizon_steps, env_ids=env_ids
+            )
+            self._push("hl_state", batch.get(("hl", "state"))[0])
+            self._push("hl_future_window", batch.get(("hl", "future_window"))[0])
+            for name in ("torso_link", "pelvis"):
+                pos, quat = base_env._get_robot_anchor_state_w_fast(name)
+                self._push(f"anchor_{name}_pos_w", pos[e])
+                self._push(f"anchor_{name}_quat_w", quat[e])
+        # Observation terms exactly as the actor consumed them.
+        policy = td.get("policy", None)  # type: ignore[union-attr]
+        if policy is not None and hasattr(policy, "keys"):
+            for term in policy.keys():
+                self._push(f"obs/{term}", policy.get(term)[e])
+        elif policy is not None:
+            self._push("obs/policy_flat", policy[e])
+        action = td.get("action", None)  # type: ignore[union-attr]
+        if action is not None:
+            self._push("action", action.reshape(action.shape[0], -1)[e])
+
+    def save(self) -> None:
+        import numpy as np
+
+        arrays: dict[str, object] = {}
+        for key, values in self.rows.items():
+            try:
+                arrays[key] = np.stack([np.asarray(v) for v in values])
+            except ValueError:
+                arrays[key] = np.asarray(values, dtype=object)
+        for key, value in self.static.items():
+            arrays[f"static/{key}"] = np.asarray(value)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(self.path, **arrays)
+        print(f"[TRACE] wrote {len(self.rows.get('step', []))} steps to {self.path}")
+
+
 def _clone_observation_terms(
     observations: object,
     *,
@@ -1419,6 +1594,32 @@ def _tensor_mean_std(
     mean = float(values.mean().item())
     std = float(values.std(unbiased=False).item()) if values.numel() > 1 else 0.0
     return mean, std
+
+
+def _delta_report(samples: list) -> dict:
+    """Distribution of |command_t - command_{t-1}| per dimension.
+
+    A quantizer with step `s` freezes any change below `s / 2`, so these
+    quantiles are what decide the level count.
+    """
+    if not samples:
+        return {}
+    pooled = torch.cat(samples, dim=0)
+    code = pooled[:, :64]
+    flat = code.reshape(-1)
+    out = {
+        "rows": int(pooled.shape[0]),
+        "mean_abs_delta": round(float(flat.mean()), 6),
+        "median_abs_delta": round(float(flat.median()), 6),
+    }
+    for q in (0.1, 0.25, 0.5, 0.75, 0.9, 0.99):
+        out[f"q{int(q * 100)}"] = round(float(torch.quantile(flat, q)), 6)
+    # Per-row L2 over the 64 code dimensions: the size of one command step.
+    norms = torch.linalg.vector_norm(code, dim=-1)
+    out["l2_median"] = round(float(norms.median()), 6)
+    out["l2_q10"] = round(float(torch.quantile(norms, 0.1)), 6)
+    out["l2_q90"] = round(float(torch.quantile(norms, 0.9)), 6)
+    return out
 
 
 def _json_default(value: object) -> object:
@@ -1752,7 +1953,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         else:
             raise RuntimeError("The environment has no trajectory selection surface.")
     if not args_cli.enable_observation_corruption:
-        _disable_observation_corruption(env_cfg)
+        if not args_cli.keep_obs_noise:
+            _disable_observation_corruption(env_cfg)
     # Domain randomization was previously left entirely live here while
     # `sim2sim_backend_eval.py` disabled it by default, so the two tools
     # reported MPJPE in different regimes and neither number said which.
@@ -1859,6 +2061,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         transform=Compose(RewardSum(), StepCounter(args_cli.steps + 2)),
     )
     base_env = _unwrap_imitation_env(env)
+    trace_dumper: _TraceDumper | None = None
+    if args_cli.dump_trace is not None:
+        trace_dumper = _TraceDumper(
+            args_cli.dump_trace,
+            base_env,
+            env_index=int(args_cli.dump_trace_env),
+            horizon_steps=int(args_cli.dump_trace_horizon),
+        )
 
     command_space = target_command_space
     if (
@@ -2029,6 +2239,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         per_env_tracking_metric_sums: dict[str, torch.Tensor] = {}
         per_env_tracking_metric_counts: dict[str, torch.Tensor] = {}
         previous_action: torch.Tensor | None = None
+        command_stats = None
+        if args_cli.command_stats_json is not None:
+            width = int(args_cli.command_stats_width)
+            command_stats = {
+                "count": 0,
+                "sum": torch.zeros(width),
+                "sumsq": torch.zeros(width),
+                "min": torch.full((width,), float("inf")),
+                "max": torch.full((width,), float("-inf")),
+                "sample": [],
+                "delta_sample": [],
+                "prev": None,
+                "prev_live": None,
+            }
+        action_lowpass_alpha = float(args_cli.action_lowpass_alpha)
+        if not 0.0 < action_lowpass_alpha <= 1.0:
+            raise ValueError(
+                f"--action_lowpass_alpha must be in (0, 1]; got {action_lowpass_alpha}."
+            )
+        filtered_action: torch.Tensor | None = None
+        filter_valid: torch.Tensor | None = None
         previous_previous_action: torch.Tensor | None = None
         previous_body_lin_vel: tuple[torch.Tensor, torch.Tensor] | None = None
         previous_velocity_valid = torch.zeros(num_envs, dtype=torch.bool)
@@ -2142,9 +2373,75 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             ):
                 td = collector_policy(td)
 
+            if trace_dumper is not None:
+                with torch.inference_mode():
+                    trace_dumper.capture(td, step_idx)
+
+            if command_stats is not None:
+                # The observation groups are nested, so the published command
+                # is ("policy", "latent_command"); the flat key is the legacy
+                # single-group layout.
+                published = td.get(("policy", "latent_command"), None)
+                if published is None:
+                    published = td.get("latent_command", None)
+                if published is not None:
+                    flat = published.detach().reshape(num_envs, -1).float()
+                    live = step_active.to(flat.device).reshape(-1)
+                    if bool(live.any()):
+                        rows = flat[live]
+                        command_stats["count"] += int(rows.shape[0])
+                        command_stats["sum"] = command_stats["sum"] + rows.sum(0).cpu()
+                        command_stats["sumsq"] = (
+                            command_stats["sumsq"] + rows.pow(2).sum(0).cpu()
+                        )
+                        command_stats["min"] = torch.minimum(
+                            command_stats["min"], rows.min(0).values.cpu()
+                        )
+                        command_stats["max"] = torch.maximum(
+                            command_stats["max"], rows.max(0).values.cpu()
+                        )
+                        # A bounded reservoir keeps the quantile estimate honest
+                        # without holding every step of a 4096-env board.
+                        if len(command_stats["sample"]) < 512:
+                            command_stats["sample"].append(rows[:64].cpu())
+                        # Per-step command CHANGE, the quantity a quantizer
+                        # can freeze: a lattice removes dither only when the
+                        # step exceeds it. Rows that just reset are excluded,
+                        # since a new episode's first command is a jump, not
+                        # dither.
+                        prev = command_stats.get("prev")
+                        if prev is not None:
+                            usable = live & command_stats["prev_live"].to(live.device)
+                            if bool(usable.any()):
+                                delta = (flat - prev.to(flat.device))[usable].abs()
+                                if len(command_stats["delta_sample"]) < 512:
+                                    command_stats["delta_sample"].append(
+                                        delta[:64].cpu()
+                                    )
+                        command_stats["prev"] = flat.detach().clone()
+                        command_stats["prev_live"] = live.detach().clone()
             action = td.get("action")
             if action is None:
                 raise RuntimeError("Policy did not write an 'action' tensor.")
+            if action_lowpass_alpha < 1.0:
+                raw = action.detach().reshape(num_envs, -1)
+                if filtered_action is None:
+                    filtered_action = raw.clone()
+                    filter_valid = torch.ones(
+                        num_envs, dtype=torch.bool, device=raw.device
+                    )
+                else:
+                    blended = (
+                        1.0 - action_lowpass_alpha
+                    ) * filtered_action + action_lowpass_alpha * raw
+                    # A row whose episode just reset has no usable history, so
+                    # it takes the raw action and starts the filter afresh.
+                    filtered_action = torch.where(
+                        filter_valid.unsqueeze(-1), blended, raw
+                    )
+                    filter_valid = torch.ones_like(filter_valid)
+                action = filtered_action.reshape(action.shape)
+                td.set("action", action)
             action_2d = action.detach().reshape(num_envs, -1)
             action_l2 = torch.linalg.vector_norm(action_2d, dim=-1).cpu()
             _accumulate_metric(metric_stats, "action_l2", action_l2, step_active)
@@ -2205,6 +2502,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 default=False,
             ).bool()
             done_any = dones | terminateds | truncateds
+            if filter_valid is not None and bool(done_any.any()):
+                filter_valid = filter_valid & ~done_any.to(filter_valid.device).reshape(
+                    -1
+                )
             terminal_step_mask = done_any & step_active
             step_term_masks: dict[str, torch.Tensor] = {}
             for term_name in termination_term_names:
@@ -2321,6 +2622,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             )
             steps_executed = step_idx + 1
 
+        if trace_dumper is not None:
+            trace_dumper.save()
         active_mask = survival_steps > 0
         return_mean, return_std = _tensor_mean_std(return_sum, active_mask)
         survival_mean, survival_std = _tensor_mean_std(survival_steps, active_mask)
@@ -2414,6 +2717,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             "metadata": {
                 "label": cell_label,
                 "video_dir": str(video_dir) if video_dir is not None else None,
+                "action_lowpass_alpha": action_lowpass_alpha,
                 "latent_blend": (
                     {
                         **latent_blend.summary(),
@@ -2597,6 +2901,50 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             encoding="utf-8",
         )
         print(f"[INFO] Wrote JSON summary: {output_json}")
+
+    if command_stats is not None and command_stats["count"] > 0:
+        count = float(command_stats["count"])
+        mean = command_stats["sum"] / count
+        var = (command_stats["sumsq"] / count - mean.pow(2)).clamp(min=0.0)
+        std = var.sqrt()
+        pooled = (
+            torch.cat(command_stats["sample"], dim=0)
+            if command_stats["sample"]
+            else torch.zeros(1, mean.numel())
+        )
+        absolute = pooled.abs()
+        quantiles = {
+            f"abs_q{int(q * 100)}": [
+                round(float(v), 6) for v in torch.quantile(absolute, q, dim=0).tolist()
+            ]
+            for q in (0.5, 0.9, 0.99, 1.0)
+        }
+        payload = {
+            "steps_counted": int(command_stats["count"]),
+            "sampled_rows": int(pooled.shape[0]),
+            "checkpoint": str(checkpoint_path),
+            "per_dimension": {
+                "min": [round(float(v), 6) for v in command_stats["min"].tolist()],
+                "max": [round(float(v), 6) for v in command_stats["max"].tolist()],
+                "mean": [round(float(v), 6) for v in mean.tolist()],
+                "std": [round(float(v), 6) for v in std.tolist()],
+                **quantiles,
+            },
+            "per_step_delta": _delta_report(command_stats["delta_sample"]),
+            "overall": {
+                "min": round(float(command_stats["min"].min()), 6),
+                "max": round(float(command_stats["max"].max()), 6),
+                "mean_abs": round(float(absolute.mean()), 6),
+                "std_mean": round(float(std.mean()), 6),
+                "abs_q99": round(float(torch.quantile(absolute.reshape(-1), 0.99)), 6),
+                "abs_max": round(float(absolute.max()), 6),
+            },
+        }
+        stats_path = args_cli.command_stats_json.expanduser().resolve()
+        stats_path.parent.mkdir(parents=True, exist_ok=True)
+        stats_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        print(f"[INFO] Wrote command statistics: {stats_path}")
+        print(f"[INFO] command range {payload['overall']}")
         if args_cli.output_csv is not None:
             _write_csv(summary, args_cli.output_csv, append=args_cli.append_csv)
 

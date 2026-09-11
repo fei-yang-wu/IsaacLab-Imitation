@@ -1181,6 +1181,21 @@ def main(env_cfg, agent_cfg):
         base_env.num_envs, dtype=torch.bool, device=device
     )
     velocity_step_dt = float(base_env.step_dt)
+    # Reference-FREE smoothness, ported from `evaluate_checkpoint` (2026-09-08)
+    # so SONIC can be compared on the same three axes our arms report. The
+    # acceleration metric above is an ERROR against the reference, so copying a
+    # jerky clip scores 0 on it; `body_acc_mps2` is the robot's own acceleration
+    # magnitude and `body_jerk_mps3` its finite difference. `action_delta_l2` is
+    # the per-step change of the action vector.
+    body_acc_sum = torch.zeros(base_env.num_envs, device=device)
+    body_acc_steps = torch.zeros(base_env.num_envs, device=device)
+    body_jerk_sum = torch.zeros(base_env.num_envs, device=device)
+    body_jerk_steps = torch.zeros(base_env.num_envs, device=device)
+    action_delta_sum = torch.zeros(base_env.num_envs, device=device)
+    action_delta_steps = torch.zeros(base_env.num_envs, device=device)
+    previous_actual_acc: torch.Tensor | None = None
+    previous_acc_valid = torch.zeros(base_env.num_envs, dtype=torch.bool, device=device)
+    previous_action: torch.Tensor | None = None
 
     # ``no_grad`` rather than ``inference_mode``: the metric accumulators are
     # written across the loop boundary, which inference tensors forbid.
@@ -1382,11 +1397,34 @@ def main(env_cfg, agent_cfg):
                 acceleration_mask = (metric_active & previous_lin_vel_valid).float()
                 acceleration_error_sum += acceleration_distance * acceleration_mask
                 acceleration_error_steps += acceleration_mask
+                actual_acc = (actual_lin_vel - prev_actual) / velocity_step_dt
+                body_acc = torch.linalg.vector_norm(actual_acc, dim=-1).mean(dim=-1)
+                body_acc_sum += body_acc * acceleration_mask
+                body_acc_steps += acceleration_mask
+                if previous_actual_acc is not None:
+                    body_jerk = torch.linalg.vector_norm(
+                        (actual_acc - previous_actual_acc) / velocity_step_dt, dim=-1
+                    ).mean(dim=-1)
+                    jerk_mask = (
+                        metric_active & previous_lin_vel_valid & previous_acc_valid
+                    ).float()
+                    body_jerk_sum += body_jerk * jerk_mask
+                    body_jerk_steps += jerk_mask
+                previous_actual_acc = actual_acc.detach().clone()
+                previous_acc_valid = metric_active & previous_lin_vel_valid
             previous_lin_vel_pair = (
                 actual_lin_vel.detach().clone(),
                 ref_lin_vel.detach().clone(),
             )
             previous_lin_vel_valid = metric_active.clone()
+            action_now = action.detach().reshape(base_env.num_envs, -1)
+            if previous_action is not None:
+                action_delta = torch.linalg.vector_norm(
+                    action_now - previous_action, dim=-1
+                )
+                action_delta_sum += action_delta * metric_active_f
+                action_delta_steps += metric_active_f
+            previous_action = action_now.clone()
 
             newly_done = done & ~done_once
             # Isaac Lab resets a finished environment *inside* ``step``, and the
@@ -1445,6 +1483,15 @@ def main(env_cfg, agent_cfg):
     ).cpu()
     final_metrics["tracking_acceleration_distance_mps2"] = (
         acceleration_error_sum / acceleration_error_steps.clamp(min=1.0)
+    ).cpu()
+    final_metrics["body_acc_mps2"] = (
+        body_acc_sum / body_acc_steps.clamp(min=1.0)
+    ).cpu()
+    final_metrics["body_jerk_mps3"] = (
+        body_jerk_sum / body_jerk_steps.clamp(min=1.0)
+    ).cpu()
+    final_metrics["action_delta_l2"] = (
+        action_delta_sum / action_delta_steps.clamp(min=1.0)
     ).cpu()
 
     failures = int(failed.sum().item())
