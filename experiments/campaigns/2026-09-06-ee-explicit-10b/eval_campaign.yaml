@@ -1,0 +1,141 @@
+# Pinned final 10B checkpoint; canonical clean board, seed 0.
+name: ee-explicit-10b-eval
+profile: ice
+wandb_project: g1-bs-pareto
+wandb_group: ee-explicit-10b-eval
+vars:
+  tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_10b_eval_pinned
+  eval_arm: ${vars.arm}
+  tree: ${vars.tree_root}/${vars.eval_arm}_seed${vars.seed}
+  eval_root: /storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_10b_eval
+  actor_args:
+  - env.rewards.motion_ee_pos.weight=1.0
+  - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+  - env.rewards.action_rate_l2.weight=-0.03
+  - agent.optim.weight_decay=1.0e-2
+  - agent.ipmd.critic_lr_schedule=linear
+  - agent.ipmd.critic_lr_final=1.0e-5
+  - env.rewards.tracking_reward_points.weight=4.0
+  - env.enable_termination_curriculum=false
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  encoder_ckpt: /data/latent_star_v2/hub_seed0/encoder/checkpoints/latest.pt
+  row: clean
+  randomization: none
+  history_args:
+  - env.observations.policy.projected_gravity.history_length=10
+  - env.observations.policy.base_ang_vel.history_length=10
+  - env.observations.policy.joint_pos_rel.history_length=10
+  - env.observations.policy.joint_vel_rel.history_length=10
+  - env.observations.policy.last_action.history_length=10
+  command_mode: z
+  critic_args: []
+  head:
+  - --tree
+  - ${vars.tree}
+  - --output_root
+  - ${vars.eval_root}
+  - --arm
+  - ${vars.eval_arm}
+  - --seed
+  - ${vars.seed}
+  - --row
+  - ${vars.row}
+  - --board
+  - bones_testbed4096_v1
+  - --final_only
+  - --
+  - --task
+  - Isaac-Imitation-G1-v2
+  - --algo
+  - IPMD
+  - --agent_entry_point
+  - rlopt_ipmd_tuned_fullbatch_cfg_entry_point
+  - --randomization
+  - ${vars.randomization}
+  - --action_sampling
+  - mode
+  - --steps
+  - '10000'
+  - --seed
+  - ${vars.seed}
+  - --reference_start_frame
+  - '0'
+  - --reset_schedule
+  - sequential
+  - --headless
+  - physics=newton_mjwarp
+  - env.sim.physics.solver_cfg.njmax=320
+  - env.sim.physics.solver_cfg.nconmax=200
+  - env.events.push_robot=null
+  - env.data.manifest=null
+  - env.data.reference_arrays_dir=${vars.ref_arrays}
+  - env.data.persist_id=${vars.persist_id}
+  - env.data.reference_arrays_resident=true
+  - env.data.reference_arrays_warm_workers=16
+  - env.data.runtime_cache_device=cuda:0
+  - env.data.reference_prefetch_mode=off
+  - env.data.macro_cache_device=cuda:0
+  - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+  interface:
+  - env.command_interface.actor=explicit
+  - env.command_interface.actor.components=${vars.components}
+  - env.command_interface.reference.critic_components=[joint_qpos_qvel,root_pos,root_ori]
+  - agent.ipmd.use_latent_command=false
+  - agent.command_space=${vars.command_space}
+  - agent.command_components=${vars.components}
+  - agent.ipmd.command_source=random
+  board_terms:
+  - env.terminations.anchor_pos.params.threshold=0.25
+  - env.terminations.anchor_pos.params.down_threshold=0.25
+  - env.terminations.anchor_ori.params.threshold=1.0
+  - env.terminations.ee_body_pos.params.threshold=0.25
+  - env.terminations.ee_body_pos.params.down_threshold=0.25
+  - env.terminations.foot_pos_xyz=null
+  - env.terminations.base_too_low=null
+  - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+  - agent.policy.activation_fn=silu
+  - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+  - agent.value_function.activation_fn=silu
+  components: '[joint_qpos,root_pos,root_ori]'
+  command_space: root_qpos
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+preflight:
+  require_container_paths:
+  - ${vars.ref_arrays}
+  - ${vars.tree}/tracker
+  output_container_path: ${vars.eval_root}
+arms:
+  root_qpos_explicit:
+    vars: {}
+    stages: &score_stages
+    - name: score
+      executable: scripts/rlopt/eval_checkpoint_tree.py
+      args: ${concat:${vars.head},${vars.interface},${vars.actor_args},${vars.history_args},${vars.critic_args},${vars.board_terms}}
+      time_limit: 02:00:00
+      gres: gpu:h200:1
+      partition: coe-gpu
+      qos: coe-ice
+      exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+      cpus_per_task: 16
+      mem: 160G
+      env:
+        CLUSTER_ISAAC_SIM_CACHE_DIR: /storage/ice-shared/vip-vwt/scratch-fwu91/isaac_cache_curves/latest_${vars.arm}
+  ee_explicit:
+    vars:
+      components: '[ee_pos,ee_ori,root_pos,root_ori]'
+      command_space: ee
+    stages: *score_stages
+  root_qpos_explicit_2b:
+    vars:
+      eval_arm: root_qpos_explicit
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_2b_eval_pinned
+    stages: *score_stages
+  ee_explicit_2b:
+    vars:
+      eval_arm: ee_explicit
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/ee_explicit_2b_eval_pinned
+      components: '[ee_pos,ee_ori,root_pos,root_ori]'
+      command_space: ee
+    stages: *score_stages

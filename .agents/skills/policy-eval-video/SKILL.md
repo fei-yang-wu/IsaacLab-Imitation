@@ -1,6 +1,6 @@
 ---
 name: policy-eval-video
-description: Render policy-vs-reference evaluation videos for a low-level tracking checkpoint in this IsaacLab-Imitation repo, one video per motion at the motion's own length, with tracking terminations disabled. Use when the user asks for eval videos, rollout videos, per-motion videos, visual inspection of a checkpoint, "does it look right", side-by-side reference comparison, or when an oracle/M3 evaluation needs its mandated non-terminating diagnostic render.
+description: Render full-motion policy/reference videos from G1 tracker checkpoints.
 ---
 
 # Policy evaluation videos

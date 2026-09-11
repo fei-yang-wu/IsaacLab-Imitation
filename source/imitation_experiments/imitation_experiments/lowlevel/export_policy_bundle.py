@@ -260,9 +260,16 @@ class Preset:
     # Lab's CircularBuffer flattens to and what the EC ObservationAssembler
     # writes (`lowlevel/observation.py`, `history_order="oldest_first"`).
     history: dict[str, int] = dataclasses.field(default_factory=dict)
+    # When the EC runtime re-runs the encoder: on acceptance of a new command
+    # (the hold boundary) or on every control tick. At hold 1 the two coincide.
+    encoder_trigger: str = "on_acceptance"
 
     def term_history(self, name: str) -> int:
         return int(self.history.get(name, 1))
+
+    def history_length(self, name: str) -> int:
+        """Alias of `term_history`, the name the smoothness campaigns use."""
+        return self.term_history(name)
 
     @property
     def total_width(self) -> int:
@@ -324,6 +331,21 @@ PRESETS = {
         encoder_state_dim=38,
         horizon_steps=10,
         history={name: 10 for name, _, _ in _PROPRIO_TERMS},
+    ),
+    # Same actor contract as `combo_v3`, named by the smoothness fine-tune
+    # campaigns (2026-09-08 onward) and their Embodied-Control plan; it also
+    # declares the encoder trigger the EC runtime should use.
+    "combo64_history10_v1": Preset(
+        name="combo64_history10_v1",
+        interface="latent",
+        terms=[("latent_command", 66, False), *_PROPRIO_TERMS],
+        z_dim=64,
+        phase_mode="sin_cos",
+        default_hold_steps=1,
+        encoder_state_dim=38,
+        horizon_steps=10,
+        history={name: 10 for name, _, _ in _PROPRIO_TERMS},
+        encoder_trigger="every_control_tick",
     ),
     "explicit_v2": Preset(
         name="explicit_v2",
@@ -1042,6 +1064,7 @@ def export_bundle(args: argparse.Namespace) -> Path:
             "window_steps": window_steps,
             "horizon_steps": encoder_provenance["horizon_steps"],
             "encoder_window_mode": encoder_provenance["encoder_window_mode"],
+            "encoder_trigger": preset.encoder_trigger,
             "macro_frame_stride": encoder_provenance["macro_frame_stride"],
             "macro_anchor_mode": encoder_provenance["macro_anchor_mode"],
             "activation": encoder_provenance["encoder_activation"],

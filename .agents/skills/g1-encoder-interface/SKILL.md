@@ -1,6 +1,6 @@
 ---
 name: g1-encoder-interface
-description: Select the G1 skill-encoder input interface (full_body qpos+qvel+root vs root_qpos qpos+root) and its macro-window cadence (expert_macro_frame_stride) for training, pretraining and evaluation. Use when a run must change what the DiffSR encoder compresses or how far apart its window frames sit, when pairing a policy with an encoder, or when a job fails with "hl/state shape mismatch" or a macro-window stride mismatch.
+description: Configure G1 encoder inputs and window cadence, or diagnose encoder/tracker interface mismatches.
 ---
 
 # G1 skill-encoder input interface

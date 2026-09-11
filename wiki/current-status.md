@@ -1,5 +1,126 @@
 # Project Live Status
 
+## Action01 55B packaged for EC (2026-09-09)
+
+Final action01 checkpoint published and pinned as `action01_55b` at HF
+`832f85896c08494d9a229dca0bcc828182a188ac`. Native async MuJoCo deployment13
+rehearsal: 9/13 SONIC successes, no runtime faults, all 13 videos recorded.
+This is separate from the Isaac benchmark and the subsequent 10B continuation.
+[Release provenance and artifacts](../experiments/campaigns/2026-09-08-combo50b-smooth-ft5b/README.md#action01-55b-ec-release-2026-09-09).
+
+## Combo 50B smoothness fine-tune complete (2026-09-09)
+
+User-provided completion: action01, antishake4, ema08 and normfix seed 0 all
+reached 55,000,301,568 cumulative frames (+5B); all 52 evaluation cells across
+latest/3B/4B/5B are complete. Single seed per arm, no repeats: between-arm gaps
+are not resolvable. Latest is frame-unmatched; the 3B board is normfix-only,
+with its pin 155,136 frames below the exact boundary. SR covers all motions;
+MPJPE covers successful motions only. About 8 of about 50 eval jobs hit the
+pre-existing Kit startup crash; all recovered by resubmission.
+[Completion record, results, job IDs and caveats](../experiments/campaigns/2026-09-08-combo50b-smooth-ft5b/README.md).
+
+## SONIC-sized combo decoder + DAgger submitted (2026-09-08)
+
+Original qualification `5738762` failed CUDA OOM; its blocked chain was
+canceled. Memory repair r1 submitted: qualification `5738999`, DAgger
+`5739000/5739001`, PPO starts `5739002`, final segment `5739026`.
+PPO environments reduced to 8192 and macro cache moved to CPU. The
+400M supervised distillation schedule and subsequent full 50B PPO budget
+remain intact. H200 qualification `5738999` completed all six rollouts (exit 0:0);
+DAgger `5739000` has started.
+Local distillation/PPO handoff smokes and 12 focused tests passed.
+[Campaign and provenance](../experiments/campaigns/2026-09-08-combo-sonic-mlp-50b/README.md).
+
+## Combo 50B capability124 evaluation submitted (2026-09-08)
+
+ICE `5735277` evaluates the final checkpoint on the frozen 124-motion
+SONIC-calibrated subset, clean seed 0. Completed: **SR 1.0000 (124/124),
+MPJPE-L 18.22 mm / MPJPE-G 65.06 mm**, success-only micro. Exact ranks,
+full completion and no timeouts verified. Single-seed calibrated result.
+[Campaign details](../experiments/campaigns/2026-09-03-combo-50b/README.md).
+
+## Combo 50B EC release (2026-09-08)
+
+50B controller published and pinned in EC; private SONIC deployment-example
+dataset published and pinned. Async one-pass rehearsal: 7/13 post-hoc SONIC
+successes, success-only MPJPE-L/G 27.90/266.00 mm; all horizons recorded.
+The examples are exact upstream deployment references, not verified website-video
+identities. Full failures and 13 comparison videos retained.
+[Release evidence and caveats](../experiments/campaigns/2026-09-03-combo-50b/README.md).
+
+## Combo 2B and 50B evaluations complete (2026-09-08 UTC)
+
+Jobs `5725997`/`5725971` completed. Canonical clean 4096 board, seed 0:
+2B SR 0.8782 / MPJPE-L 27.61 mm / MPJPE-G 121.37 mm;
+50B SR 0.9827 / MPJPE-L 20.54 mm / MPJPE-G 70.51 mm. Errors are
+success-only micro means. Exact ranks and checkpoint identities, full
+completion and no timeouts validated.
+[Campaign provenance](../experiments/campaigns/2026-09-03-combo-50b/README.md).
+
+## Combo final evaluation retry (2026-09-08 UTC)
+
+The same lineage's 2,000,289,792-frame checkpoint is also queued for clean
+evaluation as `5725997`, matching the explicit arms' checkpoint frame count.
+
+Combo training completed 50,000,166,912 frames. Final evaluation `5725616`
+failed during Kit startup; retry `5725971` submitted against the pinned final
+checkpoint. Latest valid 49B clean row: SR 0.9846 / MPJPE-L 20.53 mm /
+MPJPE-G 69.59 mm (success-only micro, seed 0, all 4096 episodes finished).
+Both explicit arms now have completed 2B and 10B clean evaluations; see
+[explicit campaign results](../experiments/campaigns/2026-09-06-ee-explicit-10b/README.md).
+
+## Phi-conditioning shared-success analysis (2026-09-07)
+
+The lower headline global errors are partly success-set selection. On the
+3,434 shared successes, phi_lstm/nolatent MPJPE-L is 22.44/21.44 mm and
+MPJPE-G is 63.35/61.52 mm; nolatent succeeds on 270 additional motions,
+phi_lstm on 37. Nolatent's global advantage over z combo reverses on their
+3,660 shared successes (78.14 vs 72.89 mm), although its body jerk remains
+6.8% lower. Phi_lstm retains lower global error than z LSTM on shared
+successes, alongside higher local error and lower full-board SR.
+These are one-seed diagnostic subsets, not causal phi ablations.
+[Analysis and provenance](../experiments/campaigns/2026-09-04-direct-affine-phi/README.md).
+
+## Phi-conditioned arms: final status check (2026-09-07)
+
+Both chains are complete; neither has queued/running training or evaluation.
+`phi_lstm` finished 10,000,171,008 frames in training job `5699181`;
+`nolatent` finished 10,000,465,920 frames in `5714419`. Final evaluation
+jobs `5709768` and `5721078`, respectively, completed successfully.
+
+Canonical summarizer reduction of final clean `bones_testbed4096_v1` rows,
+seed 0, success-only micro errors:
+
+| Arm | SR | MPJPE-L (mm) | MPJPE-G (mm) | Body jerk (m/s³) | Action delta L2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| phi_lstm | 0.8474 (3472/4096) | 22.92 | 65.99 | 205.9 | 0.882 |
+| nolatent | 0.9043 (3705/4096) | 23.20 | 79.16 | 180.3 | 0.827 |
+
+Both artifacts pass exact ordered board-rank, full-completion, zero-timeout,
+and deterministic clean-randomization checks. Local raw mirrors:
+`logs/phi_conditioning_eval/phi_lstm_seed0_clean_f10000171008.json` and
+`logs/phi_conditioning_eval/nolatent_seed0_clean_f10000465920.json`;
+remote originals under `/data/eval/latest_eval/`. Small differences from
+older phi numbers reflect using the canonical per-episode reduction here.
+Single-seed observations; these arms differ in architecture and encoder/
+critic setup, so their difference does not isolate phi conditioning.
+The recurrent-state reset qualification caveat for phi_lstm remains, and
+the recurrent axis remains parked per the existing user decision.
+
+## Explicit-interface 10B training and evaluation (2026-09-07)
+
+Both explicit arms completed 10,000,269,312 frames. Root-qpos evaluation
+`5721164` completed: **SR 0.9563 (3,917/4,096), MPJPE-L 19.75 mm,
+MPJPE-G 303.80 mm**, success-only micro errors, single seed, canonical
+clean board. Full completion and exact ordered board ranks verified.
+Body jerk 265.9 m/s³; action delta L2 1.056. EE training jobs
+`5714551`/`5714552` completed; final EE evaluation `5721417` was submitted
+on 2026-09-07 at 17:55 UTC using the matching clean protocol. Results pending.
+Matched 2.00029B evaluations submitted: root-qpos `5721421`, EE `5721423`,
+same clean board and seed 0. Results pending.
+See the [campaign record](../experiments/campaigns/2026-09-06-ee-explicit-10b/README.md)
+for checkpoint, protocol, and artifact provenance.
+
 Experiment navigation now starts at `experiments/README.md` and its exhaustive `SCRIPT_INVENTORY.md`. One-shot launchers named in the chronology below may have been pruned on 2026-07-23; `experiments/PRUNED_SCRIPTS.md` is the authoritative deletion and recovery catalog. A historical path is not a live submission instruction.
 
 Last verified: 2026-08-30. New latent/interface work uses
@@ -20,6 +141,14 @@ Human-facing launcher navigation now starts at
 and reserves `experiments/paper/` for the eventual stable release entrypoint.
 Dated campaign folders index canonical scripts rather than copying their
 implementation.
+
+## Agent guidance simplified (2026-09-07)
+
+Repository instructions and context files now keep ownership, environment,
+validation, and research contracts without repeated workflow narratives.
+Specialist skills remain; redundant style packages, the merged Skynet alias,
+and the generic Hugging Face CLI copy were retired. Personal working style
+remains in the user-level Codex AGENTS.md. No experiment protocol or code changed.
 
 ## Recurrent (LSTM) actor: PARKED (2026-09-06)
 

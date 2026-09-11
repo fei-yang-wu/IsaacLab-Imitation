@@ -1,6 +1,6 @@
 ---
 name: cluster-job-submission
-description: Submit, plan, monitor, and cancel Slurm jobs on ICE or Skynet through this repo's control plane (python -m imitation_experiments.pipeline.cluster). Covers campaign.yaml authoring, the plan/submit/status/logs/cancel verbs, walltime-segmented chained runs, cluster storage and data-I/O rules, and which paths, resources, and behavior differ per cluster profile. Use when the user asks to submit a cluster job, plan a run, check job status, tail cluster logs, cancel a Slurm job, write or edit a campaign.yaml, chain or resume a long run, or mentions ICE, PACE, Skynet, apptainer, sbatch, storage quota, or the retired cluster_interface.sh.
+description: Plan, submit, monitor, resume, or cancel ICE and Skynet jobs through the repository control plane.
 ---
 
 # Cluster job submission
