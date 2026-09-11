@@ -124,3 +124,4 @@ so no page becomes orphaned.
   LeRobot ingestion and TorchRL cache ownership.
 - [Isaac Consumer Data Plan](isaac-consumer-data-plan.md): branch split between
   off-machine action labeling and this repo's data-consumer work.
+- [sonic-training-parity-2026-09-10.md](sonic-training-parity-2026-09-10.md) — field-by-field SONIC v1.1 vs our tracker training setup (sim, DR, observations, rewards, terminations, data, optimizer); what differs and what does not.
