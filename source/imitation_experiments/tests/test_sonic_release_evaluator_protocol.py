@@ -67,3 +67,23 @@ def test_release_evaluator_has_v1_1_contract_gate() -> None:
     assert 'sonic_version == "v1_1"' in source
     assert "heading_relative_rot6d_from_full_relative" in source
     assert "robot_anchor_quat_w" in source
+
+
+def test_release_evaluator_reports_reference_free_smoothness() -> None:
+    """SONIC must report the same three smoothness axes our arms report.
+
+    `tracking_acceleration_distance_mps2` is an error against the reference, so
+    a controller that copies a jerky clip scores 0 on it. Comparing smoothness
+    needs the reference-free pair plus the action-space measure, which lived
+    only in `evaluate_checkpoint` until 2026-09-08.
+    """
+    source = _source()
+    for key in ("body_acc_mps2", "body_jerk_mps3", "action_delta_l2"):
+        assert f'final_metrics["{key}"]' in source, key
+    # Jerk needs BOTH the velocity pair behind its acceleration and the
+    # previous acceleration to be valid, or a reset boundary enters the mean.
+    assert "previous_acc_valid" in source
+    assert "metric_active & previous_lin_vel_valid & previous_acc_valid" in source
+    # The action difference is masked by the same liveness gate as every other
+    # per-step metric.
+    assert "action_delta_sum += action_delta * metric_active_f" in source

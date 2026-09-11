@@ -91,8 +91,8 @@ PY
     dither="$(timeout 300 pixi run -e native python docs/evidence/noise_20260910/dither.py "${out}" 2>&1 | grep -vE "Warning|warn" | tail -1)"
     log "[${name}] clean $(echo "${summary}" | cut -f1)/$(echo "${summary}" | cut -f2) | ${dither}"
     # dither.py prints: "<dir>: n=N ankle jitter: target A truth B measured C | leg: target D truth E | ankle target step p99 F rad, mean |target-joint| G rad"
-    a=$(echo "${dither}" | sed -nE 's/.*ankle jitter: target ([0-9.]+) truth ([0-9.]+).*/\1/p'); b=$(echo "${dither}" | sed -nE 's/.*ankle jitter: target ([0-9.]+) truth ([0-9.]+).*/\2/p')
-    d=$(echo "${dither}" | sed -nE 's/.*leg: target ([0-9.]+).*/\1/p'); f=$(echo "${dither}" | sed -nE 's/.*step p99 ([0-9.]+) rad.*/\1/p'); g=$(echo "${dither}" | sed -nE 's/.*mean \|target-joint\| ([0-9.]+) rad.*/\1/p')
+    a=$(echo "${dither}" | sed -nE 's/.*ankle jitter: target +([0-9.]+) +truth +([0-9.]+).*/\1/p'); b=$(echo "${dither}" | sed -nE 's/.*ankle jitter: target +([0-9.]+) +truth +([0-9.]+).*/\2/p')
+    d=$(echo "${dither}" | sed -nE 's/.*leg: target +([0-9.]+).*/\1/p'); f=$(echo "${dither}" | sed -nE 's/.*step p99 +([0-9.]+) rad.*/\1/p'); g=$(echo "${dither}" | sed -nE 's/.*mean \|target-joint\| +([0-9.]+) rad.*/\1/p')
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${arm}" "${newest}" "$(echo "${summary}" | cut -f1)" "$(echo "${summary}" | cut -f2)" "${a:-nan}" "${b:-nan}" "${d:-nan}" "${f:-nan}" "${g:-nan}" "${out}" "$(date -Iseconds)" >> "${RESULTS}"
     cd "${REPO_ROOT}"
 done
