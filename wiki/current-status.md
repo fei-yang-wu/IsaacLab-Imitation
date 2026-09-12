@@ -150,6 +150,22 @@ Specialist skills remain; redundant style packages, the merged Skynet alias,
 and the generic Hugging Face CLI copy were retired. Personal working style
 remains in the user-level Codex AGENTS.md. No experiment protocol or code changed.
 
+## Live curves for the 64-D merged-head family (2026-09-12)
+
+`2026-09-12-latent64-probe-live-eval/submit_live_eval.sh` scores every
+unscored 500M checkpoint of `z64_merged` (control), `z64_merged_noreg`, and
+`z64_poe` on `bones_testbed4096_v1` clean through three `*_curve` arms added
+to `2026-09-02-latest-eval` (the head without `--final_only`, 3.5 h limit,
+milestone-layout live trees relinked from the training trees).
+`report.sh` mirrors the rows to `logs/latent64_probe_live_eval/` and prints
+the matched-frame table. First pass: jobs 5765049 (control, 18 cells),
+5765050 (noreg, 9 cells), 5765051 (poe, 2 cells). A session cron re-runs
+both scripts every two hours.
+
+Training at the first pass: `z64_merged_noreg` at 4.5B after 7h47 of its
+first segment (about 580M frames per hour); `z64_poe` at 1.0B after 1h54.
+Both encoders pretrained to 50,000 updates (44 and 43 minutes).
+
 ## Product-of-experts score `<z, E(s, s')>` arm SUBMITTED (2026-09-11)
 
 RLOpt `de599c6` (branch `feat/poe-identity-phi`, on top of the recorded
