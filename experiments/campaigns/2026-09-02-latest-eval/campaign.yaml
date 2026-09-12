@@ -772,3 +772,55 @@ arms:
       tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
       encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/z64_poe_seed0/encoder/checkpoints/latest.pt
     stages: *curve_stages
+
+  # ---- The rest of the PoE family (2026-09-12). `z64_poe_base` adds the
+  # ---- constant base channel; the width-ablation arms untie the expert count
+  # ---- from the latent width. Only `poe_z256` changes the COMMAND, so it
+  # ---- carries its own interface block: 258 wide, code_latent_dim 256.
+  z64_poe_base_curve:
+    vars:
+      eval_arm: z64_poe_base
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/z64_poe_base_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  poe_proj256_curve:
+    vars:
+      eval_arm: poe_proj256
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/poe_proj256_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  poe_proj256_base_curve:
+    vars:
+      eval_arm: poe_proj256_base
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/poe_proj256_base_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  poe_z256_curve:
+    vars:
+      eval_arm: poe_z256
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/poe_z256_seed0/encoder/checkpoints/latest.pt
+      interface:
+        - env.command_interface.actor=latent
+        - env.command_interface.actor.dim=258
+        - env.command_interface.encoder=single
+        - agent.ipmd.latent_dim=258
+        - agent.ipmd.command_source=hl_skill
+        - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+        - agent.ipmd.hl_skill_horizon_steps=10
+        - agent.ipmd.hl_skill_command_mode=${vars.command_mode}
+        - agent.ipmd.hl_skill_finetune_enabled=false
+        - agent.ipmd.latent_steps_min=1
+        - agent.ipmd.latent_steps_max=1
+        - agent.ipmd.latent_learning.code_period=1
+        - agent.ipmd.latent_learning.command_phase_mode=sin_cos
+        - agent.ipmd.latent_learning.command_phase_source=hold
+        - agent.ipmd.latent_learning.command_phase_period=0
+        - agent.ipmd.latent_learning.code_latent_dim=256
+        - env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]
+        - env.expert_macro_frame_stride=1
+        - env.expert_macro_anchor_mode=robot_heading
+    stages: *curve_stages
