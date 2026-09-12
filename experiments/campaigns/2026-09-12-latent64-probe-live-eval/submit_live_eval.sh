@@ -9,10 +9,15 @@
 # Mechanics, per arm:
 #  * every `model_step_*.pt` of the training tree is relinked into a
 #    milestone-layout live tree (`<live_root>/<arm>_seed0/tracker/f<N>/models/`),
-#    so a resume's second run directory cannot raise `AmbiguousTree`. Relative
-#    symlinks, so they resolve inside the container as on the login node; that
-#    is why the control's live tree stays on scratch (`/data/...`) while the
-#    two ice-shared arms' live trees stay on ice-shared.
+#    so a resume's second run directory cannot raise `AmbiguousTree`. All live
+#    trees sit on ice-shared. A symlink target is the CANONICAL absolute path
+#    when that path is under /storage/ice-shared (identical inside the
+#    container), and a relative path otherwise. The first pass (2026-09-12)
+#    used `realpath --relative-to` for everything: the control's scratch tree is
+#    itself a symlink into the ice-shared archive, so the canonical relative
+#    path climbed twelve levels to `/storage` and, inside the container where
+#    /data is one level deep, landed on a non-existent `/ice-shared/...`; the
+#    job saw an empty tree and exited "nothing to score".
 #  * if every checkpoint already has a row in /data/eval/latest_eval, or the
 #    arm's curve job is already queued, nothing is submitted.
 #  * `cluster submit` refuses a working tree that changed since the plan was
@@ -38,12 +43,7 @@ train_tree() {
         *) echo "unknown arm $1" >&2; return 1 ;;
     esac
 }
-live_root() {
-    case "$1" in
-        z64_merged) echo "${DATA}/latent64_probe_live/$1_seed0/tracker" ;;
-        *) echo "${SHARED}/latent64_probe_live/$1_seed0/tracker" ;;
-    esac
-}
+live_root() { echo "${SHARED}/latent64_probe_live/$1_seed0/tracker"; }
 
 STASHED=0
 restore() { [ "${STASHED}" = "1" ] && git stash pop -q || true; }
@@ -70,7 +70,12 @@ for arm in ${ARMS}; do
         for src in ${tree}/*/models/model_step_*.pt; do
             n=\$(basename \$src | sed -E 's/model_step_([0-9]+)\.pt/\1/')
             dst=${live}/f\$n/models; mkdir -p \$dst
-            ln -sfn \"\$(realpath --relative-to=\$dst \$src)\" \$dst/model_step_\$n.pt
+            abs=\$(realpath \$src)
+            case \$abs in
+                /storage/ice-shared/*) target=\$abs ;;
+                *) target=\$(realpath --relative-to=\$dst \$src) ;;
+            esac
+            ln -sfn \"\$target\" \$dst/model_step_\$n.pt
         done"
     if [ "${STASHED}" = "0" ] && [ -n "$(git status --porcelain)" ]; then
         git stash push -q -u -m "live-eval submit $(date -Iseconds)" && STASHED=1

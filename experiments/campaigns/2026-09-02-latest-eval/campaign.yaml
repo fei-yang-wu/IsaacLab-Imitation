@@ -744,7 +744,7 @@ arms:
   z64_merged_curve:
     vars:
       eval_arm: z64_merged
-      tree_root: /data/latent64_probe_live
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
     stages: &curve_stages
       - name: score
         executable: scripts/rlopt/eval_checkpoint_tree.py
