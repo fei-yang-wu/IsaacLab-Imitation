@@ -98,6 +98,56 @@ vars:
     - env.data.reference_prefetch_mode=off
     - env.data.macro_cache_device=cuda:0
     - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+  # `head` without --final_only: score EVERY unscored milestone of the tree in
+  # one simulation start (the tree scorer skips cells that already have a row).
+  curve_head:
+    - --tree
+    - ${vars.tree}
+    - --output_root
+    - ${vars.eval_root}
+    - --arm
+    - ${vars.eval_arm}
+    - --seed
+    - ${vars.seed}
+    - --row
+    - ${vars.row}
+    - --board
+    - bones_testbed4096_v1
+    - "--"
+    - --task
+    - Isaac-Imitation-G1-v2
+    - --algo
+    - IPMD
+    - --agent_entry_point
+    - rlopt_ipmd_tuned_cfg_entry_point
+    - --randomization
+    - ${vars.randomization}
+    - --action_sampling
+    - mode
+    - --steps
+    - "10000"
+    - --seed
+    - ${vars.seed}
+    - --reference_start_frame
+    - "0"
+    - --reset_schedule
+    - sequential
+    - --skill_encoder_source
+    - pretrained
+    - --headless
+    - physics=newton_mjwarp
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - env.events.push_robot=null
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cuda:0
+    - env.data.reference_prefetch_mode=off
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
 
   interface:
     - env.command_interface.actor=latent
@@ -682,3 +732,43 @@ arms:
       - env.data.macro_cache_device=cuda:0
       - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
     stages: *score_stages
+
+  # ---- Budget-axis curves for the 64-D merged-head family (2026-09-12).
+  # ---- Control `z64_merged` plus the two 2026-09-11 arms: `z64_merged_noreg`
+  # ---- (no SIGReg, no latent L2) and `z64_poe` (<z, E(s, s')> score, no
+  # ---- regularizer, past-five source). Each scores every unscored 500M
+  # ---- checkpoint from a milestone-layout live tree that
+  # ---- 2026-09-12-latent64-probe-live-eval/submit_live_eval.sh relinks, so a
+  # ---- resume's second run directory can never raise `AmbiguousTree`.
+  # ---- The encoder file differs per arm; the tracker interface is z64_merged's.
+  z64_merged_curve:
+    vars:
+      eval_arm: z64_merged
+      tree_root: /data/latent64_probe_live
+    stages: &curve_stages
+      - name: score
+        executable: scripts/rlopt/eval_checkpoint_tree.py
+        args: ${concat:${vars.curve_head},${vars.interface},${vars.actor_args},${vars.history_args},${vars.critic_args},${vars.board_terms}}
+        time_limit: "03:30:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_ISAAC_SIM_CACHE_DIR: /storage/ice-shared/vip-vwt/scratch-fwu91/isaac_cache_curves/latest_${vars.arm}
+
+  z64_merged_noreg_curve:
+    vars:
+      eval_arm: z64_merged_noreg
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/z64_merged_noreg_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  z64_poe_curve:
+    vars:
+      eval_arm: z64_poe
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/z64_poe_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
