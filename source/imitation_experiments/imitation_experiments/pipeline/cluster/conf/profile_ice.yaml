@@ -36,6 +36,15 @@ slurm:
   # (2026-08-31). ice-shared is 2 TB.
   log_dir: /storage/ice-shared/vip-vwt/scratch-fwu91/slurm_logs
   job_name_prefix: imit
+  # Nodes every stage keeps off unless it sets its own `exclude`. Slurm reports
+  # these healthy, so nothing else keeps work away from them.
+  #
+  # atl1-1-03-014-16-0: no usable GPU (2026-09-12). It killed the
+  # poe_proj256_base_reg pretrain with "CUDA error: no CUDA-capable device is
+  # detected" after 39 s, and a z64_poe_base curve eval that exited 0 after
+  # 40 s having written no row -- the silent failure, since job state alone
+  # then says COMPLETED.
+  exclude: atl1-1-03-014-16-0
 env:
   # Runtime keys consumed by run_singularity.sh inside the job. Everything
   # here reaches the job verbatim; add keys freely, there is no allow-list.

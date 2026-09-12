@@ -1,5 +1,22 @@
 # Project Live Status
 
+## PoE base-field comparison submitted (2026-09-12)
+
+`z64_poe_base` adds `c(s, noisy_future, diffusion_time)` to the existing
+`z64_poe` denoiser: phi `[1; z]`, 65 fields, unchanged 64-D skill command.
+The existing PoE seed-0 run is the control; it was not resubmitted. Both
+retain past-five history, zero SIGReg/L2, merged raw-chunk diffusion,
+50,000 pretraining updates, and the same 10B-frame tracker recipe in W&B
+`g1-bs-pareto` / `latent64-probe-10b`.
+
+ICE jobs: `5766785 -> 5766786 -> 5766787` (pretrain, tracker, continuation).
+Fifteen focused model tests, the resolved campaign parity test, five local
+pretraining updates, checkpoint verification, one tracker iteration, and all
+eight preflight checks passed. These qualify wiring only; no research result.
+Code was compared against the control's submitted archive: only the intended
+three implementation files differ among 328 checked Python files.
+[Protocol and submission provenance](../experiments/campaigns/2026-09-12-poe-base-z64-10b/README.md).
+
 ## Action01 55B packaged for EC (2026-09-09)
 
 Final action01 checkpoint published and pinned as `action01_55b` at HF
@@ -149,6 +166,26 @@ validation, and research contracts without repeated workflow narratives.
 Specialist skills remain; redundant style packages, the merged Skynet alias,
 and the generic Hugging Face CLI copy were retired. Personal working style
 remains in the user-level Codex AGENTS.md. No experiment protocol or code changed.
+
+## Bad node atl1-1-03-014-16-0, and a profile-level exclude (2026-09-12)
+
+`atl1-1-03-014-16-0` on `coe-gpu` reports healthy to Slurm and has no usable
+GPU. It killed two jobs on 2026-09-12: the `poe_proj256_base_reg` pretrain
+(5767929) after 39 s with `CUDA error: no CUDA-capable device is detected`,
+and a `z64_poe_base` curve eval (5767990) that exited **0** after 40 s having
+written no row, on `RuntimeError: No CUDA GPUs are available`.
+
+The second is the dangerous one: job state said COMPLETED. A launcher that
+gated on job state would have recorded that checkpoint as scored. The live-eval
+launcher gates on the row FILES, which is why the gap surfaced on the next
+pass. Keep that rule in any new scoring launcher.
+
+The node is now excluded in two places. `slurm.exclude` in
+`pipeline/cluster/conf/profile_ice.yaml` is a new profile-level default that
+every stage of every campaign inherits, so a future campaign cannot forget it;
+a stage's own `exclude` REPLACES it rather than extending it, so a campaign
+that names its own nodes stays exactly as written. The three live campaigns
+also carry it per stage. Two tests in `test_cluster_legacy_deprecated.py`.
 
 ## Live curves for the 64-D merged-head family (2026-09-12)
 

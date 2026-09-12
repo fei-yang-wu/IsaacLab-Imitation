@@ -50,6 +50,12 @@ class SlurmDefaults:
     ntasks: int = 1
     time_limit: str = "15:59:00"
     job_name_prefix: str = "imit"
+    # Comma-separated nodes every stage of every campaign keeps off, unless the
+    # stage sets its own `exclude`. This is for hardware that Slurm reports
+    # healthy but that cannot run the job -- a per-stage list is forgotten by
+    # the next campaign, which is how atl1-1-03-014-16-0 ate a pretrain and an
+    # eval on 2026-09-12.
+    exclude: str | None = None
 
 
 @dataclass
