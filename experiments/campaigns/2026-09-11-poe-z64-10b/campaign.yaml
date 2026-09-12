@@ -4,11 +4,16 @@
 # CONTROL: `z64_merged` in `2026-09-01-latent64-probe-10b` (W&B group
 # latent64-probe-10b). This arm joins that group.
 #
-# WHAT MOVES: the DiffSR score parameterization, one variable.
+# WHAT MOVES (user, 2026-09-11): three things at once, so this arm reads
+# against `z64_merged` as a package, and against `z64_merged_noreg` /
+# `enc_hist` (p5_concat) each for one of the pieces.
 #   --diffsr_phi_parameterization identity   phi(s, z) = z (no g, no F, no bias)
 #   --diffsr_mu_conditioning pair            mu(s, s', t): a joint network on
 #                                            the transition pair
 #   --diffsr_feature_dim 64                  forced by identity (= z_dim)
+#   --jepa_sigreg_coeff 0 --reg_coeff 0      no latent regularizer at all
+#   --source_history_steps 5 --source_anchor current
+#                                            s = s[t-5..t], 2,280 wide
 # The denoiser is then eps_pred = sum_k z_k E_k(s, s', t) with E = mu: each
 # coordinate of z is the log-weight of one expert field over the pair, and
 # z_mix = a z_1 + b z_2 samples the tempered product p_1^a p_2^b for ANY a, b.
@@ -17,11 +22,9 @@
 # both the factorization and the bias. Score-parameterized: the expert fields
 # are free networks, not gradients of a scalar energy.
 #
-# Both regularizers stay at the hub defaults (SIGReg 1.0, latent L2 1e-3), so
-# the pair against `z64_merged` moves the parameterization alone (plus
-# encoder-initialization noise: 0.0064 SR / 0.46 mm / 10.8 mm across three
-# replicates, 2026-08-30-encoder-interface-500m). Everything else is the hub
-# pretrain and the probe's tracker stage verbatim.
+# Everything else is the hub pretrain and the probe's tracker stage verbatim.
+# Fresh pretrain: encoder-initialization noise 0.0064 SR / 0.46 mm / 10.8 mm
+# across three replicates (2026-08-30-encoder-interface-500m).
 #
 # Output on ice-shared; personal scratch stood at 269 of 300 GB.
 name: poe-z64-10b
@@ -51,6 +54,18 @@ vars:
     - identity
     - --diffsr_mu_conditioning
     - pair
+    # No latent regularizer: SIGReg off, latent L2 off (user, 2026-09-11).
+    - --jepa_sigreg_coeff
+    - "0"
+    - --reg_coeff
+    - "0"
+    # phi's source is the past-five chunk plus the current state (6 x 380 =
+    # 2,280 wide), as in the p5_* encoders under combo-50b; the pair-conditioned
+    # mu sees the same 2,280-wide source.
+    - --source_history_steps
+    - "5"
+    - --source_anchor
+    - current
   latent_mode: deterministic
   ln_args: ["--encoder_layer_norm"]
   window_mode: intermediate

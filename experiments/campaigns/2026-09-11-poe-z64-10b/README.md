@@ -39,16 +39,31 @@ the endpoint head and the `diff_*` NTP heads both get it),
 check, pair mu sees `s`, eps linear in `z` for weights summing to 1.75,
 loss and sampling run, bad conditioning rejected.
 
+## Two more changes, by user decision (2026-09-11)
+
+| flag | value | effect |
+|---|---|---|
+| `--jepa_sigreg_coeff 0` | SIGReg off | no isotropy pull on `z` |
+| `--reg_coeff 0` | latent L2 off | no `mean(z^2)` term |
+| `--source_history_steps 5 --source_anchor current` | `s = s[t-5..t]` | phi's source and mu's source are 6 x 380 = 2,280 wide, as in the `p5_*` encoders under combo-50b |
+
+The pretrain objective is then the diffusion next-chunk loss alone, with
+the score `<z, E(s[t-5..t], s[t+H..t+2H], t)>`. This arm therefore moves
+THREE things against `z64_merged` (score form, regularizers, source
+history). Read it as a package there, and for single pieces against:
+`z64_merged_noreg` (regularizers off, concat head, current-state source) and
+`enc_hist` = `p5_concat` (past-five source, concat head, regularizers on;
+9.5B: 0.9304 / 22.57 / 101.66).
+
 ## What is held fixed
 
-Everything else is the hub pretrain (jepa_ntp + sigreg_ebm, `diff_chunk`,
+The rest of the hub pretrain (jepa_ntp + sigreg_ebm, `diff_chunk`,
 `boundary_next`, endpoint coefficient 0, deterministic 64-D, LayerNorm,
-intermediate window, horizon 10, 50,000 updates at batch 8,192, SIGReg 1.0,
-latent L2 1e-3) and the probe's tracker (20,480 x 24, `random80_adaptive20`,
-5M-30M curriculum, ee + wide rewards, `action_rate_l2` -0.03, full-batch
-entry point, 10B, checkpoint every 500M). The pair against `z64_merged`
-therefore moves the score parameterization alone, plus encoder-init noise
-(0.0064 SR / 0.46 mm / 10.8 mm, `2026-08-30-encoder-interface-500m`).
+intermediate window, horizon 10, 50,000 updates at batch 8,192) and the
+probe's tracker (20,480 x 24, `random80_adaptive20`, 5M-30M curriculum,
+ee + wide rewards, `action_rate_l2` -0.03, full-batch entry point, 10B,
+checkpoint every 500M). Fresh pretrain: encoder-init noise 0.0064 SR /
+0.46 mm / 10.8 mm (`2026-08-30-encoder-interface-500m`).
 
 Control row, `z64_merged` at 9.5B: 0.9292 / 23.25 / 93.09 on
 `bones_testbed4096_v1` clean, one seed. The sibling `z64_merged_noreg`
@@ -95,4 +110,9 @@ tempering with `a + b != 1`, which the affine head cannot do.
 ## Status
 
 - 2026-09-11: implemented, 11 targeted RLOpt tests pass, plan resolved with
-  preflight OK, local smoke launched. Not submitted.
+  preflight OK, local smoke PASSED (pretrain, config check, one tracker
+  iteration; current-state source, regularizers on).
+- 2026-09-11, later: user turned both regularizers off and set the past-five
+  source; the local smoke was not repeated (workstation shared). Submitted:
+  pretrain 5764381, lowlevel1 5764382 (afterok), lowlevel2 5764383
+  (afterany). Resolved pretrain script checked for all eight flags.
