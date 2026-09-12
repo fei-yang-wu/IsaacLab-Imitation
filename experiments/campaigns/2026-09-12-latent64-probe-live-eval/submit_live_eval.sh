@@ -32,14 +32,15 @@ DATA="${DATA:-/home/hice1/fwu91/scratch/Research/IsaacLab/data}"
 SHARED="${SHARED:-/storage/ice-shared/vip-vwt/scratch-fwu91}"
 EVAL_DIR="${EVAL_DIR:-${DATA}/eval/latest_eval}"
 EVAL_CAMPAIGN="${EVAL_CAMPAIGN:-experiments/campaigns/2026-09-02-latest-eval/campaign.yaml}"
-ARMS="${ARMS:-z64_merged z64_merged_noreg z64_poe}"
+ARMS="${ARMS:-z64_merged z64_merged_noreg z64_poe z64_poe_base poe_proj256 poe_proj256_base poe_z256}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # arm -> training tree (login-node path) and live root (login-node path)
 train_tree() {
     case "$1" in
         z64_merged) echo "${DATA}/latent64_probe_10b/z64_merged_seed0/tracker" ;;
-        z64_merged_noreg|z64_poe) echo "${SHARED}/latent64_probe_10b/$1_seed0/tracker" ;;
+        z64_merged_noreg|z64_poe|z64_poe_base|poe_proj256|poe_proj256_base|poe_z256)
+            echo "${SHARED}/latent64_probe_10b/$1_seed0/tracker" ;;
         *) echo "unknown arm $1" >&2; return 1 ;;
     esac
 }
