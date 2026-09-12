@@ -377,7 +377,15 @@ parser.add_argument(
     "--diffsr_phi_parameterization",
     type=str,
     default="concat",
-    choices=("concat", "bilinear", "affine", "identity"),
+    choices=(
+        "concat",
+        "bilinear",
+        "affine",
+        "identity",
+        "identity_bias",
+        "linear",
+        "linear_bias",
+    ),
     help=(
         "DiffSR phi(s,z) parameterization. 'concat' is the newer simple-concat "
         "path; 'bilinear' restores the legacy matrix F(s) with g(z)^T F(s); "
@@ -386,7 +394,13 @@ parser.add_argument(
         "latent interpolation grounds to the geometric mixture of the endpoint "
         "conditionals. 'identity' sets phi(s, z) = z (requires "
         "--diffsr_feature_dim == --z_dim); with --diffsr_mu_conditioning pair "
-        "the denoiser becomes <z, E(s, s', t)>, the product-of-experts form."
+        "the denoiser becomes <z, E(s, s', t)>, the product-of-experts form. "
+        "'identity_bias' sets phi = [1; z] (requires feature_dim = z_dim + 1), "
+        "adding a command-independent base denoiser. 'linear' sets phi = A z "
+        "with a bias-free linear A into --diffsr_feature_dim, which may be "
+        "wider than z, so the expert count is untied from the latent width; "
+        "'linear_bias' is [1; A z], the same projection with the base "
+        "denoiser channel."
     ),
 )
 parser.add_argument(
