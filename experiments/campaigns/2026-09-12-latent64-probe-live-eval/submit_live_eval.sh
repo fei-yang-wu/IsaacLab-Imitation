@@ -32,17 +32,29 @@ DATA="${DATA:-/home/hice1/fwu91/scratch/Research/IsaacLab/data}"
 SHARED="${SHARED:-/storage/ice-shared/vip-vwt/scratch-fwu91}"
 EVAL_DIR="${EVAL_DIR:-${DATA}/eval/latest_eval}"
 EVAL_CAMPAIGN="${EVAL_CAMPAIGN:-experiments/campaigns/2026-09-02-latest-eval/campaign.yaml}"
-ARMS="${ARMS:-z64_merged z64_merged_noreg z64_poe z64_poe_base poe_proj256 poe_proj256_base poe_z256 z64_poe_reg z64_poe_base_reg poe_proj256_reg poe_proj256_base_reg}"
+ARMS="${ARMS:-z64_merged z64_merged_noreg z64_poe z64_poe_base poe_proj256 poe_proj256_base poe_z256 z64_poe_reg z64_poe_base_reg poe_proj256_reg poe_proj256_base_reg enc_hist p5_affine_ctrl}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # arm -> training tree (login-node path) and live root (login-node path)
 train_tree() {
     case "$1" in
-        z64_merged) echo "${DATA}/latent64_probe_10b/z64_merged_seed0/tracker" ;;
+        # On personal scratch, not ice-shared: trained before the move.
+        z64_merged|enc_hist) echo "${DATA}/latent64_probe_10b/$1_seed0/tracker" ;;
         *) echo "${SHARED}/latent64_probe_10b/$1_seed0/tracker" ;;
     esac
 }
-live_root() { echo "${SHARED}/latent64_probe_live/$1_seed0/tracker"; }
+# The live tree must sit on the same filesystem as the checkpoints it links
+# when those checkpoints are NOT under /storage/ice-shared: the relink writes a
+# relative target in that case, and a relative path from ice-shared to personal
+# scratch climbs out of the container's binds. `z64_merged` is exempt because
+# its scratch tree is a symlink INTO the ice-shared archive, so its targets are
+# absolute; `enc_hist` still has its newest checkpoints on scratch proper.
+live_root() {
+    case "$1" in
+        enc_hist) echo "${DATA}/latent64_probe_live/$1_seed0/tracker" ;;
+        *) echo "${SHARED}/latent64_probe_live/$1_seed0/tracker" ;;
+    esac
+}
 
 STASHED=0
 restore() { [ "${STASHED}" = "1" ] && git stash pop -q || true; }

@@ -855,3 +855,26 @@ arms:
       tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
       encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/poe_proj256_base_reg_seed0/encoder/checkpoints/latest.pt
     stages: *curve_stages
+
+  # ---- Past-five-source controls for the PoE family (2026-09-12). Every PoE
+  # ---- arm takes `--source_history_steps 5`, while `z64_merged` takes the
+  # ---- current state alone, so the source history was confounded with the
+  # ---- score form. These two share the PoE arms' source and differ only in
+  # ---- phi: `enc_hist` is the concat head on p5_concat, `p5_affine_ctrl` is
+  # ---- the affine head on p5_affine -- which is exactly <z, E> + base with E
+  # ---- restricted to the separable product F(s) mu(s'), so it is the NESTED
+  # ---- special case of the PoE score, not a rival family. Both pretrained
+  # ---- with the regularizers ON, so they pair with the *_reg PoE arms.
+  enc_hist_curve:
+    vars:
+      eval_arm: enc_hist
+      tree_root: /data/latent64_probe_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_concat_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  p5_affine_ctrl_curve:
+    vars:
+      eval_arm: p5_affine_ctrl
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
