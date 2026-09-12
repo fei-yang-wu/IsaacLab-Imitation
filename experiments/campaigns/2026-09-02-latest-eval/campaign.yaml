@@ -824,3 +824,34 @@ arms:
         - env.expert_macro_frame_stride=1
         - env.expert_macro_anchor_mode=robot_heading
     stages: *curve_stages
+
+  # ---- The regularizer-ON partners (2026-09-12-poe-reg-ablation). Same
+  # ---- 66-wide command as every 64-D PoE arm, so the shared interface block
+  # ---- applies unchanged; only the encoder file differs.
+  z64_poe_reg_curve:
+    vars:
+      eval_arm: z64_poe_reg
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/z64_poe_reg_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  z64_poe_base_reg_curve:
+    vars:
+      eval_arm: z64_poe_base_reg
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/z64_poe_base_reg_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  poe_proj256_reg_curve:
+    vars:
+      eval_arm: poe_proj256_reg
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/poe_proj256_reg_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
+
+  poe_proj256_base_reg_curve:
+    vars:
+      eval_arm: poe_proj256_base_reg
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_10b/poe_proj256_base_reg_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
