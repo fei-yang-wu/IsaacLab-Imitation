@@ -204,3 +204,54 @@ def test_stage_partition_and_qos_override_the_profile(tmp_path) -> None:
     )
     assert "--partition=ice-gpu" in header
     assert "--qos=coe-ice" in header
+
+
+def _stage(**kw):
+    from imitation_experiments.pipeline.cluster.config import ResolvedStage
+
+    base = dict(
+        name="score",
+        executable="scripts/rlopt/train.py",
+        args=(),
+        env={},
+        time_limit=None,
+        gres=None,
+        mem=None,
+        cpus_per_task=None,
+        partition=None,
+        qos=None,
+        exclude=None,
+        depends_on=None,
+        dependency_kind="afterok",
+    )
+    base.update(kw)
+    return ResolvedStage(**base)
+
+
+def test_profile_exclude_applies_when_a_stage_names_no_nodes(tmp_path) -> None:
+    """A node that Slurm reports healthy but that cannot run the job has to be
+    kept out of EVERY campaign, not each one that remembers.
+
+    atl1-1-03-014-16-0 (2026-09-12) killed a pretrain with "no CUDA-capable
+    device is detected" and an eval that exited 0 without writing a row.
+    """
+    from imitation_experiments.pipeline.cluster.config import load_profile
+    from imitation_experiments.pipeline.cluster.plan_cmd import _stage_directives
+
+    profile = load_profile("ice")
+    assert profile.slurm.exclude, "the ice profile must carry a default exclude"
+    directives = _stage_directives(profile, _stage(), job_name="probe")
+    assert directives.exclude == profile.slurm.exclude
+
+
+def test_stage_exclude_replaces_the_profile_default(tmp_path) -> None:
+    """A campaign that names its own nodes stays exactly as written, so a
+    deliberate one-node exclude cannot silently inherit unrelated nodes."""
+    from imitation_experiments.pipeline.cluster.config import load_profile
+    from imitation_experiments.pipeline.cluster.plan_cmd import _stage_directives
+
+    profile = load_profile("ice")
+    directives = _stage_directives(
+        profile, _stage(exclude="atl1-1-03-099-9-9"), job_name="probe"
+    )
+    assert directives.exclude == "atl1-1-03-099-9-9"

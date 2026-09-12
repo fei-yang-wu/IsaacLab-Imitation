@@ -57,7 +57,12 @@ def _stage_directives(
         partition=stage.partition or slurm.partition,
         nodes=slurm.nodes,
         ntasks=slurm.ntasks,
-        exclude=stage.exclude,
+        # A stage-level exclude REPLACES the profile default rather than
+        # extending it, so a campaign that names its own nodes stays exactly as
+        # written. The profile default exists so a node that Slurm reports
+        # healthy but that cannot run the job is kept out of EVERY campaign
+        # without each one remembering (atl1-1-03-014-16-0, 2026-09-12).
+        exclude=stage.exclude or slurm.exclude,
     )
 
 
