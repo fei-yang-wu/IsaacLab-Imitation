@@ -150,6 +150,27 @@ Specialist skills remain; redundant style packages, the merged Skynet alias,
 and the generic Hugging Face CLI copy were retired. Personal working style
 remains in the user-level Codex AGENTS.md. No experiment protocol or code changed.
 
+## Product-of-experts score `<z, E(s, s')>` arm SUBMITTED (2026-09-11)
+
+RLOpt `de599c6` (branch `feat/poe-identity-phi`, on top of the recorded
+`5c2045a`): `phi_parameterization="identity"` (phi = z, feature_dim = z_dim)
+and `DiffSRBilinear(mu_conditioning="pair")` (mu on the transition pair), so
+the denoiser is `eps = sum_k z_k E_k(s, s', t)`: linear in z, no bias, a
+z mixture samples the tempered product `p_1^a p_2^b` for any a, b. The
+affine head is the factorized special case with a bias. Score-parameterized
+(free expert fields, not an evaluable energy). Six tests; a local smoke
+(pretrain, config check, one tracker iteration) passed with the
+current-state source and regularizers on.
+
+`experiments/campaigns/2026-09-11-poe-z64-10b/`, arm `z64_poe`, group
+`latent64-probe-10b`, jobs 5764381 (pretrain), 5764382, 5764383. By user
+decision the arm also turns BOTH regularizers off (`--jepa_sigreg_coeff 0
+--reg_coeff 0`) and takes the past-five source (`--source_history_steps 5
+--source_anchor current`, 2,280-wide s), so it moves three things against
+`z64_merged` and one each against `z64_merged_noreg` and `enc_hist`. The
+target is the `diff_chunk` + `boundary_next` chunk, 11 x 380 wide. Output on
+ice-shared. Nothing measured.
+
 ## Merged 64-D encoder with no latent regularizer SUBMITTED (2026-09-11)
 
 `experiments/campaigns/2026-09-11-z64-merged-noreg-10b/`, one arm
