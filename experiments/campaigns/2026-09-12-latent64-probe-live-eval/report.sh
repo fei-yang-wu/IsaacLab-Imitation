@@ -9,7 +9,7 @@ REMOTE="${REMOTE:-ice}"
 EVAL_DIR="${EVAL_DIR:-scratch/Research/IsaacLab/data/eval/latest_eval}"
 LOCAL="${LOCAL:-${REPO_ROOT}/logs/latent64_probe_live_eval}"
 mkdir -p "${LOCAL}"
-ARMS="${ARMS:-z64_merged z64_merged_noreg z64_poe z64_poe_base poe_proj256 poe_proj256_base poe_z256 z64_poe_reg z64_poe_base_reg poe_proj256_reg poe_proj256_base_reg enc_hist p5_affine_ctrl}"
+ARMS="${ARMS:-z64_merged z64_merged_noreg z64_poe z64_poe_base poe_proj256 poe_proj256_base poe_z256 z64_poe_reg z64_poe_base_reg poe_proj256_reg poe_proj256_base_reg enc_hist p5_affine_ctrl depth7_b32768_u200k}"
 includes=()
 for a in ${ARMS}; do includes+=(--include="${a}_seed0_clean_f*.json"); done
 rsync -aq "${includes[@]}" --exclude='*' "${REMOTE}:${EVAL_DIR}/" "${LOCAL}/"
@@ -30,7 +30,8 @@ import os
 arms = os.environ.get(
     "ARMS",
     "z64_merged z64_merged_noreg z64_poe z64_poe_base poe_proj256 poe_proj256_base poe_z256 "
-    "z64_poe_reg z64_poe_base_reg poe_proj256_reg poe_proj256_base_reg enc_hist p5_affine_ctrl",
+    "z64_poe_reg z64_poe_base_reg poe_proj256_reg poe_proj256_base_reg enc_hist p5_affine_ctrl "
+    "depth7_b32768_u200k",
 ).split()
 frames = sorted({f for _, f in rows})
 print("bones_testbed4096_v1 clean, seed 0, one pass per checkpoint. cells: SR / MPJPE-L / MPJPE-G / jerk")

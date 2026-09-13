@@ -32,7 +32,10 @@ DATA="${DATA:-/home/hice1/fwu91/scratch/Research/IsaacLab/data}"
 SHARED="${SHARED:-/storage/ice-shared/vip-vwt/scratch-fwu91}"
 EVAL_DIR="${EVAL_DIR:-${DATA}/eval/latest_eval}"
 EVAL_CAMPAIGN="${EVAL_CAMPAIGN:-experiments/campaigns/2026-09-02-latest-eval/campaign.yaml}"
-ARMS="${ARMS:-z64_merged z64_merged_noreg z64_poe z64_poe_base poe_proj256 poe_proj256_base poe_z256 z64_poe_reg z64_poe_base_reg poe_proj256_reg poe_proj256_base_reg enc_hist p5_affine_ctrl}"
+# Default list trimmed 2026-09-13 (user): the nine earlier PoE arms are
+# finished and read below both past-five controls, so only the controls and
+# the live combined-scaling arm are tracked. Pass ARMS to score any of them.
+ARMS="${ARMS:-enc_hist p5_affine_ctrl depth7_b32768_u200k}"
 DRY_RUN="${DRY_RUN:-0}"
 
 # arm -> training tree (login-node path) and live root (login-node path)
@@ -40,6 +43,7 @@ train_tree() {
     case "$1" in
         # On personal scratch, not ice-shared: trained before the move.
         z64_merged|enc_hist) echo "${DATA}/latent64_probe_10b/$1_seed0/tracker" ;;
+        depth7_b32768_u200k) echo "${SHARED}/poe_deep_long_10b/$1_seed0/tracker" ;;
         *) echo "${SHARED}/latent64_probe_10b/$1_seed0/tracker" ;;
     esac
 }

@@ -878,3 +878,14 @@ arms:
       tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
       encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
     stages: *curve_stages
+
+  # ---- The combined scaling arm (2026-09-13-poe-deep-long-10b): depth-7
+  # ---- expert net, batch 32,768, 200k updates (6.55B windows, 16x the
+  # ---- control), then the same PoE tracker. Its own encoder, 66-wide command,
+  # ---- so the shared interface block applies unchanged.
+  depth7_b32768_u200k_curve:
+    vars:
+      eval_arm: depth7_b32768_u200k
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/poe_deep_long_10b/depth7_b32768_u200k_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
