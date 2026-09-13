@@ -1640,6 +1640,57 @@ class ExpertDataPlane:
             batch_size=[int(batch_size)],
         )
 
+    def _anchor_jitter_config(self) -> tuple[float, float, float, float, float]:
+        cfg = self._env.cfg
+        return (
+            float(getattr(cfg, "expert_macro_anchor_walk_std", 0.0) or 0.0),
+            float(getattr(cfg, "expert_macro_anchor_walk_max", 0.1) or 0.0),
+            float(getattr(cfg, "expert_macro_anchor_jitter", 0.0) or 0.0),
+            float(getattr(cfg, "expert_macro_anchor_jump_prob", 0.0) or 0.0),
+            float(getattr(cfg, "expert_macro_anchor_jump", 0.0) or 0.0),
+        )
+
+    def _jittered_live_anchor(
+        self, robot_anchor_pos_w: torch.Tensor, env_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Anchor-jitter DR on the live window anchor (see the env cfg fields).
+
+        Called once per control step per live-window build; the random walk
+        advances on every call, so a second build in the same step would
+        advance it twice (none exists today). The walk state resets with the
+        episode in :meth:`reset_anchor_jitter`.
+        """
+        walk_std, walk_max, jitter, jump_prob, jump = self._anchor_jitter_config()
+        if walk_std <= 0.0 and jitter <= 0.0 and jump_prob <= 0.0:
+            return robot_anchor_pos_w
+        device = robot_anchor_pos_w.device
+        walk = getattr(self, "_anchor_walk_state", None)
+        if walk is None or walk.shape[0] != int(self._env.num_envs):
+            walk = torch.zeros(int(self._env.num_envs), 2, device=device)
+            self._anchor_walk_state = walk
+        count = int(env_ids.shape[0])
+        offset = torch.zeros(count, 3, device=device)
+        if walk_std > 0.0:
+            step = torch.randn(count, 2, device=device) * walk_std
+            new = (walk.index_select(0, env_ids) + step).clamp_(-walk_max, walk_max)
+            walk.index_copy_(0, env_ids, new)
+            offset[:, :2] += new
+        if jitter > 0.0:
+            offset[:, :2] += (torch.rand(count, 2, device=device) * 2.0 - 1.0) * jitter
+        if jump_prob > 0.0 and jump > 0.0:
+            hit = (torch.rand(count, 1, device=device) < jump_prob).float()
+            offset[:, :2] += hit * (torch.rand(count, 2, device=device) * 2.0 - 1.0) * jump
+        return robot_anchor_pos_w + offset
+
+    def reset_anchor_jitter(self, env_ids: torch.Tensor | None = None) -> None:
+        walk = getattr(self, "_anchor_walk_state", None)
+        if walk is None:
+            return
+        if env_ids is None:
+            walk.zero_()
+        else:
+            walk.index_fill_(0, env_ids, 0.0)
+
     def _get_robot_anchor_state_w_fast(
         self, anchor_body_name: str
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -3519,6 +3570,7 @@ class ExpertDataPlane:
             )
             robot_anchor_pos_w = robot_anchor_pos_w.index_select(0, env_ids)
             robot_anchor_quat_w = robot_anchor_quat_w.index_select(0, env_ids)
+            robot_anchor_pos_w = self._jittered_live_anchor(robot_anchor_pos_w, env_ids)
             if context == "robot_heading":
                 # SONIC v1.1's convention. Its encoder reads
                 # `motion_anchor_ori_heading_mf_nonflat`, i.e.

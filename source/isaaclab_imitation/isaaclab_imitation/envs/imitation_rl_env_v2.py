@@ -902,6 +902,9 @@ class ImitationRLEnv(ManagerBasedRLEnv):
         """
         # Isaac Lab 3.0 hands out int32 env indices; normalize once here.
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        # Anchor-jitter DR: the odometry-like random walk restarts at zero,
+        # as a hardware episode re-captures its start alignment.
+        self.expert_data_plane.reset_anchor_jitter(env_ids)
 
         # Reset reference tracking (reassigns trajectories and resets steps).
         # The reference channel owns the reset-start samplers AND the

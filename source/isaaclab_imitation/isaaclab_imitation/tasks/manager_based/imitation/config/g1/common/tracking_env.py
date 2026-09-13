@@ -382,6 +382,25 @@ class ImitationG1BaseTrackingEnvCfg(ImitationLearningEnvCfg):
     # mismatch cannot be caught by a shape check: the value is recorded in the
     # skill checkpoint and compared on load, like the frame stride above.
     expert_macro_anchor_mode: str = "robot"
+    # Anchor-jitter domain randomization for the LIVE encoder window (anchor
+    # modes "robot" / "robot_heading" only; "expert_heading" never reads the
+    # robot's position). On the robot the anchor translation is an odometry
+    # estimate: the 2026-09-13 hardware traces show a random walk of 3-10 cm
+    # per clip plus single-tick jumps of 15-29 mm at foot contacts, and the
+    # policy, trained on Isaac's exact root position, read every jump as a
+    # tracking error and re-planned (`hardware-dither-analysis-2026-09-13`).
+    # Per control step and environment the window's robot anchor position is
+    # offset by: a random walk (Gaussian increment std `..._walk_std` m,
+    # clipped to +-`..._walk_max` m, reset to 0 with the episode), plus
+    # uniform +-`..._jitter` m, plus with probability `..._jump_prob` a
+    # uniform +-`..._jump` m jump. xy only. All zero = the exact anchor, as
+    # every arm before 2026-09-13 trained. The evaluator zeroes these with
+    # the other observation corruption.
+    expert_macro_anchor_walk_std: float = 0.0
+    expert_macro_anchor_walk_max: float = 0.1
+    expert_macro_anchor_jitter: float = 0.0
+    expert_macro_anchor_jump_prob: float = 0.0
+    expert_macro_anchor_jump: float = 0.03
     # Per-environment ring of the robot's OWN raw pose (absolute joint
     # positions in the pinned action order, anchor-body position, anchor-body
     # quaternion; 36 values per control step). 0 disables. When enabled, the

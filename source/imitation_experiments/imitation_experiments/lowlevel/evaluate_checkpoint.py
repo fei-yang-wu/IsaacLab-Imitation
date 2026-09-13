@@ -545,6 +545,14 @@ def _disable_observation_corruption(env_cfg: object) -> None:
         group = getattr(observations, group_name, None)
         if group is not None and hasattr(group, "enable_corruption"):
             group.enable_corruption = False
+    # Anchor-jitter DR lives on the env cfg, not in an observation group.
+    for name in (
+        "expert_macro_anchor_walk_std",
+        "expert_macro_anchor_jitter",
+        "expert_macro_anchor_jump_prob",
+    ):
+        if hasattr(env_cfg, name):
+            setattr(env_cfg, name, 0.0)
 
 
 def _configured_step_dt(env_cfg: object) -> float | None:

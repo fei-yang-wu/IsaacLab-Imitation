@@ -99,3 +99,21 @@ class G1SonicEventCfg(G1EventCfg):
         interval_range_s=(4.0, 6.0),
         params={"velocity_range": VELOCITY_RANGE},
     )
+    # PD gain randomization, per environment, fixed for the run (startup, like
+    # the other SONIC physical terms). The identity (1.0, 1.0) keeps the frozen
+    # protocol byte-for-byte: the actuator gains are rewritten with their own
+    # values once at startup. A campaign widens it, e.g.
+    # `env.events.randomize_actuator_gains.params.stiffness_distribution_params=[0.9,1.1]`
+    # (2026-09-13, hardware-gap fine-tunes). Neither SONIC v1.1 nor any arm
+    # before that date randomized gains.
+    randomize_actuator_gains = EventTerm(
+        func=mdp.randomize_actuator_gains,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "stiffness_distribution_params": (1.0, 1.0),
+            "damping_distribution_params": (1.0, 1.0),
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
