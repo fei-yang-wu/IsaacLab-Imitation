@@ -63,6 +63,13 @@ ARCHIVE_EXCLUDES: tuple[str, ...] = (
     # Plant rehearsal outputs (per-episode videos, plant logs): workstation
     # only, never read by a cluster job.
     "./external/Embodied-Control/artifacts",
+    # CMake build trees. The deployment rig's native DDS extension builds a
+    # 1.1 GB tree here that its own .gitignore hides but tar does not: it put
+    # the archive at 908 MB on 2026-09-13 and blocked every submit until
+    # excluded. Sources under native/ stay in; only built objects leave.
+    "*/build/CMakeFiles",
+    "./external/Embodied-Control/native/*/build",
+    "./external/Embodied-Control/native/thirdparty",
 )
 
 # A workspace archive is source code. 400 MB is far above the real figure
