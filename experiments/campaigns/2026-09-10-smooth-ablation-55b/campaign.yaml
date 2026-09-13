@@ -29,6 +29,9 @@
 #            mdp/actions.py); a4 needs a step clip added to that term.
 #
 # Everything else is the 55B run's own command.txt verbatim. The observation
+# CORRECTION 2026-09-13: the key below did not exist in RLOpt when these
+# arms ran (Hydra accepted it as an unread attribute); the normalizer kept
+# updating. Real since RLOpt 298f172. Original text:
 # normalizer stays frozen (`update_normalizers_after_rollout=false`) on EVERY
 # arm, the noise arms included, so each row moves one thing (user, 2026-09-10).
 # `critic_lr_schedule=constant`, so the raised cap moves no schedule. Resume

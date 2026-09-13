@@ -31,3 +31,16 @@ The EC runtime these rows use is the 2026-09-10 one: joint targets are NOT
 clamped to the soft joint limits, plant joint limits are Isaac-stiff, and the
 first-action distance gate is off (`docs/evidence/isaac_replay_20260910` in
 Embodied-Control). Rows from before that change are not comparable.
+
+## Correction (2026-09-13): the normalizer was not frozen
+
+Every arm here passed `agent.ppo.update_normalizers_after_rollout=false`,
+but that key did not exist in RLOpt when the jobs ran; the Hydra merge
+accepted it as an unread attribute and the actor / critic running input
+statistics kept updating on every minibatch (RLOpt
+`RunningMeanStdCatInputs.forward`). Measured drift from the hub to the cap
+checkpoints: running mean up to 0.05-0.07, running variance up to 10 %. The
+exported bundles carry each checkpoint's own statistics, so deployment is
+self-consistent; the rows are just not the frozen-normalizer experiment the
+text above describes. RLOpt 298f172 makes the key real and
+`scripts/rlopt/train.py` now refuses undeclared agent keys.

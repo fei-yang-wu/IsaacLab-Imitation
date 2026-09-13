@@ -9,6 +9,7 @@ import os
 import sys
 from pathlib import Path
 
+from imitation_experiments.provenance.config_keys import assert_no_unknown_config_keys
 from runtime_bootstrap import (
     assert_kit_not_loaded,
     config_contains_type_name,
@@ -324,6 +325,9 @@ def run(argv: list[str] | None = None, *, require_running_kit: bool = False) -> 
         args_cli.task, args_cli.agent, args_cli.algorithm
     )
     env_cfg, agent_cfg = resolve_task_config(args_cli.task, args_cli.agent)
+    # An override on a key the agent config does not declare is accepted by
+    # the Hydra merge as a plain attribute and then read by nobody.
+    assert_no_unknown_config_keys(agent_cfg)
     if args_cli.video and config_contains_type_name(env_cfg, "NewtonCfg"):
         _enable_bird_video_visualizer(
             env_cfg,
