@@ -3,7 +3,7 @@
 Hub: `e5` (rate05 + `energy_consumption` -1e-4) at 70,000,312,320 frames,
 `/data/energy_torque_10b/e5_seed0/tracker/2026-09-11_14-52-15_wandb-smooth-e5-s0-58c8d0/models/model_step_70000312320.pt`.
 Each arm continues it for exactly 10B (cap 80,000,312,320), one variable, in
-two chained 15:59 segments. W&B group `e5-hardware-gap-10b`.
+two chained 15:59 segments. W&B project `g1-bs-finetune`, group `e5-hardware-gap-10b`.
 
 | arm | one variable | override |
 |---|---|---|
@@ -40,11 +40,15 @@ trained-in EMA (the bundle / EC decode do not apply it yet).
 Validated: offline plans for d1 / c1 / h1 resolve the intended overrides;
 two-iteration local smokes of the c1 and h1 override sets on Newton pass.
 
-Eval: hook the arms into `2026-09-02-latest-eval` (tree root
-`/data/e5_hardware_gap_10b_live`) and `ec_grade_live.sh` at submission time;
-grade on the plant with the CUDA provider and the live anchor, and compare
-the a1 / c1 rows under replayed hardware anchor jitter, which the plant does
-not produce on its own.
+Eval: `2026-09-02-latest-eval` carries `e5gap_<arm>_live` arms (tree root
+`/data/e5_hardware_gap_10b_live`; the h1 scorer builds the expert_heading
+window through `vars.anchor_mode`); `submit_live_eval.sh` and
+`ec_grade_live.sh` here mirror the energy campaign's. The EC grade runs the
+CUDA provider (default) with the live anchor; for h1 it passes
+`--anchor expert_heading` because the exported bundle records the encoder
+checkpoint's anchor mode, not the tracker's. The a1 / c1 rows want a plant
+grade under replayed hardware anchor jitter, which the plant does not
+produce on its own (not built yet).
 
 Submit (when asked), per arm:
 

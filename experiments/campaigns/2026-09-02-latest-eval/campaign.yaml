@@ -24,6 +24,8 @@ wandb_project: g1-bs-pareto
 wandb_group: latest-eval
 
 vars:
+  # Live-window anchor frame the scorer builds; the h1 arm trains expert_heading.
+  anchor_mode: robot_heading
   tree_root: /data/latent64_probe_10b
   # The tracker this job scores; the control plane forces `vars.arm` to the
   # ARM NAME, so a `*_robust` arm sets `eval_arm` to the tracker it scores
@@ -168,7 +170,7 @@ vars:
     - agent.ipmd.latent_learning.code_latent_dim=64
     - env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]
     - env.expert_macro_frame_stride=1
-    - env.expert_macro_anchor_mode=robot_heading
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
 
   board_terms:
     - env.terminations.anchor_pos.params.threshold=0.25
@@ -537,6 +539,93 @@ arms:
     vars:
       eval_arm: energy_t5
       tree_root: /data/energy_torque_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  e5gap_d1_live:
+    vars:
+      eval_arm: e5gap_d1
+      tree_root: /data/e5_hardware_gap_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  e5gap_d2_live:
+    vars:
+      eval_arm: e5gap_d2
+      tree_root: /data/e5_hardware_gap_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  e5gap_g1_live:
+    vars:
+      eval_arm: e5gap_g1
+      tree_root: /data/e5_hardware_gap_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  e5gap_a1_live:
+    vars:
+      eval_arm: e5gap_a1
+      tree_root: /data/e5_hardware_gap_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  e5gap_r1_live:
+    vars:
+      eval_arm: e5gap_r1
+      tree_root: /data/e5_hardware_gap_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  e5gap_h1_live:
+    vars:
+      eval_arm: e5gap_h1
+      tree_root: /data/e5_hardware_gap_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+      # The h1 arm trains the expert_heading window; the scorer must build
+      # the same window or the encoder input is in the wrong frame.
+      anchor_mode: expert_heading
+    stages: *score_stages
+  e5gap_c1_live:
+    vars:
+      eval_arm: e5gap_c1
+      tree_root: /data/e5_hardware_gap_10b_live
       encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
       history_args:
         - env.observations.policy.projected_gravity.history_length=10

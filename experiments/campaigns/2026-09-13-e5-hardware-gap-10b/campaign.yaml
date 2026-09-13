@@ -33,10 +33,11 @@
 # decode do not apply it yet.
 #
 # Two chained 15:59 segments per arm; segment 1 starts from the hub FILE,
-# segment 2 resumes from the arm's tree. Caps: 80,000,312,320.
+# segment 2 resumes from the arm's tree. Caps: 80,000,312,320. W&B project
+# g1-bs-finetune (user, 2026-09-13), group e5-hardware-gap-10b.
 name: e5-hardware-gap-10b
 profile: ice
-wandb_project: g1-bs-pareto
+wandb_project: g1-bs-finetune
 wandb_group: e5-hardware-gap-10b
 
 vars:
@@ -94,7 +95,7 @@ vars:
     - agent.logger.log_dir=${vars.output_root}/tracker
     - agent.logger.backend=wandb
     - agent.logger.video=false
-    - agent.logger.project_name=g1-bs-pareto
+    - agent.logger.project_name=g1-bs-finetune
     - agent.logger.group_name=e5-hardware-gap-10b
     - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
     - env.command_interface.actor=latent
