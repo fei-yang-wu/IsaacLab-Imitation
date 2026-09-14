@@ -1087,4 +1087,13 @@ arms:
       eval_arm: affine_poe
       tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b_live
       encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b/affine_poe_seed0/encoder/checkpoints/latest.pt
+      # The tracker is combo's, so the actor reads ten proprioceptive frames
+      # (996 inputs). Omitting these built a 159-input actor and every cell
+      # died on a state_dict size mismatch.
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
     stages: *curve_stages
