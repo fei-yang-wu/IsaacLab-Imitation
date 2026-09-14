@@ -27,7 +27,7 @@ ENCODER="${ENCODER:-${REPO_ROOT}/logs/latent64_probe_mirror/p5_affine_encoder/la
 ROOT="${REPO_ROOT}/logs/e5_hardware_gap_ec"
 mkdir -p "${ROOT}/ckpt" "${ROOT}/bundles" "${ROOT}/grades"
 RESULTS="${ROOT}/results_echost.tsv"
-[ -s "${RESULTS}" ] || printf 'arm\tframes\tclean\tmotions\tmpjpe_l_mm_all\tmpjpe_l_mm_passed\tmpjpe_g_mm_all\tdrift_m_all\tankle_target_dither\tall_target_dither\tanchor_error_m\tbody_acc_mps2\tbody_jerk_mps3\tacc_distance_mps2\taction_delta_l2\tjoint_torques_l2\tenergy_consumption\tprovider\tremote_dir\tgraded_at\n' > "${RESULTS}"
+[ -s "${RESULTS}" ] || printf 'arm\tframes\tclean\tmotions\tmpjpe_l_mm_all\tmpjpe_l_mm_passed\tmpjpe_g_mm_all\tdrift_m_all\tankle_target_dither\tall_target_dither\tanchor_error_m\tbody_acc_mps2\tbody_jerk_mps3\tacc_distance_mps2\taction_delta_l2\tjoint_torques_l2\tenergy_consumption\tprovider\tremote_dir\tgraded_at\tankle_tgt_excess_max_rad\ttgt_beyond_limit_pct\tankle_tgt_beyond_limit_pct\tmeasured_excess_max_rad\n' > "${RESULTS}"
 log() { printf '[%s] %s\n' "$(date -Iseconds)" "$*"; }
 
 exec 9>"${ROOT}/.lock"
@@ -87,9 +87,10 @@ g = json.load(open(grade)); a = g["all"]; p = g["passed_only"]
 prov = "cuda"
 row = [arm, frames, str(g["passed"]), str(g["motions"]), f"{a['mpjpe_l_mm']:.2f}", f"{p['mpjpe_l_mm']:.2f}", f"{a['mpjpe_g_mm']:.1f}", f"{a['drift_max_m']:.3f}", f"{a['ankle_target_dither']:.4f}", f"{a['all_target_dither']:.4f}", f"{a['anchor_error_max_m']:.3f}",
        f"{a.get('body_acc_mps2', float('nan')):.2f}", f"{a.get('body_jerk_mps3', float('nan')):.1f}", f"{a.get('tracking_acceleration_distance_mps2', float('nan')):.2f}", f"{a.get('action_delta_l2', float('nan')):.3f}", f"{a.get('joint_torques_l2', float('nan')):.0f}", f"{a.get('energy_consumption', float('nan')):.1f}",
-       prov, out, time.strftime("%Y-%m-%dT%H:%M:%S")]
+       prov, out, time.strftime("%Y-%m-%dT%H:%M:%S"),
+       f"{a.get('ankle_target_excess_max_rad', float('nan')):.3f}", f"{a.get('target_beyond_limit_pct', float('nan')):.2f}", f"{a.get('ankle_target_beyond_limit_pct', float('nan')):.2f}", f"{a.get('measured_excess_max_rad', float('nan')):.3f}"]
 open(results, "a").write("\t".join(row) + "\n")
-print("[%s_f%s] clean %s/%s | L %s (passed %s) | G %s | ankle dither %s | jerk %s | acc_dist %s | adelta %s | torque_l2 %s | energy %s" % (arm, frames, row[2], row[3], row[4], row[5], row[6], row[8], row[12], row[13], row[14], row[15], row[16]))
+print("[%s_f%s] clean %s/%s | L %s (passed %s) | G %s | ankle dither %s | jerk %s | acc_dist %s | adelta %s | torque_l2 %s | energy %s | ankle tgt excess max %s | tgt beyond %s%% | ankle beyond %s%% | measured excess max %s" % (arm, frames, row[2], row[3], row[4], row[5], row[6], row[8], row[12], row[13], row[14], row[15], row[16], row[20], row[21], row[22], row[23]))
 PY
 done
 log "results:"; column -t -s$'\t' "${RESULTS}" | cut -c1-160
