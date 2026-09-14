@@ -1,0 +1,300 @@
+# 2026-09-14 -- two encoder-swap fine-tunes off the e5 hub (user request
+# 2026-09-13): pretrain a p5_affine encoder that never reads the robot's
+# position, then fine-tune e5 (70,000,312,320) onto it for 10B.
+#
+# Why: h1 of `2026-09-13-e5-hardware-gap-10b` could not run, because the
+# p5_affine encoder records `macro_anchor_mode=robot_heading` and the
+# binding guard refuses an `expert_heading` environment. An expert_heading
+# window is the window's own first frame: the policy stops reading the
+# odometry, hardware needs no localization, latents can be precomputed
+# offline (SONIC's actor design). The second arm adds the four end-effector
+# positions (ankles, wrists, `expert_ee_pos_b`, anchor frame) to the encoder
+# input (50 per frame, 500-wide window) so the latent carries where the feet
+# and hands are, the part of the reference the feet drag on.
+#
+#   eh     macro state [qpos, anchor_pos, anchor_ori]              (38/frame), expert_heading
+#   eh_ee  macro state [qpos, anchor_pos, anchor_ori, ee_pos]      (50/frame), expert_heading
+#
+# Chain per arm: pretrain (the 2026-08-30 p5_affine recipe verbatim: past-5
+# affine phi, jepa_ntp / sigreg_ebm / diff_chunk, 50k x 8192, about 5 h)
+# -> finetune1 from the e5 hub FILE -> finetune2 from the arm's tree. The
+# fine-tune keeps e5's own arguments (rate05 -0.5, energy -1e-4, frozen
+# normalizer) plus `hl_skill_restore_from_checkpoint=false` (RLOpt a0add23),
+# without which the tracker checkpoint's embedded old encoder would silently
+# replace the new one (same width) or fail (new width). The tracker's latent
+# input changes meaning under it, so the first ~1B is a re-fit; read rows
+# from 3B on. Local smokes (20-update pretrains, 3-iteration fine-tunes from
+# the e5 file) passed for both arms on 2026-09-13. W&B project
+# g1-bs-finetune, group expert-heading-encoders-10b.
+name: expert-heading-encoders-10b
+profile: ice
+wandb_project: g1-bs-finetune
+wandb_group: expert-heading-encoders-10b
+
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  agent_entry: rlopt_ipmd_tuned_fullbatch_cfg_entry_point
+
+  # --- encoder pretrain (2026-08-30 p5_affine recipe) ---
+  z_dim: 64
+  window_mode: intermediate
+  phi_parameterization: affine
+  source_args: ["--source_history_steps", "5", "--source_anchor", "current"]
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
+  anchor_mode: expert_heading
+  stride: 1
+
+  # --- tracker fine-tune (e5's arguments) ---
+  train_num_envs: 16384
+  rollout_steps: 24
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  frame_cap: 80000312320
+  max_iterations: ${ceil_div:${vars.frame_cap},${vars.frames_per_batch}}
+  adaptive_uniform_ratio: 0.2
+  adaptive_max_over_mean: 50.0
+  reset_args: []
+
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  source_ckpt: /data/energy_torque_10b/e5_seed0/tracker/2026-09-11_14-52-15_wandb-smooth-e5-s0-58c8d0/models/model_step_70000312320.pt
+  output_root: /data/expert_heading_encoders_10b/${vars.arm}_seed${vars.seed}
+  encoder_ckpt: ${vars.output_root}/encoder/checkpoints/latest.pt
+
+  pretrain_data:
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=${vars.stride}
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+
+  pretrain_head:
+    - --task
+    - ${vars.task}
+    - --num_envs
+    - "16"
+    - --seed
+    - ${vars.seed}
+    - --device
+    - cuda:0
+    - --headless
+    - --assert-kitless
+    - --output_dir
+    - ${vars.output_root}/encoder
+    - --logger_backend
+    - wandb
+    - --wandb_project
+    - g1-bs-finetune
+    - --wandb_group
+    - expert-heading-encoders-10b
+    - --wandb_run_name
+    - ${vars.wandb_arm}-pretrain-s${vars.seed}
+    - --horizon_steps
+    - "10"
+    - --encoder_window_mode
+    - ${vars.window_mode}
+    - --transition_objective
+    - jepa_ntp
+    - --jepa_loss
+    - sigreg_ebm
+    - --jepa_ntp_head
+    - diff_chunk
+    - --jepa_ntp_chunk_span
+    - boundary_next
+    - --jepa_endpoint_coeff
+    - "0"
+    - --diffsr_phi_parameterization
+    - ${vars.phi_parameterization}
+    - --latent_mode
+    - deterministic
+    - --z_dim
+    - ${vars.z_dim}
+    - --encoder_layer_norm
+
+  pretrain_tail:
+    - --encoder_hidden_dims
+    - "2048"
+    - "1024"
+    - "512"
+    - "512"
+    - --encoder_activation
+    - silu
+    - --diffsr_feature_dim
+    - "256"
+    - --diffsr_embed_dim
+    - "1024"
+    - --diffsr_g_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --diffsr_mu_hidden_dims
+    - "1024"
+    - "1024"
+    - "512"
+    - --batch_size
+    - ${vars.pretrain_batch_size}
+    - --num_updates
+    - ${vars.pretrain_updates}
+    - --log_interval
+    - "1000"
+    - --eval_batches
+    - "4"
+
+  base_args:
+    - --task
+    - ${vars.task}
+    - --algo
+    - IPMD
+    - --agent
+    - ${vars.agent_entry}
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --assert-kitless
+    - --max_iterations
+    - ${vars.max_iterations}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=g1-bs-finetune
+    - agent.logger.group_name=expert-heading-encoders-10b
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    - env.command_interface.actor=latent
+    - env.command_interface.actor.dim=66
+    - env.command_interface.encoder=single
+    - agent.ipmd.latent_dim=66
+    - agent.ipmd.command_source=hl_skill
+    - agent.ipmd.hl_skill_checkpoint_path=${vars.encoder_ckpt}
+    - agent.ipmd.hl_skill_horizon_steps=10
+    - agent.ipmd.hl_skill_command_mode=z
+    - agent.ipmd.hl_skill_finetune_enabled=false
+    - agent.ipmd.hl_skill_restore_from_checkpoint=false
+    - agent.ipmd.latent_steps_min=1
+    - agent.ipmd.latent_steps_max=1
+    - agent.ipmd.latent_learning.code_period=1
+    - agent.ipmd.latent_learning.command_phase_mode=sin_cos
+    - agent.ipmd.latent_learning.code_latent_dim=64
+    - env.rewards.tracking_reward_points.weight=4.0
+    - env.rewards.motion_ee_pos.weight=1.0
+    - env.rewards.motion_global_anchor_pos_wide.weight=1.0
+    - env.rewards.action_rate_l2.weight=-0.5
+    - env.rewards.energy_consumption.weight=-1.0e-4
+    - agent.optim.weight_decay=1.0e-2
+    - agent.ipmd.critic_lr_schedule=constant
+    - agent.ipmd.critic_lr_final=1.0e-5
+    - env.observations.policy.projected_gravity.history_length=10
+    - env.observations.policy.base_ang_vel.history_length=10
+    - env.observations.policy.joint_pos_rel.history_length=10
+    - env.observations.policy.joint_vel_rel.history_length=10
+    - env.observations.policy.last_action.history_length=10
+    - env.command_interface.reference.selection=sonic
+    - env.command_interface.reference.selection.adaptive_uniform_ratio=${vars.adaptive_uniform_ratio}
+    - env.command_interface.reference.selection.adaptive_failure_rate_max_over_mean=${vars.adaptive_max_over_mean}
+    - env.command_interface.reference.selection.adaptive_uniform_ratio_final=null
+    - env.data.reference_prefetch_mode=next
+    - env.enable_termination_curriculum=false
+    - agent.collector.frames_per_batch=${vars.rollout_steps}
+    - agent.ipmd.expert_batch_size=24576
+    - agent.loss.gamma=0.97
+    - agent.save_interval=500000000
+    - env.sim.physics.solver_cfg.njmax=320
+    - env.sim.physics.solver_cfg.nconmax=200
+    - agent.policy.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.value_function.num_cells=[2048,2048,1024,1024,512,512]
+    - agent.policy.activation_fn=silu
+    - agent.value_function.activation_fn=silu
+    - agent.ppo.update_normalizers_after_rollout=false
+    - physics=newton_mjwarp
+    - env.data.manifest=null
+    - env.data.reference_arrays_dir=${vars.ref_arrays}
+    - env.data.persist_id=${vars.persist_id}
+    - env.data.reference_arrays_resident=true
+    - env.data.reference_arrays_warm_workers=16
+    - env.data.runtime_cache_device=cpu
+    - env.data.macro_cache_device=cuda:0
+    - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+    - env.expert_macro_state_terms=${vars.macro_terms}
+    - env.expert_macro_frame_stride=1
+    - env.expert_macro_anchor_mode=${vars.anchor_mode}
+  seg1_tail:
+    - --checkpoint
+    - ${vars.source_ckpt}
+  seg2_tail:
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.ref_arrays}
+    - ${vars.source_ckpt}
+  output_container_path: ${vars.output_root}
+
+arms:
+  eh:
+    vars:
+      wandb_id: ehenc-eh
+    stages: &pretrain_two_segments
+      - name: pretrain
+        executable: scripts/rlopt/train_hl_skill_diffsr.py
+        args: ${concat:${vars.pretrain_head},${vars.source_args},${vars.pretrain_tail},${vars.pretrain_data}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0,atl1-1-03-010-30-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,expert-heading-encoders-10b,${vars.arm},seed${vars.seed},pretrain
+      - name: finetune1
+        depends_on: pretrain
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.base_args},${vars.reset_args},${vars.seg1_tail}}
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0,atl1-1-03-010-30-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,expert-heading-encoders-10b,${vars.arm},seed${vars.seed},finetune1
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+      - name: finetune2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.base_args},${vars.reset_args},${vars.seg2_tail}}
+        depends_on: finetune1
+        dependency_kind: afterany
+        time_limit: "15:59:00"
+        gres: gpu:h200:1
+        partition: coe-gpu
+        qos: coe-ice
+        exclude: atl1-1-03-017-30-0,atl1-1-03-018-2-0,atl1-1-03-014-16-0,atl1-1-03-010-30-0
+        cpus_per_task: 16
+        mem: 160G
+        env:
+          CLUSTER_WANDB_TAGS: bones-seed,129785,expert-heading-encoders-10b,${vars.arm},seed${vars.seed},finetune2
+          WANDB_RUN_ID: ${vars.wandb_id}-s${vars.seed}
+          WANDB_RESUME: allow
+  eh_ee:
+    vars:
+      wandb_id: ehenc-ehee
+      macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b,expert_ee_pos_b]"
+    stages: *pretrain_two_segments

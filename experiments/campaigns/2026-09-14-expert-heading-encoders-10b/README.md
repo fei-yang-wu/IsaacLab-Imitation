@@ -1,0 +1,89 @@
+# 2026-09-14 expert-heading encoders, 10B fine-tune off the e5 hub
+
+Two encoder-swap fine-tunes. Each arm first pretrains a p5_affine skill
+encoder whose window is anchored to the window's own first frame
+(`env.expert_macro_anchor_mode=expert_heading`), then fine-tunes the e5 hub
+(`2026-09-13-e5-hardware-gap-10b`, 70,000,312,320 frames) onto that encoder
+for 10B more frames.
+
+## Why
+
+The h1 arm of `2026-09-13-e5-hardware-gap-10b` could not start: the
+p5_affine encoder records `macro_anchor_mode=robot_heading`, and the
+binding guard (`_require_matching_macro_anchor_mode`) refuses an
+`expert_heading` environment. Under `expert_heading` the encoder never reads
+the robot's position, so hardware needs no localization and the latents can
+be computed offline, which is SONIC's actor design.
+
+The second arm adds the four end-effector positions (left and right
+`ankle_roll_link`, left and right `wrist_yaw_link`, term `expert_ee_pos_b`,
+in the window's anchor frame) to the encoder input, 50 values per frame
+instead of 38 (500-wide window instead of 380). The latent then carries where
+the feet and hands are in the reference, which is the part of the reference
+the tracker drags on in the EC plant rehearsals.
+
+## Arms
+
+| arm   | macro state per frame                                   | width | anchor mode    |
+| ----- | ------------------------------------------------------- | ----- | -------------- |
+| eh    | `expert_motion_qpos, expert_anchor_pos_b, expert_anchor_ori_b`                   | 38 | expert_heading |
+| eh_ee | `expert_motion_qpos, expert_anchor_pos_b, expert_anchor_ori_b, expert_ee_pos_b`  | 50 | expert_heading |
+
+The two arms differ from e5 in the encoder (new weights, new anchor mode)
+and, for `eh_ee`, in the encoder input. Everything else is e5's own
+argument list: `rate05` action-rate penalty -0.5, energy -1e-4, frozen
+normalizer (`agent.ppo.update_normalizers_after_rollout=false`),
+`adaptive_uniform_ratio=0.2`, `adaptive_failure_rate_max_over_mean=50.0`.
+The r1 reset values of the e5 campaign are not applied.
+
+## Chain per arm
+
+1. `pretrain`: `scripts/rlopt/train_hl_skill_diffsr.py`, the 2026-08-30
+   p5_affine recipe verbatim (`--source_history_steps 5 --source_anchor
+   current`, `jepa_ntp` / `sigreg_ebm` / `diff_chunk` / `boundary_next`,
+   affine phi, z 64, 50,000 updates of 8,192), about 5 h on one H200.
+   Output `<output_root>/encoder/checkpoints/latest.pt`.
+2. `finetune1` (afterok pretrain): `scripts/rlopt/train.py` from the e5 hub
+   file `model_step_70000312320.pt` with
+   `agent.ipmd.hl_skill_checkpoint_path=<new encoder>` and
+   `agent.ipmd.hl_skill_restore_from_checkpoint=false` (RLOpt a0add23).
+   Without that flag `load_model` restores the tracker checkpoint's embedded
+   encoder, which for `eh` silently replaces the new weights (same width)
+   and for `eh_ee` fails on a 380-vs-500 size mismatch.
+3. `finetune2` (afterany finetune1): resume from the arm's own tracker tree.
+
+Frame cap 80,000,312,320 (e5's 70B plus 10B), `max_iterations` 203,452 at
+16,384 envs x 24 steps. The tracker's latent input changes meaning under the
+new encoder, so the first ~1B is a re-fit; read rows from 3B on.
+
+W&B project `g1-bs-finetune`, group `expert-heading-encoders-10b`, run ids
+`ehenc-eh-s0` and `ehenc-ehee-s0`. Output root
+`/data/expert_heading_encoders_10b/<arm>_seed0` on ICE.
+
+## Qualification
+
+RLOpt a0add23 adds the 50-wide (`root_qpos` + ee) heading re-anchoring
+layout to `hl_skill_diffsr.py` (the trailing 12 ee values rotate and
+translate like the anchor position) and the restore flag. Local smokes on
+2026-09-13: 20-update pretrains for both encoders and 3-iteration
+fine-tunes from the e5 hub file, both arms, 0 errors.
+
+## Commands
+
+```bash
+python -m imitation_experiments.pipeline.cluster plan \
+  --campaign experiments/campaigns/2026-09-14-expert-heading-encoders-10b/campaign.yaml \
+  --arm eh --seed 0
+python -m imitation_experiments.pipeline.cluster submit --plan <plan dir> --confirm <PLAN_SHA>
+```
+
+Submit from a clean detached worktree of the committed SHA so the packed
+workspace does not carry unrelated working-tree edits.
+
+## Evaluation hookup
+
+Not yet wired. The latest-eval campaign needs `_live` rows with
+`anchor_mode: expert_heading`, and `eh_ee` needs the scorer to pass the
+50-wide `env.expert_macro_state_terms`. The EC native oracle
+(`native_fake_runtime`) supports 38-wide windows only; `eh_ee` cannot be
+plant-graded until it reads the ee points.
