@@ -1,4 +1,14 @@
-# 2026-09-14 expert-heading encoders, 10B fine-tune off the e5 hub (SUBMITTED)
+# 2026-09-14 expert-heading encoders, 10B fine-tune off the e5 hub (CANCELLED)
+
+Cancelled 2026-09-14 10:35 EDT (user): the encoder-swap re-fit was far
+behind the e5 hub at every row. Last Isaac rows (4096 clean board, single
+seed): eh 74.0B SR 0.8933 / L 38.84 / G 291 (trend 0.67 / 0.82 / 0.86 /
+0.89 at 71 / 72 / 73 / 74B), eh_ee 71.5B SR 0.4839 / L 61.99 / G 786.
+Plant rows: eh 74.5B 29/43 clean, L 49.4. Jobs 5777401/5777402 (eh),
+5778168/5778169 (eh_ee) and their pending evals cancelled. The encoders
+(`/data/expert_heading_encoders_10b/<arm>_seed0/encoder/checkpoints/latest.pt`)
+and the tracker trees stay on ICE; the code paths (50-wide compact cache,
+restore flag, EC expert_heading reference check) stay in the repo.
 
 Submitted 2026-09-13 23:17 EDT from a clean worktree of commit 2c66df2 (no
 drift), partition coe-gpu:
