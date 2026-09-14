@@ -46,6 +46,25 @@ class G1RewardsCfg:
         weight=0.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
     )
+    # L1 distance of every joint from its default (nominal) angle, Isaac Lab's
+    # `joint_deviation_l1`, as a posture regularizer (2026-09-14). Weight 0.0
+    # keeps every existing arm byte-identical; the joint-deviation fine-tune
+    # sets it through `env.rewards.joint_deviation.weight` (small: the sum
+    # over 29 joints is several rad on a walking pose).
+    joint_deviation = RewTerm(
+        func=mdp.joint_deviation_l1,
+        weight=0.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
+    )
+    # Gaussian reward on the joint-angle error against the reference frame
+    # (`track_joint_pos`, exp(-sum sq err / sigma), in [0, 1]) as a small
+    # joint-space tracking term next to the body-space ones (2026-09-14).
+    # Weight 0.0 keeps every existing arm byte-identical.
+    track_joint_pos = RewTerm(
+        func=mdp.track_joint_pos,
+        weight=0.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]), "sigma": 0.5},
+    )
 
     # -- tracking
     motion_global_anchor_pos = RewTerm(
