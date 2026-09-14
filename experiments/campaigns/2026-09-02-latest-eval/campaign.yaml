@@ -1078,3 +1078,13 @@ arms:
       tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/latent64_probe_live
       encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/poe_deep_long_10b/depth7_b32768_u200k_seed0/encoder/checkpoints/latest.pt
     stages: *curve_stages
+
+  # ---- Same arm as affine_poe_live, but WITHOUT --final_only: scores every
+  # ---- unscored milestone linked into the live tree. Use it for a backlog;
+  # ---- the *_live row stays the mid-flight single-checkpoint path.
+  affine_poe_curve:
+    vars:
+      eval_arm: affine_poe
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b/affine_poe_seed0/encoder/checkpoints/latest.pt
+    stages: *curve_stages
