@@ -1,6 +1,6 @@
 # Vega U + Sharpa learning diagnostic
 
-Parked on 2026-09-14 on branch `codex/vega-sharpa-local`. No training job is
+Parked on 2026-09-14 on branch `dev-dex`. No training job is
 running for this task. Generated data, checkpoints and videos remain in the
 local worktree; source, tests, asset definitions and this report are in Git.
 

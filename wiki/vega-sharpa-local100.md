@@ -5,7 +5,7 @@ The local milestone is a 100-iteration integration test, with a retained
 checkpoint and a tested restart. This is preliminary runtime evidence, not
 an unassisted manipulation success result.
 
-The implementation is in the `codex/vega-sharpa-local` worktree at
+The implementation is on branch `dev-dex`, with its local worktree at
 `.codex/worktrees/vega-sharpa-local`. Run the commands below from that
 worktree. It has its own locked Pixi environments. The original checkout's
 uncommitted work and input datasets were preserved.
