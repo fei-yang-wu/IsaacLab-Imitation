@@ -1,6 +1,6 @@
 # 2026-09-14 expert-heading encoders, 10B fine-tune off the e5 hub (SUBMITTED)
 
-Submitted 2026-09-14 03:17 EDT from a clean worktree of commit 2c66df2 (no
+Submitted 2026-09-13 23:17 EDT from a clean worktree of commit 2c66df2 (no
 drift), partition coe-gpu:
 
 | arm   | pretrain | finetune1 | finetune2 |
@@ -8,7 +8,7 @@ drift), partition coe-gpu:
 | eh    | 5777400  | 5777401   | 5777402   |
 | eh_ee | 5778167  | 5778168   | 5778169   |
 
-The first submission (jobs 5776810-5776816, 01:58 EDT) died at once:
+The first submission (jobs 5776810-5776816, 2026-09-13 21:58 EDT) died at once:
 `scripts/rlopt/train_hl_skill_diffsr.py` passed `diffsr_mu_conditioning`
 to `HighLevelSkillDiffSRConfig`, a field that exists only on RLOpt
 `feat/poe-identity-phi`, not on the dev pointer a0add23. The local smokes had
@@ -48,7 +48,7 @@ poses when the macro terms are root_qpos+ee (`expert_data_plane.py`,
 `_ROOT_QPOS_EE_MACRO_TERMS`), verified by unit tests against the
 replay-window terms and by a pretrain + 3-iteration fine-tune smoke on a
 local reference-array store with `macro_cache_device=cuda:0` and RLOpt
-a0add23. eh_ee was resubmitted a third time (03:35 EDT, 2026-09-14) from commit
+a0add23. eh_ee was resubmitted a third time (01:19 EDT, 2026-09-14) from commit
 adee385: pretrain 5778167, finetune1 5778168, finetune2 5778169. The eh
 chain (2c66df2) was not touched: its pretrain finished in 1 h 32 min and
 its finetune1 (5777401) started 2026-09-14 01:08 EDT.
