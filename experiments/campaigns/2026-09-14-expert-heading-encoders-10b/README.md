@@ -6,7 +6,7 @@ drift), partition coe-gpu:
 | arm   | pretrain | finetune1 | finetune2 |
 | ----- | -------- | --------- | --------- |
 | eh    | 5777400  | 5777401   | 5777402   |
-| eh_ee | 5777404  | 5777405   | 5777407   |
+| eh_ee | 5777404 (failed) -> see below |  |  |
 
 The first submission (jobs 5776810-5776816, 01:58 EDT) died at once:
 `scripts/rlopt/train_hl_skill_diffsr.py` passed `diffsr_mu_conditioning`
@@ -38,6 +38,18 @@ in the window's anchor frame) to the encoder input, 50 values per frame
 instead of 38 (500-wide window instead of 380). The latent then carries where
 the feet and hands are in the reference, which is the part of the reference
 the tracker drags on in the EC plant rehearsals.
+
+The eh_ee pretrain of the resubmission (5777404) also died at once:
+`env.data.macro_cache_device=cuda:0` (the compact GPU macro cache the
+cluster data args select) accepted only the root_qpos and full_body term
+sets. The local smokes had used a manifest, which never builds that cache.
+Fix: the compact cache now also carries the command end-effector world
+poses when the macro terms are root_qpos+ee (`expert_data_plane.py`,
+`_ROOT_QPOS_EE_MACRO_TERMS`), verified by unit tests against the
+replay-window terms and by a pretrain + 3-iteration fine-tune smoke on a
+local reference-array store with `macro_cache_device=cuda:0` and RLOpt
+a0add23. eh_ee was resubmitted a third time from that commit; see the table
+at the end of this section.
 
 ## Arms
 

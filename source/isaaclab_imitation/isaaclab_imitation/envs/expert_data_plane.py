@@ -96,6 +96,16 @@ _FULL_BODY_MACRO_TERMS = (
     "expert_anchor_pos_b",
     "expert_anchor_ori_b",
 )
+#: ``root_qpos`` plus the command end-effector positions (``expert_ee_pos_b``,
+#: the ``_command_ee_body_names`` bodies, 3 each): 38 + 12 = 50/frame for the
+#: G1's four end effectors. The compact cache then also carries the world pose
+#: of those bodies, read out of the retained body block.
+_ROOT_QPOS_EE_MACRO_TERMS = (
+    "expert_motion_qpos",
+    "expert_anchor_pos_b",
+    "expert_anchor_ori_b",
+    "expert_ee_pos_b",
+)
 
 _METRES_TO_MM = 1000.0
 
@@ -307,9 +317,7 @@ class ExpertDataPlane:
             self._achieved_cursor = torch.zeros(
                 num_envs, dtype=torch.long, device=device
             )
-            self._achieved_fill = torch.zeros(
-                num_envs, dtype=torch.long, device=device
-            )
+            self._achieved_fill = torch.zeros(num_envs, dtype=torch.long, device=device)
 
         # The dataset layout is derived by `MotionDataCfg.resolve`, which the
         # environment config runs before the env reaches here. Nothing about
@@ -1534,9 +1542,7 @@ class ExpertDataPlane:
         anchor_pos, anchor_quat = self._get_robot_anchor_state_w_fast("torso_link")
         cursor = self._achieved_cursor
         index = cursor.view(-1, 1, 1)
-        self._achieved_qpos.scatter_(
-            1, index.expand(-1, 1, 29), qpos.unsqueeze(1)
-        )
+        self._achieved_qpos.scatter_(1, index.expand(-1, 1, 29), qpos.unsqueeze(1))
         self._achieved_anchor_pos.scatter_(
             1, index.expand(-1, 1, 3), anchor_pos.unsqueeze(1)
         )
@@ -1580,9 +1586,9 @@ class ExpertDataPlane:
                 f"hold a window of {horizon} slots at stride {stride} "
                 f"({span} frames)."
             )
-        eligible = torch.nonzero(
-            self._achieved_fill >= span, as_tuple=False
-        ).reshape(-1)
+        eligible = torch.nonzero(self._achieved_fill >= span, as_tuple=False).reshape(
+            -1
+        )
         if int(eligible.numel()) == 0:
             return None
         device = self._achieved_fill.device
@@ -1622,9 +1628,9 @@ class ExpertDataPlane:
         # Expert windows carry the anchor orientation as flat 6D; the compiled
         # frame transform returns quaternions, so convert with the SAME helper
         # the expert path uses.
-        ori_b = compiled.quat_to_rot6d_flat(
-            ori_quat_b.reshape(-1, 4)
-        ).reshape(int(batch_size), horizon + 1, 6)
+        ori_b = compiled.quat_to_rot6d_flat(ori_quat_b.reshape(-1, 4)).reshape(
+            int(batch_size), horizon + 1, 6
+        )
         frames = torch.cat([qpos, pos_b, ori_b], dim=-1)
         return TensorDict(
             {
@@ -1679,7 +1685,9 @@ class ExpertDataPlane:
             offset[:, :2] += (torch.rand(count, 2, device=device) * 2.0 - 1.0) * jitter
         if jump_prob > 0.0 and jump > 0.0:
             hit = (torch.rand(count, 1, device=device) < jump_prob).float()
-            offset[:, :2] += hit * (torch.rand(count, 2, device=device) * 2.0 - 1.0) * jump
+            offset[:, :2] += (
+                hit * (torch.rand(count, 2, device=device) * 2.0 - 1.0) * jump
+            )
         return robot_anchor_pos_w + offset
 
     def reset_anchor_jitter(self, env_ids: torch.Tensor | None = None) -> None:
@@ -2762,13 +2770,34 @@ class ExpertDataPlane:
         if configured is None or not str(configured).strip():
             return None
         if self._compact_macro_cache_needs_joint_vel() is None:
-            supported = (_ROOT_QPOS_MACRO_TERMS, _FULL_BODY_MACRO_TERMS)
+            supported = (
+                _ROOT_QPOS_MACRO_TERMS,
+                _FULL_BODY_MACRO_TERMS,
+                _ROOT_QPOS_EE_MACRO_TERMS,
+            )
             raise ValueError(
-                "env.data.macro_cache_device supports the root_qpos or "
-                f"full_body macro-state terms {supported}, got "
+                "env.data.macro_cache_device supports the root_qpos, full_body "
+                f"or root_qpos+ee macro-state terms {supported}, got "
                 f"{self._expert_macro_feature_term_order()}."
             )
         return torch.device(str(configured))
+
+    def _compact_macro_cache_ee_body_names(self) -> tuple[str, ...]:
+        """Bodies whose world pose the compact cache carries for ``expert_ee_pos_b``.
+
+        Empty unless the macro terms are the root_qpos+ee selection. The order
+        is the command's end-effector order, which is also the order
+        ``_build_expert_window_terms`` receives in ``reference_body_names``.
+        """
+        if self._expert_macro_feature_term_order() != _ROOT_QPOS_EE_MACRO_TERMS:
+            return ()
+        names = tuple(str(name) for name in self._env._command_ee_body_names)
+        if not names:
+            raise ValueError(
+                "expert_ee_pos_b is a macro-state term but the environment has "
+                "no command end-effector bodies."
+            )
+        return names
 
     def _compact_macro_cache_needs_joint_vel(self) -> bool | None:
         """Whether the compact cache must also carry reference joint velocity.
@@ -2781,7 +2810,7 @@ class ExpertDataPlane:
         the wider selection asks for it.
         """
         terms = self._expert_macro_feature_term_order()
-        if terms == _ROOT_QPOS_MACRO_TERMS:
+        if terms in (_ROOT_QPOS_MACRO_TERMS, _ROOT_QPOS_EE_MACRO_TERMS):
             return False
         if terms == _FULL_BODY_MACRO_TERMS:
             return True
@@ -2880,10 +2909,45 @@ class ExpertDataPlane:
                 workers=workers,
                 chunk_rows=chunk_rows,
             )
+        ee_names = self._compact_macro_cache_ee_body_names()
+        if ee_names:
+            retained = store.body_names
+            missing = [name for name in ee_names if name not in retained]
+            if missing:
+                raise KeyError(
+                    f"{store.directory} does not retain end-effector bodies "
+                    f"{missing}; it has {retained}. Rebuild the arrays with "
+                    "those bodies or drop expert_ee_pos_b from the macro terms."
+                )
+            ee_columns = torch.tensor(
+                [retained.index(name) for name in ee_names], dtype=torch.long
+            )
+
+            def ee_pos_transform(chunk: torch.Tensor) -> torch.Tensor:
+                return chunk[:, ee_columns]
+
+            def ee_quat_transform(chunk: torch.Tensor) -> torch.Tensor:
+                return chunk[:, ee_columns][..., _WXYZ_TO_XYZW]
+
+            cache["ee_pos_w"] = copy_to_device_parallel(
+                store.array("body_pos_w")[:total],
+                device=cache_device,
+                workers=workers,
+                chunk_rows=chunk_rows,
+                transform=ee_pos_transform,
+            )
+            cache["ee_quat_w"] = copy_to_device_parallel(
+                store.array("body_quat_w")[:total],
+                device=cache_device,
+                workers=workers,
+                chunk_rows=chunk_rows,
+                transform=ee_quat_transform,
+            )
         logger.warning(
-            "Compact macro cache is ready on %s (%s).",
+            "Compact macro cache is ready on %s (%s%s).",
             cache_device,
             "qpos+qvel" if "joint_vel" in cache else "qpos",
+            f"+ee{list(ee_names)}" if ee_names else "",
         )
         return cache
 
@@ -2930,6 +2994,19 @@ class ExpertDataPlane:
             )
 
         anchor_id = self.reference_body_names.index(self._expert_anchor_body_name)
+        ee_names = self._compact_macro_cache_ee_body_names()
+        missing_ee = [
+            name for name in ee_names if name not in self.reference_body_names
+        ]
+        if missing_ee:
+            raise ValueError(
+                "The compact macro cache cannot resolve end-effector bodies "
+                f"{missing_ee} in dataset body names {self.reference_body_names}."
+            )
+        ee_ids = torch.tensor(
+            [self.reference_body_names.index(name) for name in ee_names],
+            dtype=torch.long,
+        )
         total = int(tm.end.max().item())
         joint_source = source.get("joint_pos", None)
         if joint_source is None:
@@ -2956,6 +3033,15 @@ class ExpertDataPlane:
         if joint_vel_source is not None:
             cache_bytes += total * (
                 int(joint_vel_source.shape[-1]) * joint_vel_source.element_size()
+            )
+        if ee_names:
+            cache_bytes += (
+                total
+                * len(ee_names)
+                * (
+                    3 * body_pos_source.element_size()
+                    + 4 * body_quat_source.element_size()
+                )
             )
         if cache_device.type == "cuda":
             free_bytes, _ = torch.cuda.mem_get_info(cache_device)
@@ -3002,6 +3088,19 @@ class ExpertDataPlane:
                 device=cache_device,
             )
             sources.append(("joint_vel", joint_vel_source))
+        if ee_names:
+            cache["ee_pos_w"] = torch.empty(
+                (total, len(ee_names), 3),
+                dtype=body_pos_source.dtype,
+                device=cache_device,
+            )
+            cache["ee_quat_w"] = torch.empty(
+                (total, len(ee_names), 4),
+                dtype=body_quat_source.dtype,
+                device=cache_device,
+            )
+            sources.append(("ee_pos_w", body_pos_source))
+            sources.append(("ee_quat_w", body_quat_source))
         workers = max(
             int(getattr(self._env.cfg.data, "reference_arrays_warm_workers", 8) or 1),
             1,
@@ -3018,6 +3117,10 @@ class ExpertDataPlane:
                 start, end = bound
                 if target_name in ("joint_pos", "joint_vel"):
                     chunk = source_tensor[start:end]
+                elif target_name in ("ee_pos_w", "ee_quat_w"):
+                    chunk = source_tensor[start:end][:, ee_ids]
+                    if target_name == "ee_quat_w":
+                        chunk = chunk[..., _WXYZ_TO_XYZW]
                 else:
                     chunk = source_tensor[start:end, anchor_id]
                     if target_name == "anchor_quat_w":
@@ -3079,6 +3182,9 @@ class ExpertDataPlane:
         }
         if "joint_vel" in cache:
             window["joint_vel"] = cache["joint_vel"][indices]
+        if "ee_pos_w" in cache:
+            window["_macro_ee_pos_w"] = cache["ee_pos_w"][indices]
+            window["_macro_ee_quat_w"] = cache["ee_quat_w"][indices]
         return TensorDict(
             window,
             batch_size=list(indices.shape),
@@ -3502,12 +3608,29 @@ class ExpertDataPlane:
         body_terms_enabled = len(reference_body_names) > 0
         if body_terms_enabled:
             if compact_anchor_pos is not None:
-                raise ValueError(
-                    "Compact root_qpos macro windows do not carry EE/keypoint bodies."
+                # A compact window carries at most the command end-effector
+                # bodies, in the command's order; anything else has no
+                # compact path.
+                compact_ee_pos = expert_window.get("_macro_ee_pos_w", None)
+                compact_ee_quat = expert_window.get("_macro_ee_quat_w", None)
+                cached_names = self._compact_macro_cache_ee_body_names()
+                if (
+                    compact_ee_pos is None
+                    or compact_ee_quat is None
+                    or tuple(reference_body_names) != cached_names
+                ):
+                    raise ValueError(
+                        "Compact macro windows carry only the command end-effector "
+                        f"bodies {cached_names}; requested {tuple(reference_body_names)}."
+                    )
+                body_pos = compact_ee_pos
+                body_quat = compact_ee_quat
+            else:
+                body_ids = self._get_reference_body_ids_fast(
+                    tuple(reference_body_names)
                 )
-            body_ids = self._get_reference_body_ids_fast(tuple(reference_body_names))
-            body_pos = body_pos_source.index_select(body_dim, body_ids)
-            body_quat = body_quat_source.index_select(body_dim, body_ids)
+                body_pos = body_pos_source.index_select(body_dim, body_ids)
+                body_quat = body_quat_source.index_select(body_dim, body_ids)
 
         if context == "expert":
             center_index = int(past_steps)
