@@ -1,4 +1,12 @@
-# 2026-09-14 expert-heading encoders, 10B fine-tune off the e5 hub
+# 2026-09-14 expert-heading encoders, 10B fine-tune off the e5 hub (SUBMITTED)
+
+Submitted 2026-09-14 01:58 EDT from a clean worktree of commit 69ee8ca (no
+drift), partition coe-gpu:
+
+| arm   | pretrain | finetune1 | finetune2 |
+| ----- | -------- | --------- | --------- |
+| eh    | 5776810  | 5776811   | 5776812   |
+| eh_ee | 5776814  | 5776815   | 5776816   |
 
 Two encoder-swap fine-tunes. Each arm first pretrains a p5_affine skill
 encoder whose window is anchored to the window's own first frame
