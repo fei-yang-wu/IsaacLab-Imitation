@@ -37,6 +37,15 @@ class G1RewardsCfg:
         weight=-10.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
     )
+    # PD torque pushing a joint further past its soft limit (2026-09-14, the
+    # plant's ankle-stop failure mode). Weight 0.0 keeps every existing arm
+    # byte-identical; the ankle-limit fine-tunes set it through
+    # `env.rewards.joint_limit_push.weight`.
+    joint_limit_push = RewTerm(
+        func=mdp.joint_limit_push,
+        weight=0.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
+    )
 
     # -- tracking
     motion_global_anchor_pos = RewTerm(

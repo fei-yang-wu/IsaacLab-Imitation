@@ -885,6 +885,37 @@ def _tracking_metrics(
             tracked_tensors["ref_lin_vel"].detach(),
         )
 
+    # Joint-limit behaviour (2026-09-14), reference-free. The plant's
+    # non-fall failures are joints driven past their stop; the 4096 board had
+    # no measure of it. `joint_limit_excess_rad`: max over joints of how far
+    # the measured position sits past its soft limit this step (0 inside).
+    # `joint_limit_guard_frac`: 1 when any joint is past the soft limit by
+    # more than the plant writer's 0.1 rad guard margin, so the mean over
+    # steps is the fraction of steps the plant would have faulted on.
+    # `joint_limit_push_nm`: applied PD torque still driving an offending
+    # joint outward, summed over joints (the `joint_limit_push` reward).
+    joint_pos = _as_torch(robot_data.joint_pos)
+    soft_limits = _as_torch(robot_data.soft_joint_pos_limits)
+    excess = torch.maximum(
+        (joint_pos - soft_limits[..., 1]).clamp(min=0.0),
+        (soft_limits[..., 0] - joint_pos).clamp(min=0.0),
+    )
+    metrics["joint_limit_excess_rad"] = excess.max(dim=-1).values
+    metrics["joint_limit_guard_frac"] = (excess > 0.1).any(dim=-1).to(joint_pos.dtype)
+    applied_torque = getattr(robot_data, "applied_torque", None)
+    if applied_torque is not None:
+        torque = _as_torch(applied_torque)
+        push = torch.where(
+            joint_pos > soft_limits[..., 1],
+            torque.clamp(min=0.0),
+            torch.zeros_like(torque),
+        ) + torch.where(
+            joint_pos < soft_limits[..., 0],
+            (-torque).clamp(min=0.0),
+            torch.zeros_like(torque),
+        )
+        metrics["joint_limit_push_nm"] = push.sum(dim=-1)
+
     ee_errors = _mean_body_pose_errors(base_env, ee_body_names)
     if ee_errors is not None:
         metrics["ee_pos_error_m"] = ee_errors[0]

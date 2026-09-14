@@ -416,6 +416,41 @@ def energy_consumption(
     return torch.abs(power).sum(dim=-1)
 
 
+def joint_limit_push(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg,
+) -> torch.Tensor:
+    """Penalize PD torque that keeps pushing a joint past its soft limit.
+
+    2026-09-14. On the MuJoCo plant and on the robot, every non-fall failure
+    of the e5-hub arms was the ankle-pitch joint driven past its stop: the
+    policy holds a PD target 1.7-2.3 rad beyond the limit while the foot is
+    already there, so the actuator shoves ~50 Nm into the stop. SONIC v1.1
+    also commands targets past the limit, but only while the joint is far
+    from it, and backs the target off as the joint arrives (at the stop its
+    target sits at most 0.45 rad beyond).
+
+    This term charges that shove and nothing else: per joint, the applied
+    torque component directed OUTWARD, counted only while the joint is
+    already outside its soft limit. Inside the range the term is zero
+    whatever the target; outside it, torque that pulls the joint back is
+    free. ``applied_torque`` is the implicit actuator's
+    ``kp (target - q) - kd qdot`` after the effort clip, so the same gains
+    and soft limits the actuator and :func:`joint_pos_limits` use apply.
+    Units: Nm summed over the offending joints.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    joint_ids = asset_cfg.joint_ids
+    joint_pos = asset.data.joint_pos.torch[:, joint_ids]
+    limits = asset.data.soft_joint_pos_limits.torch[:, joint_ids]
+    torque = asset.data.applied_torque.torch[:, joint_ids]
+    above = joint_pos > limits[..., 1]
+    below = joint_pos < limits[..., 0]
+    push = torch.where(above, torque.clamp(min=0.0), torch.zeros_like(torque))
+    push = push + torch.where(below, (-torque).clamp(min=0.0), torch.zeros_like(torque))
+    return push.sum(dim=-1)
+
+
 def body_angular_velocity_excess_l2(
     env: ImitationRLEnv,
     asset_cfg: SceneEntityCfg,
