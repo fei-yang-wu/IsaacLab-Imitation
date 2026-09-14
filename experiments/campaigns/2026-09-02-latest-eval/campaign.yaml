@@ -670,6 +670,32 @@ arms:
         - env.observations.policy.joint_vel_rel.history_length=10
         - env.observations.policy.last_action.history_length=10
     stages: *score_stages
+  # 2026-09-14-ankle-limit-c1-10b: c1 + one joint-limit term each, off c1's
+  # 76.0B checkpoint; same encoder and window as the e5gap arms.
+  ankl_c1l1_live:
+    vars:
+      eval_arm: ankl_c1l1
+      tree_root: /data/ankle_limit_c1_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  ankl_c1l2_live:
+    vars:
+      eval_arm: ankl_c1l2
+      tree_root: /data/ankle_limit_c1_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
   e5gap_c1_live:
     vars:
       eval_arm: e5gap_c1

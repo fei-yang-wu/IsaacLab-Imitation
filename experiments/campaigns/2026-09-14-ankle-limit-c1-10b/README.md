@@ -1,4 +1,11 @@
-# 2026-09-14 ankle-limit fine-tunes off c1 (PREPARED)
+# 2026-09-14 ankle-limit fine-tunes off c1 (SUBMITTED)
+
+Submitted 2026-09-14 06:15 EDT from a clean worktree of commit 496ec2f (no
+drift), partition coe-gpu: c1l1 5778947 / 5778948, c1l2 5778950 / 5778951
+(finetune1 / finetune2 afterany). Smokes from the committed state: c1l2
+3-iteration fine-tune from the c1 76.0B file on a local reference-array
+store (cluster data args, RLOpt a0add23), and a 64-env evaluate_checkpoint
+run reporting the three joint-limit metrics, 0 errors.
 
 Two fine-tunes off the c1 arm of `2026-09-13-e5-hardware-gap-10b` at its
 76,000,002,048 checkpoint, 10B each (cap 86,000,002,048), one added reward
