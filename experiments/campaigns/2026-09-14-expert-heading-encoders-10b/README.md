@@ -6,7 +6,7 @@ drift), partition coe-gpu:
 | arm   | pretrain | finetune1 | finetune2 |
 | ----- | -------- | --------- | --------- |
 | eh    | 5777400  | 5777401   | 5777402   |
-| eh_ee | 5777404 (failed) -> see below |  |  |
+| eh_ee | 5778167  | 5778168   | 5778169   |
 
 The first submission (jobs 5776810-5776816, 01:58 EDT) died at once:
 `scripts/rlopt/train_hl_skill_diffsr.py` passed `diffsr_mu_conditioning`
@@ -48,8 +48,10 @@ poses when the macro terms are root_qpos+ee (`expert_data_plane.py`,
 `_ROOT_QPOS_EE_MACRO_TERMS`), verified by unit tests against the
 replay-window terms and by a pretrain + 3-iteration fine-tune smoke on a
 local reference-array store with `macro_cache_device=cuda:0` and RLOpt
-a0add23. eh_ee was resubmitted a third time from that commit; see the table
-at the end of this section.
+a0add23. eh_ee was resubmitted a third time (03:35 EDT, 2026-09-14) from commit
+adee385: pretrain 5778167, finetune1 5778168, finetune2 5778169. The eh
+chain (2c66df2) was not touched: its pretrain finished in 1 h 32 min and
+its finetune1 (5777401) started 2026-09-14 01:08 EDT.
 
 ## Arms
 
