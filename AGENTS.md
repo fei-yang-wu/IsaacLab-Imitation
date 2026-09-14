@@ -52,6 +52,11 @@ PIXI_ENVIRONMENT=isaaclab ./scripts/install_workspace.sh
 
 ## Codex Worktrees
 
+- For dexterous manipulation work, use `dev-dex` in this repository and its
+  owned submodules. Reuse the existing worktree for that branch. Do not create
+  agent-named branches. This user preference overrides the branch-name
+  examples below for dexterous manipulation tasks.
+
 - Codex-created worktrees should live under this repo's `.codex/worktrees/`
   directory. Keep Claude-created worktrees under `.claude/` if that is the
   active Claude workflow.
