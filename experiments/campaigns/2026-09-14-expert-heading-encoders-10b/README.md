@@ -1,12 +1,21 @@
 # 2026-09-14 expert-heading encoders, 10B fine-tune off the e5 hub (SUBMITTED)
 
-Submitted 2026-09-14 01:58 EDT from a clean worktree of commit 69ee8ca (no
+Submitted 2026-09-14 03:17 EDT from a clean worktree of commit 2c66df2 (no
 drift), partition coe-gpu:
 
 | arm   | pretrain | finetune1 | finetune2 |
 | ----- | -------- | --------- | --------- |
-| eh    | 5776810  | 5776811   | 5776812   |
-| eh_ee | 5776814  | 5776815   | 5776816   |
+| eh    | 5777400  | 5777401   | 5777402   |
+| eh_ee | 5777404  | 5777405   | 5777407   |
+
+The first submission (jobs 5776810-5776816, 01:58 EDT) died at once:
+`scripts/rlopt/train_hl_skill_diffsr.py` passed `diffsr_mu_conditioning`
+to `HighLevelSkillDiffSRConfig`, a field that exists only on RLOpt
+`feat/poe-identity-phi`, not on the dev pointer a0add23. The local smokes had
+run against the main tree's RLOpt working copy, which carried that field
+uncommitted. Fix 2c66df2 passes the field only when RLOpt defines it; the
+smokes were repeated from a clean worktree against a0add23 (both pretrains
+and both 3-iteration fine-tunes, 0 errors) before the resubmission.
 
 Two encoder-swap fine-tunes. Each arm first pretrains a p5_affine skill
 encoder whose window is anchored to the window's own first frame
