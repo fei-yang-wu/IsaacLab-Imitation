@@ -643,6 +643,26 @@ def _wandb_log(run: Any, row: dict[str, Any]) -> None:
         run.log(payload, step=step)
 
 
+def _optional_config_field(name: str, value: object, *, default: object) -> dict:
+    """Pass a config field only when the checked-out RLOpt defines it.
+
+    The in-repo RLOpt pointer moves independently of this script. A field that
+    exists only on another RLOpt branch (``diffsr_mu_conditioning`` lives on
+    ``feat/poe-identity-phi``) must not break every other recipe at its
+    default; a non-default value without the field is a hard error.
+    """
+    import dataclasses
+
+    if name in {f.name for f in dataclasses.fields(HighLevelSkillDiffSRConfig)}:
+        return {name: value}
+    if value != default:
+        raise SystemExit(
+            f"--{name}={value!r} needs an RLOpt whose HighLevelSkillDiffSRConfig "
+            f"defines {name}; the checked-out RLOpt does not"
+        )
+    return {}
+
+
 def _build_trainer_config(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg | None = None,
 ) -> HighLevelSkillDiffSRConfig:
@@ -703,7 +723,11 @@ def _build_trainer_config(
         diffsr_feature_dim=args_cli.diffsr_feature_dim,
         diffsr_embed_dim=args_cli.diffsr_embed_dim,
         diffsr_phi_parameterization=args_cli.diffsr_phi_parameterization,
-        diffsr_mu_conditioning=args_cli.diffsr_mu_conditioning,
+        **_optional_config_field(
+            "diffsr_mu_conditioning",
+            args_cli.diffsr_mu_conditioning,
+            default="next",
+        ),
         **(
             {"diffsr_f_hidden_dims": tuple(args_cli.diffsr_f_hidden_dims)}
             if args_cli.diffsr_f_hidden_dims
