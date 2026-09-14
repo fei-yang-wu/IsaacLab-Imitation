@@ -255,6 +255,34 @@ def bad_reference_body_pos_relative(
     return torch.any(error > thresholds, dim=1)
 
 
+def joint_pos_near_hard_limit(
+    env: ImitationRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    fraction: float | None = None,
+) -> torch.Tensor:
+    """Terminate when a measured joint sits past its soft limit, ``fraction`` of
+    the way to its hard (URDF) limit.
+
+    2026-09-14. The plant's non-fall failures are joints driven into their
+    mechanical stop (ankle pitch above all): the PD target may sit past the
+    limit, that is ordinary, but the MEASURED joint reaching the stop is the
+    fault the writer trips on. This ends the episode on the measured
+    excursion, per joint: ``fraction`` 0 is the soft limit (0.9x range), 1 is
+    the hard limit; ``None`` disables the term (all False), which keeps the
+    frozen protocol byte-identical while the term exists in every config.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    if fraction is None:
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    joint_ids = asset_cfg.joint_ids
+    joint_pos = asset.data.joint_pos.torch[:, joint_ids]
+    soft = asset.data.soft_joint_pos_limits.torch[:, joint_ids]
+    hard = asset.data.joint_pos_limits.torch[:, joint_ids]
+    upper = soft[..., 1] + float(fraction) * (hard[..., 1] - soft[..., 1])
+    lower = soft[..., 0] - float(fraction) * (soft[..., 0] - hard[..., 0])
+    return torch.any(joint_pos > upper, dim=1) | torch.any(joint_pos < lower, dim=1)
+
+
 def reference_trajectory_finished(env: ImitationRLEnv) -> torch.Tensor:
     return env.current_reference_is_final_frame()
 

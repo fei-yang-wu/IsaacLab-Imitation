@@ -108,6 +108,18 @@ class G1SonicTerminationsCfg(G1TerminationsCfg):
             "threshold": 0.2,
         },
     )
+    # Measured joint past its soft limit, `fraction` of the way to the hard
+    # limit (2026-09-14, the plant's ankle-stop failure mode). `fraction: None`
+    # disables it (all False), so every existing arm is byte-identical; the
+    # ankle-termination fine-tunes set
+    # `env.terminations.joint_near_limit.params.fraction`.
+    joint_near_limit = DoneTerm(
+        func=mdp.joint_pos_near_hard_limit,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
+            "fraction": None,
+        },
+    )
     base_too_low = None
 
 
