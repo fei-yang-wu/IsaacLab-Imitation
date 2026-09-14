@@ -381,6 +381,8 @@ parser.add_argument(
         "concat",
         "bilinear",
         "affine",
+        "affine_no_bias",
+        "affine_poe",
         "identity",
         "identity_bias",
         "linear",
@@ -390,9 +392,11 @@ parser.add_argument(
         "DiffSR phi(s,z) parameterization. 'concat' is the newer simple-concat "
         "path; 'bilinear' restores the legacy matrix F(s) with g(z)^T F(s); "
         "'affine' uses that matrix form with a single linear g(z) = A z + b, "
-        "which makes phi and the diffusion score field affine in z, so a "
-        "latent interpolation grounds to the geometric mixture of the endpoint "
-        "conditionals. 'identity' sets phi(s, z) = z (requires "
+        "which makes phi and the diffusion score field affine in z. "
+        "'affine_no_bias' removes b, giving <z, A^T F(s) mu>. "
+        "'affine_poe' reassociates the affine model as <[1; z], E>. "
+        "Field affinity alone does not guarantee exact clean PoE sampling. "
+        "'identity' sets phi(s, z) = z (requires "
         "--diffsr_feature_dim == --z_dim); with --diffsr_mu_conditioning pair "
         "the denoiser becomes <z, E(s, s', t)>, the product-of-experts form. "
         "'identity_bias' sets phi = [1; z] (requires feature_dim = z_dim + 1), "
@@ -407,16 +411,28 @@ parser.add_argument(
     "--diffsr_mu_conditioning",
     type=str,
     default="next",
-    choices=("next", "pair"),
+    choices=("next", "pair", "film"),
     help=(
         "What the DiffSR denoiser mu sees. 'next': mu(s', t), the default. "
         "'pair': mu(s, s', t), so each row of mu is a joint expert field over "
-        "the transition pair."
+        "the transition pair. 'film': source-dependent scale and shift on "
+        "noisy-target hidden features before the expert readout; never uses z."
     ),
 )
 parser.add_argument("--batch_size", type=int, default=8192, help="Training batch size.")
+parser.add_argument(
+    "--encoder_lr", type=float, default=3.0e-4,
+    help="Learning rate for the skill encoder and JEPA next-chunk head.",
+)
 parser.add_argument("--num_updates", type=int, default=2000, help="Training updates.")
 parser.add_argument("--log_interval", type=int, default=100, help="Log cadence.")
+parser.add_argument(
+    "--dynamics_probe", action="store_true",
+    help="After training or eval-only, run matched-noise raw-chunk diagnostics.",
+)
+parser.add_argument("--dynamics_probe_batch_size", type=int, default=256)
+parser.add_argument("--dynamics_probe_batches", type=int, default=4)
+parser.add_argument("--dynamics_probe_seed", type=int, default=1729)
 parser.add_argument(
     "--eval_batches",
     type=int,
@@ -744,6 +760,7 @@ def _build_trainer_config(
             else {}
         ),
         batch_size=args_cli.batch_size,
+        encoder_lr=args_cli.encoder_lr,
         num_updates=args_cli.num_updates,
         log_interval=args_cli.log_interval,
         eval_batches=args_cli.eval_batches,
@@ -808,6 +825,10 @@ def _run_training(
         "seed": args_cli.seed,
         "checkpoint": args_cli.checkpoint,
         "eval_only": bool(args_cli.eval_only),
+        "dynamics_probe": bool(args_cli.dynamics_probe),
+        "dynamics_probe_batch_size": args_cli.dynamics_probe_batch_size,
+        "dynamics_probe_batches": args_cli.dynamics_probe_batches,
+        "dynamics_probe_seed": args_cli.dynamics_probe_seed,
         "reconstruction_eval": bool(args_cli.reconstruction_eval),
         "window_probe_eval": bool(args_cli.window_probe_eval),
         "window_probe_train_batches": args_cli.window_probe_train_batches,
@@ -853,6 +874,12 @@ def _run_training(
                         ridge=args_cli.window_probe_ridge,
                     )
                 )
+            if args_cli.dynamics_probe:
+                metrics.update(trainer.evaluate_dynamics_probe(
+                    batch_size=args_cli.dynamics_probe_batch_size,
+                    num_batches=args_cli.dynamics_probe_batches,
+                    seed=args_cli.dynamics_probe_seed,
+                ))
             row: dict[str, Any] = {
                 "update": int(trainer.update),
                 "eval_only": True,
@@ -886,6 +913,12 @@ def _run_training(
                     ridge=args_cli.window_probe_ridge,
                 )
             )
+        if args_cli.dynamics_probe:
+            final_metrics.update(trainer.evaluate_dynamics_probe(
+                batch_size=args_cli.dynamics_probe_batch_size,
+                num_batches=args_cli.dynamics_probe_batches,
+                seed=args_cli.dynamics_probe_seed,
+            ))
         final_row: dict[str, Any] = {
             "update": int(trainer.update),
             "post_train_eval": True,

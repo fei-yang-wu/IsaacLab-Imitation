@@ -1,0 +1,192 @@
+# Six z64 pretrain-only screens including source-modulated expert features.
+name: poe-rescue-pretrain
+profile: ice
+wandb_project: g1-bs-pareto
+wandb_group: poe-rescue-pretrain
+vars:
+  task: Isaac-Imitation-G1-v2
+  wandb_arm: ${dash:${vars.arm}}
+  objective: jepa_ntp
+  objective_args:
+  - --jepa_loss
+  - sigreg_ebm
+  - --jepa_ntp_head
+  - diff_chunk
+  - --jepa_ntp_chunk_span
+  - boundary_next
+  - --jepa_endpoint_coeff
+  - '0'
+  - --diffsr_phi_parameterization
+  - ${vars.phi_parameterization}
+  - --diffsr_mu_conditioning
+  - ${vars.mu_conditioning}
+  - --source_history_steps
+  - '5'
+  - --source_anchor
+  - current
+  - --jepa_sigreg_coeff
+  - '1.0'
+  - --reg_coeff
+  - '0.001'
+  latent_mode: deterministic
+  ln_args:
+  - --encoder_layer_norm
+  window_mode: intermediate
+  horizon: 10
+  z_dim: 64
+  pretrain_updates: 50000
+  pretrain_batch_size: 8192
+  macro_terms: '[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]'
+  stride: 1
+  anchor_mode: robot_heading
+  ref_arrays: /storage/ice-shared/vip-vwt/g1-imitation/datasets/bones_seed_full/ref_arrays/g1_bones_seed_sonic_full_129785_e714bbff_v1
+  persist_id: bones_seed_sonic_full_129785@e714bbff
+  data_overrides:
+  - physics=newton_mjwarp
+  - env.data.manifest=null
+  - env.data.reference_arrays_dir=${vars.ref_arrays}
+  - env.data.persist_id=${vars.persist_id}
+  - env.data.reference_arrays_resident=true
+  - env.data.reference_arrays_warm_workers=16
+  - env.data.runtime_cache_device=cpu
+  - env.data.macro_cache_device=cuda:0
+  - env.data.runtime_cache_body_names=[pelvis,left_hip_roll_link,left_knee_link,left_ankle_roll_link,right_hip_roll_link,right_knee_link,right_ankle_roll_link,torso_link,left_shoulder_roll_link,left_elbow_link,left_wrist_yaw_link,right_shoulder_roll_link,right_elbow_link,right_wrist_yaw_link]
+  - env.expert_macro_state_terms=${vars.macro_terms}
+  - env.expert_macro_frame_stride=${vars.stride}
+  - env.expert_macro_anchor_mode=${vars.anchor_mode}
+  pretrain_head:
+  - --task
+  - ${vars.task}
+  - --num_envs
+  - '16'
+  - --seed
+  - ${vars.seed}
+  - --device
+  - cuda:0
+  - --headless
+  - --assert-kitless
+  - --output_dir
+  - ${vars.output_root}/encoder
+  - --logger_backend
+  - wandb
+  - --wandb_project
+  - g1-bs-pareto
+  - --wandb_group
+  - poe-rescue-pretrain
+  - --wandb_run_name
+  - ${vars.wandb_arm}-pretrain-s${vars.seed}
+  - --horizon_steps
+  - ${vars.horizon}
+  - --encoder_window_mode
+  - ${vars.window_mode}
+  - --transition_objective
+  - ${vars.objective}
+  - --latent_mode
+  - ${vars.latent_mode}
+  - --z_dim
+  - ${vars.z_dim}
+  pretrain_tail:
+  - --encoder_hidden_dims
+  - '2048'
+  - '1024'
+  - '512'
+  - '512'
+  - --encoder_activation
+  - silu
+  - --diffsr_feature_dim
+  - ${vars.feature_dim}
+  - --diffsr_embed_dim
+  - '1024'
+  - --diffsr_g_hidden_dims
+  - '1024'
+  - '1024'
+  - '512'
+  - --diffsr_mu_hidden_dims
+  - '1024'
+  - '1024'
+  - ${vars.mu_last_width}
+  - --batch_size
+  - ${vars.pretrain_batch_size}
+  - --num_updates
+  - ${vars.pretrain_updates}
+  - --log_interval
+  - '1000'
+  - --eval_batches
+  - '4'
+  - --dynamics_probe
+  - --dynamics_probe_batch_size
+  - '256'
+  - --dynamics_probe_batches
+  - '4'
+  - --dynamics_probe_seed
+  - '1729'
+  - --trajectory_split_seed
+  - '0'
+  - --eval_trajectory_fraction
+  - '0.1'
+  phi_parameterization: affine
+  mu_conditioning: next
+  feature_dim: 256
+  mu_last_width: 512
+  output_root: /storage/ice-shared/vip-vwt/scratch-fwu91/poe_rescue_pretrain/${vars.arm}_seed${vars.seed}
+  gpu: gpu:h200:1
+  partition: coe-gpu
+  qos: coe-ice
+  cpus: 16
+  memory: 160G
+  walltime: '15:59:00'
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+preflight:
+  require_container_paths:
+  - ${vars.ref_arrays}
+  output_container_path: ${vars.output_root}
+arms:
+  affine_next:
+    vars: {}
+    stages:
+    - &id001
+      name: pretrain
+      executable: scripts/rlopt/train_hl_skill_diffsr.py
+      args: ${concat:${vars.pretrain_head},${vars.objective_args},${vars.ln_args},${vars.pretrain_tail},${vars.data_overrides}}
+      time_limit: ${vars.walltime}
+      gres: ${vars.gpu}
+      partition: ${vars.partition}
+      qos: ${vars.qos}
+      cpus_per_task: ${vars.cpus}
+      mem: ${vars.memory}
+      env:
+        CLUSTER_WANDB_TAGS: bones-seed,poe-rescue,z64,${vars.arm},seed${vars.seed},pretrain-only
+        TORCHINDUCTOR_CACHE_DIR: /tmp/poe-rescue-${vars.arm}-s${vars.seed}/inductor
+        TRITON_CACHE_DIR: /tmp/poe-rescue-${vars.arm}-s${vars.seed}/triton
+  affine_pair:
+    vars:
+      mu_conditioning: pair
+    stages:
+    - *id001
+  poe_joint:
+    vars:
+      phi_parameterization: identity
+      mu_conditioning: pair
+      feature_dim: 64
+    stages: &id002
+    - *id001
+  poe_joint_wide:
+    vars:
+      phi_parameterization: identity
+      mu_conditioning: pair
+      feature_dim: 64
+      mu_last_width: 2048
+    stages:
+    - *id001
+  poe_factored:
+    vars:
+      phi_parameterization: affine_no_bias
+    stages:
+    - *id001
+  poe_modulated:
+    vars:
+      phi_parameterization: identity
+      mu_conditioning: film
+      feature_dim: 64
+    stages: *id002

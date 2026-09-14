@@ -42,6 +42,13 @@ so no page becomes orphaned.
 
 ## Active work
 
+- [Direct PoE Capacity and Optimization](../experiments/campaigns/2026-09-13-poe-capacity-pretrain/README.md):
+  z64 width/depth, batch-size, learning-rate and longer-pretrain sweep.
+- [PoE Rescue Pretraining](../experiments/campaigns/2026-09-12-poe-rescue-pretrain/README.md):
+  six z64 screens of joint, factored, and source-modulated DiffSR heads.
+- [Affine Skill PoE Theory Review](affine-skill-poe-theory-review-2026-09-12.md):
+  implementation audit, limits of exact product sampling claims, related
+  work, and proposed nonlinear expert blocks within a 64-D command budget.
 - [Combo Latent Semantic Analysis Plan](combo-latent-semantic-analysis-plan.md):
   proposed paired raw-window and frozen combo-encoder study, with broad
   BONES-SEED sampling, PCA/t-SNE, clustering, and cross-family semantic probes.
@@ -128,3 +135,9 @@ so no page becomes orphaned.
 - [Isaac Consumer Data Plan](isaac-consumer-data-plan.md): branch split between
   off-machine action labeling and this repo's data-consumer work.
 - [sonic-training-parity-2026-09-10.md](sonic-training-parity-2026-09-10.md) — field-by-field SONIC v1.1 vs our tracker training setup (sim, DR, observations, rewards, terminations, data, optimizer); what differs and what does not.
+
+- [Clean PoE combined scaling and 10B tracker](../experiments/campaigns/2026-09-13-poe-deep-long-10b/README.md): depth 7, batch 32768, 200k pretraining, frozen z64 tracker chain.
+
+- [PoE with combo-10B tracker](../experiments/campaigns/2026-09-13-poe-combo-10b/README.md): completed deep PoE encoder with restored combo history and optimizer settings.
+
+- [Equivalent affine PoE and fresh combo50B](../experiments/campaigns/2026-09-13-affine-poe-combo50b/README.md): factorized augmented-code rewrite with original encoder budget and tracker recipe.

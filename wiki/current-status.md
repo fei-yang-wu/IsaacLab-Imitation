@@ -1,5 +1,55 @@
 # Project Live Status
 
+## Equivalent affine PoE + fresh combo50B submitted (2026-09-13)
+
+Jobs 5772121 (pretrain) -> 5772122-5772128 (tracker chain).
+Exact affine reassociation as <[1;z], E>, original p5_affine widths,
+50k x8192 pretrain, fresh50B combo tracker with original history, optimizer
+and staged resets. z64 plus phase unchanged. Prediction/gradient/loss/sample
+parity tests, full-batch pretrain and tracker smoke, config parity and
+preflights passed. No performance result yet.
+[Protocol and provenance](../experiments/campaigns/2026-09-13-affine-poe-combo50b/README.md).
+
+## PoE encoder with combo-10B tracker canceled (2026-09-13)
+
+Jobs 5771844 and 5771845 canceled at user request after unsatisfactory
+performance. Artifacts retained; not a completed 10B result. The arm used the completed 200k-update deep PoE encoder
+with the exact combo-10B tracker arguments: ten-step actor history,
+weight decay0.01, linear critic decay, 16384 environments, frozen z64
+plus phase. Fresh 10B cumulative budget; existing PoE jobs unchanged.
+Resolved parity, encoder checksum, one tracker update and all preflights passed.
+[Protocol and provenance](../experiments/campaigns/2026-09-13-poe-combo-10b/README.md).
+
+## Clean PoE combined scaling + tracker submitted (2026-09-13)
+
+Depth7, batch32768, 200k updates, LR3e-4, clean identity/pair z64,
+then frozen-z plus phase tracker to 10B frames. Jobs 5770203 -> 5770204
+(afterok) -> 5770205 (afterany continuation). Full-batch pretrain smoke,
+checkpoint verification, one tracker update, three campaign tests and
+all cluster preflights passed. This combines three scaling changes;
+no performance result yet.
+[Protocol and provenance](../experiments/campaigns/2026-09-13-poe-deep-long-10b/README.md).
+
+## Direct PoE capacity and optimization: 10 runs submitted (2026-09-13)
+
+Latest verified snapshot (2026-09-13, before combined-arm submission): four
+completed at 50k with final matched probe losses tail4096 6.704,
+uniform2048 6.864, depth5 6.694, depth7 6.634. Six remain running:
+tail8192 and wide_deep 14k/50k, long_b8192 160k/200k, batch16384
+26.5k/100k, batch32768 47.5k/50k, batch32768_lr2 32.25k/50k.
+wide_deep remains near loss418 with z std 1.1e-5. All seed0, z64;
+partial budgets do not establish a batch-size comparison.
+[Arm definitions and job IDs](../experiments/campaigns/2026-09-13-poe-capacity-pretrain/README.md#submitted-jobs).
+
+## PoE rescue pretraining: 6/6 complete (2026-09-13)
+
+Verified at 01:59 UTC: all six jobs completed with exit 0:0, 50k updates,
+and final probes. Paired held-out dynamics losses: affine 7.293, affine/pair
+7.251, direct PoE 8.216, wide PoE 6.879, factored no-bias 7.283,
+modulated PoE 8.113. All z64, seed 0; no tracker or composition results.
+Raw statistics and full noise-level probes are pulled locally.
+[Final statistics and provenance](../experiments/campaigns/2026-09-12-poe-rescue-pretrain/README.md#final-results-2026-09-13-0159-utc).
+
 ## PoE base-field comparison submitted (2026-09-12)
 
 `z64_poe_base` adds `c(s, noisy_future, diffusion_time)` to the existing
