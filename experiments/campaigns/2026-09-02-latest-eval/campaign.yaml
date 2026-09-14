@@ -696,6 +696,32 @@ arms:
         - env.observations.policy.joint_vel_rel.history_length=10
         - env.observations.policy.last_action.history_length=10
     stages: *score_stages
+  # 2026-09-14-ankle-term-c1l1-10b: c1l1 + one termination each, off c1l1's
+  # 79.0B checkpoint; the board keeps the frozen termination set.
+  ankt_c1l1t1_live:
+    vars:
+      eval_arm: ankt_c1l1t1
+      tree_root: /data/ankle_term_c1l1_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  ankt_c1l1j1_live:
+    vars:
+      eval_arm: ankt_c1l1j1
+      tree_root: /data/ankle_term_c1l1_10b_live
+      encoder_ckpt: /data/past_chunk_affine_64d/p5_affine_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
   e5gap_c1_live:
     vars:
       eval_arm: e5gap_c1

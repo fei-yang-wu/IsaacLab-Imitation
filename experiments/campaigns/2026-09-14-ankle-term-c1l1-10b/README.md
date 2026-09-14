@@ -1,4 +1,11 @@
-# 2026-09-14 termination fine-tunes off c1l1 (PREPARED)
+# 2026-09-14 termination fine-tunes off c1l1 (SUBMITTED)
+
+Submitted 2026-09-14 13:50 EDT from a clean worktree of commit c966537 (no
+drift), partition coe-gpu: c1l1t1 5780776 / 5780777, c1l1j1 5780779 /
+5780780 (finetune1 / finetune2 afterany). Smokes from the committed state
+(3-iteration fine-tunes of both arms from the c1l1 79.0B file on a local
+reference-array store with the cluster data args and RLOpt a0add23): 0
+errors, `joint_near_limit` present with fraction 0.5 in the resolved env.
 
 Two fine-tunes off the c1l1 arm of `2026-09-14-ankle-limit-c1-10b` at its
 79,000,240,128 checkpoint, 10B each (cap 89,000,240,128), one added
