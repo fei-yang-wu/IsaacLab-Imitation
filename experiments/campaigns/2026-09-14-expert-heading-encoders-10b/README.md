@@ -90,8 +90,17 @@ workspace does not carry unrelated working-tree edits.
 
 ## Evaluation hookup
 
-Not yet wired. The latest-eval campaign needs `_live` rows with
-`anchor_mode: expert_heading`, and `eh_ee` needs the scorer to pass the
-50-wide `env.expert_macro_state_terms`. The EC native oracle
-(`native_fake_runtime`) supports 38-wide windows only; `eh_ee` cannot be
-plant-graded until it reads the ee points.
+- Isaac board: `2026-09-02-latest-eval` arms `ehenc_eh_live` and
+  `ehenc_eh_ee_live` (rows `ehenc_<arm>_seed0_clean_f<frames>.json`). Each
+  scores with its own encoder file and `anchor_mode: expert_heading`;
+  `ehenc_eh_ee_live` also sets the scorer's `macro_terms` var (50-wide
+  `env.expert_macro_state_terms`). `./submit_live_eval.sh` relinks the
+  newest checkpoint into `/data/expert_heading_encoders_10b_live` and
+  submits from a clean detached worktree of HEAD, not from a `git stash`,
+  because the scorer needs RLOpt a0add23.
+- EC plant: `./ec_grade_echost.sh` grades `eh` on echost with the arm's
+  own encoder (downloaded once to `logs/expert_heading_encoders_ec/encoders`),
+  `--anchor expert_heading`, cuda inference, measured plant noise. Rows in
+  `logs/expert_heading_encoders_ec/results_echost.tsv`, same columns as the
+  e5 pass. `eh_ee` is refused: the EC native oracle builds the 38-per-frame
+  window and has no `expert_ee_pos_b` terms yet.

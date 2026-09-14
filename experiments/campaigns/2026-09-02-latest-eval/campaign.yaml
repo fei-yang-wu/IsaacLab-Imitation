@@ -26,6 +26,9 @@ wandb_group: latest-eval
 vars:
   # Live-window anchor frame the scorer builds; the h1 arm trains expert_heading.
   anchor_mode: robot_heading
+  # Encoder input per window frame; the ehenc_eh_ee arm adds the four
+  # end-effector positions (50 per frame) and must score with them.
+  macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]"
   tree_root: /data/latent64_probe_10b
   # The tracker this job scores; the control plane forces `vars.arm` to the
   # ARM NAME, so a `*_robust` arm sets `eval_arm` to the tracker it scores
@@ -168,7 +171,7 @@ vars:
     - agent.ipmd.latent_learning.command_phase_source=hold
     - agent.ipmd.latent_learning.command_phase_period=0
     - agent.ipmd.latent_learning.code_latent_dim=64
-    - env.expert_macro_state_terms=[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b]
+    - env.expert_macro_state_terms=${vars.macro_terms}
     - env.expert_macro_frame_stride=1
     - env.expert_macro_anchor_mode=${vars.anchor_mode}
 
@@ -629,6 +632,37 @@ arms:
       eval_arm: affine_poe
       tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b_live
       encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b/affine_poe_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  # 2026-09-14-expert-heading-encoders-10b: e5 fine-tuned onto its own
+  # expert_heading p5_affine encoder (eh: 38 per frame; eh_ee: 50 per frame
+  # with expert_ee_pos_b). Each arm scores with its own encoder file and
+  # the expert_heading window; eh_ee also needs the 50-wide macro terms.
+  ehenc_eh_live:
+    vars:
+      eval_arm: ehenc_eh
+      tree_root: /data/expert_heading_encoders_10b_live
+      encoder_ckpt: /data/expert_heading_encoders_10b/eh_seed0/encoder/checkpoints/latest.pt
+      anchor_mode: expert_heading
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
+  ehenc_eh_ee_live:
+    vars:
+      eval_arm: ehenc_eh_ee
+      tree_root: /data/expert_heading_encoders_10b_live
+      encoder_ckpt: /data/expert_heading_encoders_10b/eh_ee_seed0/encoder/checkpoints/latest.pt
+      anchor_mode: expert_heading
+      macro_terms: "[expert_motion_qpos,expert_anchor_pos_b,expert_anchor_ori_b,expert_ee_pos_b]"
       history_args:
         - env.observations.policy.projected_gravity.history_length=10
         - env.observations.policy.base_ang_vel.history_length=10
