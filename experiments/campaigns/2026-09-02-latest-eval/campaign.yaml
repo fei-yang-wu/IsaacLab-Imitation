@@ -622,6 +622,20 @@ arms:
       # the same window or the encoder input is in the wrong frame.
       anchor_mode: expert_heading
     stages: *score_stages
+  # Fresh 50B combo tracker on the exact affine PoE reassociation encoder
+  # (2026-09-13-affine-poe-combo50b); its own encoder, tree on ice-shared.
+  affine_poe_live:
+    vars:
+      eval_arm: affine_poe
+      tree_root: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b_live
+      encoder_ckpt: /storage/ice-shared/vip-vwt/scratch-fwu91/affine_poe_combo50b/affine_poe_seed0/encoder/checkpoints/latest.pt
+      history_args:
+        - env.observations.policy.projected_gravity.history_length=10
+        - env.observations.policy.base_ang_vel.history_length=10
+        - env.observations.policy.joint_pos_rel.history_length=10
+        - env.observations.policy.joint_vel_rel.history_length=10
+        - env.observations.policy.last_action.history_length=10
+    stages: *score_stages
   e5gap_c1_live:
     vars:
       eval_arm: e5gap_c1
