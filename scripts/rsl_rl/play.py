@@ -19,6 +19,7 @@ import cli_args  # isort: skip
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
 parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--max_steps", type=int, default=0, help="Stop after this many control steps; zero runs until closed.")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
@@ -156,8 +157,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # version 2.3 onwards
         policy_nn = runner.alg.policy
     except AttributeError:
-        # version 2.2 and below
-        policy_nn = runner.alg.actor_critic
+        if hasattr(runner.alg, "actor"):
+            # RSL-RL 5 split actor/critic API.
+            policy_nn = runner.alg.actor
+        else:
+            # version 2.2 and below
+            policy_nn = runner.alg.actor_critic
 
     # extract the normalizer
     if hasattr(policy_nn, "actor_obs_normalizer"):
@@ -169,8 +174,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # export policy to onnx/jit
     export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
-    export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
+    if hasattr(runner.alg, "actor") and policy_nn is runner.alg.actor:
+        print("[INFO]: RSL-RL 5 split actor loaded; legacy policy export is skipped.")
+    else:
+        export_policy_as_jit(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.pt")
+        export_policy_as_onnx(policy_nn, normalizer=normalizer, path=export_model_dir, filename="policy.onnx")
 
     dt = env.unwrapped.step_dt
 
@@ -188,11 +196,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs, _, dones, _ = env.step(actions)
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
+        timestep += 1
         if args_cli.video:
-            timestep += 1
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
                 break
+        if args_cli.max_steps > 0 and timestep >= args_cli.max_steps:
+            break
 
         # time delay for real-time evaluation
         sleep_time = dt - (time.time() - start_time)
@@ -200,6 +210,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             time.sleep(sleep_time)
 
     # close the simulator
+    if args_cli.max_steps > 0:
+        print(f"[INFO]: Playback completed {timestep} control steps.")
     env.close()
 
 

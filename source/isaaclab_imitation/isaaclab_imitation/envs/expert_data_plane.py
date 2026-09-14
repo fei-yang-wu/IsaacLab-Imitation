@@ -302,9 +302,7 @@ class ExpertDataPlane:
             self._achieved_cursor = torch.zeros(
                 num_envs, dtype=torch.long, device=device
             )
-            self._achieved_fill = torch.zeros(
-                num_envs, dtype=torch.long, device=device
-            )
+            self._achieved_fill = torch.zeros(num_envs, dtype=torch.long, device=device)
 
         # The dataset layout is derived by `MotionDataCfg.resolve`, which the
         # environment config runs before the env reaches here. Nothing about
@@ -1529,9 +1527,7 @@ class ExpertDataPlane:
         anchor_pos, anchor_quat = self._get_robot_anchor_state_w_fast("torso_link")
         cursor = self._achieved_cursor
         index = cursor.view(-1, 1, 1)
-        self._achieved_qpos.scatter_(
-            1, index.expand(-1, 1, 29), qpos.unsqueeze(1)
-        )
+        self._achieved_qpos.scatter_(1, index.expand(-1, 1, 29), qpos.unsqueeze(1))
         self._achieved_anchor_pos.scatter_(
             1, index.expand(-1, 1, 3), anchor_pos.unsqueeze(1)
         )
@@ -1575,9 +1571,9 @@ class ExpertDataPlane:
                 f"hold a window of {horizon} slots at stride {stride} "
                 f"({span} frames)."
             )
-        eligible = torch.nonzero(
-            self._achieved_fill >= span, as_tuple=False
-        ).reshape(-1)
+        eligible = torch.nonzero(self._achieved_fill >= span, as_tuple=False).reshape(
+            -1
+        )
         if int(eligible.numel()) == 0:
             return None
         device = self._achieved_fill.device
@@ -1617,9 +1613,9 @@ class ExpertDataPlane:
         # Expert windows carry the anchor orientation as flat 6D; the compiled
         # frame transform returns quaternions, so convert with the SAME helper
         # the expert path uses.
-        ori_b = compiled.quat_to_rot6d_flat(
-            ori_quat_b.reshape(-1, 4)
-        ).reshape(int(batch_size), horizon + 1, 6)
+        ori_b = compiled.quat_to_rot6d_flat(ori_quat_b.reshape(-1, 4)).reshape(
+            int(batch_size), horizon + 1, 6
+        )
         frames = torch.cat([qpos, pos_b, ori_b], dim=-1)
         return TensorDict(
             {

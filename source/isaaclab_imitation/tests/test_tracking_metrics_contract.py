@@ -86,4 +86,6 @@ def test_transition_health_returns_tensors_for_lazy_iteration_logging() -> None:
     env = SimpleNamespace(reset_buf=torch.tensor([False]))
     term._update_transition_metrics(env, torch.tensor([20.0]), torch.tensor([30.0]))
 
-    assert all(isinstance(value, torch.Tensor) for value in term.transition_metrics().values())
+    assert all(
+        isinstance(value, torch.Tensor) for value in term.transition_metrics().values()
+    )

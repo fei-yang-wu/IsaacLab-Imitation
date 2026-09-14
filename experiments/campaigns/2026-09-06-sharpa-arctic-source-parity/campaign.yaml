@@ -1,0 +1,193 @@
+# Source-parity Sharpa dual floating-hand training on the ARCTIC box grab.
+#
+#   ./submit.sh source_parity 0                       # plan only
+#   ... submit --plan <dir> --confirm <PLAN_SHA>      # printed by plan
+#
+# The Skynet profile was exercised by calibration job 3771925 (2026-09-06).
+# That run produced no learning signal because Isaac Lab 3.0.0b2.post1 writes
+# body-frame wrenches into Newton's world-frame body_f; the repository now
+# installs a gated correction at import (isaaclab_imitation/newton_wrench_frame.py)
+# and the object collider matches the release (convex decomposition). Run
+# scripts/audit/check_sharpa_backend_smoke.py before planning. Every Slurm value
+# below is a var: override with `--set vars.<key>=<value>` rather than editing
+# this file.
+name: sharpa-arctic-source-parity
+profile: skynet
+wandb_project: v2d_hands
+wandb_group: sharpa-arctic-source-parity
+
+vars:
+  task: Isaac-Sharpa-V2D-Source-v0
+  wandb_arm: ${dash:${vars.arm}}
+
+  # Released recipe scale. The curriculum is indexed by PPO updates, not by
+  # frames, so max_iterations is what reproduces the schedule: the released
+  # checkpoints are model_30000 and the last curriculum stage starts at
+  # update 15500.
+  train_num_envs: 4096
+  rollout_steps: 24
+  max_iterations: 30000
+  frames_per_batch: ${mul:${vars.train_num_envs},${vars.rollout_steps}}
+  frame_target: ${mul:${vars.max_iterations},${vars.frames_per_batch}}
+
+  # Slurm. Verified on the login node 2026-09-06:
+  #   wu-lab   MaxTime 4:00:00; heterogeneous (a40, l40s, a5000, 2080_ti, ...)
+  #   qos short MaxWall 2-00:00:00, qos long MaxWall 7-00:00:00
+  # The partition cap binds, so a wu-lab segment cannot exceed four hours no
+  # matter which qos is used. partition and qos are profile-level fields
+  # (SlurmDefaults); only gres, mem, cpus_per_task, time_limit, nodelist and
+  # exclude can be set per stage.
+  #
+  # synapse and dendrite are the known-good A40 nodes (48 GB each, more than
+  # the L40S), and the migration wiki records the Newton qualification passing
+  # on dendrite.
+  gres: gpu:a40:1
+  nodes_allowed: synapse,dendrite
+  segment_walltime: "03:59:00"
+  cpus_per_task: 16
+  mem: 128G
+
+  # Container-visible paths. data_dir binds to /data (see profile_skynet.yaml).
+  data_root: /data/dexmanip/sharpa
+  manifest: ${vars.data_root}/arctic_box_grab_speed05_usd/manifest.json
+  output_root: /data/sharpa_arctic/${vars.arm}_seed${vars.seed}
+
+  train_args:
+    - --task
+    - ${vars.task}
+    - --algo
+    - PPO
+    - --num_envs
+    - ${vars.train_num_envs}
+    - --seed
+    - ${vars.seed}
+    - --headless
+    - --max_iterations
+    - ${vars.max_iterations}
+    # Kit-less, exactly as the G1 imitation runs on ICE. The hands and the
+    # object are pre-converted USD (scripts/data/convert_sharpa_assets_to_usd.py),
+    # so nothing needs Kit's URDF importer and no display is involved.
+    - --assert-kitless
+    - physics=newton_mjwarp
+    # Kept for the record, but it is NOT what selects the reference: Isaac Lab
+    # instantiates the env config (running __post_init__, which assembles the
+    # scene from the reference) before Hydra applies overrides, so the manifest
+    # has to be present at import time. SHARPA_REFERENCE_MANIFEST in the stage
+    # env below is what actually binds it.
+    - env.reference.manifest=${vars.manifest}
+    - agent.logger.log_dir=${vars.output_root}/tracker
+    - agent.logger.backend=wandb
+    - agent.logger.video=false
+    - agent.logger.project_name=v2d_hands
+    - agent.logger.group_name=sharpa-arctic-source-parity
+    - agent.logger.exp_name=${vars.wandb_arm}-s${vars.seed}
+    # One checkpoint every 500 PPO updates at the live environment count.
+    - agent.save_interval=${mul:500,${vars.frames_per_batch}}
+
+  # Segments 2 and later resume from the checkpoint tree the previous segment
+  # wrote. Segment 1 must not pass --checkpoint: an empty tree is a hard
+  # error, by design.
+  resume_args:
+    - --checkpoint
+    - ${vars.output_root}/tracker
+
+shared_env:
+  CLUSTER_SIM_BACKEND: newton
+
+preflight:
+  require_container_paths:
+    - ${vars.manifest}
+    - ${vars.data_root}/assets/arctic_box_bottom/object/object.usda
+  output_container_path: ${vars.output_root}
+
+arms:
+  # The released CHORD recipe, unchanged, on one real ARCTIC sequence.
+  # Every segment carries the FULL frame target; the walltime ends it and the
+  # next segment continues from cumulative_env_frames. Segments chain with
+  # afterany so a TIMEOUT predecessor still releases its successor. A segment
+  # that finds the budget already complete runs zero iterations and exits.
+  source_parity:
+    stages:
+      - name: seg1
+        executable: scripts/rlopt/train.py
+        args: ${vars.train_args}
+        time_limit: ${vars.segment_walltime}
+        gres: ${vars.gres}
+        nodelist: ${vars.nodes_allowed}
+        cpus_per_task: ${vars.cpus_per_task}
+        mem: ${vars.mem}
+        env:
+          CLUSTER_WANDB_TAGS: sharpa,arctic,box-grab,source-parity,newton,seed${vars.seed},seg1
+          WANDB_RUN_ID: sharpa-arctic-parity-s${vars.seed}
+          WANDB_RESUME: allow
+          APPTAINERENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+          SINGULARITYENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+      - name: seg2
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.train_args},${vars.resume_args}}
+        depends_on: seg1
+        dependency_kind: afterany
+        time_limit: ${vars.segment_walltime}
+        gres: ${vars.gres}
+        nodelist: ${vars.nodes_allowed}
+        cpus_per_task: ${vars.cpus_per_task}
+        mem: ${vars.mem}
+        env:
+          CLUSTER_WANDB_TAGS: sharpa,arctic,box-grab,source-parity,newton,seed${vars.seed},seg2
+          WANDB_RUN_ID: sharpa-arctic-parity-s${vars.seed}
+          WANDB_RESUME: allow
+          APPTAINERENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+          SINGULARITYENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+      - name: seg3
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.train_args},${vars.resume_args}}
+        depends_on: seg2
+        dependency_kind: afterany
+        time_limit: ${vars.segment_walltime}
+        gres: ${vars.gres}
+        nodelist: ${vars.nodes_allowed}
+        cpus_per_task: ${vars.cpus_per_task}
+        mem: ${vars.mem}
+        env:
+          CLUSTER_WANDB_TAGS: sharpa,arctic,box-grab,source-parity,newton,seed${vars.seed},seg3
+          WANDB_RUN_ID: sharpa-arctic-parity-s${vars.seed}
+          WANDB_RESUME: allow
+          APPTAINERENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+          SINGULARITYENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+      - name: seg4
+        executable: scripts/rlopt/train.py
+        args: ${concat:${vars.train_args},${vars.resume_args}}
+        depends_on: seg3
+        dependency_kind: afterany
+        time_limit: ${vars.segment_walltime}
+        gres: ${vars.gres}
+        nodelist: ${vars.nodes_allowed}
+        cpus_per_task: ${vars.cpus_per_task}
+        mem: ${vars.mem}
+        env:
+          CLUSTER_WANDB_TAGS: sharpa,arctic,box-grab,source-parity,newton,seed${vars.seed},seg4
+          WANDB_RUN_ID: sharpa-arctic-parity-s${vars.seed}
+          WANDB_RESUME: allow
+          APPTAINERENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+          SINGULARITYENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+
+  # Capacity check. One short segment that only proves the profile, the
+  # container, the data staging, and the 4096-environment memory fit before
+  # any long job is queued. Run this arm first.
+  calibration:
+    vars:
+      max_iterations: 40
+      segment_walltime: "00:45:00"
+    stages:
+      - name: seg1
+        executable: scripts/rlopt/train.py
+        args: ${vars.train_args}
+        time_limit: ${vars.segment_walltime}
+        gres: ${vars.gres}
+        nodelist: ${vars.nodes_allowed}
+        cpus_per_task: ${vars.cpus_per_task}
+        mem: ${vars.mem}
+        env:
+          CLUSTER_WANDB_TAGS: sharpa,arctic,box-grab,calibration,newton,seed${vars.seed}
+          APPTAINERENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}
+          SINGULARITYENV_SHARPA_REFERENCE_MANIFEST: ${vars.manifest}

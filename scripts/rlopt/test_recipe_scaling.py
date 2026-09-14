@@ -21,6 +21,7 @@ _HELPERS = (
     "_declared_mini_batch_size",
     "_restated_frame_interval",
     "_restate_declared_intervals",
+    "_step_counter_limit",
 )
 
 REFERENCE_NUM_ENVS = 4096
@@ -58,6 +59,7 @@ def _load_helpers() -> dict:
 _NS = _load_helpers()
 declared_mini_batch_size = _NS["_declared_mini_batch_size"]
 restate_intervals = _NS["_restate_declared_intervals"]
+step_counter_limit = _NS["_step_counter_limit"]
 
 
 class _Trainer:
@@ -174,3 +176,32 @@ def test_a_config_without_a_declaration_keeps_its_save_interval() -> None:
     restate_intervals(cfg, per_env_horizon=HORIZON, scaled_frames_per_batch=384)
     assert cfg.save_interval == 999
     assert cfg.trainer.log_interval == 999
+
+
+class _Env:
+    """An environment that declares its own episode length in control steps."""
+
+    def __init__(self, max_episode_length) -> None:
+        self.unwrapped = self
+        self.max_episode_length = max_episode_length
+
+
+def test_step_cap_clears_a_long_reference_episode() -> None:
+    """A 24 s reference at half speed is 1005 control steps; the cap must clear it."""
+
+    assert step_counter_limit(_Env(1005), 500) == 1006
+
+
+def test_step_cap_keeps_the_fallback_for_short_episodes() -> None:
+    """A short task keeps the historical cap, so existing runs are unchanged."""
+
+    assert step_counter_limit(_Env(400), 500) == 500
+
+
+def test_step_cap_falls_back_when_the_episode_length_is_unusable() -> None:
+    for declared in (None, 0, -1, "many", float("nan")):
+        assert step_counter_limit(_Env(declared), 500) == 500
+
+
+def test_step_cap_accepts_an_environment_without_the_attribute() -> None:
+    assert step_counter_limit(object(), 500) == 500

@@ -64,6 +64,43 @@ DEFAULT_REWARD_WEIGHT_SCHEDULES: dict[str, float | tuple[float, ...]] = {
         1.0,
         20.0,
     ),
+    "object_pose_tracking_exp": (
+        0.0,
+        0.1,
+        0.25,
+        0.25,
+        0.5,
+        0.5,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+    ),
+    "object_goal_tracking_exp": (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.05,
+        0.1,
+        0.25,
+        0.5,
+        1.0,
+        2.0,
+    ),
+    "object_lift_progress": (
+        0.0,
+        0.0,
+        0.1,
+        0.2,
+        0.25,
+        0.5,
+        0.5,
+        1.0,
+        1.0,
+        1.0,
+    ),
+    "object_task_success": (0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 2.0, 5.0, 10.0),
     "hand_keypoints_tracking_exp": 0.25,
     "hand_joint_pos_tracking_exp": 0.25,
     "contact_wrench_support_reward": 10.0,
@@ -128,18 +165,43 @@ def _stage_values(
     return values
 
 
+SOURCE_REWARD_WEIGHT_SCHEDULES: dict[str, float | tuple[float, ...]] = {
+    "object_keypoints_tracking_exp": DEFAULT_REWARD_WEIGHT_SCHEDULES[
+        "object_keypoints_tracking_exp"
+    ],
+    "hand_keypoints_tracking_exp": 0.25,
+    "hand_joint_pos_tracking_exp": 0.25,
+    "contact_wrench_support_reward": 10.0,
+    "unintended_contact_penalty": -10.0,
+    "missed_contact_penalty": -1.0,
+}
+"""The released CHORD schedule with no added task-objective terms.
+
+The released ``v2d_hand_env_cfg.py`` schedules exactly these six rewards.
+:data:`DEFAULT_REWARD_WEIGHT_SCHEDULES` adds the object-goal terms of this
+repository's own task variant.
+"""
+
+
 def build_curriculum_params(
     command_name: str = "motion",
     num_steps_per_env: int = DEFAULT_NUM_STEPS_PER_ENV,
+    reward_weight_schedules: Mapping[str, float | Sequence[float]] | None = None,
 ) -> dict[str, Any]:
-    """Build independent Isaac Lab parameters for the released schedule."""
+    """Build independent Isaac Lab parameters for the released schedule.
+
+    ``reward_weight_schedules`` selects which reward terms the curriculum
+    drives; it defaults to :data:`DEFAULT_REWARD_WEIGHT_SCHEDULES`.
+    """
 
     if not command_name:
         raise ValueError("command_name must not be empty.")
     # Validate the rollout length here so a bad config fails before Isaac starts.
     fixed_schedule_thresholds(DEFAULT_TIMESTEP_SCHEDULE, num_steps_per_env)
+    if reward_weight_schedules is None:
+        reward_weight_schedules = DEFAULT_REWARD_WEIGHT_SCHEDULES
     reward_schedules: dict[str, float | list[float]] = {}
-    for name, value in DEFAULT_REWARD_WEIGHT_SCHEDULES.items():
+    for name, value in reward_weight_schedules.items():
         if isinstance(value, Real):
             reward_schedules[name] = float(value)
         else:

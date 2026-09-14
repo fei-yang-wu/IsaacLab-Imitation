@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import math
+import os
 from pathlib import Path
 from typing import Any
 import xml.etree.ElementTree as ET
@@ -19,6 +20,9 @@ from isaaclab.assets import Articulation, RigidObject
 from isaaclab.envs.manager_based_rl_env import ManagerBasedRLEnv
 from isaaclab_newton.sensors import ContactSensorCfg
 
+from isaaclab_imitation.tasks.manager_based.dexmanip.actions import (
+    wuji_anatomical_joint_limits,
+)
 from isaaclab_imitation.tasks.manager_based.dexmanip.command import (
     VegaWujiReferenceCommand,
     wxyz_to_xyzw_tensor,
@@ -48,6 +52,207 @@ _REQUIRED_ROBOT_SITES = ("right_palm", "left_palm")
 _FORBIDDEN_SCENE_BODIES = ("grasp_cube", "desk")
 _SITE_ORIENTATION_ATTRIBUTES = ("axisangle", "euler", "xyaxes", "zaxis")
 _REFERENCE_TIMING_ABS_TOLERANCE_S = 1.0e-9
+_INSPECTION_REPLAY_ENV = "ISAACLAB_IMITATION_VEGA_WUJI_INSPECTION_REPLAY"
+
+
+def _verify_reference_mode_authorization(
+    *, require_training_qualified_reference: bool
+) -> None:
+    """Keep the unqualified Reference escape local to the replay tool."""
+
+    if require_training_qualified_reference:
+        return
+    if os.environ.get(_INSPECTION_REPLAY_ENV) != "1":
+        raise ValueError(
+            "Unqualified Vega-Wuji References are allowed only through "
+            "scripts/viz/replay_vega_wuji_reference.py. Training and generic "
+            "environment launchers cannot disable qualification with a Hydra "
+            "override alone."
+        )
+
+
+def _verify_adopted_wuji_training_gates(reference: DexterousReference) -> None:
+    """Require final-FK evidence from the adopted Wuji recipe for training."""
+
+    metadata = reference.metadata
+    finger_mapping = metadata.get("finger_mapping")
+    wrist_ik = metadata.get("wrist_ik")
+    source = metadata.get("source")
+    if not isinstance(finger_mapping, Mapping) or not isinstance(wrist_ik, Mapping):
+        raise ValueError(
+            f"Reference {reference.sequence_id!r} lacks adopted Wuji retarget "
+            "evidence and is inspection-only."
+        )
+    expected = (
+        finger_mapping.get("recipe_source")
+        == "wuji_retargeting_notes successful v1 map"
+        and finger_mapping.get("anatomical_limits_applied_before_ik") is True
+        and math.isclose(
+            float(finger_mapping.get("source_to_robot_scale", float("nan"))),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+        and math.isclose(
+            float(finger_mapping.get("posture_cost", float("nan"))),
+            2.0e-3,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+        and wrist_ik.get("split_wrist_hand_ik_enabled") is True
+        and math.isclose(
+            float(wrist_ik.get("orientation_weight", float("nan"))),
+            0.03,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+        and isinstance(source, Mapping)
+    )
+    calibration = finger_mapping.get("palm_frame_calibration")
+    projection = finger_mapping.get("soma_chord_hand_keypoint_projection")
+    arm_lock = wrist_ik.get("post_wrist_joint_lock")
+    acceptance = finger_mapping.get("final_acceptance")
+    if (
+        not expected
+        or not isinstance(arm_lock, Mapping)
+        or arm_lock.get("verified") is not True
+        or not isinstance(acceptance, Mapping)
+        or acceptance.get("qualified") is not True
+    ):
+        raise ValueError(
+            f"Reference {reference.sequence_id!r} did not pass the adopted "
+            "Wuji recipe and final arm-lock/finger gates."
+        )
+    sides = acceptance.get("sides")
+    projection_sides = (
+        projection.get("sides") if isinstance(projection, Mapping) else None
+    )
+    if (
+        not isinstance(sides, Mapping)
+        or not isinstance(calibration, Mapping)
+        or not isinstance(projection_sides, Mapping)
+    ):
+        raise ValueError("Final Wuji acceptance evidence has no per-side gates.")
+    for side in ("left", "right"):
+        side_record = sides.get(side)
+        gates = side_record.get("gates") if isinstance(side_record, Mapping) else None
+        side_calibration = calibration.get(side)
+        side_projection = projection_sides.get(side)
+        if (
+            not isinstance(gates, Mapping)
+            or gates.get("pass") is not True
+            or gates.get("failures") != []
+            or gates.get("not_measured") != []
+            or not isinstance(side_calibration, Mapping)
+            or side_calibration.get("calibration_source")
+            != "identity-specific full-resolution SOMA zero-pose MCP geometry"
+            or not math.isclose(
+                float(side_calibration.get("scale_applied_to_targets", float("nan"))),
+                1.0,
+                rel_tol=0.0,
+                abs_tol=1.0e-12,
+            )
+            or not isinstance(side_projection, Mapping)
+            or side_projection.get("method")
+            != ("source-rate sequential tips-only bounded DLS with slight-curl prior")
+            or not math.isclose(
+                float(side_projection.get("solve_rate_hz", float("nan"))),
+                float(source.get("fps", float("nan"))),
+                rel_tol=0.0,
+                abs_tol=1.0e-9,
+            )
+            or not math.isclose(
+                float(
+                    side_projection.get("emitted_frame_change_limit_deg", float("nan"))
+                ),
+                34.99,
+                rel_tol=0.0,
+                abs_tol=1.0e-9,
+            )
+        ):
+            raise ValueError(
+                f"Reference {reference.sequence_id!r} lacks a passing, complete "
+                f"final-FK Wuji gate and geometric-calibration record for {side}."
+            )
+
+
+def _verify_runtime_promotion_attestation(
+    reference: DexterousReference,
+    *,
+    manifest_path: Path,
+    runtime_model_path: Path,
+) -> None:
+    """Require hash-bound Newton evidence that this Reference is executable.
+
+    The generic ILTools training record covers offline fitting only.  Newton
+    executability is separate evidence: a full-horizon state-lock replay and a
+    full-horizon zero-assistance replay, bound to this motion and this robot
+    model.  Free-form Reference metadata cannot substitute for that typed,
+    artifact-bound attestation, so the sidecar is authoritative and is
+    re-verified here rather than trusted.
+    """
+
+    from imitation_experiments.audit.vega_wuji_promotion import (
+        attestation_path_for_manifest,
+        load_attestation,
+        sha256_file,
+        verify_attestation_for_reference,
+    )
+
+    attestation_path = attestation_path_for_manifest(manifest_path)
+    if not attestation_path.is_file():
+        raise ValueError(
+            f"Reference {reference.sequence_id!r} has no Vega-Wuji "
+            f"runtime-promotion attestation at {attestation_path}. Replay the "
+            "Reference with scripts/viz/replay_vega_wuji_reference.py (once "
+            "for state lock, once with --unassisted-dynamics), then run "
+            "scripts/data/promote_vega_wuji_reference.py."
+        )
+    verify_attestation_for_reference(
+        load_attestation(attestation_path),
+        sequence_id=reference.sequence_id,
+        qpos=np.asarray(reference.qpos),
+        model_sha256=sha256_file(runtime_model_path),
+    )
+
+
+def _validate_reference_anatomical_envelope(
+    qpos: torch.Tensor,
+    lengths: torch.Tensor,
+    joint_names: Sequence[str],
+    effective_joint_pos_limits: torch.Tensor,
+    *,
+    tolerance: float = 1.0e-5,
+) -> None:
+    """Reject any authored Reference sample outside the live Wuji envelope."""
+
+    names = tuple(str(name) for name in joint_names)
+    if qpos.ndim != 3 or qpos.shape[-1] != len(names):
+        raise ValueError("Reference qpos must have shape [M, T, J].")
+    if lengths.shape != (qpos.shape[0],):
+        raise ValueError("Reference lengths must have shape [M].")
+    if effective_joint_pos_limits.shape != (len(names), 2):
+        raise ValueError("Effective joint limits must have shape [J, 2].")
+    if not math.isfinite(tolerance) or tolerance < 0.0:
+        raise ValueError("Anatomical-limit tolerance must be finite and non-negative.")
+    for motion_index in range(qpos.shape[0]):
+        frame_count = int(lengths[motion_index].item())
+        if not 1 <= frame_count <= qpos.shape[1]:
+            raise ValueError(f"Reference motion {motion_index} has invalid length.")
+        values = qpos[motion_index, :frame_count]
+        outside = (values < effective_joint_pos_limits[:, 0] - tolerance) | (
+            values > effective_joint_pos_limits[:, 1] + tolerance
+        )
+        if bool(outside.any().item()):
+            frame_index, joint_index = outside.nonzero(as_tuple=False)[0].tolist()
+            lower, upper = effective_joint_pos_limits[joint_index].tolist()
+            raise ValueError(
+                "Reference violates the live Wuji anatomical envelope: "
+                f"motion={motion_index}, frame={frame_index}, "
+                f"joint={names[joint_index]!r}, "
+                f"value={float(values[frame_index, joint_index]):.9g}, "
+                f"limits=[{lower:.9g}, {upper:.9g}]."
+            )
 
 
 def _xml_floats(
@@ -712,6 +917,11 @@ class VegaWujiImitationEnv(ManagerBasedRLEnv):
     """Track ILTools dexterous References with one fixed-base Vega articulation."""
 
     def __init__(self, cfg: Any, render_mode: str | None = None, **kwargs: Any) -> None:
+        _verify_reference_mode_authorization(
+            require_training_qualified_reference=bool(
+                cfg.require_training_qualified_reference
+            )
+        )
         _sync_motion_command_cfg(cfg)
         _validate_reference_timing(cfg)
         _validate_wrist_frame_cfg(cfg)
@@ -749,6 +959,12 @@ class VegaWujiImitationEnv(ManagerBasedRLEnv):
                 )
             for reference in references:
                 verify_training_qualification(reference)
+                _verify_adopted_wuji_training_gates(reference)
+                _verify_runtime_promotion_attestation(
+                    reference,
+                    manifest_path=reference_source,
+                    runtime_model_path=asset_path,
+                )
         for reference in references:
             reference.verify_scene_assets(require_hashes=is_manifest)
         fingertip_names = {
@@ -857,6 +1073,16 @@ class VegaWujiImitationEnv(ManagerBasedRLEnv):
             self._reference_joint_names = live_joint_names
             self._motion_command._reference_qpos = self._reference_qpos
             self._motion_command._reference_qvel = self._reference_qvel
+        effective_limits = wuji_anatomical_joint_limits(
+            live_joint_names,
+            self.robot.data.soft_joint_pos_limits.torch[0],
+        )
+        _validate_reference_anatomical_envelope(
+            self._reference_qpos,
+            self._reference_lengths,
+            live_joint_names,
+            effective_limits,
+        )
         self._objects: list[RigidObject] = [
             self.scene[name] for name in self._reference_object_names
         ]
@@ -982,7 +1208,10 @@ class VegaWujiImitationEnv(ManagerBasedRLEnv):
                 self.cfg.commands.motion.reset_finger_openness
             )
             joint_position[:, self._finger_joint_ids] *= openness
-        limits = self.robot.data.soft_joint_pos_limits.torch[ids]
+        limits = wuji_anatomical_joint_limits(
+            self.robot.joint_names,
+            self.robot.data.soft_joint_pos_limits.torch[ids],
+        )
         joint_position = torch.maximum(
             torch.minimum(joint_position, limits[..., 1]), limits[..., 0]
         )

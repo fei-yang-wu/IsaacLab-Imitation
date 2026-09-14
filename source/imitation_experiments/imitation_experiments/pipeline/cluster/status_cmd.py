@@ -11,7 +11,7 @@ from typing import Any
 from imitation_experiments.paper.common import PipelineError
 from imitation_experiments.paths import REPO_ROOT
 
-from .remote import ssh_run
+from .remote import slurm_path_prefix, ssh_run
 
 _SACCT_SUFFIXES = (".batch", ".extern", ".interactive")
 
@@ -71,9 +71,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     login = record["cluster"]["login"]
     job_ids = [job["slurm_job_id"] for job in record["jobs"]]
     ids_csv = ",".join(job_ids)
+    prefix = slurm_path_prefix(record["cluster"].get("slurm_bin_dir"))
     proc = ssh_run(
         login,
-        f"squeue -h -j {shlex.quote(ids_csv)} -o '%i|%T|%M|%R' 2>/dev/null || true; "
+        prefix
+        + f"squeue -h -j {shlex.quote(ids_csv)} -o '%i|%T|%M|%R' 2>/dev/null || true; "
         "echo '---SACCT---'; "
         f"sacct -n -P -j {shlex.quote(ids_csv)} "
         "--format=JobID,State,Elapsed,ExitCode 2>/dev/null || true",
@@ -157,7 +159,9 @@ def cmd_cancel(args: argparse.Namespace) -> int:
         return 2
     ssh_run(
         record["cluster"]["login"],
-        "scancel " + " ".join(shlex.quote(job_id) for job_id in ids),
+        slurm_path_prefix(record["cluster"].get("slurm_bin_dir"))
+        + "scancel "
+        + " ".join(shlex.quote(job_id) for job_id in ids),
     )
     print(f"[CANCEL] cancelled {ids}")
     return 0

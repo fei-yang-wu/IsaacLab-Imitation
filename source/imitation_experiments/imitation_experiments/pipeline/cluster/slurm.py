@@ -216,12 +216,27 @@ cp {quoted_env_file} "$extracted_workspace/docker/cluster/job_env.resolved.sh"
 {run_id_block}
 sed 's/^/[ENV] /' "$extracted_workspace/docker/cluster/job_env.resolved.sh"
 
+# Sample GPU memory every 30 s for the whole job. The before/after nvidia-smi
+# calls only ever read 0 MiB, so a capacity check needs a sample taken while
+# the simulation is actually resident.
+gpu_samples="$bootstrap_root/gpu_memory_used_mib.log"
+( nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -l 30 \\
+    > "$gpu_samples" 2>/dev/null ) &
+gpu_sampler_pid=$!
+
 # stdbuf line-buffers output so failures are not swallowed by block buffering.
 set +e
 stdbuf -oL -eL bash "$extracted_workspace/docker/cluster/run_singularity.sh" \\
     "$extracted_workspace" {quoted_profile} {quoted_args}
 job_status=$?
 set -e
+kill "$gpu_sampler_pid" 2>/dev/null || true
+if [ -s "$gpu_samples" ]; then
+    peak_mib=$(sort -n "$gpu_samples" | tail -1 | tr -d '[:space:]')
+    echo "[INFO] Peak GPU memory during job: ${{peak_mib}} MiB ($(wc -l < "$gpu_samples") samples at 30 s)"
+else
+    echo "[INFO] Peak GPU memory during job: unavailable (sampler wrote nothing)"
+fi
 rm -rf "$bootstrap_root"
 
 echo "[INFO] GPU status after job"

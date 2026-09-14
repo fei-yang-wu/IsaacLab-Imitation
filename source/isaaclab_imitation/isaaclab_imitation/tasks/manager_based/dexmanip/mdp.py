@@ -220,15 +220,21 @@ def relative_pose(
     parent_wxyz: torch.Tensor,
     child_position: torch.Tensor,
     child_wxyz: torch.Tensor | None = None,
+    *,
+    unique: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
-    """Express a child pose in a parent frame."""
+    """Express a child pose in a parent frame.
+
+    ``unique=False`` keeps the raw relative quaternion, which is what the
+    released ``subtract_frame_transforms`` command layout publishes.
+    """
     parent_inverse = quat_inverse(parent_wxyz)
     relative_position = quat_rotate(parent_inverse, child_position - parent_position)
     if child_wxyz is None:
         return relative_position, None
-    relative_wxyz = quat_unique(
-        quat_normalize(quat_multiply(parent_inverse, child_wxyz))
-    )
+    relative_wxyz = quat_normalize(quat_multiply(parent_inverse, child_wxyz))
+    if unique:
+        relative_wxyz = quat_unique(relative_wxyz)
     return relative_position, relative_wxyz
 
 
@@ -266,10 +272,12 @@ def pose_delta_command(
     current_wxyz: torch.Tensor,
     target_position: torch.Tensor,
     target_wxyz: torch.Tensor,
+    *,
+    unique: bool = True,
 ) -> torch.Tensor:
     """Return a target pose expressed in the current pose frame as XYZ+WXYZ."""
     position_delta, orientation_delta = relative_pose(
-        current_position, current_wxyz, target_position, target_wxyz
+        current_position, current_wxyz, target_position, target_wxyz, unique=unique
     )
     assert orientation_delta is not None
     return torch.cat((position_delta, orientation_delta), dim=-1)

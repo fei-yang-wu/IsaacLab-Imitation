@@ -98,6 +98,7 @@ from isaaclab_imitation.envs.rlopt import IsaacLabTerminalObsReader, IsaacLabWra
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from rlopt.agent import IPMD, IPMDL2T, PPO, SAC
 from torchrl.envs import Compose, RewardClipping, RewardSum, StepCounter, TransformedEnv
+from train_impl import _step_counter_limit
 from torchrl.envs.utils import set_exploration_type, step_mdp
 from tensordict.nn import InteractionType
 
@@ -235,6 +236,7 @@ def main(
         print_dict(video_kwargs, nesting=4)
         env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
+    isaac_env = env
     env = IsaacLabWrapper(env)
     env = env.set_info_dict_reader(
         IsaacLabTerminalObsReader(
@@ -245,7 +247,7 @@ def main(
         base_env=env,
         transform=Compose(
             RewardSum(),
-            StepCounter(1000),
+            StepCounter(_step_counter_limit(isaac_env, 1000)),
             RewardClipping(-10.0, 5.0),
         ),
     )

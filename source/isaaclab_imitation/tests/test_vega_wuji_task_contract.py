@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,9 +22,13 @@ from isaaclab_imitation.envs.vega_wuji_imitation_env import (
     _pack_references,
     _scene_spec,
     _sync_motion_command_cfg,
+    _validate_reference_anatomical_envelope,
+    _verify_reference_mode_authorization,
+    _verify_runtime_promotion_attestation,
     _validate_reference_timing,
     _validate_robot_only_mjcf,
     _validate_wrist_frame_cfg,
+    _verify_adopted_wuji_training_gates,
 )
 from isaaclab_imitation.tasks.manager_based.dexmanip import mdp
 from isaaclab_imitation.tasks.manager_based.dexmanip.actions import (
@@ -218,6 +223,202 @@ def test_reference_timing_is_exactly_one_frame_per_control_transition() -> None:
     cfg = VegaWujiImitationEnvCfg()
 
     assert _validate_reference_timing(cfg) == pytest.approx(0.05)
+
+
+def test_reference_samples_must_respect_live_anatomical_envelope() -> None:
+    names = ("l_thumb_ip", "L_arm_j1")
+    limits = torch.tensor(((0.0, math.pi / 2.0), (-1.0, 1.0)))
+    qpos = torch.tensor(
+        (((0.0, 0.0), (math.pi / 4.0, 0.5), (99.0, 99.0)),),
+        dtype=torch.float32,
+    )
+    lengths = torch.tensor((2,))
+
+    _validate_reference_anatomical_envelope(qpos, lengths, names, limits)
+
+    invalid = qpos.clone()
+    invalid[0, 1, 0] = -0.1
+    with pytest.raises(ValueError, match="l_thumb_ip"):
+        _validate_reference_anatomical_envelope(invalid, lengths, names, limits)
+
+
+def test_training_gate_rejects_legacy_wuji_recipe_evidence() -> None:
+    reference = _reference(sequence_id="legacy", frame_count=2)
+    with pytest.raises(ValueError, match="lacks adopted Wuji"):
+        _verify_adopted_wuji_training_gates(reference)
+
+    passing_gates = {"pass": True, "failures": [], "not_measured": []}
+    calibration = {
+        "calibration_source": (
+            "identity-specific full-resolution SOMA zero-pose MCP geometry"
+        ),
+        "scale_applied_to_targets": 1.0,
+    }
+    projection = {
+        "method": (
+            "source-rate sequential tips-only bounded DLS with slight-curl prior"
+        ),
+        "solve_rate_hz": 200.0,
+        "emitted_frame_change_limit_deg": 34.99,
+    }
+    reference.metadata = {
+        "source": {"fps": 200.0},
+        "finger_mapping": {
+            "recipe_source": "wuji_retargeting_notes successful v1 map",
+            "anatomical_limits_applied_before_ik": True,
+            "source_to_robot_scale": 1.0,
+            "posture_cost": 2.0e-3,
+            "palm_frame_calibration": {
+                "left": dict(calibration),
+                "right": dict(calibration),
+            },
+            "soma_chord_hand_keypoint_projection": {
+                "sides": {
+                    "left": dict(projection),
+                    "right": dict(projection),
+                }
+            },
+            "final_acceptance": {
+                "qualified": True,
+                "sides": {
+                    "left": {"gates": dict(passing_gates)},
+                    "right": {"gates": dict(passing_gates)},
+                },
+            },
+        },
+        "wrist_ik": {
+            "split_wrist_hand_ik_enabled": True,
+            "orientation_weight": 0.03,
+            "post_wrist_joint_lock": {"verified": True},
+        },
+    }
+    _verify_adopted_wuji_training_gates(reference)
+
+    reference.metadata["finger_mapping"]["palm_frame_calibration"]["left"][
+        "calibration_source"
+    ] = "posed trajectory mean"
+    with pytest.raises(ValueError, match="geometric-calibration record"):
+        _verify_adopted_wuji_training_gates(reference)
+
+
+def _promotion_fixture(tmp_path, reference):
+    """Write a model and a valid attestation sidecar for one Reference."""
+
+    from imitation_experiments.audit.vega_wuji_promotion import (
+        attestation_path_for_manifest,
+        build_attestation,
+        canonical_qpos_sha256,
+        sha256_file,
+    )
+
+    model = tmp_path / "model.xml"
+    model.write_text("<mujoco/>", encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    replay = {
+        "task": "Isaac-Imitation-Vega-Wuji-v0",
+        "physics": "newton_mjwarp",
+        "selected_motion": str(tmp_path / "ref.npz"),
+        "full_reference_horizon_requested": True,
+        "full_reference_horizon_completed": True,
+        "completed_without_termination": True,
+        "termination_step": None,
+    }
+    attestation = build_attestation(
+        motions=[
+            {
+                "sequence_id": reference.sequence_id,
+                "qpos_sha256": canonical_qpos_sha256(np.asarray(reference.qpos)),
+                "state_lock": {
+                    **replay,
+                    "mode": "reference_state_lock",
+                    "state_lock": {"passed": True},
+                },
+                "unassisted": {
+                    **replay,
+                    "mode": "unassisted_zero_residual_dynamics",
+                    "zero_virtual_object_controller_verified": True,
+                    "assistance_violation_step": None,
+                    "unassisted_dynamics": {"max_object_position_error_m": 0.01},
+                },
+            }
+        ],
+        model_sha256=sha256_file(model),
+        tool="test",
+    )
+    attestation_path_for_manifest(manifest).write_text(
+        json.dumps(attestation), encoding="utf-8"
+    )
+    return manifest, model
+
+
+def test_training_gate_rejects_free_form_runtime_promotion_metadata(tmp_path) -> None:
+    """Reference metadata must never be able to promote itself.
+
+    The attestation sidecar is authoritative; a Reference that simply claims
+    it was replayed is rejected because no sidecar exists beside its manifest.
+    """
+
+    reference = _reference(sequence_id="copied-promotion", frame_count=2)
+    reference.metadata["runtime_promotion"] = {
+        "state_lock_passed": True,
+        "unassisted_replay_passed": True,
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    model = tmp_path / "model.xml"
+    model.write_text("<mujoco/>", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no Vega-Wuji"):
+        _verify_runtime_promotion_attestation(
+            reference, manifest_path=manifest, runtime_model_path=model
+        )
+
+
+def test_training_gate_accepts_a_bound_promotion_attestation(tmp_path) -> None:
+    reference = _reference(sequence_id="promoted", frame_count=2)
+    manifest, model = _promotion_fixture(tmp_path, reference)
+
+    _verify_runtime_promotion_attestation(
+        reference, manifest_path=manifest, runtime_model_path=model
+    )
+
+
+def test_training_gate_rejects_a_promotion_bound_to_another_motion(tmp_path) -> None:
+    """A sidecar must not transfer to a Reference it was not measured on."""
+
+    reference = _reference(sequence_id="promoted", frame_count=2)
+    manifest, model = _promotion_fixture(tmp_path, reference)
+    other = _reference(sequence_id="promoted", frame_count=2, qpos_offset=0.25)
+
+    with pytest.raises(ValueError, match="does not match its promotion record"):
+        _verify_runtime_promotion_attestation(
+            other, manifest_path=manifest, runtime_model_path=model
+        )
+
+
+def test_training_gate_rejects_a_promotion_bound_to_another_model(tmp_path) -> None:
+    reference = _reference(sequence_id="promoted", frame_count=2)
+    manifest, _ = _promotion_fixture(tmp_path, reference)
+    swapped = tmp_path / "other_model.xml"
+    swapped.write_text("<mujoco><!-- different --></mujoco>", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="was promoted against model"):
+        _verify_runtime_promotion_attestation(
+            reference, manifest_path=manifest, runtime_model_path=swapped
+        )
+
+
+def test_unqualified_reference_mode_requires_replay_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ISAACLAB_IMITATION_VEGA_WUJI_INSPECTION_REPLAY", raising=False)
+    with pytest.raises(ValueError, match="Hydra override alone"):
+        _verify_reference_mode_authorization(require_training_qualified_reference=False)
+
+    monkeypatch.setenv("ISAACLAB_IMITATION_VEGA_WUJI_INSPECTION_REPLAY", "1")
+    _verify_reference_mode_authorization(require_training_qualified_reference=False)
+    _verify_reference_mode_authorization(require_training_qualified_reference=True)
 
 
 @pytest.mark.parametrize(

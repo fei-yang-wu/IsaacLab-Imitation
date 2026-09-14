@@ -42,6 +42,11 @@ setup(
             "assets/unitree/g1_description/*.xml",
             "assets/unitree/g1_description/*.usd",
             "assets/unitree/g1_description/meshes/*",
+            "assets/sharpa_wave/meshes/*",
+            "assets/sharpa_wave/meshes/*/*",
+            "assets/sharpa_wave/urdfs/sharpawave/*.urdf",
+            "assets/sharpa_wave/xmls/sharpawave/*.xml",
+            "assets/sharpa_wave/*.usd*",
             "manifests/*.json",
         ]
     },

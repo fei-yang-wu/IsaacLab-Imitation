@@ -109,3 +109,27 @@ def test_pilot_run_sh_is_deprecation_shim() -> None:
     assert proc.returncode == 2
     assert "DEPRECATED" in proc.stderr
     assert "submit.sh" in proc.stderr
+
+
+def test_kit_first_newton_entrypoint_avoids_the_kitless_branch() -> None:
+    """`train_newton.py` needs Kit's asset converter, so it must not go kit-less.
+
+    Skynet job 3771894 died in AppLauncher with `KeyError: 'EXP_PATH'` because
+    the runner sent every Newton entrypoint to the CU130 runtime Python. The
+    Kit-first bootstrap has to run under /isaac-sim/python.sh instead, and must
+    never be handed --assert-kitless.
+    """
+
+    script = (REPO_ROOT / "docker/cluster/run_singularity.sh").read_text()
+    assert "kit_first_entrypoint=0" in script
+    assert "scripts/rlopt/train_newton.py) kit_first_entrypoint=1 ;;" in script
+    # The kit-less branch is the only one that appends --assert-kitless, and it
+    # is now guarded by the flag.
+    assert (
+        'if [ "$rlopt_backend" = "newton" ] && [ "$kit_first_entrypoint" = "0" ]; then'
+        in script
+    )
+    assert (
+        'elif [ "$rlopt_backend" = "physx" ] || [ "$kit_first_entrypoint" = "1" ]; then'
+        in script
+    )

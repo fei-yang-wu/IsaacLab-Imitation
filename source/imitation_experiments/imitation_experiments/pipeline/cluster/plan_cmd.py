@@ -51,6 +51,8 @@ def _stage_directives(
         account=slurm.account,
         qos=slurm.qos,
         partition=slurm.partition,
+        nodelist=stage.nodelist or slurm.nodelist,
+        exclude=stage.exclude or slurm.exclude,
         nodes=slurm.nodes,
         ntasks=slurm.ntasks,
     )

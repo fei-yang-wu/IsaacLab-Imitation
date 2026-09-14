@@ -612,16 +612,28 @@ case "${CLUSTER_PYTHON_EXECUTABLE}" in
     scripts/rlopt/train*.py) rlopt_backend="$(resolve_rlopt_backend "${@:3}")" ;;
 esac
 
-if [ "$rlopt_backend" = "newton" ]; then
+# Newton normally needs no Kit, so its entrypoint runs under the CU130 runtime
+# Python. `train_newton.py` is the exception: it is the Kit-FIRST Newton
+# bootstrap, for tasks whose assets are URDF or MJCF and therefore need Kit's
+# asset converter before the solver ever runs (the Sharpa hands are URDF).
+# Sending it down the kit-less branch dies in AppLauncher with
+# `KeyError: 'EXP_PATH'` seconds in (Skynet job 3771894), so it takes the
+# Kit-first branch below and never receives --assert-kitless.
+kit_first_entrypoint=0
+case "${CLUSTER_PYTHON_EXECUTABLE}" in
+    scripts/rlopt/train_newton.py) kit_first_entrypoint=1 ;;
+esac
+
+if [ "$rlopt_backend" = "newton" ] && [ "$kit_first_entrypoint" = "0" ]; then
     printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}" --assert-kitless
     workload_cmd='runtime_python=""; for candidate in "${ISAACLAB_CU130_RUNTIME_ROOT}/bin/python" /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime/bin/python; do if [ -x "$candidate" ]; then runtime_python="$candidate"; break; fi; done; if [ -z "$runtime_python" ]; then echo "[ERROR] CU130 runtime Python not found." >&2; exit 1; fi; exec "$runtime_python" '"${workload_args}"
-elif [ "$rlopt_backend" = "physx" ]; then
+elif [ "$rlopt_backend" = "physx" ] || [ "$kit_first_entrypoint" = "1" ]; then
     if [ "$rlopt_pipeline" = "1" ]; then
         printf -v workload_args '%q ' "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
     else
         printf -v workload_args '%q ' scripts/rlopt/train_physx.py "${@:3}"
     fi
-    workload_cmd='runtime_site=""; for candidate in "${ISAACLAB_CU130_RUNTIME_ROOT}"/lib/python*/site-packages /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime/lib/python*/site-packages; do if [ -d "$candidate/torch" ]; then runtime_site="$candidate"; break; fi; done; if [ -z "$runtime_site" ]; then echo "[ERROR] CU130 runtime site-packages not found." >&2; exit 1; fi; export ISAACLAB_CU130_SITE_PACKAGES="$runtime_site"; runtime_nvidia_libs="$(find "$runtime_site/nvidia" -mindepth 2 -maxdepth 3 -type d -name lib -print 2>/dev/null | paste -sd: -)"; if [ -n "$runtime_nvidia_libs" ]; then export LD_LIBRARY_PATH="$runtime_nvidia_libs:${LD_LIBRARY_PATH:-}"; fi; runtime_nccl="$runtime_site/nvidia/nccl/lib/libnccl.so.2"; if [ ! -f "$runtime_nccl" ]; then echo "[ERROR] CU130 runtime NCCL not found: $runtime_nccl" >&2; exit 1; fi; export LD_PRELOAD="$runtime_nccl${LD_PRELOAD:+:$LD_PRELOAD}"; success_marker="${TMPDIR}/rlopt-physx-success"; rm -f "$success_marker"; export ISAACLAB_WORKLOAD_SUCCESS_MARKER="$success_marker"; /isaac-sim/python.sh '"${workload_args}"'; python_status=$?; if [ "$python_status" -ne 0 ]; then exit "$python_status"; fi; if [ ! -f "$success_marker" ]; then echo "[ERROR] PhysX process returned without its workload success marker." >&2; exit 1; fi'
+    workload_cmd='runtime_site=""; for candidate in "${ISAACLAB_CU130_RUNTIME_ROOT}"/lib/python*/site-packages /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime/lib/python*/site-packages; do if [ -d "$candidate/torch" ]; then runtime_site="$candidate"; break; fi; done; if [ -z "$runtime_site" ]; then echo "[ERROR] CU130 runtime site-packages not found." >&2; exit 1; fi; export ISAACLAB_CU130_SITE_PACKAGES="$runtime_site"; runtime_nvidia_libs="$(find "$runtime_site/nvidia" -mindepth 2 -maxdepth 3 -type d -name lib -print 2>/dev/null | paste -sd: -)"; if [ -n "$runtime_nvidia_libs" ]; then export LD_LIBRARY_PATH="$runtime_nvidia_libs:${LD_LIBRARY_PATH:-}"; fi; runtime_nccl="$runtime_site/nvidia/nccl/lib/libnccl.so.2"; if [ ! -f "$runtime_nccl" ]; then echo "[ERROR] CU130 runtime NCCL not found: $runtime_nccl" >&2; exit 1; fi; export LD_PRELOAD="$runtime_nccl${LD_PRELOAD:+:$LD_PRELOAD}"; success_marker="${TMPDIR}/rlopt-kit-first-success"; rm -f "$success_marker"; export ISAACLAB_WORKLOAD_SUCCESS_MARKER="$success_marker"; /isaac-sim/python.sh '"${workload_args}"'; python_status=$?; if [ "$python_status" -ne 0 ]; then exit "$python_status"; fi; if [ ! -f "$success_marker" ]; then echo "[ERROR] Kit-first process returned without its workload success marker." >&2; exit 1; fi'
 else
     printf -v workload_cmd '%q ' /isaac-sim/python.sh "${CLUSTER_PYTHON_EXECUTABLE}" "${@:3}"
 fi

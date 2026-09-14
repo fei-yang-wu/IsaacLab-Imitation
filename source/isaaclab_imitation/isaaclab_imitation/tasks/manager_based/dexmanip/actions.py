@@ -9,6 +9,7 @@ configuration compatibility.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,49 @@ SIDE_ORDER = ("right", "left")
 
 VEGA_WUJI_JOINT_COUNT = 59
 """Number of actuators in the validated Vega plus two Wuji-hand asset."""
+
+WUJI_ANATOMICAL_LIMITS_DEG: tuple[tuple[str, float | None, float | None], ...] = (
+    ("mcp_abd", -40.0, 40.0),
+    ("_pip", 0.0, 100.0),
+    ("_dip", 0.0, 80.0),
+    ("thumb_mcp", 0.0, None),
+    ("thumb_ip", 0.0, 100.0),
+)
+"""Runtime finger envelope from the adopted Wuji retargeting recipe."""
+
+
+def wuji_anatomical_joint_limits(
+    joint_names: Sequence[str], soft_joint_pos_limits: torch.Tensor
+) -> torch.Tensor:
+    """Intersect live soft limits with the adopted Wuji finger envelope."""
+
+    names = tuple(str(name) for name in joint_names)
+    if soft_joint_pos_limits.ndim < 2 or soft_joint_pos_limits.shape[-2:] != (
+        len(names),
+        2,
+    ):
+        raise ValueError("soft_joint_pos_limits must end with shape [J, 2].")
+    result = soft_joint_pos_limits.clone()
+    for joint_index, name in enumerate(names):
+        match = next(
+            (row for row in WUJI_ANATOMICAL_LIMITS_DEG if row[0] in name), None
+        )
+        if match is None:
+            continue
+        _, lower_deg, upper_deg = match
+        if lower_deg is not None:
+            lower = result.new_tensor(math.radians(lower_deg))
+            result[..., joint_index, 0] = torch.maximum(
+                result[..., joint_index, 0], lower
+            )
+        if upper_deg is not None:
+            upper = result.new_tensor(math.radians(upper_deg))
+            result[..., joint_index, 1] = torch.minimum(
+                result[..., joint_index, 1], upper
+            )
+    if bool(torch.any(result[..., 0] > result[..., 1]).item()):
+        raise ValueError("Wuji anatomical limits do not intersect live soft limits.")
+    return result
 
 
 def validate_reference_joint_order(
@@ -236,6 +280,9 @@ class VegaWujiReferenceResidualAction(ActionTerm):
         )
         self._filtered_residual = torch.zeros_like(self._raw_actions)
         self._processed_actions = self.robot.data.joint_pos.torch.clone()
+        self._effective_joint_pos_limits = wuji_anatomical_joint_limits(
+            self._joint_names, self.robot.data.soft_joint_pos_limits.torch
+        )
 
     @property
     def action_dim(self) -> int:
@@ -302,7 +349,7 @@ class VegaWujiReferenceResidualAction(ActionTerm):
             self._filtered_residual,
             self.command.reference_joint_pos,
             self._scale,
-            self.robot.data.soft_joint_pos_limits.torch,
+            self._effective_joint_pos_limits,
             ema_factor=float(self.cfg.ema_factor),
         )
         self._filtered_residual[:] = filtered_residual
@@ -368,6 +415,9 @@ class VegaWujiWristPoseResidualAction(ActionTerm):
         self._processed_actions = torch.zeros(self.num_envs, 54, device=self.device)
         self._previous_residual = torch.zeros_like(self._raw_actions)
         self._joint_targets = self.robot.data.default_joint_pos.torch.clone()
+        self._effective_joint_pos_limits = wuji_anatomical_joint_limits(
+            self.robot.joint_names, self.robot.data.soft_joint_pos_limits.torch
+        )
         self._wrist_target_pose: dict[str, torch.Tensor] = {
             side: torch.zeros(self.num_envs, 7, device=self.device)
             for side in SIDE_ORDER
@@ -505,7 +555,7 @@ class VegaWujiWristPoseResidualAction(ActionTerm):
                 :, processed_start + 7 : processed_start + 27
             ]
 
-        limits = self.robot.data.soft_joint_pos_limits.torch
+        limits = self._effective_joint_pos_limits
         self._joint_targets[:] = torch.maximum(
             torch.minimum(self._joint_targets, limits[..., 1]), limits[..., 0]
         )
@@ -570,6 +620,7 @@ class VegaWujiWristPoseResidualActionCfg(ActionTermCfg):
 __all__ = [
     "SIDE_ORDER",
     "VEGA_WUJI_JOINT_COUNT",
+    "WUJI_ANATOMICAL_LIMITS_DEG",
     "VegaWujiWristPoseResidualAction",
     "VegaWujiWristPoseResidualActionCfg",
     "VegaWujiReferenceResidualAction",
@@ -578,4 +629,5 @@ __all__ = [
     "damped_least_squares_delta",
     "reference_residual_joint_target",
     "validate_reference_joint_order",
+    "wuji_anatomical_joint_limits",
 ]

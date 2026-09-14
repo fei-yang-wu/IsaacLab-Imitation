@@ -13,6 +13,8 @@ extra_bind_paths: []
 hf_token_file: /nethome/fwu91/.hf_token
 wandb_api_key_file: /nethome/fwu91/.wandb_api_key
 min_free_gb: 50
+# Skynet keeps Slurm off the non-login PATH; a bare sbatch over ssh exits 127.
+slurm_bin_dir: /opt/slurm/Ubuntu-20.04/current/bin
 slurm:
   qos: short
   partition: wu-lab
@@ -26,6 +28,10 @@ env:
   CLUSTER_ISAACLAB_DIR: /coc/flash12/fwu91/Research/IsaacLab/isaaclab
   CLUSTER_PYTHON_EXECUTABLE: scripts/rlopt/train.py
   CLUSTER_SIM_BACKEND: auto
+  # No display of any kind: these runs are kit-less Newton, as the G1
+  # imitation runs are on ICE. Compute nodes have no Xvfb anyway (job 3771902
+  # refused, correctly).
+  CLUSTER_USE_XVFB: "0"
   CLUSTER_CU130_RUNTIME_ROOT: /opt/isaaclab-imitation-runtime-spec/.pixi/envs/container-runtime
   CLUSTER_G1_USD_PATH: repo
   CLUSTER_USE_OVERLAY: "0"

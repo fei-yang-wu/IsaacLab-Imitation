@@ -13,6 +13,7 @@ from isaaclab_imitation.tasks.manager_based.dexmanip.actions import (
     damped_least_squares_delta,
     reference_residual_joint_target,
     validate_reference_joint_order,
+    wuji_anatomical_joint_limits,
 )
 
 
@@ -98,6 +99,45 @@ def test_reference_residual_target_clips_only_final_target_to_soft_limits() -> N
 
     torch.testing.assert_close(residual, torch.tanh(raw_action) * scale)
     torch.testing.assert_close(target, torch.tensor([[0.2, -0.2]]))
+
+
+def test_wuji_runtime_limits_exclude_interphalangeal_hyperextension() -> None:
+    names = (
+        "R_arm_j1",
+        "r_index_finger_mcp_abd",
+        "r_index_finger_pip",
+        "r_index_finger_dip",
+        "r_thumb_mcp",
+        "r_thumb_ip",
+    )
+    source = torch.tensor(
+        [[[-2.0, 2.0] for _ in names], [[-1.0, 1.0] for _ in names]],
+        dtype=torch.float64,
+    )
+    original = source.clone()
+
+    actual = wuji_anatomical_joint_limits(names, source)
+
+    torch.testing.assert_close(actual[:, 0], source[:, 0])
+    torch.testing.assert_close(
+        actual[:, 1],
+        torch.tensor([[-0.6981317, 0.6981317]] * 2, dtype=torch.float64),
+    )
+    torch.testing.assert_close(actual[:, 2, 0], torch.zeros(2, dtype=torch.float64))
+    torch.testing.assert_close(
+        actual[:, 2, 1], torch.tensor([1.74532925, 1.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(actual[:, 3, 0], torch.zeros(2, dtype=torch.float64))
+    torch.testing.assert_close(
+        actual[:, 3, 1], torch.tensor([1.3962634, 1.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(actual[:, 4, 0], torch.zeros(2, dtype=torch.float64))
+    torch.testing.assert_close(actual[:, 5, 0], torch.zeros(2, dtype=torch.float64))
+    # The live thumb-IP upper bound is already tighter than the 100 deg cap.
+    torch.testing.assert_close(
+        actual[:, 5, 1], torch.tensor([1.74532925, 1.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(source, original)
 
 
 def test_damped_least_squares_solves_identity_task() -> None:

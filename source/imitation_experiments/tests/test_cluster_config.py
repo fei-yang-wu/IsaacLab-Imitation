@@ -188,3 +188,33 @@ def test_ice_profile_covers_env_ice_runtime(tmp_path: Path) -> None:
         f"legacy .env.ice_runtime keys absent from the frozen env: {sorted(missing)}; "
         "add them to profile_ice.yaml env or to SUBMISSION_SIDE_KEYS with a reason"
     )
+
+
+def test_slurm_path_prefix_is_empty_without_a_declared_dir():
+    """Clusters with Slurm already on PATH keep the previous behaviour."""
+
+    from imitation_experiments.pipeline.cluster.remote import slurm_path_prefix
+
+    assert slurm_path_prefix(None) == ""
+    assert slurm_path_prefix("") == ""
+
+
+def test_slurm_path_prefix_prepends_and_quotes_the_declared_dir():
+    """A declared directory is prepended, so it wins over any stale entry."""
+
+    from imitation_experiments.pipeline.cluster.remote import slurm_path_prefix
+
+    prefix = slurm_path_prefix("/opt/slurm/Ubuntu-20.04/current/bin")
+    assert prefix == "export PATH=/opt/slurm/Ubuntu-20.04/current/bin:$PATH; "
+
+    quoted = slurm_path_prefix("/opt/slurm dir/bin")
+    assert quoted.startswith("export PATH='/opt/slurm dir/bin':$PATH; ")
+
+
+def test_skynet_profile_declares_its_slurm_bin_dir():
+    """Skynet keeps Slurm off the non-login PATH; a bare sbatch exits 127."""
+
+    from imitation_experiments.pipeline.cluster.config import load_profile
+
+    profile = load_profile("skynet")
+    assert profile.slurm_bin_dir == "/opt/slurm/Ubuntu-20.04/current/bin"

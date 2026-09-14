@@ -71,7 +71,8 @@ the repository root [`CONTEXT.md`](../../CONTEXT.md) first.
 - **Vega/Wuji Reference-residual action** — the 59-value actor output in live
   actuator order. Each value is bounded with `tanh`, scaled by joint type,
   filtered with an exponential moving average, added to the action-aligned
-  Reference joint position, and clipped to the live soft joint limits.
+  Reference joint position, and clipped to the live soft joint limits
+  intersected with the Wuji anatomical finger envelope.
 - **Vega/Wuji transition state** — the actor receives live and action-aligned
   desired `[q, qdot]`, plus live and desired per-object
   `[XYZ, WXYZ, linear-XYZ, angular-XYZ]`. The default one-object policy vector
@@ -83,6 +84,21 @@ the repository root [`CONTEXT.md`](../../CONTEXT.md) first.
   startup.
 
 ## Invariants
+
+- **Vega/Sharpa object task success** — at the end of the prepared Reference,
+  the live box center of mass is within the configured position tolerance of
+  the Reference's final box center (default 0.05 m). Orientation error and
+  pose success (default 0.35 rad) are secondary metrics. No extra lift or hand
+  tracking condition defines this endpoint score. The object-task evaluator
+  runs to that fixed end without intermediate tracking terminations; the
+  training command refreshes endpoint metrics before reset. Earlier Vega
+  `task_success` logs used an inherited lift condition and are not this metric.
+
+- **Object-success assistance gate** — an optional local-training curriculum
+  that reduces virtual object assistance only after enough successful box
+  endpoints at the current assistance stage. Episodes spanning a stage change
+  and startup resets are excluded; early training terminations are failures.
+  It leaves reward schedule timing unchanged.
 
 - The actor consumes exactly one command source; enforced on derived actor
   input keys, not by splitting observation groups.

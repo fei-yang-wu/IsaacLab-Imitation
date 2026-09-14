@@ -469,6 +469,28 @@ def _resolve_checkpoint_path(checkpoint: str) -> str:
     return resolved
 
 
+def _step_counter_limit(isaac_env: object, fallback: int) -> int:
+    """Return a truncation cap that never fires before the task's own time-out.
+
+    The transform stack adds its own step limit. Isaac Lab already terminates
+    an episode through the task's ``time_out`` term, so this cap must sit
+    above the task's episode length; otherwise it silently shortens every
+    episode and changes the MDP. Long references (a 24 s ARCTIC sequence
+    played at half speed is 985 control steps) exceed the historical default.
+    """
+
+    unwrapped = getattr(isaac_env, "unwrapped", isaac_env)
+    declared = getattr(unwrapped, "max_episode_length", None)
+    try:
+        declared = int(declared)
+    except (TypeError, ValueError):
+        return fallback
+    if declared <= 0:
+        return fallback
+    # One extra step so the task's own time-out is what ends the episode.
+    return max(fallback, declared + 1)
+
+
 def train(
     env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg,
     agent_cfg: RLOptConfig,
@@ -677,17 +699,23 @@ def train(
         env = gym.wrappers.RecordVideo(env, **video_kwargs)  # type: ignore
     start_time = time.time()
 
+    isaac_env = env
     env = IsaacLabWrapper(env)  # type: ignore
     env = env.set_info_dict_reader(
         IsaacLabTerminalObsReader(
             observation_spec=env.observation_spec, backend="gymnasium"
         )  # type: ignore
     )
+    step_limit = _step_counter_limit(isaac_env, 500)
+    if step_limit > 500:
+        logger.info(
+            f"Step-counter cap raised to {step_limit} to clear the task episode length."
+        )
     env = TransformedEnv(
         base_env=env,
         transform=Compose(
             RewardSum(),  # type: ignore
-            StepCounter(500),  # type: ignore
+            StepCounter(step_limit),  # type: ignore
             # RewardClipping(-10.0, 5.0),  # type: ignore
         ),
     )
@@ -697,6 +725,9 @@ def train(
         env=env,
         config=agent_cfg,  # type: ignore
     )
+    from imitation_experiments.lowlevel.rlopt_checkpoint import attach_isaac_training_state
+
+    attach_isaac_training_state(agent, isaac_env)
 
     video_media_logger = None
     if args_cli.video:
@@ -727,11 +758,12 @@ def train(
         if isinstance(checkpoint, dict) and "actor_critic" in checkpoint:
             agent.load(checkpoint_path)
         else:
-            print(
-                "[WARNING] Checkpoint does not include full ASE/GAIL state; "
-                "loading policy/value optimizer state only."
-            )
+            print("[INFO] Loading policy/value, optimizer, and training counters.")
             agent.load_model(checkpoint_path)
+        if "isaaclab_training_state" in checkpoint:
+            # New episodes must see the restored curriculum, not observations
+            # cached by the collector before the checkpoint was loaded.
+            agent.collector.reset()
 
     # run training
     interrupted = False

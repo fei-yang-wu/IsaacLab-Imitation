@@ -101,9 +101,10 @@ Each NPZ contains:
   `[T, S, C, 3]`; object indices and active masks use `[T, S, C]`.
 - Typed `ScenePhysics`: object mass, local COM, COM-frame diagonal inertia,
   object/support friction, and restitution.
-- Typed `TrainingQualification`: runtime flags, real contact-geometry
-  provenance, and a full-frame signed-distance audit. The training boundary
-  caps the declared penetration tolerance at 1 mm.
+- Training NPZs contain typed `TrainingQualification`: runtime flags, real
+  contact-geometry provenance, and a full-frame signed-distance audit. The
+  training boundary caps the declared penetration tolerance at 1 mm.
+  Inspection NPZs intentionally omit this record and cannot enter training.
 
 All file poses are world-frame XYZ plus WXYZ. Relative asset paths resolve
 from the NPZ directory. The environment converts quaternions to Isaac Lab

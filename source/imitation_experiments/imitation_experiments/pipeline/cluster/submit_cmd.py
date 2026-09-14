@@ -19,6 +19,7 @@ from .planfile import (
 from .remote import (
     build_workspace_archive,
     sbatch_parsable,
+    slurm_path_prefix,
     ssh_run,
     ssh_upload,
     sync_workspace_archive,
@@ -26,12 +27,12 @@ from .remote import (
 from .slurm import validate_dependency
 
 
-def _scancel(login: str, job_ids: list[str]) -> None:
+def _scancel(login: str, job_ids: list[str], slurm_bin_dir: str | None = None) -> None:
     if not job_ids:
         return
     quoted = " ".join(shlex.quote(job_id) for job_id in job_ids)
     try:
-        ssh_run(login, f"scancel {quoted}")
+        ssh_run(login, f"{slurm_path_prefix(slurm_bin_dir)}scancel {quoted}")
     except PipelineError as exc:
         print(f"[SUBMIT] WARNING: best-effort scancel failed: {exc}")
 
@@ -50,6 +51,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     sealed = record["sealed"]
     profile: dict[str, Any] = sealed["profile"]
     login: str = profile["login"]
+    slurm_bin_dir: str | None = profile.get("slurm_bin_dir")
     remote_plan_dir: str = record["remote"]["plan_dir"]
 
     drift = git_seal_payload() != sealed["git"]
@@ -108,10 +110,13 @@ def cmd_submit(args: argparse.Namespace) -> int:
                 f"{remote_plan_dir}/batch_{stage}.sh",
                 chdir=remote_plan_dir,
                 dependency=dependency,
+                slurm_bin_dir=slurm_bin_dir,
             )
         except PipelineError as exc:
             print(f"[SUBMIT] sbatch failed for stage '{stage}': {exc}")
-            _scancel(login, [entry["slurm_job_id"] for entry in submitted])
+            _scancel(
+                login, [entry["slurm_job_id"] for entry in submitted], slurm_bin_dir
+            )
             failure_record = _submission_record(
                 record,
                 archive_sha,
@@ -175,6 +180,8 @@ def _submission_record(
         "cluster": {
             "profile": sealed["profile"]["name"],
             "login": sealed["profile"]["login"],
+            # Recorded so status/cancel reach the same Slurm binaries.
+            "slurm_bin_dir": sealed["profile"].get("slurm_bin_dir"),
         },
         "remote_plan_dir": plan_record["remote"]["plan_dir"],
         "workspace_archive_sha256": archive_sha,

@@ -45,9 +45,9 @@ def mpjpe_local_global(
 
     robot_relative = robot_body_pos_w - robot_root_pos_w.unsqueeze(-2)
     reference_relative = reference_body_pos_w - reference_root_pos_w.unsqueeze(-2)
-    local = torch.linalg.vector_norm(
-        robot_relative - reference_relative, dim=-1
-    ).mean(dim=-1)
+    local = torch.linalg.vector_norm(robot_relative - reference_relative, dim=-1).mean(
+        dim=-1
+    )
     global_ = torch.linalg.vector_norm(
         robot_body_pos_w - reference_body_pos_w, dim=-1
     ).mean(dim=-1)

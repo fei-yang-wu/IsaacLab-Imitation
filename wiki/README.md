@@ -5,6 +5,22 @@ This wiki holds repo-owned context that is too detailed or changeable for
 
 Start with:
 
+- [Vega U + Sharpa Local Training Check](vega-sharpa-local100.md): implemented
+- [Vega–Sharpa local PPO learning check](vega-sharpa-local-ppo.md): longer local run, curves and fixed-start evaluation.
+  mounted task, asset/data preparation, Newton qualification, and local PPO
+  training/restart commands.
+- [Vega U + Sharpa Implementation Plan](vega-sharpa-plan.md): the current
+  target, reuse map, ILTools arm/hand pipeline, Newton/PhysX qualification,
+  and milestones toward a trained mounted-hand manipulation policy.
+- [Sharpa Floating-Hand Imitation v1](sharpa-floating-hand-v1.md): the
+  MANO-to-ILTools conversion, dual floating-hand PhysX task, RSL-RL training,
+  and smoke-test commands.
+- [Sharpa Recipe Port Plan](sharpa-recipe-port-plan.md): phases, gates, and
+  decisions for replicating the video-to-data Sharpa recipe with ILTools,
+  isaaclab_imitation, and RLOpt.
+- [Sharpa Progress Snapshot](sharpa-progress.md): the current implementation
+  gates, PhysX/Newton validation, visual source-vs-Pink comparison, known
+  limitations, and next work queue.
 - [Project Live Status](current-status.md): the living source of truth for the
   current research direction, completed gates, active or failed jobs,
   preliminary evidence, and immediate work queue.
@@ -77,9 +93,12 @@ Start with:
   citation triage list.
 
 - [Vega-Wuji Contact Retargeting](vega-wuji-contact-retargeting.md): why the
-  dexterous Reference had no hand-object contact, the frame audit that found
-  the cause, the measured A/B between soft replay and unscaling the motion, the
-  arm-reach blocker that now caps recovery at 6 of 28 contact frames, and the
-  sequenced plan with gates.
+  visually rejected joint arm/contact solve was quarantined, how the
+  colleague's tips-only Wuji recipe is implemented, why the pinned SOMA clip
+  now passes both wrist gates but still fails the left fingertip and geometry
+  gates, and the fail-closed boundary before RL training.
 
 Index every `wiki/*.md` file here so future pages do not become orphaned.
+
+- [Vega–Sharpa object task success](vega-sharpa-object-task.md): final box metrics and actual/reference motion overlays.
+- [Vega–Sharpa learning diagnostic](vega-sharpa-learning-diagnostic.md): contact-force balance, PPO normalization fixes, and controlled local comparisons.

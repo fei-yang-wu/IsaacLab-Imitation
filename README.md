@@ -57,15 +57,18 @@ Newton backend, RLOpt PPO, the Vega plus two-Wuji MJCF, and rigid object scenes
 from the ILTools dexterous Reference contract. Its actor owns one residual for
 each of the 59 live actuators. The task adds the bounded, filtered residual to
 the action-aligned Reference joint position and clips the target to the live
-soft limits. See [data/README.md](data/README.md) for the required object,
+soft limits intersected with the Wuji anatomical finger envelope. See
+[data/README.md](data/README.md) for the required object,
 hand-frame, and contact arrays. The task has no placeholder Reference: set
-`env.reference_path` to your ILTools NPZ or hash-bound JSON Manifest.
-Training is stricter than inspection replay: it requires a hash-bound JSON
+`env.reference_path` to a hash-bound JSON Manifest for training. A direct
+ILTools NPZ is accepted only by the explicit inspection replay tool. Training
+is stricter than inspection replay: it requires a hash-bound JSON
 Manifest whose motions carry typed scene physics, real contact geometry, and a
 passing collision/clearance qualification. The policy observes current and
 next desired robot and object dynamic state; the default one-object input is
 609-D. See [data/README.md](data/README.md) for the qualification and reset
-contract.
+contract. This pre-release task still has no supported runtime-promotion
+attestation, so its training entry point remains fail-closed.
 
 `Isaac-Imitation-G1-v0`, `-v1`, `-Latent-v0`, `-Strict-v0`, and `-LafanTrack-v0`
 stay registered for reproducing recorded results and should not be cited for new

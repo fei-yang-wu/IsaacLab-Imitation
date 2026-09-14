@@ -219,17 +219,32 @@ def sync_workspace_archive(
     return local_sha, store_path, reused
 
 
+def slurm_path_prefix(slurm_bin_dir: str | None) -> str:
+    """Return a shell prefix that puts the cluster's Slurm binaries on PATH.
+
+    A non-login ssh shell does not read the profile scripts that normally add
+    Slurm to PATH, so on some clusters a bare ``sbatch`` exits 127. Profiles
+    that declare ``slurm_bin_dir`` get it prepended for every Slurm call.
+    """
+
+    if not slurm_bin_dir:
+        return ""
+    return f"export PATH={shlex.quote(slurm_bin_dir)}:$PATH; "
+
+
 def sbatch_parsable(
     login: str,
     script_remote_path: str,
     *,
     chdir: str,
     dependency: str | None = None,
+    slurm_bin_dir: str | None = None,
 ) -> str:
     """Submit and return the numeric job ID via the machine-readable interface."""
     dependency_arg = f" --dependency={shlex.quote(dependency)}" if dependency else ""
     proc = ssh_run(
         login,
+        f"{slurm_path_prefix(slurm_bin_dir)}"
         f"cd {shlex.quote(chdir)} && sbatch --parsable{dependency_arg} "
         f"{shlex.quote(script_remote_path)}",
     )

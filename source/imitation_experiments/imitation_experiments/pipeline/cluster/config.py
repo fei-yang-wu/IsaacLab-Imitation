@@ -44,6 +44,10 @@ class SlurmDefaults:
     qos: str | None = None
     partition: str | None = None
     mem_per_gpu: str | None = None
+    # Node steering. Useful when one node in a heterogeneous partition is
+    # broken for this workload; a stage may override either.
+    nodelist: str | None = None
+    exclude: str | None = None
     nodes: int = 1
     ntasks: int = 1
     time_limit: str = "15:59:00"
@@ -64,6 +68,10 @@ class ClusterProfile:
     hf_token_file: str | None = None
     wandb_api_key_file: str | None = None
     min_free_gb: int = 0
+    # Some clusters keep the Slurm binaries off the non-login PATH, so a bare
+    # `sbatch` over ssh exits 127. Declaring the directory here is explicit and
+    # does not depend on the remote shell's rc files.
+    slurm_bin_dir: str | None = None
     slurm: SlurmDefaults = field(default_factory=SlurmDefaults)
     env: dict[str, str] = field(default_factory=dict)
 
@@ -78,6 +86,8 @@ class StageSpec:
     gres: str | None = None
     mem: str | None = None
     cpus_per_task: int | None = None
+    nodelist: str | None = None
+    exclude: str | None = None
     depends_on: str | None = None
     # "afterok" (default) runs only after a clean predecessor; "afterany" also
     # runs after TIMEOUT/FAILED, which is what a walltime-segmented resume
@@ -119,6 +129,8 @@ class ResolvedStage:
     gres: str | None
     mem: str | None
     cpus_per_task: int | None
+    nodelist: str | None
+    exclude: str | None
     depends_on: str | None
     dependency_kind: str
 
@@ -231,6 +243,8 @@ def load_campaign(
             gres=stage.gres,
             mem=stage.mem,
             cpus_per_task=stage.cpus_per_task,
+            nodelist=getattr(stage, "nodelist", None),
+            exclude=getattr(stage, "exclude", None),
             depends_on=stage.depends_on,
             dependency_kind=str(getattr(stage, "dependency_kind", "afterok")),
         )
