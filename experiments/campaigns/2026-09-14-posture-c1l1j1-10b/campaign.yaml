@@ -8,9 +8,9 @@
 # at its 82,000,084,992 checkpoint, taken mid-flight; c1l1j1 continues to
 # 89B without the terms. Cap 92,000,084,992 (10B), two chained segments.
 #
-#   c1l1j1p1  env.rewards.joint_deviation.weight=-0.002   (L1 distance of all
+#   c1l1j1p1  env.rewards.joint_deviation.weight=-0.001   (L1 distance of all
 #             29 joints from their default angle; a walking pose sums to a
-#             few rad, so ~ -0.01/step against r_step ~0.22)
+#             8.7 rad on the reference poses, so ~ -0.009/step against r_step ~0.22)
 #             env.rewards.track_joint_pos.weight=0.05    (exp(-sum sq joint
 #             error / 0.5) against the reference joint angles, <= +0.05/step)
 #
@@ -157,7 +157,7 @@ arms:
     vars:
       wandb_id: post-c1l1j1p1
       arm_args:
-        - env.rewards.joint_deviation.weight=-0.002
+        - env.rewards.joint_deviation.weight=-0.001
         - env.rewards.track_joint_pos.weight=0.05
     stages: &two_segments
       - name: finetune1
